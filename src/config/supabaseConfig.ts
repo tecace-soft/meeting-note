@@ -12,5 +12,5 @@ export const supabase = createClient(
   supabaseAnonKey || ''
 );
 
-export const AUDIO_BUCKET = 'Meeting Recordings';
+export const AUDIO_BUCKET = 'meeting-recordings';
 
