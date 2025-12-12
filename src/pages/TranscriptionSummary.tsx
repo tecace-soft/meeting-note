@@ -151,7 +151,14 @@ const TranscriptionSummary: React.FC = () => {
     );
 
     try {
-      const filePath = `${fileId}-${file.name}`;
+      // Sanitize filename: remove non-ASCII chars, replace spaces with underscores
+      const ext = file.name.split('.').pop() || 'audio';
+      const sanitizedName = file.name
+        .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII
+        .replace(/\s+/g, '_') // Replace spaces with underscores
+        .replace(/[^a-zA-Z0-9._-]/g, '') // Keep only safe chars
+        || `audio_${Date.now()}`; // Fallback if empty
+      const filePath = `${fileId}-${sanitizedName.includes('.') ? sanitizedName : `${sanitizedName}.${ext}`}`;
       
       const { error } = await supabase.storage
         .from(AUDIO_BUCKET)
