@@ -5,6 +5,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
 
 interface Note {
@@ -265,7 +266,7 @@ const SummaryHistory: React.FC = () => {
                           style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
                         >
                           {note.summary ? (
-                            <ReactMarkdown>{note.summary}</ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary}</ReactMarkdown>
                           ) : (
                             <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
                               No summary available

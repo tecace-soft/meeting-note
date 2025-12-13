@@ -6,6 +6,7 @@ import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphServ
 import { supabase, AUDIO_BUCKET } from '../config/supabaseConfig';
 import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
 
 interface UploadedFile {
@@ -118,6 +119,8 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
+  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB - matches Supabase bucket limit
+
   const handleFiles = (files: File[]) => {
     const audioFiles = files.filter(file => 
       file.type.startsWith('audio/') || 
@@ -126,6 +129,12 @@ const TranscriptionSummary: React.FC = () => {
 
     if (audioFiles.length === 0) {
       alert('Please upload audio files only (mp3, wav, m4a, etc.)');
+      return;
+    }
+
+    const oversizedFiles = audioFiles.filter(f => f.size > MAX_FILE_SIZE);
+    if (oversizedFiles.length > 0) {
+      alert(`File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB. Your file: ${(oversizedFiles[0].size / 1024 / 1024).toFixed(1)}MB`);
       return;
     }
 
@@ -586,7 +595,7 @@ const TranscriptionSummary: React.FC = () => {
                           className="p-4 rounded-lg text-sm leading-relaxed prose prose-sm max-w-none max-h-96 overflow-y-auto custom-scrollbar"
                           style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
                         >
-                          <ReactMarkdown>{editedSummary}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedSummary}</ReactMarkdown>
                         </div>
                       )}
                     </div>
