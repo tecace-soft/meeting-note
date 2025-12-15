@@ -42,20 +42,23 @@ export const msalConfig: Configuration = {
   },
 };
 
-// Scopes needed for MS Teams chat access
+// Scopes needed for MS Teams chat access and OneDrive
 export const loginRequest = {
   scopes: [
     'User.Read',
     'Chat.Read',
     'Chat.ReadWrite',
     'ChatMessage.Read',
+    'Files.ReadWrite',
+    'Files.ReadWrite.All',
   ],
 };
 
-// Graph API scopes for accessing Teams data
+// Graph API scopes for accessing Teams data and OneDrive
 export const graphScopes = {
   chats: ['Chat.Read', 'Chat.ReadWrite'],
   messages: ['ChatMessage.Read'],
   user: ['User.Read'],
+  files: ['Files.ReadWrite', 'Files.ReadWrite.All'],
 };
 

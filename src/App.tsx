@@ -8,6 +8,7 @@ import { msalConfig } from './config/msalConfig';
 import Login from './pages/Login';
 import TranscriptionSummary from './pages/TranscriptionSummary';
 import SummaryHistory from './pages/SummaryHistory';
+import SaveSummary from './pages/SaveSummary';
 
 const msalInstance = new PublicClientApplication(msalConfig);
 
@@ -22,6 +23,7 @@ const App: React.FC = () => {
                 <Route path="/" element={<Login />} />
                 <Route path="/transcription-summary" element={<TranscriptionSummary />} />
                 <Route path="/summary-history" element={<SummaryHistory />} />
+                <Route path="/save-summary" element={<SaveSummary />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
-import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
+import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
@@ -173,17 +173,17 @@ const SummaryHistory: React.FC = () => {
             <button
               onClick={toggleTheme}
               className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)' }}
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
             >
-              {theme === 'light' ? '🌙' : '☀️'}
+              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             </button>
             <button
               onClick={logout}
-              className="flex items-center gap-2 px-3 py-2 rounded-md text-sm"
+              className="p-2 rounded-md"
               style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="Sign out"
             >
               <LogOut className="w-4 h-4" />
-              Sign out
             </button>
           </div>
         </div>

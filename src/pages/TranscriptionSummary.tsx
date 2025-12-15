@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import { supabase, AUDIO_BUCKET } from '../config/supabaseConfig';
-import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History } from 'lucide-react';
+import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Sun, Moon, Mic, Square, Play, Pause } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
@@ -43,6 +43,22 @@ const TranscriptionSummary: React.FC = () => {
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
   const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
+  const [showDiscardModal, setShowDiscardModal] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
+
+  // Recording states
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [isPlayingRecording, setIsPlayingRecording] = useState(false);
+  const [playbackProgress, setPlaybackProgress] = useState(0);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -65,6 +81,167 @@ const TranscriptionSummary: React.FC = () => {
     }
     return `${yy}${mm}${dd}${randomPart}`;
   };
+
+  const formatRecordingTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        setRecordedAudioUrl(audioUrl);
+        setRecordedBlob(audioBlob);
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      setRecordedAudioUrl(null);
+      setRecordedBlob(null);
+      setPlaybackProgress(0);
+      setPlaybackCurrentTime(0);
+      
+      // Start timer
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      alert('Could not access microphone. Please ensure you have granted microphone permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+        recordingIntervalRef.current = null;
+      }
+    }
+  };
+
+  const useRecording = () => {
+    if (!recordedBlob) return;
+    
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+    const fileName = `Recording_${timestamp}.webm`;
+    const audioFile = new window.File([recordedBlob], fileName, { type: 'audio/webm' });
+    
+    const newFile: UploadedFile = {
+      id: crypto.randomUUID(),
+      name: fileName,
+      size: recordedBlob.size,
+      type: 'audio/webm',
+      file: audioFile,
+      status: 'pending',
+    };
+    
+    setUploadedFiles([newFile]);
+    uploadToSupabase(newFile.id, audioFile);
+    
+    // Clean up playback
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
+    setIsPlayingRecording(false);
+  };
+
+  const togglePlayRecording = () => {
+    if (!recordedAudioUrl) return;
+    
+    if (!audioPlayerRef.current) {
+      audioPlayerRef.current = new Audio(recordedAudioUrl);
+      audioPlayerRef.current.onended = () => {
+        setIsPlayingRecording(false);
+        setPlaybackProgress(0);
+        setPlaybackCurrentTime(0);
+      };
+      audioPlayerRef.current.onloadedmetadata = () => {
+        setPlaybackDuration(audioPlayerRef.current?.duration || 0);
+      };
+      audioPlayerRef.current.ontimeupdate = () => {
+        if (audioPlayerRef.current) {
+          const current = audioPlayerRef.current.currentTime;
+          const duration = audioPlayerRef.current.duration;
+          setPlaybackCurrentTime(current);
+          setPlaybackProgress(duration > 0 ? (current / duration) * 100 : 0);
+        }
+      };
+    }
+    
+    if (isPlayingRecording) {
+      audioPlayerRef.current.pause();
+      setIsPlayingRecording(false);
+    } else {
+      audioPlayerRef.current.play();
+      setIsPlayingRecording(true);
+    }
+  };
+
+  const seekPlayback = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!audioPlayerRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percentage = x / rect.width;
+    const newTime = percentage * audioPlayerRef.current.duration;
+    audioPlayerRef.current.currentTime = newTime;
+    setPlaybackCurrentTime(newTime);
+    setPlaybackProgress(percentage * 100);
+  };
+
+  const clearRecording = () => {
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
+    if (recordedAudioUrl) {
+      URL.revokeObjectURL(recordedAudioUrl);
+    }
+    setRecordedAudioUrl(null);
+    setRecordedBlob(null);
+    setRecordingTime(0);
+    setIsPlayingRecording(false);
+    setPlaybackProgress(0);
+    setPlaybackCurrentTime(0);
+    setPlaybackDuration(0);
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
+      if (recordedAudioUrl) {
+        URL.revokeObjectURL(recordedAudioUrl);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -206,9 +383,11 @@ const TranscriptionSummary: React.FC = () => {
 
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
+    clearRecording();
   };
 
   const hasCompletedFiles = uploadedFiles.some(f => f.status === 'completed');
+  const showPromptSection = isRecording || recordedAudioUrl || uploadedFiles.length > 0;
 
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
@@ -368,17 +547,25 @@ const TranscriptionSummary: React.FC = () => {
             <button
               onClick={toggleTheme}
               className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)' }}
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
             >
-              {theme === 'light' ? '🌙' : '☀️'}
+              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => navigate('/save-summary')}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="OneDrive"
+            >
+              <HardDrive className="w-4 h-4" />
             </button>
             <button
               onClick={logout}
-              className="flex items-center gap-2 px-3 py-2 rounded-md text-sm"
+              className="p-2 rounded-md"
               style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="Sign out"
             >
               <LogOut className="w-4 h-4" />
-              Sign out
             </button>
           </div>
         </div>
@@ -393,31 +580,156 @@ const TranscriptionSummary: React.FC = () => {
               Summarize Audio File
             </h2>
             
-            {/* Drop Zone - Hidden when files are uploaded */}
-            <div className={`collapse-container ${uploadedFiles.length > 0 ? 'collapsed' : 'expanded'}`}>
+            {/* Record/Upload Options - Hidden when files are uploaded or recording complete */}
+            <div className={`collapse-container ${(uploadedFiles.length > 0 || recordedAudioUrl) ? 'collapsed' : 'expanded'}`}>
               <div className="collapse-content">
-                <div
-                  className={`drop-zone rounded-lg p-8 text-center cursor-pointer transition-all ${isDragging ? 'drag-over' : ''}`}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma"
-                    multiple
-                    onChange={handleFileSelect}
-                    className="hidden"
-                  />
-                  <Upload className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--text-muted)' }} />
-                  <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
-                    Drop audio files here or click to browse
-                  </p>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Supports MP3, WAV, M4A, OGG, FLAC, AAC, WMA
-                  </p>
+                <div className="flex flex-col md:flex-row items-stretch gap-4">
+                  {/* Record Option */}
+                  <div
+                    className="flex-1 card rounded-lg p-6 text-center transition-all"
+                    style={{ border: isRecording ? '2px solid var(--error)' : '2px dashed var(--border)' }}
+                  >
+                    {!isRecording ? (
+                      <>
+                        <button
+                          onClick={startRecording}
+                          className="w-16 h-16 rounded-full mx-auto mb-3 flex items-center justify-center transition-all hover:scale-105"
+                          style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                        >
+                          <Mic className="w-7 h-7" />
+                        </button>
+                        <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
+                          Record Audio
+                        </p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          Click to start recording
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="relative w-16 h-16 mx-auto mb-3">
+                          <div 
+                            className="absolute inset-0 rounded-full animate-ping opacity-25"
+                            style={{ backgroundColor: 'var(--error)' }}
+                          />
+                          <button
+                            onClick={stopRecording}
+                            className="relative w-16 h-16 rounded-full flex items-center justify-center transition-all hover:scale-105"
+                            style={{ backgroundColor: 'var(--error)', color: '#fff' }}
+                          >
+                            <Square className="w-6 h-6" fill="currentColor" />
+                          </button>
+                        </div>
+                        <p className="text-lg font-mono font-medium mb-1" style={{ color: 'var(--error)' }}>
+                          {formatRecordingTime(recordingTime)}
+                        </p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          Recording... Click to stop
+                        </p>
+                      </>
+                    )}
+                  </div>
+
+                  {/* OR Divider */}
+                  <div className="flex md:flex-col items-center justify-center gap-2 py-2 md:py-0 md:px-2">
+                    <div className="flex-1 h-px md:h-auto md:w-px md:flex-1" style={{ backgroundColor: 'var(--border)' }} />
+                    <span className="text-xs font-medium px-2" style={{ color: 'var(--text-muted)' }}>or</span>
+                    <div className="flex-1 h-px md:h-auto md:w-px md:flex-1" style={{ backgroundColor: 'var(--border)' }} />
+                  </div>
+
+                  {/* Upload Option */}
+                  <div
+                    className={`flex-1 drop-zone rounded-lg p-6 text-center cursor-pointer transition-all ${isDragging ? 'drag-over' : ''}`}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma"
+                      multiple
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                    <Upload className="w-10 h-10 mx-auto mb-3" style={{ color: 'var(--text-muted)' }} />
+                    <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
+                      Upload Audio File
+                    </p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      Drop files or click to browse
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Recording Playback - Shows when recording is complete but not uploaded */}
+            <div className={`collapse-container ${(recordedAudioUrl && uploadedFiles.length === 0) ? 'expanded' : 'collapsed'}`}>
+              <div className="collapse-content">
+                <div className="card rounded-lg p-6">
+                  <div className="flex items-center gap-4 mb-4">
+                    <button
+                      onClick={togglePlayRecording}
+                      className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 flex-shrink-0"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      {isPlayingRecording ? (
+                        <Pause className="w-6 h-6" fill="currentColor" />
+                      ) : (
+                        <Play className="w-6 h-6" fill="currentColor" style={{ marginLeft: '3px' }} />
+                      )}
+                    </button>
+                    <div className="flex-grow">
+                      <p className="text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
+                        Recording Complete
+                      </p>
+                      {/* Progress Bar */}
+                      <div 
+                        className="h-2 rounded-full cursor-pointer relative overflow-hidden"
+                        style={{ backgroundColor: 'var(--bg-secondary)' }}
+                        onClick={seekPlayback}
+                      >
+                        <div 
+                          className="absolute top-0 left-0 h-full rounded-full transition-all"
+                          style={{ 
+                            width: `${playbackProgress}%`, 
+                            backgroundColor: 'var(--accent)',
+                          }} 
+                        />
+                      </div>
+                      {/* Time Display */}
+                      <div className="flex justify-between mt-1">
+                        <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+                          {formatRecordingTime(Math.floor(playbackCurrentTime))}
+                        </span>
+                        <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+                          {formatRecordingTime(recordingTime)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-end gap-3">
+                    <button
+                      onClick={clearRecording}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                    >
+                      <X className="w-4 h-4" />
+                      Discard
+                    </button>
+                    <button
+                      onClick={useRecording}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      <Check className="w-4 h-4" />
+                      Use Recording
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -480,30 +792,31 @@ const TranscriptionSummary: React.FC = () => {
             </div>
 
             {/* Summarize Prompt */}
-            <div className={`collapse-container ${hasCompletedFiles ? 'expanded' : 'collapsed'}`}>
+            <div className={`collapse-container ${showPromptSection ? 'expanded' : 'collapsed'}`}>
               <div className="collapse-content">
               <div className="mt-4 card rounded-lg p-4">
                 <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
                   Add instructions (optional)
                 </label>
-                <div className="flex gap-3">
-                  <input
-                    type="text"
+                <div className="flex gap-3 items-end">
+                  <textarea
                     value={summaryPrompt}
                     onChange={(e) => setSummaryPrompt(e.target.value)}
                     placeholder="e.g., Focus on action items and decisions..."
-                    className="flex-grow px-4 py-2 rounded-lg text-sm"
+                    className="flex-grow px-4 py-2 rounded-lg text-sm resize-y min-h-[40px]"
                     style={{
                       backgroundColor: 'var(--bg-secondary)',
                       border: '1px solid var(--border)',
                       color: 'var(--text)',
+                      height: '40px',
+                      maxHeight: '200px',
                     }}
                     disabled={isSummarizing}
                   />
                   <button
                     onClick={handleSummarize}
-                    disabled={isSummarizing}
-                    className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isSummarizing || !hasCompletedFiles}
+                    className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed h-[40px]"
                     style={{
                       backgroundColor: 'var(--accent)',
                       color: '#ffffff',
@@ -556,26 +869,39 @@ const TranscriptionSummary: React.FC = () => {
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
                           Summary
                         </h3>
-                        <button
-                          onClick={() => setIsEditingSummary(!isEditingSummary)}
-                          className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
-                          style={{ 
-                            backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
-                            color: isEditingSummary ? '#fff' : 'var(--text-secondary)',
-                          }}
-                        >
-                          {isEditingSummary ? (
-                            <>
-                              <Save className="w-3 h-3" />
-                              Done
-                            </>
-                          ) : (
-                            <>
-                              <Pencil className="w-3 h-3" />
-                              Edit
-                            </>
-                          )}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setShowDiscardModal(true)}
+                            className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
+                            style={{ 
+                              backgroundColor: 'var(--bg-secondary)',
+                              color: 'var(--text-muted)',
+                            }}
+                          >
+                            <X className="w-3 h-3" />
+                            Discard
+                          </button>
+                          <button
+                            onClick={() => setIsEditingSummary(!isEditingSummary)}
+                            className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
+                            style={{ 
+                              backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
+                              color: isEditingSummary ? '#fff' : 'var(--text-secondary)',
+                            }}
+                          >
+                            {isEditingSummary ? (
+                              <>
+                                <Save className="w-3 h-3" />
+                                Done
+                              </>
+                            ) : (
+                              <>
+                                <Pencil className="w-3 h-3" />
+                                Edit
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                       
                       {isEditingSummary ? (
@@ -599,6 +925,31 @@ const TranscriptionSummary: React.FC = () => {
                         </div>
                       )}
                     </div>
+
+                    {/* View Transcript Toggle */}
+                    {summaryResult.transcript && (
+                      <div style={{ marginTop: '24px' }}>
+                        <button
+                          onClick={() => setShowTranscript(!showTranscript)}
+                          className="flex items-center gap-2 text-sm font-medium transition-all"
+                          style={{ color: 'var(--accent)' }}
+                        >
+                          <span>{showTranscript ? '▼' : '▶'}</span>
+                          {showTranscript ? 'Hide Original Transcript' : 'View Original Transcript'}
+                        </button>
+                        
+                        <div className={`collapse-container ${showTranscript ? 'expanded' : 'collapsed'}`}>
+                          <div className="collapse-content">
+                            <div 
+                              className="mt-3 p-4 rounded-lg text-sm leading-relaxed max-h-96 overflow-y-auto custom-scrollbar whitespace-pre-wrap"
+                              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                            >
+                              {summaryResult.transcript}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -612,32 +963,51 @@ const TranscriptionSummary: React.FC = () => {
                 Teams Chats
               </h2>
               {summaryResult && (
-                <button
-                  onClick={handleForwardSummary}
-                  disabled={!selectedChatId || isForwarding}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{
-                    backgroundColor: forwardSuccess ? 'var(--success)' : 'var(--accent)',
-                    color: '#ffffff',
-                  }}
-                >
-                  {isForwarding ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Sending...
-                    </>
-                  ) : forwardSuccess ? (
-                    <>
-                      <Check className="w-4 h-4" />
-                      Sent!
-                    </>
-                  ) : (
-                    <>
-                      <Forward className="w-4 h-4" />
-                      Forward Summary
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      const completedFile = uploadedFiles.find(f => f.status === 'completed' && f.publicUrl);
+                      const audioUrl = completedFile?.publicUrl ? encodeURIComponent(completedFile.publicUrl) : '';
+                      const audioName = completedFile?.name ? encodeURIComponent(completedFile.name) : '';
+                      navigate(`/save-summary?note_id=${currentNoteId}&audio_url=${audioUrl}&audio_name=${audioName}`);
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                    style={{
+                      backgroundColor: 'var(--bg-secondary)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <HardDrive className="w-4 h-4" />
+                    Save to OneDrive
+                  </button>
+                  <button
+                    onClick={handleForwardSummary}
+                    disabled={!selectedChatId || isForwarding}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{
+                      backgroundColor: forwardSuccess ? 'var(--success)' : 'var(--accent)',
+                      color: '#ffffff',
+                    }}
+                  >
+                    {isForwarding ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : forwardSuccess ? (
+                      <>
+                        <Check className="w-4 h-4" />
+                        Sent!
+                      </>
+                    ) : (
+                      <>
+                        <Forward className="w-4 h-4" />
+                        Forward Summary
+                      </>
+                    )}
+                  </button>
+                </div>
               )}
             </div>
 
@@ -747,6 +1117,51 @@ const TranscriptionSummary: React.FC = () => {
           </section>
         </div>
       </main>
+
+      {/* Discard Confirmation Modal */}
+      {showDiscardModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          onClick={() => setShowDiscardModal(false)}
+        >
+          <div 
+            className="card rounded-lg p-6 max-w-sm w-full shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text)' }}>
+              Discard Summary
+            </h3>
+            <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
+              Are you sure you want to discard this summary? This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDiscardModal(false)}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setSummaryResult(null);
+                  setSummaryError(null);
+                  setEditedSummary('');
+                  setIsEditingSummary(false);
+                  setCurrentNoteId(null);
+                  setShowTranscript(false);
+                  setShowDiscardModal(false);
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                style={{ backgroundColor: 'var(--error)', color: '#fff' }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
