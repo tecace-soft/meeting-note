@@ -23,6 +23,7 @@ interface Note {
   summary?: string;
   transcription?: string;
   user_name?: string;
+  name?: string | null;
   created_at?: string;
 }
 
@@ -88,18 +89,35 @@ const SaveSummary: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('note')
-          .select('id, summary, transcription, user_name, created_at')
+          .select('id, summary, transcription, user_name, name, created_at')
           .eq('id', noteId)
           .single();
 
         if (error) throw error;
         setNote(data);
         
-        // Generate default filenames
-        const date = new Date();
-        const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-        setSaveFileName(`Meeting_Note_${dateStr}.md`);
-        setTranscriptFileName(`Meeting_Transcript_${dateStr}.md`);
+        // Generate default filenames based on note.name
+        if (data.name) {
+          setSaveFileName(`${data.name}_note.md`);
+          setTranscriptFileName(`${data.name}_transcript.md`);
+          
+          // Set audio filename if audioName is available
+          if (audioName) {
+            const extension = audioName.split('.').pop() || '';
+            setAudioFileName(`${data.name}_audio.${extension}`);
+          }
+        } else {
+          // Fallback to date-based naming if no name
+          const date = new Date();
+          const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+          setSaveFileName(`Meeting_Note_${dateStr}.md`);
+          setTranscriptFileName(`Meeting_Transcript_${dateStr}.md`);
+          
+          // Fallback audio filename
+          if (audioName) {
+            setAudioFileName(audioName);
+          }
+        }
       } catch (err: any) {
         console.error('Error fetching note:', err);
       } finally {
@@ -108,14 +126,8 @@ const SaveSummary: React.FC = () => {
     };
 
     fetchNote();
-  }, [noteId]);
+  }, [noteId, audioName]);
 
-  // Set audio filename from URL param
-  useEffect(() => {
-    if (audioName) {
-      setAudioFileName(audioName);
-    }
-  }, [audioName]);
 
   // Fetch OneDrive contents
   const fetchContents = async (folderId: string | null = null) => {
