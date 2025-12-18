@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
+import { useMobile } from '../hooks/useMobile';
 import { supabase } from '../config/supabaseConfig';
 import { 
   LogOut, ArrowLeft, Folder, File, FolderPlus, Trash2, 
@@ -41,6 +42,7 @@ const SaveSummary: React.FC = () => {
 
   const { theme, toggleTheme } = useTheme();
   const { user, isAuthenticated, isLoading: authLoading, logout, getAccessToken } = useAuth();
+  const isMobile = useMobile();
 
   const [note, setNote] = useState<Note | null>(null);
   const [noteLoading, setNoteLoading] = useState(true);
@@ -358,7 +360,7 @@ const SaveSummary: React.FC = () => {
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            {user && (
+            {user && !isMobile && (
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium"
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
@@ -383,9 +385,9 @@ const SaveSummary: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow overflow-hidden flex">
+      <main className="flex-grow overflow-hidden flex" style={{ flexDirection: isMobile ? 'column' : 'row' }}>
         {/* File Browser */}
-        <div className="flex-grow flex flex-col overflow-hidden p-6 mobile-safe-bottom">
+        <div className="flex-grow flex flex-col overflow-hidden" style={{ padding: isMobile ? '16px' : '24px', paddingBottom: isMobile ? 'max(80px, env(safe-area-inset-bottom, 80px))' : 'max(24px, env(safe-area-inset-bottom, 24px))' }}>
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
             
             {/* Breadcrumbs & Actions */}

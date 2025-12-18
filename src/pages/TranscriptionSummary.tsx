@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
+import { useMobile } from '../hooks/useMobile';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import { supabase, AUDIO_BUCKET } from '../config/supabaseConfig';
 import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Sun, Moon, Mic, Square, Play, Pause } from 'lucide-react';
@@ -38,6 +39,7 @@ const TranscriptionSummary: React.FC = () => {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const { user, isAuthenticated, isLoading, logout, getAccessToken } = useAuth();
+  const isMobile = useMobile();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [chats, setChats] = useState<TeamsChat[]>([]);
@@ -583,7 +585,7 @@ const TranscriptionSummary: React.FC = () => {
             <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>Meeting Note</h1>
           </div>
           <div className="flex items-center gap-4">
-            {user && (
+            {user && !isMobile && (
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium" 
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
@@ -628,8 +630,8 @@ const TranscriptionSummary: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow overflow-y-auto custom-scrollbar p-6 mobile-safe-bottom">
-        <div className="max-w-7xl mx-auto space-y-8">
+      <main className="flex-grow overflow-y-auto custom-scrollbar" style={{ padding: isMobile ? '16px' : '24px', paddingBottom: isMobile ? 'max(80px, env(safe-area-inset-bottom, 80px))' : 'max(24px, env(safe-area-inset-bottom, 24px))' }}>
+        <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto space-y-8`}>
           {/* File Upload Section */}
           <section>
             <h2 className="text-lg font-medium mb-4" style={{ color: 'var(--text)' }}>

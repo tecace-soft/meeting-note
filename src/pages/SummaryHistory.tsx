@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
+import { useMobile } from '../hooks/useMobile';
 import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, Download, Trash2, Pencil, Save, Loader2, Plus, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,6 +36,7 @@ const SummaryHistory: React.FC = () => {
   
   const { theme, toggleTheme } = useTheme();
   const { user, isAuthenticated, isLoading, logout, getAccessToken } = useAuth();
+  const isMobile = useMobile();
   
   const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null);
   const [chatLoading, setChatLoading] = useState(true);
@@ -56,6 +58,8 @@ const SummaryHistory: React.FC = () => {
   const [editingTags, setEditingTags] = useState<string[]>([]);
   const [newTagValue, setNewTagValue] = useState<string>('');
   const [isSavingTags, setIsSavingTags] = useState(false);
+  const tagContainerRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const [visibleTagCounts, setVisibleTagCounts] = useState<{ [key: string]: number }>({});
   
   // Mode: 'chat' for chat-specific notes, 'user' for all user notes
   const mode = userId ? 'user' : 'chat';
@@ -161,6 +165,76 @@ const SummaryHistory: React.FC = () => {
 
     fetchNotes();
   }, [chatId, userId, mode]);
+
+  // Calculate visible tag counts based on container width
+  useEffect(() => {
+    const calculateVisibleTags = () => {
+      const newCounts: { [key: string]: number } = {};
+      
+      Object.keys(tagContainerRefs.current).forEach(noteId => {
+        const container = tagContainerRefs.current[noteId];
+        if (!container) return;
+        
+        const containerWidth = container.offsetWidth;
+        const plusButtonWidth = 32; // Approximate width of + button with gap
+        const ellipsisWidth = 40; // Approximate width of "..." tag
+        const availableWidth = containerWidth - plusButtonWidth;
+        
+        const tags = notes.find(n => n.id === noteId)?.tags || [];
+        if (tags.length === 0) return;
+        
+        // Create a temporary element to measure tag widths
+        const tempSpan = document.createElement('span');
+        tempSpan.className = 'text-xs px-2 py-0.5 rounded-full';
+        tempSpan.style.visibility = 'hidden';
+        tempSpan.style.position = 'absolute';
+        tempSpan.style.whiteSpace = 'nowrap';
+        document.body.appendChild(tempSpan);
+        
+        let totalWidth = 0;
+        let visibleCount = 0;
+        const gap = 6; // gap-1.5 = 6px
+        
+        for (let i = 0; i < tags.length; i++) {
+          tempSpan.textContent = tags[i];
+          const tagWidth = tempSpan.offsetWidth;
+          
+          const widthWithGap = totalWidth + (i > 0 ? gap : 0) + tagWidth;
+          
+          // Check if we need to show ellipsis
+          if (i < tags.length - 1) {
+            // If adding this tag plus ellipsis would exceed, show ellipsis instead
+            if (widthWithGap + gap + ellipsisWidth > availableWidth) {
+              break;
+            }
+          }
+          
+          if (widthWithGap <= availableWidth) {
+            totalWidth = widthWithGap;
+            visibleCount = i + 1;
+          } else {
+            break;
+          }
+        }
+        
+        document.body.removeChild(tempSpan);
+        newCounts[noteId] = visibleCount;
+      });
+      
+      setVisibleTagCounts(newCounts);
+    };
+    
+    // Calculate after a short delay to ensure DOM is ready
+    const timeoutId = setTimeout(calculateVisibleTags, 100);
+    
+    // Recalculate on window resize
+    window.addEventListener('resize', calculateVisibleTags);
+    
+    return () => {
+      clearTimeout(timeoutId);
+      window.removeEventListener('resize', calculateVisibleTags);
+    };
+  }, [notes]);
 
   const getChatDisplayName = (): string => {
     if (!chatInfo) return 'Loading...';
@@ -429,7 +503,7 @@ const SummaryHistory: React.FC = () => {
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            {user && (
+            {user && !isMobile && (
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium" 
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
@@ -458,8 +532,8 @@ const SummaryHistory: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow flex flex-col overflow-hidden p-6 mobile-safe-bottom">
-        <div className="max-w-7xl mx-auto flex flex-col" style={{ height: '100%' }}>
+      <main className="flex-grow flex flex-col overflow-hidden" style={{ padding: isMobile ? '16px' : '24px', paddingBottom: isMobile ? 'max(80px, env(safe-area-inset-bottom, 80px))' : 'max(24px, env(safe-area-inset-bottom, 24px))' }}>
+        <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto flex flex-col`} style={{ height: '100%' }}>
           {/* Notes List */}
           <div className="flex flex-col" style={{ height: '100%' }}>
             <h3 className="text-lg font-medium mb-4 flex-shrink-0" style={{ color: 'var(--text)' }}>
@@ -488,77 +562,102 @@ const SummaryHistory: React.FC = () => {
                   <div
                     key={note.id}
                     className="card rounded-lg overflow-hidden transition-all"
+                    style={{ border: '1px solid var(--border)' }}
                   >
                     <div 
-                      className="p-4 flex items-center gap-4 hover:bg-opacity-80 transition-all"
+                      className={`p-4 flex ${isMobile ? 'flex-col gap-3' : 'items-center gap-4'} hover:bg-opacity-80 transition-all cursor-pointer`}
                       style={{ backgroundColor: expandedNoteId === note.id ? 'var(--bg-secondary)' : undefined }}
+                      onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
+                      onMouseEnter={(e) => {
+                        const card = e.currentTarget.closest('.card') as HTMLElement;
+                        if (card) {
+                          card.style.borderColor = 'var(--accent)';
+                        }
+                        const chevronButton = e.currentTarget.querySelector('[data-chevron-button]') as HTMLElement;
+                        if (chevronButton) {
+                          chevronButton.style.color = 'var(--accent)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        const card = e.currentTarget.closest('.card') as HTMLElement;
+                        if (card) {
+                          card.style.borderColor = 'var(--border)';
+                        }
+                        const chevronButton = e.currentTarget.querySelector('[data-chevron-button]') as HTMLElement;
+                        if (chevronButton) {
+                          chevronButton.style.color = 'var(--text-muted)';
+                        }
+                      }}
                     >
-                      <div 
-                        onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
-                        className="w-10 h-10 rounded-lg flex items-center justify-center cursor-pointer" 
-                        style={{ backgroundColor: 'var(--accent-light)' }}
-                      >
-                        <FileText className="w-5 h-5" style={{ color: 'var(--accent)' }} />
-                      </div>
-                      <div 
-                        onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
-                        className="flex-grow min-w-0 cursor-pointer"
-                      >
-                        {editingNoteId === note.id ? (
-                          <div className="flex items-center gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="text"
-                              value={editingName}
-                              onChange={(e) => setEditingName(e.target.value)}
-                              onBlur={() => handleSaveName(note.id)}
-                              onKeyDown={(e) => handleNameKeyDown(e, note.id)}
-                              disabled={isSavingName}
-                              className="text-sm font-medium px-2 rounded"
-                              style={{ 
-                                backgroundColor: 'var(--bg-secondary)', 
-                                color: 'var(--text)',
-                                border: '2px solid var(--accent)',
-                                width: '60%',
-                                height: '20px',
-                                lineHeight: '20px',
-                                paddingTop: '0',
-                                paddingBottom: '0'
-                              }}
-                              autoFocus
-                            />
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            {note.name ? (
-                              <>
-                                <p 
-                                  className="text-sm font-medium" 
-                                  style={{ color: 'var(--text)' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleStartEditName(note, e);
+                      <div className={`flex ${isMobile ? 'w-full gap-3 items-center' : 'items-center gap-4 flex-grow min-w-0'}`}>
+                        <div 
+                          className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
+                          style={{ backgroundColor: 'var(--accent-light)' }}
+                        >
+                          <FileText className="w-5 h-5" style={{ color: 'var(--accent)' }} />
+                        </div>
+                        <div 
+                          className={`flex flex-col flex-grow min-w-0 ${isMobile ? 'gap-2' : ''}`}
+                        >
+                          <div>
+                            {editingNoteId === note.id ? (
+                              <div className="flex items-center gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="text"
+                                  value={editingName}
+                                  onChange={(e) => setEditingName(e.target.value)}
+                                  onBlur={() => handleSaveName(note.id)}
+                                  onKeyDown={(e) => handleNameKeyDown(e, note.id)}
+                                  disabled={isSavingName}
+                                  className="text-sm font-medium px-2 rounded"
+                                  style={{ 
+                                    backgroundColor: 'var(--bg-secondary)', 
+                                    color: 'var(--text)',
+                                    border: '2px solid var(--accent)',
+                                    width: '60%',
+                                    height: '20px',
+                                    lineHeight: '20px',
+                                    paddingTop: '0',
+                                    paddingBottom: '0'
                                   }}
-                                  title="Click to edit name"
-                                >
-                                  {note.name}
-                                </p>
-                                <button
-                                  onClick={(e) => handleStartEditName(note, e)}
-                                  className="p-1 rounded transition-all hover:bg-opacity-80"
-                                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
-                                  title="Edit name"
-                                >
-                                  <Pencil className="w-3 h-3" />
-                                </button>
-                              </>
+                                  autoFocus
+                                />
+                              </div>
                             ) : (
-                              <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>
-                                {note.id}
-                              </p>
+                              <div className="flex items-center gap-2 min-w-0">
+                                {note.name ? (
+                                  <>
+                                    <p 
+                                      className="text-sm font-medium truncate" 
+                                      style={{ 
+                                        color: 'var(--text)',
+                                        maxWidth: isMobile ? 'calc(100vw - 200px)' : 'none'
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleStartEditName(note, e);
+                                      }}
+                                      title={note.name}
+                                    >
+                                      {note.name}
+                                    </p>
+                                    <button
+                                      onClick={(e) => handleStartEditName(note, e)}
+                                      className="p-1 rounded transition-all hover:bg-opacity-80 flex-shrink-0"
+                                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
+                                      title="Edit name"
+                                    >
+                                      <Pencil className="w-3 h-3" />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <p className="text-sm font-medium truncate" style={{ color: 'var(--text)', maxWidth: isMobile ? 'calc(100vw - 200px)' : 'none' }}>
+                                    {note.id}
+                                  </p>
+                                )}
+                              </div>
                             )}
                           </div>
-                        )}
-                        <div className="mt-1">
                           <div className="flex items-center gap-3">
                             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                               Created by {note.user_name}
@@ -568,13 +667,16 @@ const SummaryHistory: React.FC = () => {
                               {formatDate(note.created_at)}
                             </div>
                           </div>
-                          <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                          <div 
+                            ref={(el) => { tagContainerRefs.current[note.id] = el; }}
+                            className="flex items-center gap-1.5 overflow-hidden"
+                          >
                             {note.tags && note.tags.length > 0 && (
                               <>
-                                {note.tags.map((tag, index) => (
+                                {note.tags.slice(0, visibleTagCounts[note.id] || note.tags.length).map((tag, index) => (
                                   <span
                                     key={index}
-                                    className="text-xs px-2 py-0.5 rounded-full"
+                                    className="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
                                     style={{
                                       backgroundColor: 'var(--accent-light)',
                                       color: 'var(--accent)',
@@ -583,6 +685,37 @@ const SummaryHistory: React.FC = () => {
                                     {tag}
                                   </span>
                                 ))}
+                                {(visibleTagCounts[note.id] || note.tags.length) < note.tags.length && (
+                                  <span
+                                    className="text-xs px-2 py-0.5 rounded-full flex-shrink-0 relative group"
+                                    style={{
+                                      backgroundColor: 'var(--accent-light)',
+                                      color: 'var(--accent)',
+                                    }}
+                                    title={note.tags.slice(visibleTagCounts[note.id] || note.tags.length).join(', ')}
+                                  >
+                                    ...
+                                    <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-50 px-3 py-2 rounded-lg shadow-lg max-w-xs"
+                                      style={{
+                                        backgroundColor: 'var(--card)',
+                                        border: '1px solid var(--border)',
+                                        color: 'var(--text)',
+                                      }}
+                                    >
+                                      <div className="text-xs whitespace-normal">
+                                        {note.tags && note.tags.slice(visibleTagCounts[note.id] || (note.tags?.length || 0)).map((tag, idx) => {
+                                          const remainingTags = note.tags?.slice(visibleTagCounts[note.id] || (note.tags?.length || 0)) || [];
+                                          return (
+                                            <span key={idx} className="inline-block mr-1 mb-1">
+                                              {tag}
+                                              {idx < remainingTags.length - 1 && ','}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  </span>
+                                )}
                               </>
                             )}
                             <button
@@ -590,7 +723,7 @@ const SummaryHistory: React.FC = () => {
                                 e.stopPropagation();
                                 handleStartEditTags(note);
                               }}
-                              className="flex items-center justify-center w-6 h-6 rounded-full transition-all hover:bg-opacity-80"
+                              className="flex items-center justify-center w-6 h-6 rounded-full transition-all hover:bg-opacity-80 flex-shrink-0"
                               style={{
                                 backgroundColor: 'var(--bg-secondary)',
                                 color: 'var(--text-secondary)',
@@ -611,95 +744,190 @@ const SummaryHistory: React.FC = () => {
                               <Plus className="w-3 h-3" />
                             </button>
                           </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {(note.summary || note.transcription || note.audio_file) && (
-                          <>
+                          {isMobile && (
+                            <div className="w-full flex items-center justify-between mt-2">
+                            {(note.summary || note.transcription || note.audio_file) && (
+                              <>
+                                <button
+                                  ref={(el) => {
+                                    downloadButtonRefs.current[note.id] = el;
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenDownloadMenuId(openDownloadMenuId === note.id ? null : note.id);
+                                  }}
+                                  className="p-1.5 rounded-md transition-all hover:bg-opacity-80 flex-shrink-0"
+                                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--accent)' }}
+                                  title="Download"
+                                >
+                                  <Download className="w-4 h-4" />
+                                </button>
+                                
+                                {openDownloadMenuId === note.id && menuPosition && (
+                                  <div 
+                                    className="fixed py-1 rounded-lg shadow-lg min-w-40"
+                                    style={{ 
+                                      backgroundColor: 'var(--card)', 
+                                      border: '1px solid var(--border)',
+                                      zIndex: 9999,
+                                      top: `${menuPosition.top}px`,
+                                      right: isMobile ? '16px' : `${menuPosition.right}px`,
+                                      left: isMobile ? '16px' : 'auto',
+                                      maxWidth: isMobile ? 'calc(100vw - 32px)' : 'none'
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {note.summary && (
+                                      <button
+                                        onClick={() => handleDownloadSummary(note)}
+                                        className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                        style={{ color: 'var(--text)' }}
+                                      >
+                                        <FileText className="w-4 h-4" />
+                                        Summary
+                                      </button>
+                                    )}
+                                    {note.transcription && (
+                                      <button
+                                        onClick={() => handleDownloadTranscript(note)}
+                                        className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                        style={{ color: 'var(--text)' }}
+                                      >
+                                        <FileText className="w-4 h-4" />
+                                        Transcript
+                                      </button>
+                                    )}
+                                    {note.audio_file && (
+                                      <button
+                                        onClick={() => handleDownloadAudio(note)}
+                                        className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                        style={{ color: 'var(--text)' }}
+                                      >
+                                        <Download className="w-4 h-4" />
+                                        Audio
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            )}
                             <button
-                              ref={(el) => {
-                                downloadButtonRefs.current[note.id] = el;
-                              }}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setOpenDownloadMenuId(openDownloadMenuId === note.id ? null : note.id);
+                                setDeleteNoteId(note.id);
                               }}
-                              className="p-1.5 rounded-md transition-all hover:bg-opacity-80"
-                              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--accent)' }}
-                              title="Download"
+                              className="p-1.5 rounded-md transition-all hover:bg-opacity-80 flex-shrink-0"
+                              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--error)' }}
+                              title="Delete note"
                             >
-                              <Download className="w-4 h-4" />
+                              <Trash2 className="w-4 h-4" />
                             </button>
-                            
-                            {openDownloadMenuId === note.id && menuPosition && (
-                              <div 
-                                className="fixed py-1 rounded-lg shadow-lg min-w-40"
-                                style={{ 
-                                  backgroundColor: 'var(--card)', 
-                                  border: '1px solid var(--border)',
-                                  zIndex: 9999,
-                                  top: `${menuPosition.top}px`,
-                                  right: `${menuPosition.right}px`
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {note.summary && (
-                                  <button
-                                    onClick={() => handleDownloadSummary(note)}
-                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
-                                    style={{ color: 'var(--text)' }}
-                                  >
-                                    <FileText className="w-4 h-4" />
-                                    Summary
-                                  </button>
-                                )}
-                                {note.transcription && (
-                                  <button
-                                    onClick={() => handleDownloadTranscript(note)}
-                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
-                                    style={{ color: 'var(--text)' }}
-                                  >
-                                    <FileText className="w-4 h-4" />
-                                    Transcript
-                                  </button>
-                                )}
-                                {note.audio_file && (
-                                  <button
-                                    onClick={() => handleDownloadAudio(note)}
-                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
-                                    style={{ color: 'var(--text)' }}
-                                  >
-                                    <Download className="w-4 h-4" />
-                                    Audio
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </>
-                        )}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDeleteNoteId(note.id);
-                          }}
-                          className="p-1.5 rounded-md transition-all hover:bg-opacity-80"
-                          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--error)' }}
-                          title="Delete note"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
-                          className="p-1.5 rounded-md transition-all"
-                          style={{ color: 'var(--text-muted)' }}
-                        >
-                          {expandedNoteId === note.id ? (
-                            <ChevronUp className="w-5 h-5" />
-                          ) : (
-                            <ChevronDown className="w-5 h-5" />
+                            <button
+                              onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
+                              className="p-1.5 rounded-md transition-all flex-shrink-0"
+                              style={{ color: 'var(--text-muted)', backgroundColor: 'transparent' }}
+                              data-chevron-button
+                            >
+                              {expandedNoteId === note.id ? (
+                                <ChevronUp className="w-5 h-5" />
+                              ) : (
+                                <ChevronDown className="w-5 h-5" />
+                              )}
+                            </button>
+                            </div>
                           )}
-                        </button>
+                        </div>
                       </div>
+                      {!isMobile && (
+                        <div className="flex items-center gap-3">
+                          {(note.summary || note.transcription || note.audio_file) && (
+                            <>
+                              <button
+                                ref={(el) => {
+                                  downloadButtonRefs.current[note.id] = el;
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenDownloadMenuId(openDownloadMenuId === note.id ? null : note.id);
+                                }}
+                                className="p-1.5 rounded-md transition-all hover:bg-opacity-80"
+                                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--accent)' }}
+                                title="Download"
+                              >
+                                <Download className="w-4 h-4" />
+                              </button>
+                              
+                              {openDownloadMenuId === note.id && menuPosition && (
+                                <div 
+                                  className="fixed py-1 rounded-lg shadow-lg min-w-40"
+                                  style={{ 
+                                    backgroundColor: 'var(--card)', 
+                                    border: '1px solid var(--border)',
+                                    zIndex: 9999,
+                                    top: `${menuPosition.top}px`,
+                                    right: `${menuPosition.right}px`
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {note.summary && (
+                                    <button
+                                      onClick={() => handleDownloadSummary(note)}
+                                      className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                      style={{ color: 'var(--text)' }}
+                                    >
+                                      <FileText className="w-4 h-4" />
+                                      Summary
+                                    </button>
+                                  )}
+                                  {note.transcription && (
+                                    <button
+                                      onClick={() => handleDownloadTranscript(note)}
+                                      className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                      style={{ color: 'var(--text)' }}
+                                    >
+                                      <FileText className="w-4 h-4" />
+                                      Transcript
+                                    </button>
+                                  )}
+                                  {note.audio_file && (
+                                    <button
+                                      onClick={() => handleDownloadAudio(note)}
+                                      className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                      style={{ color: 'var(--text)' }}
+                                    >
+                                      <Download className="w-4 h-4" />
+                                      Audio
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteNoteId(note.id);
+                            }}
+                            className="p-1.5 rounded-md transition-all hover:bg-opacity-80 flex-shrink-0"
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--error)' }}
+                            title="Delete note"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
+                            className="p-1.5 rounded-md transition-all flex-shrink-0"
+                            style={{ color: 'var(--text-muted)', backgroundColor: 'transparent' }}
+                            data-chevron-button
+                          >
+                            {expandedNoteId === note.id ? (
+                              <ChevronUp className="w-5 h-5" />
+                            ) : (
+                              <ChevronDown className="w-5 h-5" />
+                            )}
+                          </button>
+                        </div>
+                      )}
                     </div>
                     
                     <div className={`collapse-container ${expandedNoteId === note.id ? 'expanded' : 'collapsed'}`}>
