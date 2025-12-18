@@ -628,7 +628,7 @@ const TranscriptionSummary: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow overflow-y-auto custom-scrollbar p-6">
+      <main className="flex-grow overflow-y-auto custom-scrollbar p-6 mobile-safe-bottom">
         <div className="max-w-7xl mx-auto space-y-8">
           {/* File Upload Section */}
           <section>

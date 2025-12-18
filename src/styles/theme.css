@@ -400,6 +400,11 @@ body {
   background-color: var(--text-muted);
 }
 
+/* Mobile safe area bottom padding */
+.mobile-safe-bottom {
+  padding-bottom: max(24px, env(safe-area-inset-bottom, 24px));
+}
+
 /* Menu item hover effect */
 .menu-item-hover:hover {
   background-color: var(--bg-secondary) !important;

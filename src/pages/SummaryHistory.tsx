@@ -458,7 +458,7 @@ const SummaryHistory: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow flex flex-col overflow-hidden p-6">
+      <main className="flex-grow flex flex-col overflow-hidden p-6 mobile-safe-bottom">
         <div className="max-w-7xl mx-auto flex flex-col" style={{ height: '100%' }}>
           {/* Notes List */}
           <div className="flex flex-col" style={{ height: '100%' }}>

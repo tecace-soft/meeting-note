@@ -61,7 +61,7 @@ const Login: React.FC = () => {
       </div>
 
       {/* Main Content */}
-      <div className="flex-grow flex items-center justify-center px-4 sm:px-6 lg:px-8">
+      <div className="flex-grow flex items-center justify-center px-4 sm:px-6 lg:px-8 mobile-safe-bottom">
         <div className="max-w-md w-full space-y-8">
           {/* Header */}
           <div className="text-center">

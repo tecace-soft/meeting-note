@@ -385,7 +385,7 @@ const SaveSummary: React.FC = () => {
       {/* Main Content */}
       <main className="flex-grow overflow-hidden flex">
         {/* File Browser */}
-        <div className="flex-grow flex flex-col overflow-hidden p-6">
+        <div className="flex-grow flex flex-col overflow-hidden p-6 mobile-safe-bottom">
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
             
             {/* Breadcrumbs & Actions */}
