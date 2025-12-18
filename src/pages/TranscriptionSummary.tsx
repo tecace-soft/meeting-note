@@ -453,7 +453,7 @@ const TranscriptionSummary: React.FC = () => {
       setCurrentNoteId(noteId);
 
       const response = await fetch(
-        'https://n8n.srv1153481.hstgr.cloud/webhook-test/e616c0f9-df5f-471b-ad68-579919548ed7',
+        'https://n8n.srv1153481.hstgr.cloud/webhook/e616c0f9-df5f-471b-ad68-579919548ed7',
         {
           method: 'POST',
           headers: {
