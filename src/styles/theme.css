@@ -400,3 +400,9 @@ body {
   background-color: var(--text-muted);
 }
 
+/* Menu item hover effect */
+.menu-item-hover:hover {
+  background-color: var(--bg-secondary) !important;
+  color: var(--accent) !important;
+}
+

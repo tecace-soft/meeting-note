@@ -453,7 +453,7 @@ const TranscriptionSummary: React.FC = () => {
       setCurrentNoteId(noteId);
 
       const response = await fetch(
-        'https://n8n.srv1153481.hstgr.cloud/webhook/e616c0f9-df5f-471b-ad68-579919548ed7',
+        'https://n8n.srv1153481.hstgr.cloud/webhook-test/e616c0f9-df5f-471b-ad68-579919548ed7',
         {
           method: 'POST',
           headers: {
@@ -478,89 +478,12 @@ const TranscriptionSummary: React.FC = () => {
       setSummaryResult(result);
       setEditedSummary(result.summary);
       
-      // Generate filename using OpenAI
-      if (result.summary && noteId) {
-        try {
-          const generatedName = await generateFileName(result.summary);
-          const today = new Date();
-          const year = String(today.getFullYear()).slice(-2);
-          const month = String(today.getMonth() + 1).padStart(2, '0');
-          const day = String(today.getDate()).padStart(2, '0');
-          const fileName = `${year}${month}${day}_${generatedName}`;
-          
-          // Update note in Supabase
-          const { error: updateError } = await supabase
-            .from('note')
-            .update({ name: fileName })
-            .eq('id', noteId);
-          
-          if (updateError) {
-            console.error('Error updating note name:', updateError);
-          }
-        } catch (error: any) {
-          console.error('Error generating filename:', error);
-          // Don't fail the whole operation if filename generation fails
-        }
-      }
-      
     } catch (error: any) {
       console.error('Error summarizing:', error);
       setSummaryError(error.message || 'Failed to generate summary');
     } finally {
       setIsSummarizing(false);
     }
-  };
-
-  const generateFileName = async (summary: string): Promise<string> => {
-    const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OpenAI API key not configured');
-    }
-
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a helpful assistant that generates concise file names for the provided meeting notes. The file name should be multiple words (no more than 6) and contain no spaces or underscores. Capitalize the first letter of each word. Ultimately your file name should describe the main topic(s) of discussion shown in the meeting notes as specifically as possible so when someone reads this file name they can recognize the specific meeting it refers to over another.',
-          },
-          {
-            role: 'user',
-            content: `Create a file name for the following meeting notes:\n\nSummary:\n${summary}`,
-          },
-        ],
-        max_tokens: 50,
-        temperature: 0.7,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`OpenAI API error: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
-    }
-
-    const data = await response.json();
-    const generatedName = data.choices[0]?.message?.content?.trim() || 'MeetingNote';
-    
-    // Sanitize: remove spaces, underscores, special chars, keep only alphanumeric
-    // Then ensure proper CamelCase formatting
-    let sanitized = generatedName
-      .replace(/\s+/g, '')
-      .replace(/_/g, '')
-      .replace(/[^a-zA-Z0-9]/g, '');
-    
-    // Ensure first letter is capitalized
-    if (sanitized.length > 0) {
-      sanitized = sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
-    }
-    
-    return sanitized || 'MeetingNote';
   };
 
   const formatFileSize = (bytes: number): string => {

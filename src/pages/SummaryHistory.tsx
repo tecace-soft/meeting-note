@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
-import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, Download, Trash2, Pencil } from 'lucide-react';
+import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, Download, Trash2, Pencil, Save, Loader2, Plus, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
@@ -14,8 +14,10 @@ interface Note {
   user_name: string;
   chat_id: string;
   summary?: string;
+  transcription?: string;
   audio_file?: string | null;
   name?: string | null;
+  tags?: string[];
   created_at?: string;
 }
 
@@ -44,6 +46,16 @@ const SummaryHistory: React.FC = () => {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>('');
   const [isSavingName, setIsSavingName] = useState(false);
+  const [openDownloadMenuId, setOpenDownloadMenuId] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; right: number } | null>(null);
+  const downloadButtonRefs = useRef<{ [key: string]: HTMLButtonElement | null }>({});
+  const [editingSummaryId, setEditingSummaryId] = useState<string | null>(null);
+  const [editedSummary, setEditedSummary] = useState<string>('');
+  const [isSavingSummary, setIsSavingSummary] = useState(false);
+  const [editingTagsNoteId, setEditingTagsNoteId] = useState<string | null>(null);
+  const [editingTags, setEditingTags] = useState<string[]>([]);
+  const [newTagValue, setNewTagValue] = useState<string>('');
+  const [isSavingTags, setIsSavingTags] = useState(false);
   
   // Mode: 'chat' for chat-specific notes, 'user' for all user notes
   const mode = userId ? 'user' : 'chat';
@@ -53,6 +65,29 @@ const SummaryHistory: React.FC = () => {
       navigate('/');
     }
   }, [isAuthenticated, isLoading, navigate]);
+
+  // Close download menu when clicking outside and calculate menu position
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setOpenDownloadMenuId(null);
+      setMenuPosition(null);
+    };
+    
+    if (openDownloadMenuId) {
+      const button = downloadButtonRefs.current[openDownloadMenuId];
+      if (button) {
+        const rect = button.getBoundingClientRect();
+        setMenuPosition({
+          top: rect.bottom + 4,
+          right: window.innerWidth - rect.right,
+        });
+      }
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    } else {
+      setMenuPosition(null);
+    }
+  }, [openDownloadMenuId]);
 
   // Fetch chat info from Graph API (only in chat mode)
   useEffect(() => {
@@ -154,25 +189,53 @@ const SummaryHistory: React.FC = () => {
     });
   };
 
-  const handleDownloadAudio = async (audioUrl: string, noteId: string) => {
+  const downloadFile = (content: string | Blob, fileName: string, mimeType?: string) => {
+    let blob: Blob;
+    if (content instanceof Blob) {
+      blob = content;
+    } else {
+      blob = new Blob([content], { type: mimeType || 'text/plain' });
+    }
+    
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  const handleDownloadSummary = (note: Note) => {
+    if (!note.summary) return;
+    const fileName = note.name ? `${note.name}_summary.md` : `summary_${note.id}.md`;
+    downloadFile(note.summary, fileName, 'text/markdown');
+    setOpenDownloadMenuId(null);
+  };
+
+  const handleDownloadTranscript = (note: Note) => {
+    if (!note.transcription) return;
+    const fileName = note.name ? `${note.name}_transcript.md` : `transcript_${note.id}.md`;
+    downloadFile(note.transcription, fileName, 'text/markdown');
+    setOpenDownloadMenuId(null);
+  };
+
+  const handleDownloadAudio = async (note: Note) => {
+    if (!note.audio_file) return;
+    
     try {
-      const response = await fetch(audioUrl);
+      const response = await fetch(note.audio_file);
       if (!response.ok) throw new Error('Failed to download audio file');
       
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
+      const urlParts = note.audio_file.split('/');
+      const originalFileName = urlParts[urlParts.length - 1] || `audio_${note.id}`;
+      const extension = originalFileName.split('.').pop() || '';
+      const fileName = note.name ? `${note.name}_audio.${extension}` : originalFileName;
       
-      // Extract filename from URL or use note ID
-      const urlParts = audioUrl.split('/');
-      const fileName = urlParts[urlParts.length - 1] || `audio_${noteId}`;
-      a.download = fileName;
-      
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      downloadFile(blob, fileName);
+      setOpenDownloadMenuId(null);
     } catch (error) {
       console.error('Error downloading audio:', error);
       alert('Failed to download audio file');
@@ -251,6 +314,90 @@ const SummaryHistory: React.FC = () => {
       e.preventDefault();
       handleCancelEdit();
     }
+  };
+
+  const handleStartEditSummary = (note: Note) => {
+    setEditingSummaryId(note.id);
+    setEditedSummary(note.summary || '');
+  };
+
+  const handleSaveSummary = async (noteId: string) => {
+    try {
+      setIsSavingSummary(true);
+      const { error } = await supabase
+        .from('note')
+        .update({ summary: editedSummary.trim() })
+        .eq('id', noteId);
+      
+      if (error) throw error;
+      
+      // Update local state
+      setNotes(prev => prev.map(note => 
+        note.id === noteId ? { ...note, summary: editedSummary.trim() } : note
+      ));
+      
+      setEditingSummaryId(null);
+    } catch (error) {
+      console.error('Error updating summary:', error);
+      alert('Failed to update summary');
+    } finally {
+      setIsSavingSummary(false);
+    }
+  };
+
+  const handleCancelEditSummary = () => {
+    setEditingSummaryId(null);
+    setEditedSummary('');
+  };
+
+  const handleStartEditTags = (note: Note) => {
+    setEditingTagsNoteId(note.id);
+    setEditingTags(note.tags ? [...note.tags] : []);
+    setNewTagValue('');
+  };
+
+  const handleAddTag = () => {
+    const trimmed = newTagValue.trim();
+    if (trimmed && !editingTags.includes(trimmed)) {
+      setEditingTags([...editingTags, trimmed]);
+      setNewTagValue('');
+    }
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setEditingTags(editingTags.filter(tag => tag !== tagToRemove));
+  };
+
+  const handleSaveTags = async (noteId: string) => {
+    try {
+      setIsSavingTags(true);
+      const { error } = await supabase
+        .from('note')
+        .update({ tags: editingTags })
+        .eq('id', noteId);
+      
+      if (error) throw error;
+      
+      // Update local state
+      setNotes(prev => prev.map(note => 
+        note.id === noteId ? { ...note, tags: editingTags } : note
+      ));
+      
+      setEditingTagsNoteId(null);
+      setEditingTags([]);
+      setNewTagValue('');
+    } catch (error) {
+      console.error('Error updating tags:', error);
+      alert('Failed to update tags');
+    } finally {
+      setIsSavingTags(false);
+    }
+  };
+
+  const handleCancelEditTags = () => {
+    setEditingTagsNoteId(null);
+    setEditingTags([]);
+    setNewTagValue('');
   };
 
   if (isLoading) {
@@ -411,29 +558,124 @@ const SummaryHistory: React.FC = () => {
                             )}
                           </div>
                         )}
-                        <div className="flex items-center gap-3 mt-1">
-                          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                            Created by {note.user_name}
-                          </p>
-                          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                            <Calendar className="w-3 h-3" />
-                            {formatDate(note.created_at)}
+                        <div className="mt-1">
+                          <div className="flex items-center gap-3">
+                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                              Created by {note.user_name}
+                            </p>
+                            <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                              <Calendar className="w-3 h-3" />
+                              {formatDate(note.created_at)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                            {note.tags && note.tags.length > 0 && (
+                              <>
+                                {note.tags.map((tag, index) => (
+                                  <span
+                                    key={index}
+                                    className="text-xs px-2 py-0.5 rounded-full"
+                                    style={{
+                                      backgroundColor: 'var(--accent-light)',
+                                      color: 'var(--accent)',
+                                    }}
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartEditTags(note);
+                              }}
+                              className="flex items-center justify-center w-6 h-6 rounded-full transition-all hover:bg-opacity-80"
+                              style={{
+                                backgroundColor: 'var(--bg-secondary)',
+                                color: 'var(--text-secondary)',
+                                border: '1px dashed var(--border)',
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = 'var(--accent-light)';
+                                e.currentTarget.style.color = 'var(--accent)';
+                                e.currentTarget.style.borderColor = 'var(--accent)';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                                e.currentTarget.style.color = 'var(--text-secondary)';
+                                e.currentTarget.style.borderColor = 'var(--border)';
+                              }}
+                              title="Add or edit tags"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
                           </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        {note.audio_file && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDownloadAudio(note.audio_file!, note.id);
-                            }}
-                            className="p-1.5 rounded-md transition-all hover:bg-opacity-80"
-                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--accent)' }}
-                            title="Download audio"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
+                        {(note.summary || note.transcription || note.audio_file) && (
+                          <>
+                            <button
+                              ref={(el) => {
+                                downloadButtonRefs.current[note.id] = el;
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenDownloadMenuId(openDownloadMenuId === note.id ? null : note.id);
+                              }}
+                              className="p-1.5 rounded-md transition-all hover:bg-opacity-80"
+                              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--accent)' }}
+                              title="Download"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                            
+                            {openDownloadMenuId === note.id && menuPosition && (
+                              <div 
+                                className="fixed py-1 rounded-lg shadow-lg min-w-40"
+                                style={{ 
+                                  backgroundColor: 'var(--card)', 
+                                  border: '1px solid var(--border)',
+                                  zIndex: 9999,
+                                  top: `${menuPosition.top}px`,
+                                  right: `${menuPosition.right}px`
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {note.summary && (
+                                  <button
+                                    onClick={() => handleDownloadSummary(note)}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    <FileText className="w-4 h-4" />
+                                    Summary
+                                  </button>
+                                )}
+                                {note.transcription && (
+                                  <button
+                                    onClick={() => handleDownloadTranscript(note)}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    <FileText className="w-4 h-4" />
+                                    Transcript
+                                  </button>
+                                )}
+                                {note.audio_file && (
+                                  <button
+                                    onClick={() => handleDownloadAudio(note)}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    <Download className="w-4 h-4" />
+                                    Audio
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </>
                         )}
                         <button
                           onClick={(e) => {
@@ -463,11 +705,60 @@ const SummaryHistory: React.FC = () => {
                     <div className={`collapse-container ${expandedNoteId === note.id ? 'expanded' : 'collapsed'}`}>
                       <div className="collapse-content">
                         <div 
-                          className="p-4 border-t prose prose-sm max-w-none"
+                          className="p-4 border-t"
                           style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
                         >
                           {note.summary ? (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary}</ReactMarkdown>
+                            <div className="space-y-3">
+                              <div className="flex justify-end">
+                                {editingSummaryId === note.id ? (
+                                  <button
+                                    onClick={() => handleSaveSummary(note.id)}
+                                    disabled={isSavingSummary}
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all disabled:opacity-50"
+                                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                  >
+                                    {isSavingSummary ? (
+                                      <>
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                        Saving...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Save className="w-4 h-4" />
+                                        Save
+                                      </>
+                                    )}
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => handleStartEditSummary(note)}
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all"
+                                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                    Edit
+                                  </button>
+                                )}
+                              </div>
+                              {editingSummaryId === note.id ? (
+                                <textarea
+                                  value={editedSummary}
+                                  onChange={(e) => setEditedSummary(e.target.value)}
+                                  className="w-full p-4 rounded-lg text-sm leading-relaxed min-h-48 max-h-96 resize-y custom-scrollbar"
+                                  style={{ 
+                                    backgroundColor: 'var(--card)', 
+                                    color: 'var(--text)',
+                                    border: '2px solid var(--accent)',
+                                  }}
+                                  placeholder="Edit your summary here... (Markdown supported)"
+                                />
+                              ) : (
+                                <div className="prose prose-sm max-w-none">
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary}</ReactMarkdown>
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
                               No summary available
@@ -517,6 +808,120 @@ const SummaryHistory: React.FC = () => {
                 style={{ backgroundColor: 'var(--error)', color: '#fff' }}
               >
                 {isDeleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tag Management Modal */}
+      {editingTagsNoteId && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={handleCancelEditTags}
+        >
+          <div 
+            className="card rounded-lg p-6 max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text)' }}>
+              Manage Tags
+            </h3>
+            
+            {/* Current Tags */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
+                Tags
+              </label>
+              <div className="flex flex-wrap gap-2 min-h-[60px] p-3 rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                {editingTags.length > 0 ? (
+                  editingTags.map((tag, index) => (
+                    <span
+                      key={index}
+                      className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-full"
+                      style={{
+                        backgroundColor: 'var(--accent-light)',
+                        color: 'var(--accent)',
+                      }}
+                    >
+                      {tag}
+                      <button
+                        onClick={() => handleRemoveTag(tag)}
+                        className="hover:opacity-70 transition-opacity"
+                        title="Remove tag"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>No tags</span>
+                )}
+              </div>
+            </div>
+
+            {/* Add New Tag */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
+                Add Tag
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newTagValue}
+                  onChange={(e) => setNewTagValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddTag();
+                    }
+                  }}
+                  placeholder="Enter tag name"
+                  className="flex-1 px-3 py-2 rounded-lg text-sm"
+                  style={{
+                    backgroundColor: 'var(--bg-secondary)',
+                    color: 'var(--text)',
+                    border: '1px solid var(--border)',
+                  }}
+                />
+                <button
+                  onClick={handleAddTag}
+                  disabled={!newTagValue.trim()}
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                  }}
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleCancelEditTags}
+                disabled={isSavingTags}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleSaveTags(editingTagsNoteId)}
+                disabled={isSavingTags}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                {isSavingTags ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin inline-block mr-2" />
+                    Saving...
+                  </>
+                ) : (
+                  'Save'
+                )}
               </button>
             </div>
           </div>
