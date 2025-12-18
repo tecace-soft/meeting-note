@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { useMobile } from '../hooks/useMobile';
-import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, Download, Trash2, Pencil, Save, Loader2, Plus, X } from 'lucide-react';
+import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, Download, Trash2, Pencil, Save, Loader2, Plus, X, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
@@ -60,6 +60,9 @@ const SummaryHistory: React.FC = () => {
   const [isSavingTags, setIsSavingTags] = useState(false);
   const tagContainerRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const [visibleTagCounts, setVisibleTagCounts] = useState<{ [key: string]: number }>({});
+  const [searchKeyword, setSearchKeyword] = useState<string>('');
+  const [sortField, setSortField] = useState<'name' | 'created_at' | 'user_name'>('created_at');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   
   // Mode: 'chat' for chat-specific notes, 'user' for all user notes
   const mode = userId ? 'user' : 'chat';
@@ -474,6 +477,47 @@ const SummaryHistory: React.FC = () => {
     setNewTagValue('');
   };
 
+  // Filter and sort notes
+  const filteredAndSortedNotes = React.useMemo(() => {
+    let filtered = [...notes];
+
+    // Apply search filter
+    if (searchKeyword.trim()) {
+      const keyword = searchKeyword.toLowerCase().trim();
+      filtered = filtered.filter(note => {
+        const nameMatch = note.name?.toLowerCase().includes(keyword) || false;
+        const idMatch = note.id.toLowerCase().includes(keyword);
+        const userMatch = note.user_name?.toLowerCase().includes(keyword) || false;
+        const tagsMatch = note.tags?.some(tag => tag.toLowerCase().includes(keyword)) || false;
+        
+        return nameMatch || idMatch || userMatch || tagsMatch;
+      });
+    }
+
+    // Apply sorting
+    filtered.sort((a, b) => {
+      let comparison = 0;
+      
+      switch (sortField) {
+        case 'created_at':
+          comparison = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+          break;
+        case 'name':
+          comparison = (a.name || a.id).localeCompare(b.name || b.id);
+          break;
+        case 'user_name':
+          comparison = (a.user_name || '').localeCompare(b.user_name || '');
+          break;
+        default:
+          return 0;
+      }
+      
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    return filtered;
+  }, [notes, searchKeyword, sortField, sortDirection]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
@@ -488,8 +532,8 @@ const SummaryHistory: React.FC = () => {
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       {/* Header */}
-      <header className="border-b px-6 py-4" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)' }}>
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+      <header className="border-b px-6 py-4 flex-shrink-0" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)', width: '100%' }}>
+        <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto flex items-center justify-between`} style={{ width: '100%', minWidth: 0 }}>
           <div className="flex items-center gap-4">
             <button
               onClick={() => navigate('/transcription-summary')}
@@ -538,35 +582,106 @@ const SummaryHistory: React.FC = () => {
           padding: isMobile ? '16px' : '24px',
           paddingBottom: isMobile 
             ? 'calc(80px + env(safe-area-inset-bottom, 0px))' 
-            : 'calc(24px + env(safe-area-inset-bottom, 0px))'
+            : 'calc(24px + env(safe-area-inset-bottom, 0px))',
+          width: '100%',
+          minWidth: 0
         }}
       >
-        <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto flex flex-col`} style={{ height: '100%' }}>
+        <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto flex flex-col`} style={{ height: '100%', width: '100%', minWidth: 0, flexShrink: 0 }}>
           {/* Notes List */}
-          <div className="flex flex-col" style={{ height: '100%' }}>
-            <h3 className="text-lg font-medium mb-4 flex-shrink-0" style={{ color: 'var(--text)' }}>
-              Meeting Notes
-              {mode === 'chat' && chatInfo && !chatLoading ? ` - ${getChatDisplayName()}` : ''}
-              {mode === 'chat' && chatLoading ? ' - Loading...' : ''}
-              {mode === 'user' && user ? ` - ${user.displayName}` : ''}
-            </h3>
+          <div className="flex flex-col flex-1 min-h-0" style={{ width: '100%', minWidth: 0 }}>
+            <div className="flex-shrink-0 mb-4" style={{ width: '100%', minWidth: 0 }}>
+              <h3 className="text-lg font-medium mb-4" style={{ color: 'var(--text)' }}>
+                Meeting Notes
+                {mode === 'chat' && chatInfo && !chatLoading ? ` - ${getChatDisplayName()}` : ''}
+                {mode === 'chat' && chatLoading ? ' - Loading...' : ''}
+                {mode === 'user' && user ? ` - ${user.displayName}` : ''}
+              </h3>
+              
+              {/* Search and Sort Controls */}
+              <div className={`flex ${isMobile ? 'flex-col gap-3' : 'items-center gap-4'} mb-4`} style={{ width: '100%' }}>
+                {/* Search Input */}
+                <div className="relative flex-1" style={{ minWidth: 0, marginBottom: isMobile ? '16px' : '0' }}>
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+                  <input
+                    type="text"
+                    placeholder="Search by name, tags, ID, or user..."
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 rounded-lg text-sm"
+                    style={{
+                      backgroundColor: 'var(--bg-secondary)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border)',
+                    }}
+                  />
+                </div>
+                
+                {/* Sort Controls */}
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    Sort:
+                  </label>
+                  <select
+                    value={sortField}
+                    onChange={(e) => setSortField(e.target.value as typeof sortField)}
+                    className="px-3 py-2 rounded-lg text-sm"
+                    style={{
+                      backgroundColor: 'var(--bg-secondary)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <option value="created_at">Date</option>
+                    <option value="name">Name</option>
+                    <option value="user_name">Creator</option>
+                  </select>
+                  <button
+                    onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
+                    className="p-2 rounded-lg transition-all flex-shrink-0"
+                    style={{
+                      color: 'var(--text-secondary)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                    title={sortDirection === 'asc' ? 'Ascending' : 'Descending'}
+                  >
+                    {sortDirection === 'asc' ? (
+                      <ArrowUp className="w-4 h-4" />
+                    ) : (
+                      <ArrowDown className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
 
-            <div className="overflow-y-auto custom-scrollbar" style={{ flex: '1 1 0', minHeight: 0 }}>
+            <div className="overflow-y-auto custom-scrollbar flex-1 min-h-0" style={{ width: '100%', minWidth: 0 }}>
               {notesLoading ? (
-                <div className="card rounded-lg p-8 text-center">
+                <div className="card rounded-lg p-8 text-center" style={{ width: '100%' }}>
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 mx-auto mb-4" style={{ borderColor: 'var(--accent)' }}></div>
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading notes...</p>
                 </div>
-              ) : notes.length === 0 ? (
-                <div className="card rounded-lg p-8 text-center">
-                  <FileText className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--text-muted)' }} />
-                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    {mode === 'user' ? 'No meeting notes found' : 'No meeting notes found for this chat'}
-                  </p>
+              ) : filteredAndSortedNotes.length === 0 ? (
+                <div className="space-y-3" style={{ width: '100%' }}>
+                  <div className="card rounded-lg p-8 text-center" style={{ width: '100%' }}>
+                    <FileText className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--text-muted)' }} />
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      {searchKeyword.trim() 
+                        ? 'No notes match your search' 
+                        : mode === 'user' 
+                          ? 'No meeting notes found' 
+                          : 'No meeting notes found for this chat'}
+                    </p>
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {notes.map(note => (
+                <div className="space-y-3" style={{ width: '100%' }}>
+                  {filteredAndSortedNotes.map(note => (
                   <div
                     key={note.id}
                     className="card rounded-lg overflow-hidden transition-all"

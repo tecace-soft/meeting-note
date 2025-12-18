@@ -1160,12 +1160,16 @@ const TranscriptionSummary: React.FC = () => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setOpenMenuChatId(null);
-                                if (chat.webUrl) {
-                                  window.open(chat.webUrl, '_blank');
-                                }
+                                // Disabled - coming soon
                               }}
-                              className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all chat-menu-item"
+                              disabled
+                              className="w-full flex items-center gap-2 px-4 py-2 text-sm chat-menu-item"
+                              style={{
+                                opacity: 0.5,
+                                cursor: 'not-allowed',
+                                color: 'var(--text-muted)',
+                              }}
+                              title="Coming soon"
                             >
                               <MessageSquare className="w-4 h-4" />
                               Chat
