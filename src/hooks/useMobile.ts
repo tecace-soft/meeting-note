@@ -13,7 +13,10 @@ export const useMobile = (): boolean => {
     // Also check viewport width
     const isSmallViewport = window.innerWidth <= 768;
     
-    return isMobileUserAgent || isSmallViewport;
+    // Check for touch capability (more reliable for actual mobile devices)
+    const hasTouchScreen = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    
+    return (isMobileUserAgent && hasTouchScreen) || (isSmallViewport && hasTouchScreen);
   });
 
   useEffect(() => {
@@ -22,7 +25,8 @@ export const useMobile = (): boolean => {
       const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
       const isMobileUserAgent = mobileRegex.test(userAgent.toLowerCase());
       const isSmallViewport = window.innerWidth <= 768;
-      setIsMobile(isMobileUserAgent || isSmallViewport);
+      const hasTouchScreen = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      setIsMobile((isMobileUserAgent && hasTouchScreen) || (isSmallViewport && hasTouchScreen));
     };
 
     window.addEventListener('resize', checkMobile);

@@ -630,7 +630,13 @@ const TranscriptionSummary: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow overflow-y-auto custom-scrollbar" style={{ padding: isMobile ? '16px' : '24px', paddingBottom: isMobile ? 'max(80px, env(safe-area-inset-bottom, 80px))' : 'max(24px, env(safe-area-inset-bottom, 24px))' }}>
+      <main 
+        className={`flex-grow overflow-y-auto custom-scrollbar ${isMobile ? 'mobile-bottom-padding' : ''}`}
+        style={{ 
+          padding: isMobile ? '16px' : '24px',
+          paddingBottom: isMobile ? undefined : 'calc(24px + env(safe-area-inset-bottom, 0px))'
+        }}
+      >
         <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto space-y-8`}>
           {/* File Upload Section */}
           <section>

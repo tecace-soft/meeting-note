@@ -532,7 +532,15 @@ const SummaryHistory: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow flex flex-col overflow-hidden" style={{ padding: isMobile ? '16px' : '24px', paddingBottom: isMobile ? 'max(80px, env(safe-area-inset-bottom, 80px))' : 'max(24px, env(safe-area-inset-bottom, 24px))' }}>
+      <main 
+        className="flex-grow flex flex-col overflow-hidden" 
+        style={{ 
+          padding: isMobile ? '16px' : '24px',
+          paddingBottom: isMobile 
+            ? 'calc(80px + env(safe-area-inset-bottom, 0px))' 
+            : 'calc(24px + env(safe-area-inset-bottom, 0px))'
+        }}
+      >
         <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto flex flex-col`} style={{ height: '100%' }}>
           {/* Notes List */}
           <div className="flex flex-col" style={{ height: '100%' }}>

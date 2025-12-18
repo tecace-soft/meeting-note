@@ -387,7 +387,13 @@ const SaveSummary: React.FC = () => {
       {/* Main Content */}
       <main className="flex-grow overflow-hidden flex" style={{ flexDirection: isMobile ? 'column' : 'row' }}>
         {/* File Browser */}
-        <div className="flex-grow flex flex-col overflow-hidden" style={{ padding: isMobile ? '16px' : '24px', paddingBottom: isMobile ? 'max(80px, env(safe-area-inset-bottom, 80px))' : 'max(24px, env(safe-area-inset-bottom, 24px))' }}>
+        <div 
+          className={`flex-grow flex flex-col overflow-hidden ${isMobile ? 'mobile-bottom-padding' : ''}`}
+          style={{ 
+            padding: isMobile ? '16px' : '24px',
+            paddingBottom: isMobile ? undefined : 'calc(24px + env(safe-area-inset-bottom, 0px))'
+          }}
+        >
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
             
             {/* Breadcrumbs & Actions */}
