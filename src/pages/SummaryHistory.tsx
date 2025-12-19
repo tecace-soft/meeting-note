@@ -8,6 +8,7 @@ import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moo
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
+import JSZip from 'jszip';
 
 interface Note {
   id: string;
@@ -45,12 +46,18 @@ const SummaryHistory: React.FC = () => {
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
   const [deleteNoteId, setDeleteNoteId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>('');
   const [isSavingName, setIsSavingName] = useState(false);
   const [openDownloadMenuId, setOpenDownloadMenuId] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; right: number } | null>(null);
   const downloadButtonRefs = useRef<{ [key: string]: HTMLButtonElement | null }>({});
+  const [showBulkDownloadMenu, setShowBulkDownloadMenu] = useState(false);
+  const [bulkDownloadMenuPosition, setBulkDownloadMenuPosition] = useState<{ top: number; right: number } | null>(null);
+  const bulkDownloadButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [isBulkDownloading, setIsBulkDownloading] = useState(false);
   const [editingSummaryId, setEditingSummaryId] = useState<string | null>(null);
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [isSavingSummary, setIsSavingSummary] = useState(false);
@@ -63,6 +70,7 @@ const SummaryHistory: React.FC = () => {
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [sortField, setSortField] = useState<'name' | 'created_at' | 'user_name'>('created_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
   
   // Mode: 'chat' for chat-specific notes, 'user' for all user notes
   const mode = userId ? 'user' : 'chat';
@@ -95,6 +103,29 @@ const SummaryHistory: React.FC = () => {
       setMenuPosition(null);
     }
   }, [openDownloadMenuId]);
+
+  // Close bulk download menu when clicking outside and calculate menu position
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setShowBulkDownloadMenu(false);
+      setBulkDownloadMenuPosition(null);
+    };
+    
+    if (showBulkDownloadMenu) {
+      const button = bulkDownloadButtonRef.current;
+      if (button) {
+        const rect = button.getBoundingClientRect();
+        setBulkDownloadMenuPosition({
+          top: rect.bottom + 4,
+          right: window.innerWidth - rect.right,
+        });
+      }
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    } else {
+      setBulkDownloadMenuPosition(null);
+    }
+  }, [showBulkDownloadMenu]);
 
   // Fetch chat info from Graph API (only in chat mode)
   useEffect(() => {
@@ -319,6 +350,114 @@ const SummaryHistory: React.FC = () => {
     }
   };
 
+  const handleBulkDownloadSummaries = async () => {
+    if (selectedNoteIds.size === 0) return;
+    
+    try {
+      setIsBulkDownloading(true);
+      const zip = new JSZip();
+      const selectedNotes = notes.filter(note => selectedNoteIds.has(note.id) && note.summary);
+      
+      if (selectedNotes.length === 0) {
+        alert('No summaries available for selected notes');
+        setShowBulkDownloadMenu(false);
+        return;
+      }
+      
+      for (const note of selectedNotes) {
+        if (note.summary) {
+          const fileName = note.name ? `${note.name}_summary.md` : `summary_${note.id}.md`;
+          zip.file(fileName, note.summary);
+        }
+      }
+      
+      const blob = await zip.generateAsync({ type: 'blob' });
+      downloadFile(blob, 'meeting_notes_summaries.zip', 'application/zip');
+      setShowBulkDownloadMenu(false);
+    } catch (error) {
+      console.error('Error downloading summaries:', error);
+      alert('Failed to download summaries');
+    } finally {
+      setIsBulkDownloading(false);
+    }
+  };
+
+  const handleBulkDownloadTranscripts = async () => {
+    if (selectedNoteIds.size === 0) return;
+    
+    try {
+      setIsBulkDownloading(true);
+      const zip = new JSZip();
+      const selectedNotes = notes.filter(note => selectedNoteIds.has(note.id) && note.transcription);
+      
+      if (selectedNotes.length === 0) {
+        alert('No transcripts available for selected notes');
+        setShowBulkDownloadMenu(false);
+        return;
+      }
+      
+      for (const note of selectedNotes) {
+        if (note.transcription) {
+          const fileName = note.name ? `${note.name}_transcript.md` : `transcript_${note.id}.md`;
+          zip.file(fileName, note.transcription);
+        }
+      }
+      
+      const blob = await zip.generateAsync({ type: 'blob' });
+      downloadFile(blob, 'meeting_notes_transcripts.zip', 'application/zip');
+      setShowBulkDownloadMenu(false);
+    } catch (error) {
+      console.error('Error downloading transcripts:', error);
+      alert('Failed to download transcripts');
+    } finally {
+      setIsBulkDownloading(false);
+    }
+  };
+
+  const handleBulkDownloadAudio = async () => {
+    if (selectedNoteIds.size === 0) return;
+    
+    try {
+      setIsBulkDownloading(true);
+      const zip = new JSZip();
+      const selectedNotes = notes.filter(note => selectedNoteIds.has(note.id) && note.audio_file);
+      
+      if (selectedNotes.length === 0) {
+        alert('No audio files available for selected notes');
+        setShowBulkDownloadMenu(false);
+        return;
+      }
+      
+      for (const note of selectedNotes) {
+        if (note.audio_file) {
+          try {
+            const response = await fetch(note.audio_file);
+            if (!response.ok) throw new Error(`Failed to download audio for note ${note.id}`);
+            
+            const blob = await response.blob();
+            const urlParts = note.audio_file.split('/');
+            const originalFileName = urlParts[urlParts.length - 1] || `audio_${note.id}`;
+            const extension = originalFileName.split('.').pop() || '';
+            const fileName = note.name ? `${note.name}_audio.${extension}` : originalFileName;
+            
+            zip.file(fileName, blob);
+          } catch (error) {
+            console.error(`Error downloading audio for note ${note.id}:`, error);
+          }
+        }
+      }
+      
+      const blob = await zip.generateAsync({ type: 'blob' });
+      downloadFile(blob, 'meeting_notes_audio.zip', 'application/zip');
+      setShowBulkDownloadMenu(false);
+    } catch (error) {
+      console.error('Error downloading audio files:', error);
+      alert('Failed to download audio files');
+    } finally {
+      setIsBulkDownloading(false);
+    }
+  };
+
   const handleDeleteNote = async () => {
     if (!deleteNoteId) return;
     
@@ -339,6 +478,33 @@ const SummaryHistory: React.FC = () => {
       alert('Failed to delete note');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleBulkDeleteNotes = async () => {
+    if (selectedNoteIds.size === 0) return;
+    
+    try {
+      setIsBulkDeleting(true);
+      const noteIdsArray = Array.from(selectedNoteIds);
+      
+      // Delete all selected notes
+      const { error } = await supabase
+        .from('note')
+        .delete()
+        .in('id', noteIdsArray);
+      
+      if (error) throw error;
+      
+      // Remove notes from local state
+      setNotes(prev => prev.filter(note => !selectedNoteIds.has(note.id)));
+      setSelectedNoteIds(new Set());
+      setShowBulkDeleteModal(false);
+    } catch (error) {
+      console.error('Error deleting notes:', error);
+      alert('Failed to delete notes');
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -518,6 +684,31 @@ const SummaryHistory: React.FC = () => {
     return filtered;
   }, [notes, searchKeyword, sortField, sortDirection]);
 
+  // Select all/deselect all handler
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedNoteIds(new Set(filteredAndSortedNotes.map(note => note.id)));
+    } else {
+      setSelectedNoteIds(new Set());
+    }
+  };
+
+  // Toggle individual note selection
+  const handleToggleNoteSelection = (noteId: string) => {
+    setSelectedNoteIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(noteId)) {
+        newSet.delete(noteId);
+      } else {
+        newSet.add(noteId);
+      }
+      return newSet;
+    });
+  };
+
+  const allSelected = filteredAndSortedNotes.length > 0 && filteredAndSortedNotes.every(note => selectedNoteIds.has(note.id));
+  const someSelected = filteredAndSortedNotes.some(note => selectedNoteIds.has(note.id)) && !allSelected;
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
@@ -590,75 +781,324 @@ const SummaryHistory: React.FC = () => {
         <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto flex flex-col`} style={{ height: '100%', width: '100%', minWidth: 0, flexShrink: 0 }}>
           {/* Notes List */}
           <div className="flex flex-col flex-1 min-h-0" style={{ width: '100%', minWidth: 0 }}>
-            <div className="flex-shrink-0 mb-4" style={{ width: '100%', minWidth: 0 }}>
-              <h3 className="text-lg font-medium mb-4" style={{ color: 'var(--text)' }}>
-                Meeting Notes
-                {mode === 'chat' && chatInfo && !chatLoading ? ` - ${getChatDisplayName()}` : ''}
-                {mode === 'chat' && chatLoading ? ' - Loading...' : ''}
-                {mode === 'user' && user ? ` - ${user.displayName}` : ''}
-              </h3>
+            <div className="flex-shrink-0" style={{ width: '100%', minWidth: 0, marginBottom: '16px' }}>
+              <div className="flex items-center gap-4 mb-4">
+                <h3 className="text-lg font-medium" style={{ color: 'var(--text)' }}>
+                  Meeting Notes
+                  {mode === 'chat' && chatInfo && !chatLoading ? ` - ${getChatDisplayName()}` : ''}
+                  {mode === 'chat' && chatLoading ? ' - Loading...' : ''}
+                  {mode === 'user' && user ? ` - ${user.displayName}` : ''}
+                </h3>
+              </div>
               
               {/* Search and Sort Controls */}
-              <div className={`flex ${isMobile ? 'flex-col gap-3' : 'items-center gap-4'} mb-4`} style={{ width: '100%' }}>
-                {/* Search Input */}
-                <div className="relative flex-1" style={{ minWidth: 0, marginBottom: isMobile ? '16px' : '0' }}>
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-                  <input
-                    type="text"
-                    placeholder="Search by name, tags, ID, or user..."
-                    value={searchKeyword}
-                    onChange={(e) => setSearchKeyword(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 rounded-lg text-sm"
-                    style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      color: 'var(--text)',
-                      border: '1px solid var(--border)',
-                    }}
-                  />
+              {isMobile ? (
+                <div className="flex flex-col gap-3" style={{ width: '100%' }}>
+                  {/* Search Input */}
+                  <div className="relative flex-1" style={{ minWidth: 0, width: '100%' }}>
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+                    <input
+                      type="text"
+                      placeholder="Search by name, tags, ID, or user..."
+                      value={searchKeyword}
+                      onChange={(e) => setSearchKeyword(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 rounded-lg text-sm"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--border)',
+                      }}
+                    />
+                  </div>
+                  
+                  {/* Sort Controls */}
+                  <div className="flex items-center gap-3 flex-shrink-0 w-full">
+                    <label className="text-sm font-medium flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                      Sort:
+                    </label>
+                    <select
+                      value={sortField}
+                      onChange={(e) => setSortField(e.target.value as typeof sortField)}
+                      className="px-3 py-2 rounded-lg text-sm flex-1"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      <option value="created_at">Date</option>
+                      <option value="name">Name</option>
+                      <option value="user_name">Creator</option>
+                    </select>
+                    <button
+                      onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
+                      className="p-2 rounded-lg transition-all flex-shrink-0"
+                      style={{
+                        color: 'var(--text-secondary)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      title={sortDirection === 'asc' ? 'Ascending' : 'Descending'}
+                    >
+                      {sortDirection === 'asc' ? (
+                        <ArrowUp className="w-4 h-4" />
+                      ) : (
+                        <ArrowDown className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                  
+                  {/* Action Buttons Row with Checkbox */}
+                  <div className="flex items-center gap-3 w-full">
+                    {/* Select All Checkbox */}
+                    <div className="flex items-center flex-shrink-0" style={{ paddingLeft: '15px' }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={(input) => {
+                          if (input) input.indeterminate = someSelected;
+                        }}
+                        onChange={(e) => handleSelectAll(e.target.checked)}
+                        className="w-5 h-5 rounded cursor-pointer"
+                        style={{
+                          accentColor: 'var(--accent)',
+                        }}
+                        title={allSelected ? 'Deselect all' : 'Select all'}
+                      />
+                    </div>
+                    
+                    {/* Bulk Download Button */}
+                    <button
+                      ref={bulkDownloadButtonRef}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowBulkDownloadMenu(!showBulkDownloadMenu);
+                      }}
+                      disabled={selectedNoteIds.size === 0 || isBulkDownloading}
+                      className="py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      style={{
+                        backgroundColor: selectedNoteIds.size > 0 ? 'var(--accent)' : 'var(--bg-secondary)',
+                        color: selectedNoteIds.size > 0 ? '#fff' : 'var(--text-muted)',
+                        justifyContent: 'center',
+                        paddingLeft: selectedNoteIds.size > 0 ? '12px' : '16px',
+                        paddingRight: selectedNoteIds.size > 0 ? '12px' : '16px',
+                      }}
+                      title={selectedNoteIds.size > 0 ? `Download ${selectedNoteIds.size} selected note(s)` : 'Select notes to download'}
+                    >
+                      <Download className="w-4 h-4" />
+                      {selectedNoteIds.size > 0 && (
+                        <span>{selectedNoteIds.size}</span>
+                      )}
+                    </button>
+                    
+                    {/* Bulk Delete Button */}
+                    <button
+                      onClick={() => setShowBulkDeleteModal(true)}
+                      disabled={selectedNoteIds.size === 0}
+                      className="py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      style={{
+                        backgroundColor: selectedNoteIds.size > 0 ? 'var(--error)' : 'var(--bg-secondary)',
+                        color: selectedNoteIds.size > 0 ? '#fff' : 'var(--text-muted)',
+                        justifyContent: 'center',
+                        paddingLeft: selectedNoteIds.size > 0 ? '12px' : '16px',
+                        paddingRight: selectedNoteIds.size > 0 ? '12px' : '16px',
+                      }}
+                      title={selectedNoteIds.size > 0 ? `Delete ${selectedNoteIds.size} selected note(s)` : 'Select notes to delete'}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      {selectedNoteIds.size > 0 && (
+                        <span>{selectedNoteIds.size}</span>
+                      )}
+                    </button>
+                  </div>
                 </div>
-                
-                {/* Sort Controls */}
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-                    Sort:
-                  </label>
-                  <select
-                    value={sortField}
-                    onChange={(e) => setSortField(e.target.value as typeof sortField)}
-                    className="px-3 py-2 rounded-lg text-sm"
-                    style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      color: 'var(--text)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <option value="created_at">Date</option>
-                    <option value="name">Name</option>
-                    <option value="user_name">Creator</option>
-                  </select>
+              ) : (
+                <div className="flex items-center gap-4" style={{ width: '100%' }}>
+                  {/* Select All Checkbox */}
+                  <div className="flex items-center flex-shrink-0" style={{ paddingLeft: '15px' }}>
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(input) => {
+                        if (input) input.indeterminate = someSelected;
+                      }}
+                      onChange={(e) => handleSelectAll(e.target.checked)}
+                      className="w-5 h-5 rounded cursor-pointer"
+                      style={{
+                        accentColor: 'var(--accent)',
+                      }}
+                      title={allSelected ? 'Deselect all' : 'Select all'}
+                    />
+                  </div>
+                  
+                  {/* Search Input */}
+                  <div className="relative flex-1" style={{ minWidth: 0 }}>
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+                    <input
+                      type="text"
+                      placeholder="Search by name, tags, ID, or user..."
+                      value={searchKeyword}
+                      onChange={(e) => setSearchKeyword(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 rounded-lg text-sm"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--border)',
+                      }}
+                    />
+                  </div>
+                  
+                  {/* Sort Controls */}
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                      Sort:
+                    </label>
+                    <select
+                      value={sortField}
+                      onChange={(e) => setSortField(e.target.value as typeof sortField)}
+                      className="px-3 py-2 rounded-lg text-sm"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      <option value="created_at">Date</option>
+                      <option value="name">Name</option>
+                      <option value="user_name">Creator</option>
+                    </select>
+                    <button
+                      onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
+                      className="p-2 rounded-lg transition-all flex-shrink-0"
+                      style={{
+                        color: 'var(--text-secondary)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      title={sortDirection === 'asc' ? 'Ascending' : 'Descending'}
+                    >
+                      {sortDirection === 'asc' ? (
+                        <ArrowUp className="w-4 h-4" />
+                      ) : (
+                        <ArrowDown className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                  
+                  {/* Bulk Download Button */}
                   <button
-                    onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
-                    className="p-2 rounded-lg transition-all flex-shrink-0"
+                    ref={bulkDownloadButtonRef}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowBulkDownloadMenu(!showBulkDownloadMenu);
+                    }}
+                    disabled={selectedNoteIds.size === 0 || isBulkDownloading}
+                    className="py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{
-                      color: 'var(--text-secondary)',
+                      backgroundColor: selectedNoteIds.size > 0 ? 'var(--accent)' : 'var(--bg-secondary)',
+                      color: selectedNoteIds.size > 0 ? '#fff' : 'var(--text-muted)',
+                      minWidth: '80px',
+                      justifyContent: 'center',
+                      paddingLeft: selectedNoteIds.size > 0 ? '12px' : '16px',
+                      paddingRight: selectedNoteIds.size > 0 ? '12px' : '16px',
                     }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                    title={sortDirection === 'asc' ? 'Ascending' : 'Descending'}
+                    title={selectedNoteIds.size > 0 ? `Download ${selectedNoteIds.size} selected note(s)` : 'Select notes to download'}
                   >
-                    {sortDirection === 'asc' ? (
-                      <ArrowUp className="w-4 h-4" />
-                    ) : (
-                      <ArrowDown className="w-4 h-4" />
+                    <Download className="w-4 h-4" />
+                    {selectedNoteIds.size > 0 && (
+                      <span>{selectedNoteIds.size}</span>
+                    )}
+                  </button>
+                  
+                  {/* Bulk Delete Button */}
+                  <button
+                    onClick={() => setShowBulkDeleteModal(true)}
+                    disabled={selectedNoteIds.size === 0}
+                    className="py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{
+                      backgroundColor: selectedNoteIds.size > 0 ? 'var(--error)' : 'var(--bg-secondary)',
+                      color: selectedNoteIds.size > 0 ? '#fff' : 'var(--text-muted)',
+                      minWidth: '80px',
+                      justifyContent: 'center',
+                      paddingLeft: selectedNoteIds.size > 0 ? '12px' : '16px',
+                      paddingRight: selectedNoteIds.size > 0 ? '12px' : '16px',
+                      marginRight: '15px',
+                    }}
+                    title={selectedNoteIds.size > 0 ? `Delete ${selectedNoteIds.size} selected note(s)` : 'Select notes to delete'}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    {selectedNoteIds.size > 0 && (
+                      <span>{selectedNoteIds.size}</span>
                     )}
                   </button>
                 </div>
-              </div>
+              )}
             </div>
+            
+            {/* Bulk Download Menu */}
+            {showBulkDownloadMenu && bulkDownloadMenuPosition && (
+              <div 
+                className="fixed py-1 rounded-lg shadow-lg min-w-40 z-50"
+                style={{ 
+                  backgroundColor: 'var(--card)', 
+                  border: '1px solid var(--border)',
+                  top: `${bulkDownloadMenuPosition.top}px`,
+                  right: `${bulkDownloadMenuPosition.right}px`,
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {notes.filter(note => selectedNoteIds.has(note.id) && note.summary).length > 0 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleBulkDownloadSummaries();
+                    }}
+                    disabled={isBulkDownloading}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left disabled:opacity-50"
+                    style={{ color: 'var(--text)' }}
+                  >
+                    <FileText className="w-4 h-4" />
+                    Summary
+                  </button>
+                )}
+                {notes.filter(note => selectedNoteIds.has(note.id) && note.transcription).length > 0 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleBulkDownloadTranscripts();
+                    }}
+                    disabled={isBulkDownloading}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left disabled:opacity-50"
+                    style={{ color: 'var(--text)' }}
+                  >
+                    <FileText className="w-4 h-4" />
+                    Transcript
+                  </button>
+                )}
+                {notes.filter(note => selectedNoteIds.has(note.id) && note.audio_file).length > 0 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleBulkDownloadAudio();
+                    }}
+                    disabled={isBulkDownloading}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left disabled:opacity-50"
+                    style={{ color: 'var(--text)' }}
+                  >
+                    <Download className="w-4 h-4" />
+                    Audio
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="overflow-y-auto custom-scrollbar flex-1 min-h-0" style={{ width: '100%', minWidth: 0 }}>
               {notesLoading ? (
@@ -713,11 +1153,21 @@ const SummaryHistory: React.FC = () => {
                       }}
                     >
                       <div className={`flex ${isMobile ? 'w-full gap-3 items-center' : 'items-center gap-4 flex-grow min-w-0'}`}>
-                        <div 
-                          className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
-                          style={{ backgroundColor: 'var(--accent-light)' }}
-                        >
-                          <FileText className="w-5 h-5" style={{ color: 'var(--accent)' }} />
+                        <div className="flex items-center justify-center flex-shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={selectedNoteIds.has(note.id)}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              handleToggleNoteSelection(note.id);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-5 h-5 rounded cursor-pointer"
+                            style={{
+                              accentColor: 'var(--accent)',
+                            }}
+                            title={selectedNoteIds.has(note.id) ? 'Deselect' : 'Select'}
+                          />
                         </div>
                         <div 
                           className={`flex flex-col flex-grow min-w-0 ${isMobile ? 'gap-2' : ''}`}
@@ -1159,6 +1609,44 @@ const SummaryHistory: React.FC = () => {
                 style={{ backgroundColor: 'var(--error)', color: '#fff' }}
               >
                 {isDeleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setShowBulkDeleteModal(false)}
+        >
+          <div 
+            className="card rounded-lg p-8 max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text)' }}>
+              Delete Selected Meeting Notes
+            </h3>
+            <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
+              Are you sure you want to permanently delete {selectedNoteIds.size} meeting note{selectedNoteIds.size !== 1 ? 's' : ''}? This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowBulkDeleteModal(false)}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDeleteNotes}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                style={{ backgroundColor: 'var(--error)', color: '#fff' }}
+              >
+                {isBulkDeleting ? 'Deleting...' : 'Delete'}
               </button>
             </div>
           </div>

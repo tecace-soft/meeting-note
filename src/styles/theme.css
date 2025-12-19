@@ -412,6 +412,46 @@ body {
   padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
 }
 
+/* Checkbox styling for theme support */
+input[type="checkbox"] {
+  background-color: var(--bg-secondary) !important;
+  border: 2px solid var(--border) !important;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+}
+
+input[type="checkbox"]:checked {
+  background-color: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+
+input[type="checkbox"]:checked::after {
+  content: '✓';
+  display: block;
+  text-align: center;
+  color: white;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: bold;
+}
+
+input[type="checkbox"]:indeterminate {
+  background-color: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+
+input[type="checkbox"]:indeterminate::after {
+  content: '−';
+  display: block;
+  text-align: center;
+  color: white;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: bold;
+}
+
 /* Menu item hover effect */
 .menu-item-hover:hover {
   background-color: var(--bg-secondary) !important;
