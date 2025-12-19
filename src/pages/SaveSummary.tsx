@@ -5,9 +5,10 @@ import { useTheme } from '../theme/ThemeProvider';
 import { useMobile } from '../hooks/useMobile';
 import { supabase } from '../config/supabaseConfig';
 import { 
-  LogOut, ArrowLeft, Folder, File, FolderPlus, Trash2, 
-  Edit2, Save, X, Loader2, ChevronRight, Home, Check, Sun, Moon
+  LogOut, Folder, File, FolderPlus, Trash2, 
+  Edit2, Save, X, Loader2, ChevronRight, Home, Check, Sun, Moon, History, NotebookPen
 } from 'lucide-react';
+import brandIcon from '../images/meeting note ICON.svg';
 import {
   getOneDriveRoot,
   getOneDriveFolderContents,
@@ -350,10 +351,15 @@ const SaveSummary: React.FC = () => {
           <div className="flex items-center gap-4">
             <button
               onClick={() => navigate('/transcription-summary')}
-              className="p-2 rounded-md transition-all hover:bg-opacity-80"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              className="cursor-pointer"
+              style={{ background: 'none', border: 'none', padding: 0 }}
             >
-              <ArrowLeft className="w-4 h-4" />
+              <img 
+                src={brandIcon} 
+                alt="Meeting Note Icon" 
+                className="h-8 w-auto"
+                style={{ height: '32px' }}
+              />
             </button>
             <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
               {noteId ? 'Save to OneDrive' : 'OneDrive'}
@@ -371,6 +377,22 @@ const SaveSummary: React.FC = () => {
             )}
             <button onClick={toggleTheme} className="p-2 rounded-md" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => navigate('/transcription-summary')}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="Transcription Summary"
+            >
+              <NotebookPen className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => navigate(`/summary-history?user_id=${user?.id}`)}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="My Notes"
+            >
+              <History className="w-4 h-4" />
             </button>
             <button
               onClick={logout}

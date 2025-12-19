@@ -9,6 +9,7 @@ import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Ch
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
+import brandIcon from '../images/meeting note ICON.svg';
 
 // Type definition for Wake Lock API
 interface WakeLockSentinel extends EventTarget {
@@ -582,6 +583,12 @@ const TranscriptionSummary: React.FC = () => {
       <header className="border-b px-6 py-4" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)' }}>
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
+            <img 
+              src={brandIcon} 
+              alt="Meeting Note Icon" 
+              className="h-8 w-auto"
+              style={{ height: '32px' }}
+            />
             <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>Meeting Note</h1>
           </div>
           <div className="flex items-center gap-4">
@@ -946,7 +953,28 @@ const TranscriptionSummary: React.FC = () => {
                             Discard
                           </button>
                           <button
-                            onClick={() => setIsEditingSummary(!isEditingSummary)}
+                            onClick={async () => {
+                              if (isEditingSummary && currentNoteId) {
+                                // Save the edited summary to summary_edit
+                                try {
+                                  const { error } = await supabase
+                                    .from('note')
+                                    .update({ summary_edit: editedSummary.trim() })
+                                    .eq('id', currentNoteId);
+                                  
+                                  if (error) {
+                                    console.error('Error saving edited summary:', error);
+                                    alert('Failed to save edited summary');
+                                    return;
+                                  }
+                                } catch (error) {
+                                  console.error('Error saving edited summary:', error);
+                                  alert('Failed to save edited summary');
+                                  return;
+                                }
+                              }
+                              setIsEditingSummary(!isEditingSummary);
+                            }}
                             className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
                             style={{ 
                               backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',

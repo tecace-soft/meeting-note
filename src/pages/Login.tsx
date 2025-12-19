@@ -2,6 +2,10 @@ import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
+import { Sun, Moon } from 'lucide-react';
+import brandIcon from '../images/meeting note ICON.svg';
+import brandIconDark from '../images/meeting note dark mode.svg';
+import brandIconLight from '../images/meeting note light mode.svg';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -43,20 +47,13 @@ const Login: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--bg)' }}>
       {/* Header */}
-      <div className="flex justify-between items-center p-4">
-        <div className="text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-          Meeting Note
-        </div>
+      <div className="flex justify-end items-center p-4">
         <button
           onClick={toggleTheme}
-          className="text-sm px-3 py-1 rounded border"
-          style={{ 
-            backgroundColor: 'var(--card)', 
-            borderColor: 'var(--border)',
-            color: 'var(--text)'
-          }}
+          className="p-2 rounded-md"
+          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
         >
-          {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
+          {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
         </button>
       </div>
 
@@ -66,16 +63,13 @@ const Login: React.FC = () => {
           {/* Header */}
           <div className="text-center">
             <div className="mb-6">
-              <svg className="w-16 h-16 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--accent)' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-              </svg>
+              <img 
+                src={theme === 'dark' ? brandIconDark : brandIconLight} 
+                alt="Meeting Note" 
+                className="mx-auto"
+                style={{ height: '120px', width: 'auto' }}
+              />
             </div>
-            <h2 className="text-3xl font-light" style={{ color: 'var(--text)' }}>
-              Meeting Note
-            </h2>
-            <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              Transcribe audio files and access your Teams chats
-            </p>
           </div>
 
           {/* Login Card */}

@@ -4,11 +4,12 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { useMobile } from '../hooks/useMobile';
-import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, Download, Trash2, Pencil, Save, Loader2, Plus, X, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { LogOut, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, Download, Trash2, Pencil, Save, Loader2, Plus, X, Search, ArrowUpDown, ArrowUp, ArrowDown, HardDrive, NotebookPen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
 import JSZip from 'jszip';
+import brandIcon from '../images/meeting note ICON.svg';
 
 interface Note {
   id: string;
@@ -16,6 +17,7 @@ interface Note {
   user_name: string;
   chat_id: string;
   summary?: string;
+  summary_edit?: string;
   transcription?: string;
   audio_file?: string | null;
   name?: string | null;
@@ -316,9 +318,10 @@ const SummaryHistory: React.FC = () => {
   };
 
   const handleDownloadSummary = (note: Note) => {
-    if (!note.summary) return;
+    const summaryToDownload = note.summary_edit || note.summary;
+    if (!summaryToDownload) return;
     const fileName = note.name ? `${note.name}_summary.md` : `summary_${note.id}.md`;
-    downloadFile(note.summary, fileName, 'text/markdown');
+    downloadFile(summaryToDownload, fileName, 'text/markdown');
     setOpenDownloadMenuId(null);
   };
 
@@ -356,7 +359,7 @@ const SummaryHistory: React.FC = () => {
     try {
       setIsBulkDownloading(true);
       const zip = new JSZip();
-      const selectedNotes = notes.filter(note => selectedNoteIds.has(note.id) && note.summary);
+      const selectedNotes = notes.filter(note => selectedNoteIds.has(note.id) && (note.summary_edit || note.summary));
       
       if (selectedNotes.length === 0) {
         alert('No summaries available for selected notes');
@@ -365,9 +368,10 @@ const SummaryHistory: React.FC = () => {
       }
       
       for (const note of selectedNotes) {
-        if (note.summary) {
+        const summaryToDownload = note.summary_edit || note.summary;
+        if (summaryToDownload) {
           const fileName = note.name ? `${note.name}_summary.md` : `summary_${note.id}.md`;
-          zip.file(fileName, note.summary);
+          zip.file(fileName, summaryToDownload);
         }
       }
       
@@ -561,7 +565,8 @@ const SummaryHistory: React.FC = () => {
 
   const handleStartEditSummary = (note: Note) => {
     setEditingSummaryId(note.id);
-    setEditedSummary(note.summary || '');
+    // Use summary_edit if it exists, otherwise use summary
+    setEditedSummary(note.summary_edit || note.summary || '');
   };
 
   const handleSaveSummary = async (noteId: string) => {
@@ -569,14 +574,14 @@ const SummaryHistory: React.FC = () => {
       setIsSavingSummary(true);
       const { error } = await supabase
         .from('note')
-        .update({ summary: editedSummary.trim() })
+        .update({ summary_edit: editedSummary.trim() })
         .eq('id', noteId);
       
       if (error) throw error;
       
       // Update local state
       setNotes(prev => prev.map(note => 
-        note.id === noteId ? { ...note, summary: editedSummary.trim() } : note
+        note.id === noteId ? { ...note, summary_edit: editedSummary.trim() } : note
       ));
       
       setEditingSummaryId(null);
@@ -728,10 +733,15 @@ const SummaryHistory: React.FC = () => {
           <div className="flex items-center gap-4">
             <button
               onClick={() => navigate('/transcription-summary')}
-              className="p-2 rounded-md transition-all"
-              style={{ backgroundColor: 'var(--bg-secondary)' }}
+              className="cursor-pointer"
+              style={{ background: 'none', border: 'none', padding: 0 }}
             >
-              <ArrowLeft className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
+              <img 
+                src={brandIcon} 
+                alt="Meeting Note Icon" 
+                className="h-8 w-auto"
+                style={{ height: '32px' }}
+              />
             </button>
             <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
               {mode === 'user' ? 'My Notes' : 'Summary History'}
@@ -753,6 +763,22 @@ const SummaryHistory: React.FC = () => {
               style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
             >
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => navigate('/transcription-summary')}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="Transcription Summary"
+            >
+              <NotebookPen className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => navigate('/save-summary')}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="OneDrive"
+            >
+              <HardDrive className="w-4 h-4" />
             </button>
             <button
               onClick={logout}
@@ -1055,7 +1081,7 @@ const SummaryHistory: React.FC = () => {
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                {notes.filter(note => selectedNoteIds.has(note.id) && note.summary).length > 0 && (
+                {notes.filter(note => selectedNoteIds.has(note.id) && (note.summary_edit || note.summary)).length > 0 && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -1319,7 +1345,7 @@ const SummaryHistory: React.FC = () => {
                           </div>
                           {isMobile && (
                             <div className="w-full flex items-center justify-between mt-2">
-                            {(note.summary || note.transcription || note.audio_file) && (
+                            {((note.summary_edit || note.summary) || note.transcription || note.audio_file) && (
                               <>
                                 <button
                                   ref={(el) => {
@@ -1350,7 +1376,7 @@ const SummaryHistory: React.FC = () => {
                                     }}
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    {note.summary && (
+                                    {(note.summary_edit || note.summary) && (
                                       <button
                                         onClick={() => handleDownloadSummary(note)}
                                         className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all menu-item-hover text-left"
@@ -1509,7 +1535,7 @@ const SummaryHistory: React.FC = () => {
                           className="p-4 border-t"
                           style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
                         >
-                          {note.summary ? (
+                          {(note.summary_edit || note.summary) ? (
                             <div className="space-y-3">
                               <div className="flex justify-end">
                                 {editingSummaryId === note.id ? (
@@ -1556,7 +1582,7 @@ const SummaryHistory: React.FC = () => {
                                 />
                               ) : (
                                 <div className="prose prose-sm max-w-none">
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary}</ReactMarkdown>
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary_edit || note.summary || ''}</ReactMarkdown>
                                 </div>
                               )}
                             </div>
