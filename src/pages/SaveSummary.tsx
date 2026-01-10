@@ -2,13 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
-import { useMobile } from '../hooks/useMobile';
 import { supabase } from '../config/supabaseConfig';
 import { 
-  LogOut, Folder, File, FolderPlus, Trash2, 
-  Edit2, Save, X, Loader2, ChevronRight, Home, Check, Sun, Moon, History, NotebookPen
+  LogOut, ArrowLeft, Folder, File, FolderPlus, Trash2, 
+  Edit2, Save, X, Loader2, ChevronRight, Home, Check, Sun, Moon
 } from 'lucide-react';
-import brandIcon from '../images/meeting note ICON.svg';
 import {
   getOneDriveRoot,
   getOneDriveFolderContents,
@@ -25,7 +23,6 @@ interface Note {
   summary?: string;
   transcription?: string;
   user_name?: string;
-  name?: string | null;
   created_at?: string;
 }
 
@@ -43,7 +40,6 @@ const SaveSummary: React.FC = () => {
 
   const { theme, toggleTheme } = useTheme();
   const { user, isAuthenticated, isLoading: authLoading, logout, getAccessToken } = useAuth();
-  const isMobile = useMobile();
 
   const [note, setNote] = useState<Note | null>(null);
   const [noteLoading, setNoteLoading] = useState(true);
@@ -92,35 +88,18 @@ const SaveSummary: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('note')
-          .select('id, summary, transcription, user_name, name, created_at')
+          .select('id, summary, transcription, user_name, created_at')
           .eq('id', noteId)
           .single();
 
         if (error) throw error;
         setNote(data);
         
-        // Generate default filenames based on note.name
-        if (data.name) {
-          setSaveFileName(`${data.name}_note.md`);
-          setTranscriptFileName(`${data.name}_transcript.md`);
-          
-          // Set audio filename if audioName is available
-          if (audioName) {
-            const extension = audioName.split('.').pop() || '';
-            setAudioFileName(`${data.name}_audio.${extension}`);
-          }
-        } else {
-          // Fallback to date-based naming if no name
-          const date = new Date();
-          const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-          setSaveFileName(`Meeting_Note_${dateStr}.md`);
-          setTranscriptFileName(`Meeting_Transcript_${dateStr}.md`);
-          
-          // Fallback audio filename
-          if (audioName) {
-            setAudioFileName(audioName);
-          }
-        }
+        // Generate default filenames
+        const date = new Date();
+        const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+        setSaveFileName(`Meeting_Note_${dateStr}.md`);
+        setTranscriptFileName(`Meeting_Transcript_${dateStr}.md`);
       } catch (err: any) {
         console.error('Error fetching note:', err);
       } finally {
@@ -129,8 +108,14 @@ const SaveSummary: React.FC = () => {
     };
 
     fetchNote();
-  }, [noteId, audioName]);
+  }, [noteId]);
 
+  // Set audio filename from URL param
+  useEffect(() => {
+    if (audioName) {
+      setAudioFileName(audioName);
+    }
+  }, [audioName]);
 
   // Fetch OneDrive contents
   const fetchContents = async (folderId: string | null = null) => {
@@ -351,22 +336,17 @@ const SaveSummary: React.FC = () => {
           <div className="flex items-center gap-4">
             <button
               onClick={() => navigate('/transcription-summary')}
-              className="cursor-pointer"
-              style={{ background: 'none', border: 'none', padding: 0 }}
+              className="p-2 rounded-md transition-all hover:bg-opacity-80"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
             >
-              <img 
-                src={brandIcon} 
-                alt="Meeting Note Icon" 
-                className="h-8 w-auto"
-                style={{ height: '32px' }}
-              />
+              <ArrowLeft className="w-4 h-4" />
             </button>
             <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
               {noteId ? 'Save to OneDrive' : 'OneDrive'}
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            {user && !isMobile && (
+            {user && (
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium"
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
@@ -377,22 +357,6 @@ const SaveSummary: React.FC = () => {
             )}
             <button onClick={toggleTheme} className="p-2 rounded-md" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-            </button>
-            <button
-              onClick={() => navigate('/transcription-summary')}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="Transcription Summary"
-            >
-              <NotebookPen className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => navigate(`/summary-history?user_id=${user?.id}`)}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="My Notes"
-            >
-              <History className="w-4 h-4" />
             </button>
             <button
               onClick={logout}
@@ -407,15 +371,9 @@ const SaveSummary: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow overflow-hidden flex" style={{ flexDirection: isMobile ? 'column' : 'row' }}>
+      <main className="flex-grow overflow-hidden flex">
         {/* File Browser */}
-        <div 
-          className={`flex-grow flex flex-col overflow-hidden ${isMobile ? 'mobile-bottom-padding' : ''}`}
-          style={{ 
-            padding: isMobile ? '16px' : '24px',
-            paddingBottom: isMobile ? undefined : 'calc(24px + env(safe-area-inset-bottom, 0px))'
-          }}
-        >
+        <div className="flex-grow flex flex-col overflow-hidden p-6">
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
             
             {/* Breadcrumbs & Actions */}

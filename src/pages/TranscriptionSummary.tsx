@@ -2,27 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
-import { useMobile } from '../hooks/useMobile';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import { supabase, AUDIO_BUCKET } from '../config/supabaseConfig';
 import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Sun, Moon, Mic, Square, Play, Pause } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
-import brandIcon from '../images/meeting note ICON.svg';
-
-// Type definition for Wake Lock API
-interface WakeLockSentinel extends EventTarget {
-  released: boolean;
-  type: 'screen';
-  release(): Promise<void>;
-}
-
-interface NavigatorWithWakeLock {
-  wakeLock?: {
-    request(type: 'screen'): Promise<WakeLockSentinel>;
-  };
-}
 
 interface UploadedFile {
   id: string;
@@ -40,7 +25,6 @@ const TranscriptionSummary: React.FC = () => {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const { user, isAuthenticated, isLoading, logout, getAccessToken } = useAuth();
-  const isMobile = useMobile();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [chats, setChats] = useState<TeamsChat[]>([]);
@@ -75,7 +59,6 @@ const TranscriptionSummary: React.FC = () => {
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
-  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -109,25 +92,6 @@ const TranscriptionSummary: React.FC = () => {
 
   const startRecording = async () => {
     try {
-      // Request wake lock to keep screen on during recording
-      if ('wakeLock' in navigator) {
-        try {
-          const nav = navigator as NavigatorWithWakeLock;
-          if (nav.wakeLock) {
-            const wakeLock = await nav.wakeLock.request('screen');
-            wakeLockRef.current = wakeLock;
-            
-            // Handle wake lock release (e.g., when user switches tabs)
-            wakeLock.addEventListener('release', () => {
-              console.log('Wake lock released');
-            });
-          }
-        } catch (err: any) {
-          console.warn('Wake lock request failed:', err);
-          // Continue with recording even if wake lock fails
-        }
-      }
-      
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const mediaRecorder = new MediaRecorder(stream);
@@ -175,14 +139,6 @@ const TranscriptionSummary: React.FC = () => {
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
         recordingIntervalRef.current = null;
-      }
-      
-      // Release wake lock
-      if (wakeLockRef.current) {
-        wakeLockRef.current.release().catch((err: any) => {
-          console.warn('Error releasing wake lock:', err);
-        });
-        wakeLockRef.current = null;
       }
     }
   };
@@ -283,13 +239,6 @@ const TranscriptionSummary: React.FC = () => {
       }
       if (recordedAudioUrl) {
         URL.revokeObjectURL(recordedAudioUrl);
-      }
-      // Release wake lock if still active
-      if (wakeLockRef.current) {
-        wakeLockRef.current.release().catch((err: any) => {
-          console.warn('Error releasing wake lock on unmount:', err);
-        });
-        wakeLockRef.current = null;
       }
     };
   }, []);
@@ -583,16 +532,10 @@ const TranscriptionSummary: React.FC = () => {
       <header className="border-b px-6 py-4" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)' }}>
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <img 
-              src={brandIcon} 
-              alt="Meeting Note Icon" 
-              className="h-8 w-auto"
-              style={{ height: '32px' }}
-            />
             <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>Meeting Note</h1>
           </div>
           <div className="flex items-center gap-4">
-            {user && !isMobile && (
+            {user && (
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium" 
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
@@ -607,14 +550,6 @@ const TranscriptionSummary: React.FC = () => {
               style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
             >
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-            </button>
-            <button
-              onClick={() => navigate(`/summary-history?user_id=${user?.id}`)}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="My Notes"
-            >
-              <History className="w-4 h-4" />
             </button>
             <button
               onClick={() => navigate('/save-summary')}
@@ -637,14 +572,8 @@ const TranscriptionSummary: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main 
-        className={`flex-grow overflow-y-auto custom-scrollbar ${isMobile ? 'mobile-bottom-padding' : ''}`}
-        style={{ 
-          padding: isMobile ? '16px' : '24px',
-          paddingBottom: isMobile ? undefined : 'calc(24px + env(safe-area-inset-bottom, 0px))'
-        }}
-      >
-        <div className={`${isMobile ? 'w-full' : 'max-w-7xl'} mx-auto space-y-8`}>
+      <main className="flex-grow overflow-y-auto custom-scrollbar p-6">
+        <div className="max-w-7xl mx-auto space-y-8">
           {/* File Upload Section */}
           <section>
             <h2 className="text-lg font-medium mb-4" style={{ color: 'var(--text)' }}>
@@ -953,28 +882,7 @@ const TranscriptionSummary: React.FC = () => {
                             Discard
                           </button>
                           <button
-                            onClick={async () => {
-                              if (isEditingSummary && currentNoteId) {
-                                // Save the edited summary to summary_edit
-                                try {
-                                  const { error } = await supabase
-                                    .from('note')
-                                    .update({ summary_edit: editedSummary.trim() })
-                                    .eq('id', currentNoteId);
-                                  
-                                  if (error) {
-                                    console.error('Error saving edited summary:', error);
-                                    alert('Failed to save edited summary');
-                                    return;
-                                  }
-                                } catch (error) {
-                                  console.error('Error saving edited summary:', error);
-                                  alert('Failed to save edited summary');
-                                  return;
-                                }
-                              }
-                              setIsEditingSummary(!isEditingSummary);
-                            }}
+                            onClick={() => setIsEditingSummary(!isEditingSummary)}
                             className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
                             style={{ 
                               backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
@@ -1188,16 +1096,12 @@ const TranscriptionSummary: React.FC = () => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                // Disabled - coming soon
+                                setOpenMenuChatId(null);
+                                if (chat.webUrl) {
+                                  window.open(chat.webUrl, '_blank');
+                                }
                               }}
-                              disabled
-                              className="w-full flex items-center gap-2 px-4 py-2 text-sm chat-menu-item"
-                              style={{
-                                opacity: 0.5,
-                                cursor: 'not-allowed',
-                                color: 'var(--text-muted)',
-                              }}
-                              title="Coming soon"
+                              className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all chat-menu-item"
                             >
                               <MessageSquare className="w-4 h-4" />
                               Chat

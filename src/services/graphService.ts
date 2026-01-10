@@ -52,32 +52,79 @@ export async function getTeamsChats(accessToken: string): Promise<TeamsChat[]> {
       .get();
 
     console.log('First chat lastMessagePreview:', response.value[0]?.lastMessagePreview);
+    console.log('Total chats from API:', response.value.length);
 
-    const chats = response.value.map((chat: any) => {
-      // Use lastMessagePreview.createdDateTime if available, otherwise fall back
-      const lastMsgTime = chat.lastMessagePreview?.createdDateTime;
-      
-      return {
-        id: chat.id,
-        topic: chat.topic,
-        chatType: chat.chatType,
-        createdDateTime: chat.createdDateTime,
-        lastUpdatedDateTime: chat.lastUpdatedDateTime,
-        lastMessageDateTime: lastMsgTime || null,
-        webUrl: chat.webUrl,
-        members: chat.members?.map((member: any) => ({
-          id: member.userId || member.id || '',
-          displayName: member.displayName || 'Unknown',
-          email: member.email || '',
-        })) || [],
-      };
-    });
+    const chats = response.value
+      .map((chat: any) => {
+        // Use lastMessagePreview.createdDateTime if available, otherwise fall back
+        const lastMsgTime = chat.lastMessagePreview?.createdDateTime;
+        
+        return {
+          id: chat.id,
+          topic: chat.topic,
+          chatType: chat.chatType,
+          createdDateTime: chat.createdDateTime,
+          lastUpdatedDateTime: chat.lastUpdatedDateTime,
+          lastMessageDateTime: lastMsgTime || null,
+          webUrl: chat.webUrl,
+          members: chat.members?.map((member: any) => ({
+            id: member.userId || member.id || '',
+            displayName: member.displayName || 'Unknown',
+            email: member.email || '',
+          })) || [],
+        };
+      })
+      // Filter out chats with no messages (empty calendar event chats)
+      .filter((chat: TeamsChat) => {
+        // Only include chats that have had at least one message
+        const hasMessage = chat.lastMessageDateTime !== null;
+        
+        if (!hasMessage) {
+          // Log filtered chats without any messages
+          if (chat.chatType === 'meeting') {
+            console.log('Filtering out empty meeting chat:', {
+              topic: chat.topic,
+              chatType: chat.chatType,
+              lastMessageDateTime: chat.lastMessageDateTime,
+              lastUpdatedDateTime: chat.lastUpdatedDateTime
+            });
+          }
+          return false;
+        }
+        
+        // For meeting chats, also filter out old ones with only system messages
+        if (chat.chatType === 'meeting') {
+          const lastMessageDate = new Date(chat.lastMessageDateTime!);
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          
+          // Filter out meeting chats older than 30 days
+          if (lastMessageDate < thirtyDaysAgo) {
+            console.log('Filtering out old meeting chat:', {
+              topic: chat.topic,
+              chatType: chat.chatType,
+              lastMessageDateTime: chat.lastMessageDateTime,
+              daysOld: Math.floor((new Date().getTime() - lastMessageDate.getTime()) / (1000 * 60 * 60 * 24))
+            });
+            return false;
+          }
+          
+          console.log('Including recent meeting chat:', {
+            topic: chat.topic,
+            chatType: chat.chatType,
+            lastMessageDateTime: chat.lastMessageDateTime,
+            createdDateTime: chat.createdDateTime
+          });
+        }
+        
+        return true;
+      });
+    
+    console.log('Chats after filtering:', chats.length);
 
-    // Sort by lastMessageDateTime if available, otherwise lastUpdatedDateTime
+    // Sort by lastMessageDateTime (all chats now have this)
     return chats.sort((a: TeamsChat, b: TeamsChat) => {
-      const dateA = a.lastMessageDateTime || a.lastUpdatedDateTime;
-      const dateB = b.lastMessageDateTime || b.lastUpdatedDateTime;
-      return new Date(dateB).getTime() - new Date(dateA).getTime();
+      return new Date(b.lastMessageDateTime!).getTime() - new Date(a.lastMessageDateTime!).getTime();
     });
   } catch (error) {
     console.error('Error fetching Teams chats:', error);
