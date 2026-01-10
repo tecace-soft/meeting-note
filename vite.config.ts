@@ -7,11 +7,11 @@ export default defineConfig({
     port: 5174,
     open: true,
     host: '0.0.0.0',
-    allowedHosts: ['meeting-note-fxms.onrender.com']
+    allowedHosts: ['meeting-note-fxms.onrender.com', 'meetingnote.tecace.com']
   },
   preview: {
     host: '0.0.0.0',
-    allowedHosts: ['meeting-note-fxms.onrender.com']
+    allowedHosts: ['meeting-note-fxms.onrender.com', 'meetingnote.tecace.com']
   }
 })
 
