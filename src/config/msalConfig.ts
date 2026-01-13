@@ -1,5 +1,13 @@
 import { Configuration, LogLevel } from '@azure/msal-browser';
 
+// Get the current origin for redirect URI (works with any domain)
+const getRedirectUri = (): string => {
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+  return import.meta.env.VITE_MSAL_REDIRECT_URI || 'http://localhost:5174';
+};
+
 // MSAL configuration for MS Teams authentication
 // You'll need to register your app in Azure AD portal:
 // https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
@@ -9,8 +17,8 @@ export const msalConfig: Configuration = {
     clientId: import.meta.env.VITE_MSAL_CLIENT_ID || 'YOUR_CLIENT_ID_HERE',
     // Replace with your tenant ID or use 'common' for multi-tenant
     authority: import.meta.env.VITE_MSAL_AUTHORITY || 'https://login.microsoftonline.com/common',
-    // Redirect URI - must match what's registered in Azure AD
-    redirectUri: import.meta.env.VITE_MSAL_REDIRECT_URI || 'http://localhost:5174',
+    // Redirect URI - dynamically uses current domain, must match what's registered in Azure AD
+    redirectUri: getRedirectUri(),
     postLogoutRedirectUri: '/',
     navigateToLoginRequestUrl: true,
   },
