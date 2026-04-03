@@ -4,7 +4,11 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import { supabase, AUDIO_BUCKET, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
-import { isSupabaseResumableConfigured, uploadWithTus } from '../services/supabaseResumableUpload';
+import {
+  isSupabaseResumableConfigured,
+  shouldUseResumableUpload,
+  uploadWithTus,
+} from '../services/supabaseResumableUpload';
 import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Sun, Moon, Mic, Square, Play, Pause } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -369,7 +373,8 @@ const TranscriptionSummary: React.FC = () => {
           .replace(/[^a-zA-Z0-9._-]/g, '') || `audio_${Date.now()}`;
       const filePath = `${fileId}-${sanitizedName.includes('.') ? sanitizedName : `${sanitizedName}.${ext}`}`;
 
-      const useTus = isSupabaseResumableConfigured(SUPABASE_URL);
+      const useTus =
+        isSupabaseResumableConfigured(SUPABASE_URL) && shouldUseResumableUpload(file.size);
 
       if (useTus) {
         await uploadWithTus(

@@ -15,10 +15,15 @@ function getResumableEndpoint(projectUrl: string): string {
   return `https://${match[1]}.storage.supabase.co/storage/v1/upload/resumable`;
 }
 
-/** When true, use chunked TUS for every upload (better on mobile than a single huge PUT). */
+/** Project URL supports the dedicated Storage TUS endpoint (`*.storage.supabase.co`). */
 export function isSupabaseResumableConfigured(projectUrl: string): boolean {
   const t = projectUrl.trim().replace(/\/$/, '');
   return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(t);
+}
+
+/** TUS only for large files: standard `upload()` hits the same RLS path that usually works with anon keys; TUS can succeed at the protocol level but not materialize an object for some policies. */
+export function shouldUseResumableUpload(fileSize: number): boolean {
+  return fileSize >= RESUMABLE_UPLOAD_CHUNK_BYTES;
 }
 
 /**
