@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
-import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon } from 'lucide-react';
+import { LogOut, ArrowLeft, FileText, Calendar, ChevronDown, ChevronUp, Sun, Moon, HardDrive } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
@@ -12,8 +12,9 @@ interface Note {
   id: string;
   user_id: string;
   user_name: string;
-  chat_id: string;
+  chat_id?: string | null;
   summary?: string;
+  summary_edit?: string | null;
   created_at?: string;
 }
 
@@ -46,7 +47,12 @@ const SummaryHistory: React.FC = () => {
   // Fetch chat info from Graph API
   useEffect(() => {
     const fetchChatInfo = async () => {
-      if (!chatId || !isAuthenticated) return;
+      if (!chatId) {
+        setChatInfo(null);
+        setChatLoading(false);
+        return;
+      }
+      if (!isAuthenticated) return;
       
       try {
         setChatLoading(true);
@@ -82,18 +88,24 @@ const SummaryHistory: React.FC = () => {
     fetchChatInfo();
   }, [chatId, isAuthenticated, getAccessToken]);
 
-  // Fetch notes from Supabase
+  // Fetch notes from Supabase (by chat when chat_id present, else all for signed-in user)
   useEffect(() => {
     const fetchNotes = async () => {
-      if (!chatId) return;
-      
       try {
         setNotesLoading(true);
-        const { data, error } = await supabase
-          .from('note')
-          .select('*')
-          .eq('chat_id', chatId)
-          .order('created_at', { ascending: false });
+        let query = supabase.from('note').select('*');
+
+        if (chatId) {
+          query = query.eq('chat_id', chatId);
+        } else {
+          if (!user?.id) {
+            setNotes([]);
+            return;
+          }
+          query = query.eq('user_id', user.id);
+        }
+
+        const { data, error } = await query.order('created_at', { ascending: false });
 
         if (error) throw error;
         setNotes(data || []);
@@ -105,7 +117,7 @@ const SummaryHistory: React.FC = () => {
     };
 
     fetchNotes();
-  }, [chatId]);
+  }, [chatId, user?.id]);
 
   const getChatDisplayName = (): string => {
     if (!chatInfo) return 'Loading...';
@@ -178,6 +190,14 @@ const SummaryHistory: React.FC = () => {
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             </button>
             <button
+              onClick={() => navigate('/save-summary')}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="OneDrive"
+            >
+              <HardDrive className="w-4 h-4" />
+            </button>
+            <button
               onClick={logout}
               className="p-2 rounded-md"
               style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
@@ -192,17 +212,28 @@ const SummaryHistory: React.FC = () => {
       {/* Main Content */}
       <main className="flex-grow overflow-y-auto custom-scrollbar p-6">
         <div className="max-w-7xl mx-auto space-y-6">
-          {/* Chat Name Header */}
+          {/* Chat / scope header */}
           <div className="card rounded-lg p-6">
-            {chatLoading ? (
-              <div className="flex items-center gap-2">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2" style={{ borderColor: 'var(--accent)' }}></div>
-                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading chat info...</span>
-              </div>
+            {chatId ? (
+              chatLoading ? (
+                <div className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2" style={{ borderColor: 'var(--accent)' }}></div>
+                  <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading chat info...</span>
+                </div>
+              ) : (
+                <h2 className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
+                  {getChatDisplayName()}
+                </h2>
+              )
             ) : (
-              <h2 className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
-                {getChatDisplayName()}
-              </h2>
+              <>
+                <h2 className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
+                  All summaries
+                </h2>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  Meeting notes you created across all chats
+                </p>
+              </>
             )}
           </div>
 
@@ -220,7 +251,9 @@ const SummaryHistory: React.FC = () => {
             ) : notes.length === 0 ? (
               <div className="card rounded-lg p-8 text-center">
                 <FileText className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--text-muted)' }} />
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No meeting notes found for this chat</p>
+                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  {chatId ? 'No meeting notes found for this chat' : 'No meeting notes found for your account'}
+                </p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -245,6 +278,11 @@ const SummaryHistory: React.FC = () => {
                         </p>
                         <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                           Created by {note.user_name}
+                          {!chatId && note.chat_id ? (
+                            <span className="block truncate mt-0.5" title={note.chat_id}>
+                              Chat: {note.chat_id}
+                            </span>
+                          ) : null}
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
@@ -266,8 +304,10 @@ const SummaryHistory: React.FC = () => {
                           className="p-4 border-t prose prose-sm max-w-none"
                           style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
                         >
-                          {note.summary ? (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary}</ReactMarkdown>
+                          {note.summary_edit || note.summary ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {note.summary_edit || note.summary || ''}
+                            </ReactMarkdown>
                           ) : (
                             <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
                               No summary available

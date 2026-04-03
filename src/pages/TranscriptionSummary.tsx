@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
-import { supabase, AUDIO_BUCKET } from '../config/supabaseConfig';
+import { supabase, AUDIO_BUCKET, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
+import { shouldUseResumableUpload, uploadWithTus } from '../services/supabaseResumableUpload';
 import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Sun, Moon, Mic, Square, Play, Pause } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -290,10 +291,15 @@ const TranscriptionSummary: React.FC = () => {
   }, []);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const files = Array.from(e.target.files);
+    const input = e.target;
+    const list = input.files;
+    if (!list?.length) return;
+    const files = Array.from(list);
+    // Defer until the mobile file sheet is dismissed; avoids freezes / tab reload on iOS.
+    window.setTimeout(() => {
       handleFiles(files);
-    }
+      input.value = '';
+    }, 0);
   };
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB - matches Supabase bucket limit
@@ -337,23 +343,30 @@ const TranscriptionSummary: React.FC = () => {
     );
 
     try {
-      // Sanitize filename: remove non-ASCII chars, replace spaces with underscores
       const ext = file.name.split('.').pop() || 'audio';
       const sanitizedName = file.name
-        .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII
-        .replace(/\s+/g, '_') // Replace spaces with underscores
-        .replace(/[^a-zA-Z0-9._-]/g, '') // Keep only safe chars
-        || `audio_${Date.now()}`; // Fallback if empty
+        .replace(/[^\x00-\x7F]/g, '')
+        .replace(/\s+/g, '_')
+        .replace(/[^a-zA-Z0-9._-]/g, '')
+        || `audio_${Date.now()}`;
       const filePath = `${fileId}-${sanitizedName.includes('.') ? sanitizedName : `${sanitizedName}.${ext}`}`;
-      
-      const { error } = await supabase.storage
-        .from(AUDIO_BUCKET)
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: false,
-        });
 
-      if (error) throw error;
+      if (shouldUseResumableUpload(file.size)) {
+        await uploadWithTus(filePath, file, SUPABASE_URL, SUPABASE_ANON_KEY, (uploaded, total) => {
+          const pct = total > 0 ? Math.min(100, Math.round((uploaded / total) * 100)) : 0;
+          setUploadedFiles(prev =>
+            prev.map(f => (f.id === fileId ? { ...f, progress: pct } : f))
+          );
+        });
+      } else {
+        const { error } = await supabase.storage
+          .from(AUDIO_BUCKET)
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: false,
+          });
+        if (error) throw error;
+      }
 
       const { data: urlData } = supabase.storage
         .from(AUDIO_BUCKET)
@@ -560,6 +573,14 @@ const TranscriptionSummary: React.FC = () => {
               <HardDrive className="w-4 h-4" />
             </button>
             <button
+              onClick={() => navigate('/summary-history')}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="Summary history"
+            >
+              <History className="w-4 h-4" />
+            </button>
+            <button
               onClick={logout}
               className="p-2 rounded-md"
               style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
@@ -637,21 +658,22 @@ const TranscriptionSummary: React.FC = () => {
                     <div className="flex-1 h-px md:h-auto md:w-px md:flex-1" style={{ backgroundColor: 'var(--border)' }} />
                   </div>
 
-                  {/* Upload Option */}
-                  <div
-                    className={`flex-1 drop-zone rounded-lg p-6 text-center cursor-pointer transition-all ${isDragging ? 'drag-over' : ''}`}
+                  {/* Upload Option — label + native input avoids iOS issues with programmatic .click() */}
+                  <label
+                    htmlFor="meeting-audio-upload"
+                    className={`flex-1 drop-zone rounded-lg p-6 text-center cursor-pointer transition-all block min-h-[8rem] ${isDragging ? 'drag-over' : ''}`}
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
                     onDrop={handleDrop}
-                    onClick={() => fileInputRef.current?.click()}
                   >
                     <input
+                      id="meeting-audio-upload"
                       ref={fileInputRef}
                       type="file"
                       accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma"
                       multiple
                       onChange={handleFileSelect}
-                      className="hidden"
+                      className="sr-only"
                     />
                     <Upload className="w-10 h-10 mx-auto mb-3" style={{ color: 'var(--text-muted)' }} />
                     <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
@@ -660,7 +682,7 @@ const TranscriptionSummary: React.FC = () => {
                     <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                       Drop files or click to browse
                     </p>
-                  </div>
+                  </label>
                 </div>
               </div>
             </div>

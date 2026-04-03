@@ -5,7 +5,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { 
   LogOut, ArrowLeft, Folder, File, FolderPlus, Trash2, 
-  Edit2, Save, X, Loader2, ChevronRight, Home, Check, Sun, Moon
+  Edit2, Save, X, Loader2, ChevronRight, Home, Check, Sun, Moon, History
 } from 'lucide-react';
 import {
   getOneDriveRoot,
@@ -357,6 +357,14 @@ const SaveSummary: React.FC = () => {
             )}
             <button onClick={toggleTheme} className="p-2 rounded-md" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => navigate('/summary-history')}
+              className="p-2 rounded-md"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              title="Summary history"
+            >
+              <History className="w-4 h-4" />
             </button>
             <button
               onClick={logout}
