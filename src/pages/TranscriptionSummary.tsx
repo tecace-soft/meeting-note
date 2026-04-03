@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import { supabase, AUDIO_BUCKET, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
-import { shouldUseResumableUpload, uploadWithTus } from '../services/supabaseResumableUpload';
+import { isSupabaseResumableConfigured, uploadWithTus } from '../services/supabaseResumableUpload';
 import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Sun, Moon, Mic, Square, Play, Pause } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -15,7 +15,6 @@ interface UploadedFile {
   name: string;
   size: number;
   type: string;
-  file: File;
   status: 'pending' | 'uploading' | 'processing' | 'completed' | 'error';
   progress?: number;
   error?: string;
@@ -27,6 +26,23 @@ const TranscriptionSummary: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
   const { user, isAuthenticated, isLoading, logout, getAccessToken } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadProgressGateRef = useRef<Map<string, { pct: number; at: number }>>(new Map());
+  const screenWakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const activeUploadsRef = useRef(0);
+
+  /** Call from file input / recording handlers (user gesture) so Android Chrome grants wake lock. */
+  const ensureScreenWakeLockFromGesture = () => {
+    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+    if (screenWakeLockRef.current) return;
+    void navigator.wakeLock
+      .request('screen')
+      .then((w) => {
+        screenWakeLockRef.current = w;
+      })
+      .catch(() => {
+        /* denied or unsupported */
+      });
+  };
 
   const [chats, setChats] = useState<TeamsChat[]>([]);
   const [chatsLoading, setChatsLoading] = useState(true);
@@ -146,7 +162,9 @@ const TranscriptionSummary: React.FC = () => {
 
   const useRecording = () => {
     if (!recordedBlob) return;
-    
+
+    ensureScreenWakeLockFromGesture();
+
     const now = new Date();
     const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
     const fileName = `Recording_${timestamp}.webm`;
@@ -157,7 +175,6 @@ const TranscriptionSummary: React.FC = () => {
       name: fileName,
       size: recordedBlob.size,
       type: 'audio/webm',
-      file: audioFile,
       status: 'pending',
     };
     
@@ -287,6 +304,7 @@ const TranscriptionSummary: React.FC = () => {
     e.preventDefault();
     setIsDragging(false);
     const files = Array.from(e.dataTransfer.files);
+    ensureScreenWakeLockFromGesture();
     handleFiles(files);
   }, []);
 
@@ -295,7 +313,7 @@ const TranscriptionSummary: React.FC = () => {
     const list = input.files;
     if (!list?.length) return;
     const files = Array.from(list);
-    // Defer until the mobile file sheet is dismissed; avoids freezes / tab reload on iOS.
+    ensureScreenWakeLockFromGesture();
     window.setTimeout(() => {
       handleFiles(files);
       input.value = '';
@@ -321,43 +339,61 @@ const TranscriptionSummary: React.FC = () => {
       return;
     }
 
-    const newUploadedFiles: UploadedFile[] = audioFiles.map(file => ({
+    const newUploadedFiles: UploadedFile[] = audioFiles.map((file) => ({
       id: crypto.randomUUID(),
       name: file.name,
       size: file.size,
       type: file.type,
-      file: file,
       status: 'pending' as const,
     }));
 
-    setUploadedFiles(prev => [...prev, ...newUploadedFiles]);
+    setUploadedFiles((prev) => [...prev, ...newUploadedFiles]);
 
-    newUploadedFiles.forEach(uploadedFile => {
-      uploadToSupabase(uploadedFile.id, uploadedFile.file);
+    newUploadedFiles.forEach((meta, i) => {
+      uploadToSupabase(meta.id, audioFiles[i]);
     });
   };
 
   const uploadToSupabase = async (fileId: string, file: File) => {
-    setUploadedFiles(prev => 
-      prev.map(f => f.id === fileId ? { ...f, status: 'uploading', progress: 0 } : f)
+    setUploadedFiles((prev) =>
+      prev.map((f) => (f.id === fileId ? { ...f, status: 'uploading', progress: 0 } : f))
     );
 
+    activeUploadsRef.current += 1;
     try {
       const ext = file.name.split('.').pop() || 'audio';
-      const sanitizedName = file.name
-        .replace(/[^\x00-\x7F]/g, '')
-        .replace(/\s+/g, '_')
-        .replace(/[^a-zA-Z0-9._-]/g, '')
-        || `audio_${Date.now()}`;
+      const sanitizedName =
+        file.name
+          .replace(/[^\x00-\x7F]/g, '')
+          .replace(/\s+/g, '_')
+          .replace(/[^a-zA-Z0-9._-]/g, '') || `audio_${Date.now()}`;
       const filePath = `${fileId}-${sanitizedName.includes('.') ? sanitizedName : `${sanitizedName}.${ext}`}`;
 
-      if (shouldUseResumableUpload(file.size)) {
-        await uploadWithTus(filePath, file, SUPABASE_URL, SUPABASE_ANON_KEY, (uploaded, total) => {
-          const pct = total > 0 ? Math.min(100, Math.round((uploaded / total) * 100)) : 0;
-          setUploadedFiles(prev =>
-            prev.map(f => (f.id === fileId ? { ...f, progress: pct } : f))
-          );
-        });
+      const useTus = isSupabaseResumableConfigured(SUPABASE_URL);
+
+      if (useTus) {
+        await uploadWithTus(
+          filePath,
+          file,
+          SUPABASE_URL,
+          SUPABASE_ANON_KEY,
+          (uploaded, total) => {
+            const pct = total > 0 ? Math.min(100, Math.round((uploaded / total) * 100)) : 0;
+            const now = Date.now();
+            const gate = uploadProgressGateRef.current;
+            const prev = gate.get(fileId) ?? { pct: -1, at: 0 };
+            const jump = pct - prev.pct;
+            const elapsed = now - prev.at;
+            if (pct >= 100 || prev.pct < 0 || jump >= 3 || elapsed >= 450) {
+              gate.set(fileId, { pct, at: now });
+              startTransition(() => {
+                setUploadedFiles((prevFiles) =>
+                  prevFiles.map((f) => (f.id === fileId ? { ...f, progress: pct } : f))
+                );
+              });
+            }
+          }
+        );
       } else {
         const { error } = await supabase.storage
           .from(AUDIO_BUCKET)
@@ -368,29 +404,46 @@ const TranscriptionSummary: React.FC = () => {
         if (error) throw error;
       }
 
-      const { data: urlData } = supabase.storage
-        .from(AUDIO_BUCKET)
-        .getPublicUrl(filePath);
+      const { data: urlData } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(filePath);
 
       console.log('Supabase public URL:', urlData.publicUrl);
 
-      setUploadedFiles(prev => 
-        prev.map(f => f.id === fileId ? { 
-          ...f, 
-          status: 'completed', 
-          progress: 100,
-          publicUrl: urlData.publicUrl 
-        } : f)
+      setUploadedFiles((prev) =>
+        prev.map((f) =>
+          f.id === fileId
+            ? {
+                ...f,
+                status: 'completed',
+                progress: 100,
+                publicUrl: urlData.publicUrl,
+              }
+            : f
+        )
       );
     } catch (error: any) {
       console.error('Upload error:', error);
-      setUploadedFiles(prev => 
-        prev.map(f => f.id === fileId ? { 
-          ...f, 
-          status: 'error', 
-          error: error.message || 'Upload failed' 
-        } : f)
+      setUploadedFiles((prev) =>
+        prev.map((f) =>
+          f.id === fileId
+            ? {
+                ...f,
+                status: 'error',
+                error: error.message || 'Upload failed',
+              }
+            : f
+        )
       );
+    } finally {
+      uploadProgressGateRef.current.delete(fileId);
+      activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+      if (activeUploadsRef.current === 0) {
+        try {
+          await screenWakeLockRef.current?.release();
+        } catch {
+          /* */
+        }
+        screenWakeLockRef.current = null;
+      }
     }
   };
 
@@ -682,6 +735,9 @@ const TranscriptionSummary: React.FC = () => {
                     <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                       Drop files or click to browse
                     </p>
+                    <p className="text-xs mt-2 max-w-xs mx-auto" style={{ color: 'var(--text-muted)' }}>
+                      Large files: keep this tab open and screen on until upload finishes.
+                    </p>
                   </label>
                 </div>
               </div>
@@ -781,6 +837,7 @@ const TranscriptionSummary: React.FC = () => {
                       {file.status === 'uploading' && (
                         <span className="text-xs uploading-ellipsis" style={{ color: 'var(--accent)' }}>
                           Uploading
+                          {file.progress != null && file.progress > 0 ? ` ${file.progress}%` : ''}
                         </span>
                       )}
                       {file.status === 'processing' && (

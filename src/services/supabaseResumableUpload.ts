@@ -1,8 +1,8 @@
 import { Upload } from 'tus-js-client';
 import { AUDIO_BUCKET } from '../config/supabaseConfig';
 
-/** Supabase Storage TUS uses fixed 6MB chunks; use resumable uploads at this size and above. */
-export const RESUMABLE_UPLOAD_THRESHOLD_BYTES = 6 * 1024 * 1024;
+/** Supabase Storage TUS uses fixed 6MB chunks. */
+export const RESUMABLE_UPLOAD_CHUNK_BYTES = 6 * 1024 * 1024;
 
 function getResumableEndpoint(projectUrl: string): string {
   const trimmed = projectUrl.replace(/\/$/, '');
@@ -15,8 +15,10 @@ function getResumableEndpoint(projectUrl: string): string {
   return `https://${match[1]}.storage.supabase.co/storage/v1/upload/resumable`;
 }
 
-export function shouldUseResumableUpload(fileSize: number): boolean {
-  return fileSize >= RESUMABLE_UPLOAD_THRESHOLD_BYTES;
+/** When true, use chunked TUS for every upload (better on mobile than a single huge PUT). */
+export function isSupabaseResumableConfigured(projectUrl: string): boolean {
+  const t = projectUrl.trim().replace(/\/$/, '');
+  return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(t);
 }
 
 /**
@@ -39,7 +41,7 @@ export function uploadWithTus(
   return new Promise((resolve, reject) => {
     const upload = new Upload(file, {
       endpoint,
-      retryDelays: [0, 3000, 5000, 10000, 20000],
+      retryDelays: [0, 2000, 5000, 10000, 20000, 30000, 45000],
       headers: {
         authorization: `Bearer ${anonKey}`,
         apikey: anonKey,
@@ -52,7 +54,7 @@ export function uploadWithTus(
         contentType: file.type || 'application/octet-stream',
         cacheControl: '3600',
       },
-      chunkSize: 6 * 1024 * 1024,
+      chunkSize: RESUMABLE_UPLOAD_CHUNK_BYTES,
       onError: (err) => reject(err instanceof Error ? err : new Error(String(err))),
       onProgress: (bytesUploaded, bytesTotal) => onProgress?.(bytesUploaded, bytesTotal),
       onSuccess: () => resolve(),
