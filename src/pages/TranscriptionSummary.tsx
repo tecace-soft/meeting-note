@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useTheme } from '../theme/ThemeProvider';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import { supabase, AUDIO_BUCKET, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
 import {
@@ -9,7 +8,7 @@ import {
   shouldUseResumableUpload,
   uploadWithTus,
 } from '../services/supabaseResumableUpload';
-import { Upload, File, MessageSquare, Users, Clock, LogOut, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Sun, Moon, Mic, Square, Play, Pause } from 'lucide-react';
+import { Upload, File, MessageSquare, Users, Clock, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Mic, Square, Play, Pause } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
@@ -27,8 +26,7 @@ interface UploadedFile {
 
 const TranscriptionSummary: React.FC = () => {
   const navigate = useNavigate();
-  const { theme, toggleTheme } = useTheme();
-  const { user, isAuthenticated, isLoading, logout, getAccessToken } = useAuth();
+  const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadProgressGateRef = useRef<Map<string, { pct: number; at: number }>>(new Map());
   const screenWakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -63,6 +61,7 @@ const TranscriptionSummary: React.FC = () => {
   const [isEditingSummary, setIsEditingSummary] = useState(false);
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
+  const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
@@ -551,6 +550,39 @@ const TranscriptionSummary: React.FC = () => {
     return chat.chatType === 'oneOnOne' ? 'Direct Message' : 'Group Chat';
   };
 
+  const persistSummaryEdit = async (summaryText: string): Promise<boolean> => {
+    if (!currentNoteId) return false;
+
+    try {
+      setSummaryEditError(null);
+
+      const { error } = await supabase
+        .from('note')
+        .update({ summary_edit: summaryText })
+        .eq('id', currentNoteId);
+
+      if (error) throw error;
+      return true;
+    } catch (err: unknown) {
+      console.error('Error saving summary edit:', err);
+      setSummaryEditError(err instanceof Error ? err.message : 'Failed to save summary edit');
+      return false;
+    }
+  };
+
+  const handleToggleEditSummary = async () => {
+    if (!isEditingSummary) {
+      setIsEditingSummary(true);
+      return;
+    }
+
+    if (currentNoteId) {
+      const saved = await persistSummaryEdit(editedSummary);
+      if (!saved) return;
+    }
+    setIsEditingSummary(false);
+  };
+
   const handleForwardSummary = async () => {
     if (!selectedChatId || !editedSummary || !currentNoteId) return;
     
@@ -588,7 +620,7 @@ const TranscriptionSummary: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
+      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 mx-auto mb-4" style={{ borderColor: 'var(--accent)' }}></div>
           <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
@@ -598,60 +630,8 @@ const TranscriptionSummary: React.FC = () => {
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      {/* Header */}
-      <header className="border-b px-6 py-4" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)' }}>
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>Meeting Note</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            {user && (
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium" 
-                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
-                  {user.displayName.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{user.displayName}</span>
-              </div>
-            )}
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-            >
-              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-            </button>
-            <button
-              onClick={() => navigate('/save-summary')}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="OneDrive"
-            >
-              <HardDrive className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => navigate('/summary-history')}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="Summary history"
-            >
-              <History className="w-4 h-4" />
-            </button>
-            <button
-              onClick={logout}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="Sign out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-grow overflow-y-auto custom-scrollbar p-6">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
+      <main className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-6">
         <div className="max-w-7xl mx-auto space-y-8">
           {/* File Upload Section */}
           <section>
@@ -966,7 +946,7 @@ const TranscriptionSummary: React.FC = () => {
                             Discard
                           </button>
                           <button
-                            onClick={() => setIsEditingSummary(!isEditingSummary)}
+                            onClick={() => void handleToggleEditSummary()}
                             className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
                             style={{ 
                               backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
@@ -991,7 +971,10 @@ const TranscriptionSummary: React.FC = () => {
                       {isEditingSummary ? (
                         <textarea
                           value={editedSummary}
-                          onChange={(e) => setEditedSummary(e.target.value)}
+                          onChange={(e) => {
+                            setEditedSummary(e.target.value);
+                            setSummaryEditError(null);
+                          }}
                           className="w-full p-4 rounded-lg text-sm leading-relaxed max-h-96 min-h-48 custom-scrollbar resize-y"
                           style={{ 
                             backgroundColor: 'var(--bg-secondary)', 
@@ -1008,6 +991,11 @@ const TranscriptionSummary: React.FC = () => {
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedSummary}</ReactMarkdown>
                         </div>
                       )}
+                      {summaryEditError ? (
+                        <p className="text-xs mt-2" style={{ color: 'var(--error)' }}>
+                          {summaryEditError}
+                        </p>
+                      ) : null}
                     </div>
 
                     {/* View Transcript Toggle */}
@@ -1231,6 +1219,7 @@ const TranscriptionSummary: React.FC = () => {
                 onClick={() => {
                   setSummaryResult(null);
                   setSummaryError(null);
+                  setSummaryEditError(null);
                   setEditedSummary('');
                   setIsEditingSummary(false);
                   setCurrentNoteId(null);

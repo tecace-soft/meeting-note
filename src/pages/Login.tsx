@@ -41,27 +41,22 @@ const Login: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--bg)' }}>
-      {/* Header */}
-      <div className="flex justify-between items-center p-4">
-        <div className="text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-          Meeting Note
-        </div>
-        <button
-          onClick={toggleTheme}
-          className="text-sm px-3 py-1 rounded border"
-          style={{ 
-            backgroundColor: 'var(--card)', 
-            borderColor: 'var(--border)',
-            color: 'var(--text)'
-          }}
-        >
-          {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
-        </button>
-      </div>
+    <div className="relative min-h-screen flex flex-col" style={{ backgroundColor: 'var(--bg)' }}>
+      <button
+        type="button"
+        onClick={toggleTheme}
+        className="fixed bottom-8 right-4 z-10 rounded-md border px-3 py-2 text-sm shadow-md"
+        style={{
+          backgroundColor: 'var(--card)',
+          borderColor: 'var(--border)',
+          color: 'var(--text)',
+        }}
+        aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+      >
+        {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
+      </button>
 
-      {/* Main Content */}
-      <div className="flex-grow flex items-center justify-center px-4 sm:px-6 lg:px-8">
+      <div className="flex flex-1 items-center justify-center px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
           {/* Header */}
           <div className="text-center">

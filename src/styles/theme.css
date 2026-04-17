@@ -191,6 +191,18 @@ body {
   box-shadow: var(--shadow-lg);
 }
 
+/* Folder list item (same hover intent, no lift shadow) */
+.folder-item {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+}
+
+.folder-item:hover {
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
 /* Chat menu icon */
 .chat-menu-icon {
   background-color: transparent;
@@ -246,6 +258,14 @@ body {
 .collapse-container.collapsed .collapse-content > * {
   opacity: 0;
   transition: opacity 0.15s ease-out;
+}
+
+.collapse-container--instant {
+  transition: none;
+}
+
+.collapse-container--instant .collapse-content > * {
+  transition: none;
 }
 
 /* Markdown styling */

@@ -1,11 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
-import { 
-  LogOut, ArrowLeft, Folder, File, FolderPlus, Trash2, 
-  Edit2, Save, X, Loader2, ChevronRight, Home, Check, Sun, Moon, History
+import {
+  Folder,
+  File,
+  FolderPlus,
+  Trash2,
+  Edit2,
+  Save,
+  X,
+  Loader2,
+  ChevronRight,
+  Home,
+  Check,
 } from 'lucide-react';
 import {
   getOneDriveRoot,
@@ -38,8 +46,7 @@ const SaveSummary: React.FC = () => {
   const audioUrl = searchParams.get('audio_url') ? decodeURIComponent(searchParams.get('audio_url')!) : null;
   const audioName = searchParams.get('audio_name') ? decodeURIComponent(searchParams.get('audio_name')!) : null;
 
-  const { theme, toggleTheme } = useTheme();
-  const { user, isAuthenticated, isLoading: authLoading, logout, getAccessToken } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, getAccessToken } = useAuth();
 
   const [note, setNote] = useState<Note | null>(null);
   const [noteLoading, setNoteLoading] = useState(true);
@@ -319,7 +326,7 @@ const SaveSummary: React.FC = () => {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
+      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 mx-auto mb-4" style={{ borderColor: 'var(--accent)' }}></div>
           <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
@@ -329,57 +336,8 @@ const SaveSummary: React.FC = () => {
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      {/* Header */}
-      <header className="border-b px-6 py-4" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)' }}>
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => navigate('/transcription-summary')}
-              className="p-2 rounded-md transition-all hover:bg-opacity-80"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-            <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
-              {noteId ? 'Save to OneDrive' : 'OneDrive'}
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
-            {user && (
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium"
-                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
-                  {user.displayName.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{user.displayName}</span>
-              </div>
-            )}
-            <button onClick={toggleTheme} className="p-2 rounded-md" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
-              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-            </button>
-            <button
-              onClick={() => navigate('/summary-history')}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="Summary history"
-            >
-              <History className="w-4 h-4" />
-            </button>
-            <button
-              onClick={logout}
-              className="p-2 rounded-md"
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              title="Sign out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-grow overflow-hidden flex">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
+      <main className="flex min-h-0 flex-1 overflow-hidden">
         {/* File Browser */}
         <div className="flex-grow flex flex-col overflow-hidden p-6">
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
