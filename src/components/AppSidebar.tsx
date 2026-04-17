@@ -24,6 +24,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 
 const STORAGE_KEY = 'meeting_note_sidebar_collapsed';
+const MOBILE_STORAGE_KEY = 'meeting_note_sidebar_mobile_collapsed';
 
 export function readSidebarCollapsed(): boolean {
   if (typeof window === 'undefined') return false;
@@ -38,6 +39,27 @@ export function writeSidebarCollapsed(collapsed: boolean): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Mobile drawer: default collapsed when key unset. */
+export function readMobileSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const v = window.localStorage.getItem(MOBILE_STORAGE_KEY);
+    if (v === null) return true;
+    return v === '1';
+  } catch {
+    return true;
+  }
+}
+
+export function writeMobileSidebarCollapsed(collapsed: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(MOBILE_STORAGE_KEY, collapsed ? '1' : '0');
   } catch {
     /* ignore */
   }
@@ -65,12 +87,16 @@ interface AppSidebarProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onExpandSidebar: () => void;
+  mobileOverlay?: boolean;
+  onMobileOverlayNavigate?: () => void;
 }
 
 const AppSidebar: React.FC<AppSidebarProps> = ({
   collapsed,
   onToggleCollapsed,
   onExpandSidebar,
+  mobileOverlay = false,
+  onMobileOverlayNavigate,
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -415,14 +441,33 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     []
   );
 
+  const handleNavPress = () => {
+    if (collapsed) onExpandSidebar();
+    else if (mobileOverlay) onMobileOverlayNavigate?.();
+  };
+
   return (
     <aside
-      className="flex flex-shrink-0 flex-col border-r transition-[width] duration-200 ease-out"
-      style={{
-        width: collapsed ? 60 : 240,
-        borderColor: 'var(--border)',
-        backgroundColor: 'var(--card)',
-      }}
+      className={
+        mobileOverlay
+          ? 'fixed left-0 top-0 z-50 flex h-full flex-col border-r shadow-xl transition-transform duration-200 ease-out'
+          : 'flex flex-shrink-0 flex-col border-r transition-[width] duration-200 ease-out'
+      }
+      style={
+        mobileOverlay
+          ? {
+              width: 'min(260px, 88vw)',
+              borderColor: 'var(--border)',
+              backgroundColor: 'var(--card)',
+              transform: collapsed ? 'translateX(-100%)' : 'translateX(0)',
+              pointerEvents: collapsed ? 'none' : 'auto',
+            }
+          : {
+              width: collapsed ? 60 : 240,
+              borderColor: 'var(--border)',
+              backgroundColor: 'var(--card)',
+            }
+      }
     >
       <div
         className={`flex items-center border-b py-2 ${
@@ -465,9 +510,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   to={item.to}
                   end={item.end}
                   title={collapsed ? item.label : undefined}
-                  onClick={() => {
-                    if (collapsed) onExpandSidebar();
-                  }}
+                  onClick={handleNavPress}
                   className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity hover:opacity-100 ${
                     collapsed ? 'justify-center px-2' : 'px-3'
                   }`}
@@ -545,6 +588,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                               <NavLink
                                 to={`/project?id=${encodeURIComponent(p.id)}`}
                                 title={p.name}
+                                onClick={handleNavPress}
                                 className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-1 pr-1 text-xs font-medium opacity-90 transition-opacity hover:opacity-100"
                                 style={({ isActive }) =>
                                   linkStyle(isActive && String(activeProjectId) === String(p.id))
@@ -618,6 +662,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               to={item.to}
               end={item.end}
               title={collapsed ? item.label : undefined}
+              onClick={handleNavPress}
               className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity hover:opacity-100 ${
                 collapsed ? 'justify-center px-2' : 'px-3'
               }`}
@@ -689,6 +734,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         ) : (
           <NavLink
             to="/"
+            onClick={handleNavPress}
             className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium ${
               collapsed ? 'justify-center px-2' : 'px-3'
             }`}

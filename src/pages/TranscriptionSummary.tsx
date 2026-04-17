@@ -12,6 +12,12 @@ import { Upload, File, MessageSquare, Users, Clock, X, Loader2, Send, Check, For
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
+import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
+import {
+  normalizeTranscript,
+  persistNoteDiarization,
+  type TranscriptSegment,
+} from '../lib/transcriptSegments';
 
 interface UploadedFile {
   id: string;
@@ -53,7 +59,7 @@ const TranscriptionSummary: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [summaryPrompt, setSummaryPrompt] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
-  const [summaryResult, setSummaryResult] = useState<{ transcript: string; summary: string } | null>(null);
+  const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string } | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [isForwarding, setIsForwarding] = useState(false);
@@ -64,7 +70,7 @@ const TranscriptionSummary: React.FC = () => {
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
-  const [showTranscript, setShowTranscript] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(true);
 
   // Recording states
   const [isRecording, setIsRecording] = useState(false);
@@ -497,8 +503,23 @@ const TranscriptionSummary: React.FC = () => {
       }
 
       const result = await response.json();
-      setSummaryResult(result);
-      setEditedSummary(result.summary);
+      const summaryText =
+        typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
+      const transcript = normalizeTranscript(result.transcript);
+      setSummaryResult({
+        summary: summaryText,
+        transcript,
+      });
+      setEditedSummary(summaryText);
+      if (transcript.length > 0) setShowTranscript(true);
+
+      if (transcript.length > 0) {
+        try {
+          await persistNoteDiarization(noteId, transcript);
+        } catch (dErr: unknown) {
+          console.error('Failed to persist transcript diarization on note:', dErr);
+        }
+      }
       
     } catch (error: any) {
       console.error('Error summarizing:', error);
@@ -631,7 +652,7 @@ const TranscriptionSummary: React.FC = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      <main className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-6">
+      <main className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6">
         <div className="max-w-7xl mx-auto space-y-8">
           {/* File Upload Section */}
           <section>
@@ -645,7 +666,7 @@ const TranscriptionSummary: React.FC = () => {
                 <div className="flex flex-col md:flex-row items-stretch gap-4">
                   {/* Record Option */}
                   <div
-                    className="flex-1 card rounded-lg p-6 text-center transition-all"
+                    className="flex-1 card rounded-lg p-4 md:p-6 text-center transition-all"
                     style={{ border: isRecording ? '2px solid var(--error)' : '2px dashed var(--border)' }}
                   >
                     {!isRecording ? (
@@ -731,7 +752,7 @@ const TranscriptionSummary: React.FC = () => {
             {/* Recording Playback - Shows when recording is complete but not uploaded */}
             <div className={`collapse-container ${(recordedAudioUrl && uploadedFiles.length === 0) ? 'expanded' : 'collapsed'}`}>
               <div className="collapse-content">
-                <div className="card rounded-lg p-6">
+                <div className="card rounded-lg p-4 md:p-6">
                   <div className="flex items-center gap-4 mb-4">
                     <button
                       onClick={togglePlayRecording}
@@ -905,7 +926,7 @@ const TranscriptionSummary: React.FC = () => {
 
             {/* Summary Result */}
             {(isSummarizing || summaryResult || summaryError) && (
-              <div className="mt-4 card rounded-lg p-6">
+              <div className="mt-4 card rounded-lg p-4 md:p-6">
                 {isSummarizing && (
                   <div className="flex flex-col items-center justify-center py-8">
                     <div className="relative">
@@ -975,17 +996,17 @@ const TranscriptionSummary: React.FC = () => {
                             setEditedSummary(e.target.value);
                             setSummaryEditError(null);
                           }}
-                          className="w-full p-4 rounded-lg text-sm leading-relaxed max-h-96 min-h-48 custom-scrollbar resize-y"
+                          className="w-full h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] resize-none overflow-y-auto rounded-lg border-2 p-4 max-md:p-4 text-sm max-md:text-base leading-relaxed custom-scrollbar"
                           style={{ 
                             backgroundColor: 'var(--bg-secondary)', 
                             color: 'var(--text)',
-                            border: '2px solid var(--accent)',
+                            borderColor: 'var(--accent)',
                           }}
                           placeholder="Edit your summary here... (Markdown supported)"
                         />
                       ) : (
                         <div 
-                          className="p-4 rounded-lg text-sm leading-relaxed prose prose-sm max-w-none max-h-96 overflow-y-auto custom-scrollbar"
+                          className="prose prose-sm max-w-none h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto rounded-lg p-4 text-sm max-md:text-base leading-relaxed custom-scrollbar"
                           style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
                         >
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedSummary}</ReactMarkdown>
@@ -997,33 +1018,39 @@ const TranscriptionSummary: React.FC = () => {
                         </p>
                       ) : null}
                     </div>
-
-                    {/* View Transcript Toggle */}
-                    {summaryResult.transcript && (
-                      <div style={{ marginTop: '24px' }}>
-                        <button
-                          onClick={() => setShowTranscript(!showTranscript)}
-                          className="flex items-center gap-2 text-sm font-medium transition-all"
-                          style={{ color: 'var(--accent)' }}
-                        >
-                          <span>{showTranscript ? '▼' : '▶'}</span>
-                          {showTranscript ? 'Hide Original Transcript' : 'View Original Transcript'}
-                        </button>
-                        
-                        <div className={`collapse-container ${showTranscript ? 'expanded' : 'collapsed'}`}>
-                          <div className="collapse-content">
-                            <div 
-                              className="mt-3 p-4 rounded-lg text-sm leading-relaxed max-h-96 overflow-y-auto custom-scrollbar whitespace-pre-wrap"
-                              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                            >
-                              {summaryResult.transcript}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
+              </div>
+            )}
+
+            {summaryResult && !isSummarizing && summaryResult.transcript.length > 0 && (
+              <div className="mt-4 card rounded-lg p-4 md:p-6">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                    Transcription
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowTranscript(!showTranscript)}
+                    className="flex shrink-0 items-center gap-2 text-xs font-medium transition-all sm:text-sm"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    <span aria-hidden>{showTranscript ? '▼' : '▶'}</span>
+                    {showTranscript ? 'Hide transcript' : 'View transcript'}
+                  </button>
+                </div>
+                <div className={`collapse-container ${showTranscript ? 'expanded' : 'collapsed'}`}>
+                  <div className="collapse-content">
+                    <TranscriptDiarizedEditor
+                      segments={summaryResult.transcript}
+                      onSegmentsChange={(next) =>
+                        setSummaryResult((prev) => (prev ? { ...prev, transcript: next } : prev))
+                      }
+                      noteId={currentNoteId}
+                      scrollContainerClassName="h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]"
+                    />
+                  </div>
+                </div>
               </div>
             )}
           </section>
@@ -1198,7 +1225,7 @@ const TranscriptionSummary: React.FC = () => {
           onClick={() => setShowDiscardModal(false)}
         >
           <div 
-            className="card rounded-lg p-6 max-w-sm w-full shadow-xl"
+            className="card rounded-lg p-4 md:p-6 max-w-sm w-full shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text)' }}>

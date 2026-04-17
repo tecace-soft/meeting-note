@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
+import { getNoteDiarizationRaw, hasUsableDiarization, normalizeTranscript } from '../lib/transcriptSegments';
 
 interface ProjectRow {
   id: string;
@@ -29,9 +31,22 @@ interface NoteRow {
   user_name?: string | null;
   summary?: string | null;
   summary_edit?: string | null;
+  transcription?: string | null;
+  diarization?: unknown;
+  diatrization?: unknown;
   created_at?: string | null;
   projects?: Array<string | number> | null;
 }
+
+/** Fixed scroll height for plain transcription (no diarization). */
+const NOTE_DETAIL_SCROLL_BODY =
+  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar rounded-lg p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed';
+
+/** Summary: fixed height scroll, no border or fill. */
+const NOTE_SUMMARY_SCROLL =
+  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed rounded-lg';
+
+const NOTE_TRANSCRIPT_SCROLL_CLASS = 'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]';
 
 interface ChatMessage {
   id: string;
@@ -122,7 +137,7 @@ const Project: React.FC = () => {
 
         const { data: nData, error: nErr } = await supabase
           .from('note')
-          .select('id, name, user_name, summary, summary_edit, created_at, projects')
+          .select('*')
           .contains('projects', [projectIdFilterValue])
           .order('created_at', { ascending: false });
 
@@ -350,8 +365,8 @@ const Project: React.FC = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      <main className="min-h-0 flex-1 overflow-hidden p-6">
-        <div className="mx-auto flex h-full max-w-5xl min-h-0 flex-col gap-4">
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
           <h1 className="flex-shrink-0 text-3xl font-semibold" style={{ color: 'var(--text)' }}>
             {project?.name || 'Project'}
           </h1>
@@ -476,11 +491,13 @@ const Project: React.FC = () => {
           </div>
 
           <div
-            className={`overflow-hidden transition-all duration-300 ease-out ${
-              isLowerSectionExpanded ? 'max-h-[55vh] opacity-100' : 'max-h-0 opacity-0'
+            className={`flex min-h-0 flex-col overflow-hidden transition-opacity duration-300 ease-out ${
+              isLowerSectionExpanded
+                ? 'min-h-0 flex-1 opacity-100'
+                : 'h-0 shrink-0 flex-[0_0_0] opacity-0 pointer-events-none'
             }`}
           >
-            <section className="card flex min-h-0 max-h-[45vh] flex-shrink flex-col overflow-hidden rounded-lg p-4">
+            <section className="card flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
               {activeTab === 'notes' ? (
                 <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
                   {error ? (
@@ -500,13 +517,16 @@ const Project: React.FC = () => {
                         <div key={note.id} className="chat-item card rounded-lg overflow-visible">
                           <div
                             onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
-                            className="p-4 flex items-center gap-4 cursor-pointer hover:bg-opacity-80"
+                            className="grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 sm:px-4 sm:py-3.5"
                             style={{ backgroundColor: expandedNoteId === note.id ? 'var(--bg-secondary)' : undefined }}
                           >
-                            <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: 'var(--accent-light)' }}>
-                              <FileText className="w-5 h-5" style={{ color: 'var(--accent)' }} />
+                            <div
+                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                              style={{ backgroundColor: 'var(--accent-light)' }}
+                            >
+                              <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
                             </div>
-                            <div className="flex-grow min-w-0">
+                            <div className="min-w-0 overflow-hidden pr-1">
                               {renamingNoteId === note.id ? (
                                 <input
                                   autoFocus
@@ -527,7 +547,7 @@ const Project: React.FC = () => {
                                     }
                                   }}
                                   maxLength={200}
-                                  className="w-full rounded px-1 py-0 text-sm font-medium"
+                                  className="w-full min-w-0 rounded px-1 py-0.5 text-sm font-medium"
                                   style={{
                                     color: 'var(--text)',
                                     backgroundColor: 'var(--accent-light)',
@@ -535,32 +555,44 @@ const Project: React.FC = () => {
                                   }}
                                 />
                               ) : (
-                                <p className="text-sm font-medium truncate" style={{ color: 'var(--text)' }}>
+                                <p
+                                  className="truncate text-sm font-medium leading-snug"
+                                  style={{ color: 'var(--text)' }}
+                                  title={note.name?.trim() || 'Untitled note'}
+                                >
                                   {note.name?.trim() || 'Untitled note'}
                                 </p>
                               )}
-                              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                              <p
+                                className="mt-0.5 truncate text-xs leading-snug"
+                                style={{ color: 'var(--text-muted)' }}
+                                title={`Created by ${note.user_name || 'Unknown'}`}
+                              >
                                 Created by {note.user_name || 'Unknown'}
                               </p>
                             </div>
-                            <div className="flex items-center gap-3">
-                              <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                <Calendar className="w-3 h-3" />
-                                {formatDate(note.created_at)}
+                            <div className="flex h-10 shrink-0 items-center justify-end gap-1.5 sm:gap-3">
+                              <div
+                                className="flex min-w-0 max-w-[5rem] items-center gap-1 truncate text-xs sm:max-w-[9rem] md:max-w-none"
+                                style={{ color: 'var(--text-muted)' }}
+                                title={formatDate(note.created_at)}
+                              >
+                                <Calendar className="h-3 w-3 shrink-0" aria-hidden />
+                                <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
                               </div>
                               <div
-                                className="relative"
+                                className="relative flex h-10 w-10 shrink-0 items-center justify-center"
                                 ref={openNoteMenuId === note.id ? noteMenuRef : undefined}
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <button
                                   type="button"
                                   onClick={() => setOpenNoteMenuId((prev) => (prev === note.id ? null : note.id))}
-                                  className="rounded-md p-1"
+                                  className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
                                   style={{ color: 'var(--text-muted)' }}
                                   aria-label={`Note actions for ${note.name?.trim() || 'Untitled note'}`}
                                 >
-                                  <MoreHorizontal className="w-4 h-4" />
+                                  <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
                                 </button>
                                 {openNoteMenuId === note.id ? (
                                   <div
@@ -606,61 +638,110 @@ const Project: React.FC = () => {
                           <div className={`collapse-container collapse-container--instant ${expandedNoteId === note.id ? 'expanded' : 'collapsed'}`}>
                             <div className="collapse-content">
                               <div className="p-4 border-t" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-                                <div className="flex items-center justify-end gap-2 mb-3">
-                                  {editingNoteId === note.id ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleSaveNoteEdit(note)}
-                                      disabled={savingNoteId === note.id}
-                                      className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium disabled:opacity-50"
-                                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                    >
-                                      {savingNoteId === note.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                                      Done
-                                    </button>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleStartNoteEdit(note)}
-                                      className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium"
-                                      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                    >
-                                      <Pencil className="w-3 h-3" />
-                                      Edit
-                                    </button>
-                                  )}
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                  <h4 className="shrink-0 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                    Summary
+                                  </h4>
+                                  <div className="flex shrink-0 items-center gap-2">
+                                    {editingNoteId === note.id ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleSaveNoteEdit(note)}
+                                        disabled={savingNoteId === note.id}
+                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium disabled:opacity-50"
+                                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                      >
+                                        {savingNoteId === note.id ? (
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <Save className="h-3 w-3" />
+                                        )}
+                                        Done
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartNoteEdit(note)}
+                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                                        style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                      >
+                                        <Pencil className="h-3 w-3" />
+                                        Edit
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
 
-                                <div className="max-h-80 overflow-y-auto custom-scrollbar pr-1">
-                                  {editingNoteId === note.id ? (
-                                    <textarea
-                                      value={noteEditDraft}
-                                      onChange={(e) => setNoteEditDraft(e.target.value)}
-                                      className="w-full p-3 rounded-lg text-sm leading-relaxed max-h-96 min-h-40 custom-scrollbar resize-y"
-                                      style={{
-                                        backgroundColor: 'var(--bg)',
-                                        color: 'var(--text)',
-                                        border: '1px solid var(--border)',
-                                      }}
-                                    />
-                                  ) : note.summary_edit || note.summary ? (
-                                    <div className="prose prose-sm max-w-none">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {note.summary_edit || note.summary || ''}
-                                      </ReactMarkdown>
-                                    </div>
-                                  ) : (
-                                    <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
-                                      No summary available
-                                    </p>
-                                  )}
-                                </div>
+                                {editingNoteId === note.id ? (
+                                  <textarea
+                                    value={noteEditDraft}
+                                    onChange={(e) => setNoteEditDraft(e.target.value)}
+                                    className={`w-full resize-none ${NOTE_SUMMARY_SCROLL}`}
+                                    style={{ color: 'var(--text)' }}
+                                  />
+                                ) : note.summary_edit || note.summary ? (
+                                  <div
+                                    className={`prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`}
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                      {note.summary_edit || note.summary || ''}
+                                    </ReactMarkdown>
+                                  </div>
+                                ) : (
+                                  <div
+                                    className={`flex items-center justify-center italic ${NOTE_SUMMARY_SCROLL}`}
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
+                                    No summary available
+                                  </div>
+                                )}
 
                                 {editingNoteId === note.id && noteEditError ? (
-                                  <p className="text-xs mt-2" style={{ color: 'var(--error)' }}>
+                                  <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
                                     {noteEditError}
                                   </p>
                                 ) : null}
+
+                                {(() => {
+                                  const diarRaw = getNoteDiarizationRaw(note);
+                                  const showDiarized = hasUsableDiarization(diarRaw);
+                                  const plainTx = note.transcription?.trim();
+                                  if (!showDiarized && !plainTx) return null;
+                                  return (
+                                    <div className="mt-6 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+                                      <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                        Transcription
+                                      </h4>
+                                      {showDiarized ? (
+                                        <TranscriptDiarizedEditor
+                                          segments={normalizeTranscript(diarRaw)}
+                                          onSegmentsChange={(next) =>
+                                            setNotes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === note.id
+                                                  ? { ...n, diarization: next, diatrization: undefined }
+                                                  : n
+                                              )
+                                            )
+                                          }
+                                          noteId={note.id}
+                                          scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
+                                        />
+                                      ) : (
+                                        <div
+                                          className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                                          style={{
+                                            backgroundColor: 'var(--bg)',
+                                            color: 'var(--text-secondary)',
+                                          }}
+                                        >
+                                          {plainTx}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
                           </div>
@@ -670,7 +751,10 @@ const Project: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <div className="flex min-h-[180px] items-center justify-center rounded-lg border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+                <div
+                  className="flex min-h-0 flex-1 items-center justify-center rounded-lg border"
+                  style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+                >
                   <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
                     Chats tab coming soon.
                   </p>
