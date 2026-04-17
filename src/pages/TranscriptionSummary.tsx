@@ -95,18 +95,8 @@ const TranscriptionSummary: React.FC = () => {
     }
   }, [openMenuChatId]);
 
-  const generateNoteId = (): string => {
-    const now = new Date();
-    const yy = String(now.getFullYear()).slice(-2);
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let randomPart = '';
-    for (let i = 0; i < 10; i++) {
-      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return `${yy}${mm}${dd}${randomPart}`;
-  };
+  /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
+  const generateNoteId = (): string => crypto.randomUUID();
 
   const formatRecordingTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);

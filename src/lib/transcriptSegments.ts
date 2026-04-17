@@ -143,7 +143,33 @@ export function applySpeakerReplacements(
   });
 }
 
+function isMissingDiarizationColumnError(err: { message?: string; details?: string }): boolean {
+  const t = `${err.message ?? ''} ${err.details ?? ''}`.toLowerCase();
+  return (
+    t.includes('diarization') &&
+    (t.includes('schema cache') || t.includes('could not find') || t.includes('does not exist') || t.includes('pgrst204'))
+  );
+}
+
+/** Writes diarized segments to `note`; supports `diarization` or legacy-only `diatrization` column. */
 export async function persistNoteDiarization(noteId: string, segments: TranscriptSegment[]): Promise<void> {
-  const { error } = await supabase.from('note').update({ diarization: segments }).eq('id', noteId);
-  if (error) throw error;
+  if (!noteId) return;
+
+  const { error: errCanonical } = await supabase
+    .from('note')
+    .update({ diarization: segments })
+    .eq('id', noteId);
+
+  if (!errCanonical) return;
+
+  if (isMissingDiarizationColumnError(errCanonical)) {
+    const { error: errLegacy } = await supabase
+      .from('note')
+      .update({ diatrization: segments })
+      .eq('id', noteId);
+    if (errLegacy) throw errLegacy;
+    return;
+  }
+
+  throw errCanonical;
 }
