@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
+  Folder,
   FolderMinus,
   Loader2,
   MoreHorizontal,
@@ -367,8 +368,12 @@ const Project: React.FC = () => {
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
         <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
-          <h1 className="flex-shrink-0 text-3xl font-semibold" style={{ color: 'var(--text)' }}>
-            {project?.name || 'Project'}
+          <h1
+            className="flex flex-shrink-0 items-center gap-3 text-3xl font-semibold"
+            style={{ color: 'var(--text)' }}
+          >
+            <Folder className="h-8 w-8 shrink-0" style={{ color: 'var(--accent)' }} aria-hidden />
+            <span className="min-w-0 truncate">{project?.name || 'Project'}</span>
           </h1>
 
           <div
@@ -497,9 +502,9 @@ const Project: React.FC = () => {
                 : 'h-0 shrink-0 flex-[0_0_0] opacity-0 pointer-events-none'
             }`}
           >
-            <section className="card flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-6">
               {activeTab === 'notes' ? (
-                <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
+                <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-0 md:px-5">
                   {error ? (
                     <p className="text-sm" style={{ color: 'var(--error)' }}>{error}</p>
                   ) : notes.length === 0 ? (
@@ -752,7 +757,7 @@ const Project: React.FC = () => {
                 </div>
               ) : (
                 <div
-                  className="flex min-h-0 flex-1 items-center justify-center rounded-lg border"
+                  className="flex min-h-0 flex-1 items-center justify-center rounded-lg border py-8"
                   style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
                 >
                   <p className="text-sm" style={{ color: 'var(--text-muted)' }}>

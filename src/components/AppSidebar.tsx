@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Check,
@@ -22,6 +23,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
+import { normalizeTranscript } from '../lib/transcriptSegments';
 
 const STORAGE_KEY = 'meeting_note_sidebar_collapsed';
 const MOBILE_STORAGE_KEY = 'meeting_note_sidebar_mobile_collapsed';
@@ -75,11 +77,44 @@ interface SidebarNote {
   name?: string | null;
   created_at?: string | null;
   projects?: Array<string | number> | null;
+  summary?: string | null;
+  summary_edit?: string | null;
+  transcription?: string | null;
+  diarization?: unknown;
+  diatrization?: unknown;
+}
+
+function formatNoteModalDate(createdAt?: string | null): string {
+  if (!createdAt) return 'Unknown date';
+  try {
+    return new Date(createdAt).toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return 'Unknown date';
+  }
+}
+
+function getNoteSummaryText(note: SidebarNote): string {
+  return (note.summary_edit?.trim() || note.summary?.trim() || '').trim();
+}
+
+function getNoteTranscriptionText(note: SidebarNote): string {
+  const plain = note.transcription?.trim();
+  if (plain) return plain;
+  const diarized = note.diarization ?? note.diatrization;
+  const segments = normalizeTranscript(diarized);
+  if (segments.length === 0) return '';
+  return segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
 }
 
 const navItems = [
   { to: '/transcription-summary', label: 'Meeting Note', icon: FileText, end: true as const },
-  { to: '/summary-history', label: 'Summary History', icon: History, end: false as const, projects: true as const },
+  { to: '/summary-history', label: 'History', icon: History, end: false as const, projects: true as const },
   { to: '/save-summary', label: 'OneDrive', icon: HardDrive, end: false as const },
 ] as const;
 
@@ -114,6 +149,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
   const [creatingProject, setCreatingProject] = useState(false);
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [createModalExpandedNoteId, setCreateModalExpandedNoteId] = useState<string | null>(null);
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const [renameProjectId, setRenameProjectId] = useState<string | null>(null);
   const [renameProjectName, setRenameProjectName] = useState('');
@@ -247,7 +283,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         setNotesLoading(true);
         const { data, error } = await supabase
           .from('note')
-          .select('id, name, created_at, projects')
+          .select('*')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false });
 
@@ -277,6 +313,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     setCreateProjectError(null);
     setNewProjectName('');
     setSelectedNoteIds([]);
+    setCreateModalExpandedNoteId(null);
     setIsCreateProjectOpen(true);
   };
 
@@ -342,6 +379,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       setIsCreateProjectOpen(false);
       setNewProjectName('');
       setSelectedNoteIds([]);
+      setCreateModalExpandedNoteId(null);
     } catch (err: unknown) {
       console.error('Sidebar: failed to create project', err);
       setCreateProjectError(err instanceof Error ? err.message : 'Failed to create project');
@@ -749,116 +787,235 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
       {isCreateProjectOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6"
           style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (!creatingProject) {
+              setIsCreateProjectOpen(false);
+              setCreateModalExpandedNoteId(null);
+            }
+          }}
         >
           <div
-            className="w-full max-w-lg rounded-lg border p-4 sm:p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-project-dialog-title"
+            className="flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl sm:max-w-6xl"
             style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-                New Project
-              </h3>
+            <div
+              className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-4 sm:px-6 sm:py-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <div>
+                <h3 id="new-project-dialog-title" className="text-lg font-semibold sm:text-xl" style={{ color: 'var(--text)' }}>
+                  New Project
+                </h3>
+                <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  Name your folder and choose which meeting notes to include.
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={() => setIsCreateProjectOpen(false)}
-                className="rounded-md p-1.5"
+                onClick={() => {
+                  setIsCreateProjectOpen(false);
+                  setCreateModalExpandedNoteId(null);
+                }}
+                className="rounded-md p-2"
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                 aria-label="Close modal"
+                disabled={creatingProject}
               >
-                <X className="h-4 w-4" aria-hidden />
+                <X className="h-5 w-5" aria-hidden />
               </button>
             </div>
 
-            <form onSubmit={handleCreateProject} className="space-y-3">
-              <div>
-                <label
-                  htmlFor="new-project-name"
-                  className="mb-1 block text-xs font-medium uppercase tracking-wide"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Project Name
-                </label>
-                <input
-                  id="new-project-name"
-                  type="text"
-                  value={newProjectName}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                  maxLength={200}
-                  placeholder="Enter project name"
-                  className="w-full rounded-lg border px-3 py-2 text-sm"
-                  style={{
-                    backgroundColor: 'var(--bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text)',
-                  }}
-                  disabled={creatingProject}
-                />
+            <form onSubmit={handleCreateProject} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="shrink-0 space-y-4 px-4 pb-2 pt-4 sm:px-6 sm:pt-5">
+                <div>
+                  <label
+                    htmlFor="new-project-name"
+                    className="mb-1.5 block text-sm font-medium"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    Project name
+                  </label>
+                  <input
+                    id="new-project-name"
+                    type="text"
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    maxLength={200}
+                    placeholder="e.g. Q1 customer calls"
+                    className="w-full rounded-lg border px-3 py-2.5 text-base"
+                    style={{
+                      backgroundColor: 'var(--bg)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text)',
+                    }}
+                    disabled={creatingProject}
+                  />
+                </div>
+                <div>
+                  <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    Include notes
+                  </p>
+                  <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Check notes to add to this project. Expand a row to read the summary and transcription.
+                  </p>
+                </div>
               </div>
 
-              <div>
-                <p className="mb-1 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Select Notes
-                </p>
-                <div
-                  className="custom-scrollbar max-h-64 space-y-1 overflow-y-auto rounded-lg border p-2"
-                  style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
-                >
+              <div className="flex min-h-0 flex-1 flex-col px-4 pb-2 sm:px-6">
+                <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
                   {notesLoading ? (
-                    <div className="flex items-center gap-2 px-1 py-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                      Loading notes...
+                    <div className="flex min-h-[12rem] flex-1 items-center justify-center py-6">
+                      <div className="card rounded-lg p-8 text-center">
+                        <div
+                          className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-b-2"
+                          style={{ borderColor: 'var(--accent)' }}
+                          aria-hidden
+                        />
+                        <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                          Loading notes...
+                        </p>
+                      </div>
                     </div>
                   ) : sortedNotes.length === 0 ? (
-                    <p className="px-1 py-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                      No notes found.
-                    </p>
+                    <div className="flex min-h-[12rem] flex-1 items-center justify-center py-6">
+                      <div className="card rounded-lg p-8 text-center">
+                        <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                          No notes found.
+                        </p>
+                      </div>
+                    </div>
                   ) : (
-                    sortedNotes.map((note) => {
-                      const checked = selectedNoteIds.includes(note.id);
-                      return (
-                        <button
-                          key={note.id}
-                          type="button"
-                          onClick={() => toggleNoteSelection(note.id)}
-                          className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left"
-                          style={{
-                            backgroundColor: checked ? 'var(--accent-light)' : 'transparent',
-                            color: checked ? 'var(--accent)' : 'var(--text)',
-                          }}
-                        >
-                          <span
-                            className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border"
-                            style={{
-                              borderColor: checked ? 'var(--accent)' : 'var(--border)',
-                              backgroundColor: checked ? 'var(--accent)' : 'transparent',
-                              color: '#fff',
-                            }}
-                          >
-                            {checked ? <Check className="h-3 w-3" aria-hidden /> : null}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-sm">
-                            {note.name?.trim() || 'Untitled note'}
-                          </span>
-                        </button>
-                      );
-                    })
+                    <ul className="space-y-3">
+                      {sortedNotes.map((note) => {
+                        const checked = selectedNoteIds.includes(note.id);
+                        const expanded = createModalExpandedNoteId === note.id;
+                        const title = note.name?.trim() || 'Untitled note';
+                        const summaryPreview = getNoteSummaryText(note);
+                        const transcriptionPreview = getNoteTranscriptionText(note);
+                        return (
+                          <li key={note.id} className="chat-item card overflow-visible rounded-lg transition-all">
+                            <div
+                              className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 sm:px-4 sm:py-3.5"
+                              style={{
+                                backgroundColor:
+                                  expanded || checked ? 'var(--bg-secondary)' : undefined,
+                              }}
+                            >
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleNoteSelection(note.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="h-4 w-4 shrink-0 rounded border"
+                                  style={{ borderColor: 'var(--border)', accentColor: 'var(--accent)' }}
+                                  aria-label={`Include ${title} in project`}
+                                />
+                              </div>
+                              <div className="min-w-0 overflow-hidden pr-1">
+                                <p
+                                  className="truncate text-sm font-medium leading-snug"
+                                  style={{ color: 'var(--text)' }}
+                                  title={title}
+                                >
+                                  {title}
+                                </p>
+                                <p
+                                  className="mt-0.5 truncate text-xs leading-snug"
+                                  style={{ color: 'var(--text-muted)' }}
+                                  title={formatNoteModalDate(note.created_at)}
+                                >
+                                  {formatNoteModalDate(note.created_at)}
+                                </p>
+                              </div>
+                              <div className="flex h-10 shrink-0 items-center justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setCreateModalExpandedNoteId((id) => (id === note.id ? null : note.id))
+                                  }
+                                  className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
+                                  style={{ color: 'var(--text-muted)' }}
+                                  aria-expanded={expanded}
+                                  aria-label={expanded ? 'Collapse note details' : 'Expand note details'}
+                                >
+                                  <ChevronDown
+                                    className={`h-5 w-5 shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                                    aria-hidden
+                                  />
+                                </button>
+                              </div>
+                            </div>
+                            {expanded ? (
+                              <div
+                                className="border-t p-4"
+                                style={{
+                                  borderColor: 'var(--border)',
+                                  backgroundColor: 'var(--bg-secondary)',
+                                }}
+                              >
+                                <div>
+                                  <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                    Summary
+                                  </h4>
+                                  <div
+                                    className="custom-scrollbar max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    {summaryPreview || 'No summary for this note.'}
+                                  </div>
+                                </div>
+                                <div
+                                  className="mt-6 border-t pt-4"
+                                  style={{ borderColor: 'var(--border)' }}
+                                >
+                                  <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                    Transcription
+                                  </h4>
+                                  <div
+                                    className="custom-scrollbar max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
+                                    style={{
+                                      backgroundColor: 'var(--bg)',
+                                      color: 'var(--text-secondary)',
+                                    }}
+                                  >
+                                    {transcriptionPreview || 'No transcription for this note.'}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   )}
                 </div>
               </div>
 
               {createProjectError ? (
-                <p className="text-xs" style={{ color: 'var(--error)' }}>
+                <p className="shrink-0 px-4 py-2 text-sm sm:px-6" style={{ color: 'var(--error)' }}>
                   {createProjectError}
                 </p>
               ) : null}
 
-              <div className="flex justify-end gap-2 pt-1">
+              <div
+                className="flex shrink-0 justify-end gap-3 border-t px-4 py-4 sm:px-6"
+                style={{ borderColor: 'var(--border)' }}
+              >
                 <button
                   type="button"
-                  onClick={() => setIsCreateProjectOpen(false)}
-                  className="rounded-lg px-3 py-2 text-sm"
+                  onClick={() => {
+                    setIsCreateProjectOpen(false);
+                    setCreateModalExpandedNoteId(null);
+                  }}
+                  className="rounded-lg px-4 py-2.5 text-sm font-medium"
                   style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   disabled={creatingProject}
                 >
@@ -866,12 +1023,12 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium disabled:opacity-60"
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   disabled={creatingProject || !newProjectName.trim()}
                 >
                   {creatingProject ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                  Create Project
+                  Create project
                 </button>
               </div>
             </form>
