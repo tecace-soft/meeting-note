@@ -148,6 +148,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as HTMLElement | null;
       if (t?.closest('[data-transcript-speaker-trigger]')) return;
+      // Delete confirm is portaled outside the speaker panel; ignore so we don't close the menu
+      // (and clear confirm state) before the confirm button's click runs.
+      if (t?.closest('[data-speaker-delete-confirm]')) return;
       const el = speakerMenuPanelRef.current;
       if (el && !el.contains(e.target as Node)) closeSpeakerMenu();
     };
@@ -502,6 +505,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       {speakerDeleteConfirm &&
         createPortal(
           <div
+            data-speaker-delete-confirm
             className="fixed inset-0 z-[80] flex items-center justify-center p-4"
             style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
             role="presentation"
