@@ -8,7 +8,29 @@ import {
   shouldUseResumableUpload,
   uploadWithTus,
 } from '../services/supabaseResumableUpload';
-import { Upload, File, MessageSquare, Users, Clock, X, Loader2, Send, Check, Forward, Pencil, Save, MoreVertical, History, HardDrive, Mic, Square, Play, Pause } from 'lucide-react';
+import {
+  Upload,
+  File,
+  MessageSquare,
+  Users,
+  UserCircle,
+  Clock,
+  X,
+  Loader2,
+  Send,
+  Check,
+  Pencil,
+  Save,
+  MoreVertical,
+  History,
+  HardDrive,
+  Mic,
+  Square,
+  Play,
+  Pause,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
@@ -18,6 +40,17 @@ import {
   persistNoteDiarization,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
+
+interface GeneratedProfile {
+  speakerId: string | null;
+  speakerName: string;
+  draft: string;
+  isNew: boolean;
+  saving: boolean;
+  saved: boolean;
+  saveError: string | null;
+  expanded: boolean;
+}
 
 interface UploadedFile {
   id: string;
@@ -70,6 +103,11 @@ const TranscriptionSummary: React.FC = () => {
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
+  const [isForwardTeamsModalOpen, setIsForwardTeamsModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
+  const [profileGenError, setProfileGenError] = useState<string | null>(null);
+  const [generatedProfiles, setGeneratedProfiles] = useState<GeneratedProfile[]>([]);
   const [resultsTab, setResultsTab] = useState<'summary' | 'transcription'>('summary');
 
   // Recording states
@@ -620,6 +658,8 @@ const TranscriptionSummary: React.FC = () => {
       }
       
       setForwardSuccess(true);
+      setIsForwardTeamsModalOpen(false);
+      setOpenMenuChatId(null);
       setTimeout(() => setForwardSuccess(false), 3000);
     } catch (error: any) {
       console.error('Error forwarding summary:', error);
@@ -628,6 +668,115 @@ const TranscriptionSummary: React.FC = () => {
       setIsForwarding(false);
     }
   };
+
+  const formatTranscriptText = (segments: TranscriptSegment[]): string =>
+    segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+
+  const handleGenerateProfile = async () => {
+    if (!summaryResult || !user?.id) return;
+    setIsProfileModalOpen(true);
+    setProfileGenStep('finding-speakers');
+    setProfileGenError(null);
+    setGeneratedProfiles([]);
+
+    try {
+      const uniqueSpeakers = [...new Set(summaryResult.transcript.map((s) => s.speaker).filter(Boolean))];
+
+      const { data: speakerRows, error: speakerErr } = await supabase
+        .from('speaker')
+        .select('id, name, profile')
+        .eq('user_id', user.id)
+        .in('name', uniqueSpeakers);
+
+      if (speakerErr) throw speakerErr;
+
+      const speakerMap = new Map<string, { id: string; profile: string | null }>();
+      ((speakerRows ?? []) as { id: string; name: string; profile: string | null }[]).forEach((s) => {
+        speakerMap.set(s.name.toLowerCase(), { id: s.id, profile: s.profile });
+      });
+
+      setProfileGenStep('generating');
+
+      const transcriptText = formatTranscriptText(summaryResult.transcript);
+
+      const results = await Promise.all(
+        uniqueSpeakers.map(async (speakerName): Promise<GeneratedProfile> => {
+          const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
+          const existingProfile = record?.profile?.trim() || null;
+
+          const openAiKey = (import.meta.env.VITE_OPENAI_API_KEY as string | undefined) ?? '';
+          const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
+            'generate-profile',
+            {
+              body: { speakerName, transcriptText, existingProfile, apiKey: openAiKey },
+              headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+            }
+          );
+
+          if (error) throw new Error(`Edge function error for "${speakerName}": ${error.message}`);
+          if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
+
+          return {
+            speakerId: record?.id ?? null,
+            speakerName,
+            draft: data?.profile ?? '',
+            isNew: !existingProfile,
+            saving: false,
+            saved: false,
+            saveError: null,
+            expanded: true,
+          };
+        })
+      );
+
+      setGeneratedProfiles(results);
+      setProfileGenStep('ready');
+    } catch (err: unknown) {
+      console.error('Profile generation failed:', err);
+      setProfileGenError(err instanceof Error ? err.message : 'Profile generation failed');
+      setProfileGenStep('error');
+    }
+  };
+
+  const handleSaveProfile = async (speakerName: string) => {
+    if (!user?.id) return;
+    const profile = generatedProfiles.find((p) => p.speakerName === speakerName);
+    if (!profile) return;
+
+    setGeneratedProfiles((prev) =>
+      prev.map((p) => (p.speakerName === speakerName ? { ...p, saving: true, saveError: null } : p))
+    );
+
+    try {
+      if (profile.speakerId) {
+        const { error } = await supabase
+          .from('speaker')
+          .update({ profile: profile.draft })
+          .eq('id', profile.speakerId)
+          .eq('user_id', user.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('speaker')
+          .insert({ user_id: user.id, name: speakerName, profile: profile.draft });
+        if (error) throw error;
+      }
+      setGeneratedProfiles((prev) =>
+        prev.map((p) => (p.speakerName === speakerName ? { ...p, saving: false, saved: true } : p))
+      );
+    } catch (err: unknown) {
+      setGeneratedProfiles((prev) =>
+        prev.map((p) =>
+          p.speakerName === speakerName
+            ? { ...p, saving: false, saveError: err instanceof Error ? err.message : 'Save failed' }
+            : p
+        )
+      );
+    }
+  };
+
+  const resultActionBtnClass =
+    'result-action-btn flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50';
 
   if (isLoading) {
     return (
@@ -1103,173 +1252,524 @@ const TranscriptionSummary: React.FC = () => {
                         scrollContainerClassName="h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]"
                       />
                     ) : null}
+
+                    <div
+                      className="flex flex-wrap justify-end gap-2 border-t pt-4"
+                      style={{ borderColor: 'var(--border)' }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const completedFile = uploadedFiles.find((f) => f.status === 'completed' && f.publicUrl);
+                          const audioUrl = completedFile?.publicUrl ? encodeURIComponent(completedFile.publicUrl) : '';
+                          const audioName = completedFile?.name ? encodeURIComponent(completedFile.name) : '';
+                          navigate(`/save-summary?note_id=${currentNoteId}&audio_url=${audioUrl}&audio_name=${audioName}`);
+                        }}
+                        className={resultActionBtnClass}
+                      >
+                        <HardDrive className="h-4 w-4" aria-hidden />
+                        Save to OneDrive
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsForwardTeamsModalOpen(true)}
+                        disabled={isForwarding}
+                        className={resultActionBtnClass}
+                      >
+                        {isForwarding ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                            Sending...
+                          </>
+                        ) : forwardSuccess ? (
+                          <>
+                            <Check className="h-4 w-4 shrink-0" style={{ color: 'var(--success)' }} aria-hidden />
+                            Sent!
+                          </>
+                        ) : (
+                          <>
+                            <Users className="h-4 w-4" aria-hidden />
+                            Forward to Teams
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleGenerateProfile()}
+                        className={resultActionBtnClass}
+                      >
+                        <UserCircle className="h-4 w-4" aria-hidden />
+                        Generate Profile
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
             )}
           </section>
+        </div>
+      </main>
 
-          {/* Teams Chats Section */}
-          <section>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-medium" style={{ color: 'var(--text)' }}>
-                Teams Chats
+      {isForwardTeamsModalOpen && summaryResult && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (!isForwarding) setIsForwardTeamsModalOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="forward-teams-title"
+            className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <h2 id="forward-teams-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+                Forward to Teams
               </h2>
-              {summaryResult && (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      const completedFile = uploadedFiles.find(f => f.status === 'completed' && f.publicUrl);
-                      const audioUrl = completedFile?.publicUrl ? encodeURIComponent(completedFile.publicUrl) : '';
-                      const audioName = completedFile?.name ? encodeURIComponent(completedFile.name) : '';
-                      navigate(`/save-summary?note_id=${currentNoteId}&audio_url=${audioUrl}&audio_name=${audioName}`);
-                    }}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                    style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      color: 'var(--text)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <HardDrive className="w-4 h-4" />
-                    Save to OneDrive
-                  </button>
-                  <button
-                    onClick={handleForwardSummary}
-                    disabled={!selectedChatId || isForwarding}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{
-                      backgroundColor: forwardSuccess ? 'var(--success)' : 'var(--accent)',
-                      color: '#ffffff',
-                    }}
-                  >
-                    {isForwarding ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Sending...
-                      </>
-                    ) : forwardSuccess ? (
-                      <>
-                        <Check className="w-4 h-4" />
-                        Sent!
-                      </>
-                    ) : (
-                      <>
-                        <Forward className="w-4 h-4" />
-                        Forward Summary
-                      </>
-                    )}
-                  </button>
+              <button
+                type="button"
+                disabled={isForwarding}
+                onClick={() => setIsForwardTeamsModalOpen(false)}
+                className="rounded-md p-2 transition-opacity disabled:opacity-50"
+                style={{ color: 'var(--text-muted)' }}
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" aria-hidden />
+              </button>
+            </div>
+            <p className="shrink-0 px-4 pt-3 text-sm sm:px-5" style={{ color: 'var(--text-secondary)' }}>
+              Choose a chat, then click <span className="font-medium" style={{ color: 'var(--text)' }}>Forward Summary</span>.
+            </p>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-3 sm:px-5">
+              {chatsLoading ? (
+                <div className="rounded-lg border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
+                  <div
+                    className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-b-2"
+                    style={{ borderColor: 'var(--accent)' }}
+                  />
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    Loading your Teams chats...
+                  </p>
+                </div>
+              ) : chatsError ? (
+                <div className="rounded-lg border p-6" style={{ borderColor: 'var(--border)' }}>
+                  <p className="text-sm font-medium" style={{ color: 'var(--error)' }}>
+                    {chatsError}
+                  </p>
+                  <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Make sure you have the necessary permissions to access Teams chats.
+                  </p>
+                </div>
+              ) : chats.length === 0 ? (
+                <div className="rounded-lg border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
+                  <MessageSquare className="mx-auto mb-4 h-12 w-12" style={{ color: 'var(--text-muted)' }} aria-hidden />
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    No Teams chats found
+                  </p>
+                </div>
+              ) : (
+                <div className="max-h-[min(50vh,22rem)] overflow-y-auto custom-scrollbar rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+                  <div className="space-y-2 p-2">
+                    {chats
+                      .filter((chat) => chat.members && chat.members.length > 1)
+                      .map((chat) => (
+                        <div
+                          key={chat.id}
+                          onClick={() => setSelectedChatId(chat.id === selectedChatId ? null : chat.id)}
+                          className="chat-item flex cursor-pointer items-center gap-4 rounded-lg p-4 transition-all"
+                          style={{
+                            borderColor: chat.id === selectedChatId ? 'var(--accent)' : undefined,
+                            backgroundColor: chat.id === selectedChatId ? 'var(--accent-light)' : undefined,
+                          }}
+                        >
+                          <div
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                            style={{
+                              backgroundColor: chat.id === selectedChatId ? 'var(--accent)' : 'var(--accent-light)',
+                            }}
+                          >
+                            {chat.chatType === 'oneOnOne' ? (
+                              <MessageSquare
+                                className="h-5 w-5"
+                                style={{ color: chat.id === selectedChatId ? '#fff' : 'var(--accent)' }}
+                                aria-hidden
+                              />
+                            ) : (
+                              <Users
+                                className="h-5 w-5"
+                                style={{ color: chat.id === selectedChatId ? '#fff' : 'var(--accent)' }}
+                                aria-hidden
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium" style={{ color: 'var(--text)' }}>
+                              {getChatDisplayName(chat)}
+                            </p>
+                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                              {chat.chatType === 'oneOnOne'
+                                ? 'Direct message'
+                                : chat.chatType === 'group'
+                                  ? 'Group chat'
+                                  : 'Meeting chat'}
+                              {chat.members && ` • ${chat.members.length} members`}
+                              {' • '}
+                              {formatDate(chat.lastMessageDateTime || chat.lastUpdatedDateTime)}
+                            </p>
+                          </div>
+                          <div className="relative shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMenuChatId(openMenuChatId === chat.id ? null : chat.id);
+                              }}
+                              className="chat-menu-icon rounded-md p-2 transition-all"
+                              aria-label="Chat actions"
+                            >
+                              <MoreVertical style={{ width: '22px', height: '22px' }} aria-hidden />
+                            </button>
+
+                            {openMenuChatId === chat.id ? (
+                              <div
+                                className="absolute right-0 top-full z-10 mt-1 min-w-32 rounded-lg py-1 shadow-lg"
+                                style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenMenuChatId(null);
+                                    navigate(`/summary-history?chat_id=${encodeURIComponent(chat.id)}`);
+                                  }}
+                                  className="chat-menu-item flex w-full items-center gap-2 px-4 py-2 text-sm transition-all"
+                                >
+                                  <History className="h-4 w-4" aria-hidden />
+                                  History
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenMenuChatId(null);
+                                    if (chat.webUrl) window.open(chat.webUrl, '_blank');
+                                  }}
+                                  className="chat-menu-item flex w-full items-center gap-2 px-4 py-2 text-sm transition-all"
+                                >
+                                  <MessageSquare className="h-4 w-4" aria-hidden />
+                                  Chat
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div
+              className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t px-4 py-3 sm:px-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <button
+                type="button"
+                disabled={isForwarding}
+                onClick={() => setIsForwardTeamsModalOpen(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedChatId || isForwarding || !editedSummary.trim()}
+                onClick={() => void handleForwardSummary()}
+                className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                {isForwarding ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    Sending...
+                  </>
+                ) : (
+                  'Forward Summary'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generate Profile Modal */}
+      {isProfileModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (profileGenStep !== 'finding-speakers' && profileGenStep !== 'generating') {
+              setIsProfileModalOpen(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="profile-modal-title"
+            className="flex max-h-[min(92vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div
+              className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-4"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <div>
+                <h2 id="profile-modal-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+                  Generate Profile
+                </h2>
+                <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  AI-generated speaker profiles based on the meeting transcript
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'}
+                onClick={() => setIsProfileModalOpen(false)}
+                className="rounded-md p-2 transition-opacity disabled:opacity-40"
+                style={{ color: 'var(--text-muted)' }}
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" aria-hidden />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-5 py-4">
+              {(profileGenStep === 'finding-speakers' || profileGenStep === 'generating') && (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div
+                    className="mb-5 h-10 w-10 animate-spin rounded-full border-4 border-t-transparent"
+                    style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }}
+                    aria-hidden
+                  />
+                  <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>
+                    {profileGenStep === 'finding-speakers' ? 'Looking up speaker data…' : 'Generating profiles with AI…'}
+                  </p>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {profileGenStep === 'generating' && 'This may take a moment for each speaker'}
+                  </p>
+                </div>
+              )}
+
+              {profileGenStep === 'error' && (
+                <div
+                  className="rounded-lg border p-4"
+                  style={{ borderColor: 'var(--error)', backgroundColor: 'var(--error-light)' }}
+                >
+                  <p className="text-sm font-medium" style={{ color: 'var(--error)' }}>
+                    {profileGenError}
+                  </p>
+                </div>
+              )}
+
+              {profileGenStep === 'ready' && (
+                <div className="space-y-4">
+                  {generatedProfiles.map((profile) => (
+                    <div
+                      key={profile.speakerName}
+                      className="overflow-hidden rounded-lg border"
+                      style={{ borderColor: 'var(--border)' }}
+                    >
+                      {/* Profile header row */}
+                      <div
+                        className="flex items-center justify-between gap-3 border-b px-4 py-3"
+                        style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
+                            style={{
+                              backgroundColor: 'color-mix(in srgb, var(--accent) 20%, var(--bg-secondary))',
+                              color: 'var(--accent)',
+                            }}
+                          >
+                            {profile.speakerName.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                              {profile.speakerName}
+                            </p>
+                            <span
+                              className="inline-block rounded-full px-2 py-0.5 text-xs font-medium"
+                              style={{
+                                backgroundColor: profile.isNew
+                                  ? 'color-mix(in srgb, var(--accent) 15%, transparent)'
+                                  : 'color-mix(in srgb, var(--success) 15%, transparent)',
+                                color: profile.isNew ? 'var(--accent)' : 'var(--success)',
+                              }}
+                            >
+                              {profile.isNew ? 'New profile' : 'Updated profile'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {profile.saved && (
+                            <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--success)' }}>
+                              <Check className="h-3.5 w-3.5" aria-hidden />
+                              Saved
+                            </span>
+                          )}
+                          {profile.saveError && (
+                            <span className="text-xs" style={{ color: 'var(--error)' }}>
+                              {profile.saveError}
+                            </span>
+                          )}
+                          {!profile.saved && (
+                            <button
+                              type="button"
+                              disabled={profile.saving}
+                              onClick={() => void handleSaveProfile(profile.speakerName)}
+                              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50"
+                              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                            >
+                              {profile.saving ? (
+                                <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />Saving…</>
+                              ) : (
+                                <><Save className="h-3.5 w-3.5" aria-hidden />Save Profile</>
+                              )}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setGeneratedProfiles((prev) =>
+                                prev.map((p) =>
+                                  p.speakerName === profile.speakerName ? { ...p, expanded: !p.expanded } : p
+                                )
+                              )
+                            }
+                            className="rounded-md p-1.5 transition-opacity hover:opacity-70"
+                            style={{ color: 'var(--text-muted)' }}
+                            aria-label={profile.expanded ? 'Collapse' : 'Expand'}
+                          >
+                            {profile.expanded ? (
+                              <ChevronUp className="h-4 w-4" aria-hidden />
+                            ) : (
+                              <ChevronDown className="h-4 w-4" aria-hidden />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Editable textarea */}
+                      {profile.expanded && (
+                        <div className="p-4">
+                          <textarea
+                            value={profile.draft}
+                            disabled={profile.saved}
+                            onChange={(e) =>
+                              setGeneratedProfiles((prev) =>
+                                prev.map((p) =>
+                                  p.speakerName === profile.speakerName ? { ...p, draft: e.target.value, saved: false } : p
+                                )
+                              )
+                            }
+                            className="custom-scrollbar w-full resize-y rounded-lg border p-3 text-sm leading-relaxed outline-none transition-colors focus:border-transparent disabled:opacity-70"
+                            style={{
+                              minHeight: '16rem',
+                              backgroundColor: 'var(--bg-secondary)',
+                              color: 'var(--text)',
+                              borderColor: 'var(--border)',
+                            }}
+                            onFocus={(e) => {
+                              e.target.style.outline = '2px solid var(--accent)';
+                              e.target.style.outlineOffset = '0px';
+                            }}
+                            onBlur={(e) => {
+                              e.target.style.outline = 'none';
+                            }}
+                            placeholder="Generated profile will appear here…"
+                          />
+                          <p className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                            Markdown supported · Edit before saving
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
 
-            {summaryResult && !selectedChatId && (
-              <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
-                Select a chat below to forward the summary
-              </p>
-            )}
-
-            {chatsLoading ? (
-              <div className="card rounded-lg p-8 text-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 mx-auto mb-4" style={{ borderColor: 'var(--accent)' }}></div>
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading your Teams chats...</p>
-              </div>
-            ) : chatsError ? (
-              <div className="card rounded-lg p-8 text-center error">
-                <p className="text-sm mb-2">{chatsError}</p>
+            {/* Footer */}
+            {profileGenStep === 'ready' && (
+              <div
+                className="flex shrink-0 items-center justify-between gap-3 border-t px-5 py-3"
+                style={{ borderColor: 'var(--border)' }}
+              >
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Make sure you have the necessary permissions to access Teams chats.
+                  {generatedProfiles.filter((p) => p.saved).length} of {generatedProfiles.length} profile
+                  {generatedProfiles.length !== 1 ? 's' : ''} saved
                 </p>
-              </div>
-            ) : chats.length === 0 ? (
-              <div className="card rounded-lg p-8 text-center">
-                <MessageSquare className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--text-muted)' }} />
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No Teams chats found</p>
-              </div>
-            ) : (
-              <div className="max-h-96 overflow-y-auto custom-scrollbar rounded-lg" style={{ border: '1px solid var(--border)' }}>
-                <div className="space-y-2 p-2">
-                  {chats.filter(chat => chat.members && chat.members.length > 1).map(chat => (
-                    <div
-                      key={chat.id}
-                      onClick={() => summaryResult && setSelectedChatId(chat.id === selectedChatId ? null : chat.id)}
-                      className={`chat-item rounded-lg p-4 flex items-center gap-4 transition-all ${summaryResult ? 'cursor-pointer' : ''}`}
-                      style={{
-                        borderColor: chat.id === selectedChatId ? 'var(--accent)' : undefined,
-                        backgroundColor: chat.id === selectedChatId ? 'var(--accent-light)' : undefined,
-                      }}
-                    >
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center" 
-                        style={{ backgroundColor: chat.id === selectedChatId ? 'var(--accent)' : 'var(--accent-light)' }}>
-                        {chat.chatType === 'oneOnOne' ? (
-                          <MessageSquare className="w-5 h-5" style={{ color: chat.id === selectedChatId ? '#fff' : 'var(--accent)' }} />
-                        ) : (
-                          <Users className="w-5 h-5" style={{ color: chat.id === selectedChatId ? '#fff' : 'var(--accent)' }} />
-                        )}
-                      </div>
-                      <div className="flex-grow min-w-0">
-                        <p className="text-sm font-medium truncate" style={{ color: 'var(--text)' }}>
-                          {getChatDisplayName(chat)}
-                        </p>
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                          {chat.chatType === 'oneOnOne' ? 'Direct message' : 
-                           chat.chatType === 'group' ? 'Group chat' : 'Meeting chat'}
-                          {chat.members && ` • ${chat.members.length} members`}
-                          {' • '}{formatDate(chat.lastMessageDateTime || chat.lastUpdatedDateTime)}
-                        </p>
-                      </div>
-                      <div className="relative">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenMenuChatId(openMenuChatId === chat.id ? null : chat.id);
-                          }}
-                          className="p-2 rounded-md transition-all chat-menu-icon"
-                        >
-                          <MoreVertical style={{ width: '22px', height: '22px' }} />
-                        </button>
-                        
-                        {openMenuChatId === chat.id && (
-                          <div 
-                            className="absolute right-0 top-full mt-1 py-1 rounded-lg shadow-lg z-10 min-w-32"
-                            style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}
-                          >
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuChatId(null);
-                                navigate(`/summary-history?chat_id=${encodeURIComponent(chat.id)}`);
-                              }}
-                              className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all chat-menu-item"
-                            >
-                              <History className="w-4 h-4" />
-                              History
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuChatId(null);
-                                if (chat.webUrl) {
-                                  window.open(chat.webUrl, '_blank');
-                                }
-                              }}
-                              className="w-full flex items-center gap-2 px-4 py-2 text-sm transition-all chat-menu-item"
-                            >
-                              <MessageSquare className="w-4 h-4" />
-                              Chat
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsProfileModalOpen(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity"
+                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    disabled={generatedProfiles.some((p) => p.saving)}
+                    onClick={() => {
+                      const unsaved = generatedProfiles.filter((p) => !p.saved);
+                      unsaved.forEach((p) => void handleSaveProfile(p.speakerName));
+                    }}
+                    className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
+                    {generatedProfiles.some((p) => p.saving) ? (
+                      <><Loader2 className="h-4 w-4 animate-spin" aria-hidden />Saving…</>
+                    ) : (
+                      'Save All'
+                    )}
+                  </button>
                 </div>
               </div>
             )}
-          </section>
+
+            {profileGenStep === 'error' && (
+              <div
+                className="flex shrink-0 justify-end border-t px-5 py-3"
+                style={{ borderColor: 'var(--border)' }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsProfileModalOpen(false)}
+                  className="rounded-lg px-4 py-2 text-sm font-medium"
+                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-      </main>
+      )}
 
       {/* Discard Confirmation Modal */}
       {showDiscardModal && (
@@ -1305,6 +1805,7 @@ const TranscriptionSummary: React.FC = () => {
                   setIsEditingSummary(false);
                   setCurrentNoteId(null);
                   setResultsTab('summary');
+                  setIsForwardTeamsModalOpen(false);
                   setShowDiscardModal(false);
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium transition-all"

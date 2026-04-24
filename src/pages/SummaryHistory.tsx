@@ -31,7 +31,6 @@ interface Note {
   transcription?: string | null;
   diarization?: unknown;
   /** Legacy column name; still read so diarized UI works until fully migrated. */
-  diatrization?: unknown;
   created_at?: string;
 }
 
@@ -671,7 +670,7 @@ const SummaryHistory: React.FC = () => {
                                       setNotes((prev) =>
                                         prev.map((n) =>
                                           n.id === note.id
-                                            ? { ...n, diarization: next, diatrization: undefined }
+                                            ? { ...n, diarization: next }
                                             : n
                                         )
                                       )

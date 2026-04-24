@@ -34,7 +34,6 @@ interface NoteRow {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
-  diatrization?: unknown;
   created_at?: string | null;
   projects?: Array<string | number> | null;
 }
@@ -725,7 +724,7 @@ const Project: React.FC = () => {
                                             setNotes((prev) =>
                                               prev.map((n) =>
                                                 n.id === note.id
-                                                  ? { ...n, diarization: next, diatrization: undefined }
+                                                  ? { ...n, diarization: next }
                                                   : n
                                               )
                                             )

@@ -81,7 +81,6 @@ interface SidebarNote {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
-  diatrization?: unknown;
 }
 
 function formatNoteModalDate(createdAt?: string | null): string {
@@ -106,7 +105,7 @@ function getNoteSummaryText(note: SidebarNote): string {
 function getNoteTranscriptionText(note: SidebarNote): string {
   const plain = note.transcription?.trim();
   if (plain) return plain;
-  const diarized = note.diarization ?? note.diatrization;
+  const diarized = note.diarization;
   const segments = normalizeTranscript(diarized);
   if (segments.length === 0) return '';
   return segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');

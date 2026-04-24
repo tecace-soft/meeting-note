@@ -6,13 +6,8 @@ export type ReplacementScope = 'single' | 'from_here' | 'all';
 
 const SPEAKER_NUMBER_RE = /^Speaker\s*#?\s*(\d+)\s*$/i;
 
-/** Supabase row may use `diarization` or legacy `diatrization`. */
-export function getNoteDiarizationRaw(note: {
-  diarization?: unknown;
-  diatrization?: unknown;
-}): unknown {
-  if (note.diarization != null) return note.diarization;
-  return note.diatrization;
+export function getNoteDiarizationRaw(note: { diarization?: unknown }): unknown {
+  return note.diarization;
 }
 
 /**
@@ -143,33 +138,9 @@ export function applySpeakerReplacements(
   });
 }
 
-function isMissingDiarizationColumnError(err: { message?: string; details?: string }): boolean {
-  const t = `${err.message ?? ''} ${err.details ?? ''}`.toLowerCase();
-  return (
-    t.includes('diarization') &&
-    (t.includes('schema cache') || t.includes('could not find') || t.includes('does not exist') || t.includes('pgrst204'))
-  );
-}
 
-/** Writes diarized segments to `note`; supports `diarization` or legacy-only `diatrization` column. */
 export async function persistNoteDiarization(noteId: string, segments: TranscriptSegment[]): Promise<void> {
   if (!noteId) return;
-
-  const { error: errCanonical } = await supabase
-    .from('note')
-    .update({ diarization: segments })
-    .eq('id', noteId);
-
-  if (!errCanonical) return;
-
-  if (isMissingDiarizationColumnError(errCanonical)) {
-    const { error: errLegacy } = await supabase
-      .from('note')
-      .update({ diatrization: segments })
-      .eq('id', noteId);
-    if (errLegacy) throw errLegacy;
-    return;
-  }
-
-  throw errCanonical;
+  const { error } = await supabase.from('note').update({ diarization: segments }).eq('id', noteId);
+  if (error) throw error;
 }

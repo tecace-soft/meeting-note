@@ -1,6 +1,8 @@
 import React, { useId, useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import { createPortal } from 'react-dom';
-import { Loader2, Trash2, X } from 'lucide-react';
+import { Loader2, Pencil, Save, Trash2, User, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabaseConfig';
 import {
@@ -11,7 +13,7 @@ import {
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 
-type DbSpeaker = { id: string; name: string };
+type DbSpeaker = { id: string; name: string; profile?: string | null };
 
 type SpeakerMenuState = {
   segmentIndex: number;
@@ -58,6 +60,11 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const [deletingSpeakerId, setDeletingSpeakerId] = useState<string | null>(null);
   const [speakerDeleteConfirm, setSpeakerDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [speakerDeleteConfirmError, setSpeakerDeleteConfirmError] = useState<string | null>(null);
+  const [speakerProfileView, setSpeakerProfileView] = useState<{ id: string; name: string; profile: string | null } | null>(null);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [profileDraft, setProfileDraft] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const speakerMenuPanelRef = useRef<HTMLDivElement>(null);
 
   const closeSpeakerMenu = useCallback(() => {
@@ -69,6 +76,10 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setSpeakersFetchError(null);
     setSpeakerDeleteConfirm(null);
     setSpeakerDeleteConfirmError(null);
+    setSpeakerProfileView(null);
+    setIsEditingProfile(false);
+    setProfileDraft('');
+    setProfileSaveError(null);
   }, []);
 
   const applySpeakerRenameToSummary = (summaryText: string, fromSpeaker: string, toSpeaker: string): string => {
@@ -114,7 +125,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     try {
       const { data, error } = await supabase
         .from('speaker')
-        .select('id, name')
+        .select('id, name, profile')
         .eq('user_id', user.id)
         .order('name', { ascending: true });
       if (error) throw error;
@@ -151,6 +162,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       // Delete confirm is portaled outside the speaker panel; ignore so we don't close the menu
       // (and clear confirm state) before the confirm button's click runs.
       if (t?.closest('[data-speaker-delete-confirm]')) return;
+      if (t?.closest('[data-speaker-profile-modal]')) return;
       const el = speakerMenuPanelRef.current;
       if (el && !el.contains(e.target as Node)) closeSpeakerMenu();
     };
@@ -183,6 +195,37 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setSpeakerMenuError(null);
     setSpeakersFetchError(null);
     void loadSpeakersForMenu();
+  };
+
+  const openSpeakerProfileView = (row: DbSpeaker) => {
+    const profile = row.profile?.trim() || null;
+    setSpeakerProfileView({ id: row.id, name: row.name, profile });
+    setIsEditingProfile(false);
+    setProfileDraft(profile ?? '');
+    setProfileSaveError(null);
+  };
+
+  const handleSaveProfileEdit = async () => {
+    if (!speakerProfileView || !user?.id) return;
+    setSavingProfile(true);
+    setProfileSaveError(null);
+    try {
+      const { error } = await supabase
+        .from('speaker')
+        .update({ profile: profileDraft })
+        .eq('id', speakerProfileView.id)
+        .eq('user_id', user.id);
+      if (error) throw error;
+      setSpeakerProfileView((prev) => (prev ? { ...prev, profile: profileDraft } : prev));
+      setSavedSpeakers((prev) =>
+        prev.map((s) => (s.id === speakerProfileView.id ? { ...s, profile: profileDraft } : s))
+      );
+      setIsEditingProfile(false);
+    } catch (err: unknown) {
+      setProfileSaveError(err instanceof Error ? err.message : 'Failed to save profile');
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   const openSpeakerDeleteConfirm = (row: DbSpeaker) => {
@@ -433,6 +476,18 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                         </button>
                         <button
                           type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openSpeakerProfileView(row);
+                          }}
+                          className="flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-md text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--bg-secondary)] hover:text-[var(--accent)]"
+                          title={`View profile for "${row.name}"`}
+                          aria-label={`View profile for ${row.name}`}
+                        >
+                          <User className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                        </button>
+                        <button
+                          type="button"
                           disabled={speakerChangeSaving || deletingSpeakerId === row.id}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -564,6 +619,160 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   {deletingSpeakerId ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
                   Delete
                 </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+      {speakerProfileView &&
+        createPortal(
+          <div
+            data-speaker-profile-modal
+            className="fixed inset-0 z-[90] flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+            role="presentation"
+            onClick={() => {
+              if (!savingProfile) {
+                setSpeakerProfileView(null);
+                setIsEditingProfile(false);
+              }
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="speaker-profile-title"
+              className="flex max-h-[min(90vh,720px)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border shadow-xl"
+              style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div
+                className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5"
+                style={{ borderColor: 'var(--border)' }}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
+                    style={{
+                      backgroundColor: 'color-mix(in srgb, var(--accent) 18%, var(--bg-secondary))',
+                      color: 'var(--accent)',
+                    }}
+                  >
+                    {getTranscriptAvatarLabel(speakerProfileView.name)}
+                  </div>
+                  <h2 id="speaker-profile-title" className="truncate text-base font-semibold" style={{ color: 'var(--text)' }}>
+                    {speakerProfileView.name}
+                  </h2>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isEditingProfile ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={savingProfile}
+                        onClick={() => {
+                          setIsEditingProfile(false);
+                          setProfileDraft(speakerProfileView.profile ?? '');
+                          setProfileSaveError(null);
+                        }}
+                        className="rounded-lg px-3 py-1.5 text-sm transition-opacity disabled:opacity-50"
+                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingProfile}
+                        onClick={() => void handleSaveProfileEdit()}
+                        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-opacity disabled:opacity-50"
+                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                      >
+                        {savingProfile ? (
+                          <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />Saving…</>
+                        ) : (
+                          <><Save className="h-3.5 w-3.5" aria-hidden />Save</>
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfileDraft(speakerProfileView.profile ?? '');
+                        setIsEditingProfile(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-opacity hover:opacity-80"
+                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" aria-hidden />
+                      Edit
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={savingProfile}
+                    onClick={() => { setSpeakerProfileView(null); setIsEditingProfile(false); }}
+                    className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70"
+                    style={{ color: 'var(--text-muted)' }}
+                    aria-label="Close"
+                  >
+                    <X className="h-4 w-4" aria-hidden />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-4 py-4 sm:px-5">
+                {profileSaveError ? (
+                  <p className="mb-3 text-xs" style={{ color: 'var(--error)' }}>
+                    {profileSaveError}
+                  </p>
+                ) : null}
+
+                {isEditingProfile ? (
+                  <textarea
+                    value={profileDraft}
+                    onChange={(e) => setProfileDraft(e.target.value)}
+                    className="custom-scrollbar w-full resize-none rounded-lg border p-3 text-sm leading-relaxed outline-none"
+                    style={{
+                      minHeight: '20rem',
+                      backgroundColor: 'var(--bg-secondary)',
+                      color: 'var(--text)',
+                      borderColor: 'var(--border)',
+                    }}
+                    onFocus={(e) => { e.target.style.outline = '2px solid var(--accent)'; e.target.style.outlineOffset = '0'; }}
+                    onBlur={(e) => { e.target.style.outline = 'none'; }}
+                    placeholder="Enter profile in markdown…"
+                    autoFocus
+                  />
+                ) : speakerProfileView.profile ? (
+                  <div
+                    className="prose prose-sm max-w-none text-sm leading-relaxed"
+                    style={{ color: 'var(--text)' }}
+                  >
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {speakerProfileView.profile}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <div
+                    className="flex flex-col items-center justify-center py-12 text-center"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <User className="mb-3 h-10 w-10 opacity-40" aria-hidden />
+                    <p className="text-sm">No profile yet for this speaker.</p>
+                    <button
+                      type="button"
+                      onClick={() => { setProfileDraft(''); setIsEditingProfile(true); }}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-opacity hover:opacity-80"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" aria-hidden />
+                      Create profile
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>,
