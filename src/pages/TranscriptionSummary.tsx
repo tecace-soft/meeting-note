@@ -70,7 +70,7 @@ const TranscriptionSummary: React.FC = () => {
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
-  const [showTranscript, setShowTranscript] = useState(true);
+  const [resultsTab, setResultsTab] = useState<'summary' | 'transcription'>('summary');
 
   // Recording states
   const [isRecording, setIsRecording] = useState(false);
@@ -501,7 +501,7 @@ const TranscriptionSummary: React.FC = () => {
         transcript,
       });
       setEditedSummary(summaryText);
-      if (transcript.length > 0) setShowTranscript(true);
+      setResultsTab('summary');
 
       if (transcript.length > 0) {
         try {
@@ -939,108 +939,172 @@ const TranscriptionSummary: React.FC = () => {
 
                 {summaryResult && !isSummarizing && (
                   <div className="space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
+                    {summaryResult.transcript.length > 0 ? (
+                      <div
+                        className="flex flex-wrap items-end justify-between gap-3 border-b"
+                        style={{ borderColor: 'var(--border)' }}
+                      >
+                        <div
+                          className="-mb-px flex min-w-0 gap-1 sm:gap-6"
+                          role="tablist"
+                          aria-label="Summary or transcription"
+                        >
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={resultsTab === 'summary'}
+                            onClick={() => setResultsTab('summary')}
+                            className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                            style={{
+                              borderBottomColor:
+                                resultsTab === 'summary' ? 'var(--accent)' : 'transparent',
+                              color: resultsTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
+                            }}
+                          >
+                            Summary
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={resultsTab === 'transcription'}
+                            onClick={() => setResultsTab('transcription')}
+                            className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                            style={{
+                              borderBottomColor:
+                                resultsTab === 'transcription' ? 'var(--accent)' : 'transparent',
+                              color:
+                                resultsTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
+                            }}
+                          >
+                            Transcription
+                          </button>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 pb-2">
+                          <button
+                            onClick={() => setShowDiscardModal(true)}
+                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            style={{
+                              backgroundColor: 'var(--bg-secondary)',
+                              color: 'var(--text-muted)',
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                            Discard
+                          </button>
+                          {resultsTab === 'summary' ? (
+                            <button
+                              onClick={() => void handleToggleEditSummary()}
+                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                              style={{
+                                backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
+                                color: isEditingSummary ? '#fff' : 'var(--text-secondary)',
+                              }}
+                            >
+                              {isEditingSummary ? (
+                                <>
+                                  <Save className="h-3 w-3" />
+                                  Done
+                                </>
+                              ) : (
+                                <>
+                                  <Pencil className="h-3 w-3" />
+                                  Edit
+                                </>
+                              )}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mb-2 flex items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
                           Summary
                         </h3>
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => setShowDiscardModal(true)}
-                            className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
-                            style={{ 
+                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            style={{
                               backgroundColor: 'var(--bg-secondary)',
                               color: 'var(--text-muted)',
                             }}
                           >
-                            <X className="w-3 h-3" />
+                            <X className="h-3 w-3" />
                             Discard
                           </button>
                           <button
                             onClick={() => void handleToggleEditSummary()}
-                            className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
-                            style={{ 
+                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            style={{
                               backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
                               color: isEditingSummary ? '#fff' : 'var(--text-secondary)',
                             }}
                           >
                             {isEditingSummary ? (
                               <>
-                                <Save className="w-3 h-3" />
+                                <Save className="h-3 w-3" />
                                 Done
                               </>
                             ) : (
                               <>
-                                <Pencil className="w-3 h-3" />
+                                <Pencil className="h-3 w-3" />
                                 Edit
                               </>
                             )}
                           </button>
                         </div>
                       </div>
-                      
-                      {isEditingSummary ? (
-                        <textarea
-                          value={editedSummary}
-                          onChange={(e) => {
-                            setEditedSummary(e.target.value);
-                            setSummaryEditError(null);
-                          }}
-                          className="w-full h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] resize-none overflow-y-auto rounded-lg border-2 p-4 max-md:p-4 text-sm max-md:text-base leading-relaxed custom-scrollbar"
-                          style={{ 
-                            backgroundColor: 'var(--bg-secondary)', 
-                            color: 'var(--text)',
-                            borderColor: 'var(--accent)',
-                          }}
-                          placeholder="Edit your summary here... (Markdown supported)"
-                        />
-                      ) : (
-                        <div 
-                          className="prose prose-sm max-w-none h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto rounded-lg p-4 text-sm max-md:text-base leading-relaxed custom-scrollbar"
-                          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
-                        >
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedSummary}</ReactMarkdown>
-                        </div>
-                      )}
-                      {summaryEditError ? (
-                        <p className="text-xs mt-2" style={{ color: 'var(--error)' }}>
-                          {summaryEditError}
-                        </p>
-                      ) : null}
-                    </div>
+                    )}
+
+                    {(summaryResult.transcript.length === 0 || resultsTab === 'summary') && (
+                      <div>
+                        {isEditingSummary ? (
+                          <textarea
+                            value={editedSummary}
+                            onChange={(e) => {
+                              setEditedSummary(e.target.value);
+                              setSummaryEditError(null);
+                            }}
+                            className="custom-scrollbar h-72 min-h-0 w-full max-md:h-[min(52vh,24rem)] max-md:min-h-[11rem] resize-none overflow-y-auto rounded-lg border-2 p-4 text-sm leading-relaxed max-md:p-4 max-md:text-base"
+                            style={{
+                              backgroundColor: 'var(--bg-secondary)',
+                              color: 'var(--text)',
+                              borderColor: 'var(--accent)',
+                            }}
+                            placeholder="Edit your summary here... (Markdown supported)"
+                          />
+                        ) : (
+                          <div
+                            className="prose prose-sm custom-scrollbar h-72 min-h-0 max-w-none max-md:h-[min(52vh,24rem)] max-md:min-h-[11rem] overflow-y-auto rounded-lg p-4 text-sm leading-relaxed max-md:text-base"
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
+                          >
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedSummary}</ReactMarkdown>
+                          </div>
+                        )}
+                        {summaryEditError ? (
+                          <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
+                            {summaryEditError}
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {summaryResult.transcript.length > 0 && resultsTab === 'transcription' ? (
+                      <TranscriptDiarizedEditor
+                        segments={summaryResult.transcript}
+                        onSegmentsChange={(next) =>
+                          setSummaryResult((prev) => (prev ? { ...prev, transcript: next } : prev))
+                        }
+                        noteId={currentNoteId}
+                        onSummaryEditChange={(nextSummary) => {
+                          setEditedSummary(nextSummary);
+                          setSummaryResult((prev) => (prev ? { ...prev, summary: nextSummary } : prev));
+                        }}
+                        scrollContainerClassName="h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]"
+                      />
+                    ) : null}
                   </div>
                 )}
-              </div>
-            )}
-
-            {summaryResult && !isSummarizing && summaryResult.transcript.length > 0 && (
-              <div className="mt-4 card rounded-lg p-4 md:p-6">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                    Transcription
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => setShowTranscript(!showTranscript)}
-                    className="flex shrink-0 items-center gap-2 text-xs font-medium transition-all sm:text-sm"
-                    style={{ color: 'var(--accent)' }}
-                  >
-                    <span aria-hidden>{showTranscript ? '▼' : '▶'}</span>
-                    {showTranscript ? 'Hide transcript' : 'View transcript'}
-                  </button>
-                </div>
-                <div className={`collapse-container ${showTranscript ? 'expanded' : 'collapsed'}`}>
-                  <div className="collapse-content">
-                    <TranscriptDiarizedEditor
-                      segments={summaryResult.transcript}
-                      onSegmentsChange={(next) =>
-                        setSummaryResult((prev) => (prev ? { ...prev, transcript: next } : prev))
-                      }
-                      noteId={currentNoteId}
-                      scrollContainerClassName="h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]"
-                    />
-                  </div>
-                </div>
               </div>
             )}
           </section>
@@ -1240,7 +1304,7 @@ const TranscriptionSummary: React.FC = () => {
                   setEditedSummary('');
                   setIsEditingSummary(false);
                   setCurrentNoteId(null);
-                  setShowTranscript(false);
+                  setResultsTab('summary');
                   setShowDiscardModal(false);
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium transition-all"

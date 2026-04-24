@@ -1,6 +1,6 @@
 import React, { useId, useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Loader2 } from 'lucide-react';
+import { Loader2, Trash2, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabaseConfig';
 import {
@@ -32,6 +32,7 @@ export interface TranscriptDiarizedEditorProps {
   segments: TranscriptSegment[];
   onSegmentsChange: (next: TranscriptSegment[]) => void;
   noteId: string | null;
+  onSummaryEditChange?: (nextSummary: string) => void;
   /** Tailwind height/overflow classes for the segment list (default: max-h-96). */
   scrollContainerClassName?: string;
 }
@@ -40,6 +41,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   segments,
   onSegmentsChange,
   noteId,
+  onSummaryEditChange,
   scrollContainerClassName,
 }) => {
   const scopeGroupId = useId();
@@ -53,6 +55,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const [replacementScope, setReplacementScope] = useState<ReplacementScope>('single');
   const [speakerMenuError, setSpeakerMenuError] = useState<string | null>(null);
   const [speakerChangeSaving, setSpeakerChangeSaving] = useState(false);
+  const [deletingSpeakerId, setDeletingSpeakerId] = useState<string | null>(null);
+  const [speakerDeleteConfirm, setSpeakerDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [speakerDeleteConfirmError, setSpeakerDeleteConfirmError] = useState<string | null>(null);
   const speakerMenuPanelRef = useRef<HTMLDivElement>(null);
 
   const closeSpeakerMenu = useCallback(() => {
@@ -62,7 +67,41 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setReplacementScope('single');
     setSpeakerMenuError(null);
     setSpeakersFetchError(null);
+    setSpeakerDeleteConfirm(null);
+    setSpeakerDeleteConfirmError(null);
   }, []);
+
+  const applySpeakerRenameToSummary = (summaryText: string, fromSpeaker: string, toSpeaker: string): string => {
+    const from = fromSpeaker.trim();
+    const to = toSpeaker.trim();
+    if (!from || !to || from.toLowerCase() === to.toLowerCase()) return summaryText;
+    const escapedFrom = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return summaryText.replace(new RegExp(escapedFrom, 'gi'), to);
+  };
+
+  const persistSummarySpeakerRename = async (
+    targetNoteId: string,
+    fromSpeaker: string,
+    toSpeaker: string
+  ): Promise<string | null> => {
+    const { data, error } = await supabase
+      .from('note')
+      .select('summary_edit, summary')
+      .eq('id', targetNoteId)
+      .single();
+    if (error) throw error;
+
+    const row = (data as { summary_edit?: string | null; summary?: string | null } | null) ?? null;
+    const sourceSummary = row?.summary_edit ?? row?.summary ?? '';
+    const nextSummary = applySpeakerRenameToSummary(sourceSummary, fromSpeaker, toSpeaker);
+
+    const { error: updateError } = await supabase
+      .from('note')
+      .update({ summary_edit: nextSummary })
+      .eq('id', targetNoteId);
+    if (updateError) throw updateError;
+    return nextSummary;
+  };
 
   const loadSpeakersForMenu = useCallback(async () => {
     if (!user?.id) {
@@ -92,11 +131,17 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   useEffect(() => {
     if (!speakerMenu) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeSpeakerMenu();
+      if (e.key !== 'Escape') return;
+      if (speakerDeleteConfirm && !deletingSpeakerId) {
+        setSpeakerDeleteConfirm(null);
+        setSpeakerDeleteConfirmError(null);
+        return;
+      }
+      closeSpeakerMenu();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [speakerMenu, closeSpeakerMenu]);
+  }, [speakerMenu, speakerDeleteConfirm, deletingSpeakerId, closeSpeakerMenu]);
 
   useEffect(() => {
     if (!speakerMenu) return;
@@ -137,6 +182,37 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     void loadSpeakersForMenu();
   };
 
+  const openSpeakerDeleteConfirm = (row: DbSpeaker) => {
+    setSpeakerDeleteConfirmError(null);
+    setSpeakerDeleteConfirm({ id: row.id, name: row.name });
+  };
+
+  const confirmDeleteSavedSpeaker = async () => {
+    if (!speakerDeleteConfirm || !user?.id) return;
+    const speakerId = speakerDeleteConfirm.id;
+    setSpeakerDeleteConfirmError(null);
+    setDeletingSpeakerId(speakerId);
+    try {
+      const { error } = await supabase
+        .from('speaker')
+        .delete()
+        .eq('id', speakerId)
+        .eq('user_id', user.id);
+      if (error) throw error;
+      setSavedSpeakers((prev) => prev.filter((s) => s.id !== speakerId));
+      if (pickedSpeakerId === speakerId) {
+        setPickedSpeakerId(null);
+        setSpeakerNameInput('');
+      }
+      setSpeakerDeleteConfirm(null);
+    } catch (err: unknown) {
+      console.error('Failed to delete speaker:', err);
+      setSpeakerDeleteConfirmError(err instanceof Error ? err.message : 'Could not delete speaker');
+    } finally {
+      setDeletingSpeakerId(null);
+    }
+  };
+
   const handleApplySpeakerChange = async () => {
     if (!speakerMenu || !user?.id) return;
     const chosenName = speakerNameInput.trim();
@@ -147,6 +223,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setSpeakerMenuError(null);
     setSpeakerChangeSaving(true);
     try {
+      let nextSummaryText: string | null = null;
       const exists = savedSpeakers.some((s) => s.name.toLowerCase() === chosenName.toLowerCase());
       if (!exists) {
         const { data: inserted, error: insertError } = await supabase
@@ -179,10 +256,18 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
 
       if (noteId) {
         await persistNoteDiarization(noteId, nextTranscript);
+        nextSummaryText = await persistSummarySpeakerRename(
+          noteId,
+          speakerMenu.originalSpeaker,
+          chosenName
+        );
       }
 
       startTransition(() => {
         onSegmentsChange(nextTranscript);
+        if (nextSummaryText != null) {
+          onSummaryEditChange?.(nextSummaryText);
+        }
       });
       closeSpeakerMenu();
     } catch (err: unknown) {
@@ -316,7 +401,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                     {filteredSavedSpeakers.map((row, i) => (
                       <li
                         key={row.id}
-                        className="border-b last:border-b-0"
+                        className="flex items-center border-b last:border-b-0"
                         style={{ borderColor: 'var(--border)' }}
                       >
                         <button
@@ -325,7 +410,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                             setSpeakerNameInput(row.name);
                             setPickedSpeakerId(row.id);
                           }}
-                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors"
+                          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors"
                           style={{
                             backgroundColor:
                               pickedSpeakerId === row.id ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
@@ -342,6 +427,19 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                             {getTranscriptAvatarLabel(row.name)}
                           </span>
                           <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={speakerChangeSaving || deletingSpeakerId === row.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openSpeakerDeleteConfirm(row);
+                          }}
+                          className="flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-md text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--bg-secondary)] hover:text-[var(--error)] disabled:opacity-40"
+                          title={`Remove "${row.name}" from saved speakers`}
+                          aria-label={`Delete saved speaker ${row.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         </button>
                       </li>
                     ))}
@@ -396,6 +494,73 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   'Change'
                 )}
               </button>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {speakerDeleteConfirm &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+            role="presentation"
+            onClick={() => {
+              if (!deletingSpeakerId) {
+                setSpeakerDeleteConfirm(null);
+                setSpeakerDeleteConfirmError(null);
+              }
+            }}
+          >
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="delete-speaker-title"
+              className="w-full max-w-sm rounded-lg border p-4 shadow-xl sm:p-5"
+              style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 id="delete-speaker-title" className="text-base font-semibold" style={{ color: 'var(--text)' }}>
+                Delete saved speaker?
+              </h3>
+              <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                Remove{' '}
+                <span className="font-medium" style={{ color: 'var(--text)' }}>
+                  {speakerDeleteConfirm.name}
+                </span>{' '}
+                from your saved speakers. This cannot be undone.
+              </p>
+              {speakerDeleteConfirmError ? (
+                <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
+                  {speakerDeleteConfirmError}
+                </p>
+              ) : null}
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={Boolean(deletingSpeakerId)}
+                  onClick={() => {
+                    if (!deletingSpeakerId) {
+                      setSpeakerDeleteConfirm(null);
+                      setSpeakerDeleteConfirmError(null);
+                    }
+                  }}
+                  className="rounded-lg px-3 py-2 text-sm transition-opacity disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(deletingSpeakerId)}
+                  onClick={() => void confirmDeleteSavedSpeaker()}
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--error)', color: '#fff' }}
+                >
+                  {deletingSpeakerId ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                  Delete
+                </button>
+              </div>
             </div>
           </div>,
           document.body

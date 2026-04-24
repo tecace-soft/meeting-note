@@ -731,6 +731,13 @@ const Project: React.FC = () => {
                                             )
                                           }
                                           noteId={note.id}
+                                          onSummaryEditChange={(nextSummary) =>
+                                            setNotes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === note.id ? { ...n, summary_edit: nextSummary } : n
+                                              )
+                                            )
+                                          }
                                           scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
                                         />
                                       ) : (
