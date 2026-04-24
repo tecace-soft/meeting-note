@@ -1,23 +1,32 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { supabase } from '../config/supabaseConfig';
+import { supabase, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
 import {
-  FileText,
   Calendar,
-  Trash2,
-  Loader2,
-  Pencil,
-  Save,
-  MoreHorizontal,
+  Check,
   ChevronLeft,
   ChevronRight,
+  FileText,
+  Forward,
+  HardDrive,
+  Loader2,
+  MessageSquare,
+  MoreHorizontal,
+  Pencil,
+  Save,
+  Trash2,
+  UserCircle,
+  Users,
+  X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { marked } from 'marked';
 import { Client } from '@microsoft/microsoft-graph-client';
 import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
-import { getNoteDiarizationRaw, hasUsableDiarization, normalizeTranscript } from '../lib/transcriptSegments';
+import { getNoteDiarizationRaw, hasUsableDiarization, normalizeTranscript, type TranscriptSegment } from '../lib/transcriptSegments';
+import { getTeamsChats, sendChatMessage, type TeamsChat } from '../services/graphService';
 
 interface Note {
   id: string;
@@ -49,6 +58,17 @@ const NOTE_SUMMARY_SCROLL =
   'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed rounded-lg';
 
 const NOTE_TRANSCRIPT_SCROLL_CLASS = 'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]';
+
+interface GeneratedHistoryProfile {
+  speakerId: string | null;
+  speakerName: string;
+  draft: string;
+  isNew: boolean;
+  saving: boolean;
+  saved: boolean;
+  saveError: string | null;
+  expanded: boolean;
+}
 
 const NOTES_PAGE_SIZE = 10;
 
@@ -100,6 +120,25 @@ const SummaryHistory: React.FC = () => {
   const [deletingNote, setDeletingNote] = useState(false);
   const [deleteNoteError, setDeleteNoteError] = useState<string | null>(null);
   const [noteListActionError, setNoteListActionError] = useState<string | null>(null);
+
+  // Per-note expanded tab state
+  const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, 'summary' | 'transcription'>>({});
+
+  // Forward to Teams state
+  const [forwardModalNoteId, setForwardModalNoteId] = useState<string | null>(null);
+  const [teamsChats, setTeamsChats] = useState<TeamsChat[]>([]);
+  const [teamsChatsLoading, setTeamsChatsLoading] = useState(false);
+  const [teamsChatsError, setTeamsChatsError] = useState<string | null>(null);
+  const [selectedForwardChatId, setSelectedForwardChatId] = useState<string | null>(null);
+  const [isForwarding, setIsForwarding] = useState(false);
+  const [forwardError, setForwardError] = useState<string | null>(null);
+  const [forwardSuccess, setForwardSuccess] = useState(false);
+
+  // Generate Profile state
+  const [profileModalNoteId, setProfileModalNoteId] = useState<string | null>(null);
+  const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
+  const [profileGenError, setProfileGenError] = useState<string | null>(null);
+  const [generatedProfiles, setGeneratedProfiles] = useState<GeneratedHistoryProfile[]>([]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -380,6 +419,111 @@ const SummaryHistory: React.FC = () => {
     }
   };
 
+  const handleOpenForwardModal = async (note: Note) => {
+    setOpenNoteMenuId(null);
+    setForwardModalNoteId(note.id);
+    setSelectedForwardChatId(null);
+    setForwardError(null);
+    setForwardSuccess(false);
+    setTeamsChatsLoading(true);
+    setTeamsChatsError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('No access token');
+      const chats = await getTeamsChats(token);
+      setTeamsChats(chats);
+    } catch (err: unknown) {
+      setTeamsChatsError(err instanceof Error ? err.message : 'Failed to load Teams chats');
+    } finally {
+      setTeamsChatsLoading(false);
+    }
+  };
+
+  const handleForwardSummary = async (note: Note) => {
+    if (!selectedForwardChatId) return;
+    const summaryText = note.summary_edit || note.summary || '';
+    if (!summaryText) return;
+    setIsForwarding(true);
+    setForwardError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('No access token');
+      const summaryHtml = await marked(summaryText);
+      await sendChatMessage(token, selectedForwardChatId, `<strong>Meeting Note:</strong><br><br>${summaryHtml}`, 'html');
+      await supabase.from('note').update({ chat_id: selectedForwardChatId }).eq('id', note.id);
+      setForwardSuccess(true);
+      setTimeout(() => {
+        setForwardSuccess(false);
+        setForwardModalNoteId(null);
+      }, 2000);
+    } catch (err: unknown) {
+      setForwardError(err instanceof Error ? err.message : 'Failed to forward summary');
+    } finally {
+      setIsForwarding(false);
+    }
+  };
+
+  const handleOpenProfileModal = async (note: Note) => {
+    setOpenNoteMenuId(null);
+    setProfileModalNoteId(note.id);
+    setProfileGenStep('finding-speakers');
+    setProfileGenError(null);
+    setGeneratedProfiles([]);
+    try {
+      const diarRaw = getNoteDiarizationRaw(note);
+      const segments: TranscriptSegment[] = hasUsableDiarization(diarRaw) ? normalizeTranscript(diarRaw) : [];
+      if (segments.length === 0) throw new Error('No diarized transcription found for this note.');
+      const uniqueSpeakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
+      const { data: speakerRows, error: speakerErr } = await supabase
+        .from('speaker').select('id, name, profile').eq('user_id', user!.id).in('name', uniqueSpeakers);
+      if (speakerErr) throw speakerErr;
+      const speakerMap = new Map<string, { id: string; profile: string | null }>();
+      ((speakerRows ?? []) as { id: string; name: string; profile: string | null }[]).forEach((s) => {
+        speakerMap.set(s.name.toLowerCase(), { id: s.id, profile: s.profile });
+      });
+      const transcriptText = segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+      setProfileGenStep('generating');
+      const openAiKey = (import.meta.env.VITE_OPENAI_API_KEY as string | undefined) ?? '';
+      const results = await Promise.all(
+        uniqueSpeakers.map(async (speakerName): Promise<GeneratedHistoryProfile> => {
+          const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
+          const existingProfile = record?.profile?.trim() || null;
+          const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
+            'generate-profile',
+            { body: { speakerName, transcriptText, existingProfile, apiKey: openAiKey }, headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
+          );
+          if (error) throw new Error(`Edge function error for "${speakerName}": ${error.message}`);
+          if (data?.error) throw new Error(data.error);
+          return { speakerId: record?.id ?? null, speakerName, draft: data?.profile ?? '', isNew: !existingProfile, saving: false, saved: false, saveError: null, expanded: true };
+        })
+      );
+      setGeneratedProfiles(results);
+      setProfileGenStep('ready');
+    } catch (err: unknown) {
+      setProfileGenError(err instanceof Error ? err.message : 'Profile generation failed');
+      setProfileGenStep('error');
+    }
+  };
+
+  const handleSaveHistoryProfile = async (speakerName: string) => {
+    if (!user?.id) return;
+    const profile = generatedProfiles.find((p) => p.speakerName === speakerName);
+    if (!profile) return;
+    setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: true, saveError: null } : p));
+    try {
+      if (profile.speakerId) {
+        const { error } = await supabase.from('speaker').update({ profile: profile.draft }).eq('id', profile.speakerId).eq('user_id', user.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('speaker').insert({ user_id: user.id, name: speakerName, profile: profile.draft });
+        if (error) throw error;
+      }
+      setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: false, saved: true } : p));
+    } catch (err: unknown) {
+      setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: false, saveError: err instanceof Error ? err.message : 'Save failed' } : p));
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
@@ -556,26 +700,49 @@ const SummaryHistory: React.FC = () => {
                           </button>
                           {openNoteMenuId === note.id ? (
                             <div
-                              className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border p-2 shadow-lg"
+                              className="absolute right-0 top-full z-20 mt-1 w-[162px] rounded-xl border p-2 shadow-lg"
                               style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
                             >
                               <button
                                 type="button"
-                                onClick={() => handleStartRenameNote(note)}
-                                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                style={{ color: 'var(--text)' }}
+                                onClick={() => { setOpenNoteMenuId(null); navigate(`/save-summary?note_id=${note.id}`); }}
+                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                               >
-                                <Pencil className="h-4 w-4" aria-hidden />
+                                <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                                Save to OneDrive
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleOpenForwardModal(note)}
+                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                              >
+                                <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                Forward to Teams
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleOpenProfileModal(note)}
+                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                              >
+                                <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                                Generate Profile
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStartRenameNote(note)}
+                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                              >
+                                <Pencil className="h-4 w-4 shrink-0" aria-hidden />
                                 Rename Note
                               </button>
                               <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
                               <button
                                 type="button"
                                 onClick={() => handleOpenDeleteNote(note)}
-                                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
                                 style={{ color: 'var(--error)' }}
                               >
-                                <Trash2 className="h-4 w-4" aria-hidden />
+                                <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
                                 Delete Note
                               </button>
                             </div>
@@ -586,120 +753,128 @@ const SummaryHistory: React.FC = () => {
                     
                     <div className={`collapse-container ${expandedNoteId === note.id ? 'expanded' : 'collapsed'}`}>
                       <div className="collapse-content">
-                        <div 
-                          className="p-4 border-t"
-                          style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
-                        >
-                          <div className="mb-2 flex items-center justify-between gap-3">
-                            <h4 className="text-sm font-semibold shrink-0" style={{ color: 'var(--text)' }}>
-                              Summary
-                            </h4>
-                            <div className="flex shrink-0 items-center gap-2">
-                              {editingNoteId === note.id ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSaveNoteEdit(note)}
-                                  disabled={savingNoteId === note.id}
-                                  className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all disabled:opacity-50"
-                                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                >
-                                  {savingNoteId === note.id ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : (
-                                    <Save className="w-3 h-3" />
-                                  )}
-                                  Done
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleStartNoteEdit(note)}
-                                  className="flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium transition-all"
-                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                >
-                                  <Pencil className="w-3 h-3" />
-                                  Edit
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          {editingNoteId === note.id ? (
-                            <textarea
-                              value={noteEditDraft}
-                              onChange={(e) => setNoteEditDraft(e.target.value)}
-                              className={`w-full resize-none ${NOTE_SUMMARY_SCROLL}`}
-                              style={{ color: 'var(--text)' }}
-                            />
-                          ) : note.summary_edit || note.summary ? (
+                        {(() => {
+                          const diarRaw = getNoteDiarizationRaw(note);
+                          const showDiarized = hasUsableDiarization(diarRaw);
+                          const plainTx = note.transcription?.trim();
+                          const hasTranscription = showDiarized || Boolean(plainTx);
+                          const activeTab = noteExpandedTab[note.id] ?? 'summary';
+                          return (
                             <div
-                              className={`prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`}
-                              style={{ color: 'var(--text)' }}
+                              className="border-t"
+                              style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
                             >
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                {note.summary_edit || note.summary || ''}
-                              </ReactMarkdown>
-                            </div>
-                          ) : (
-                            <div
-                              className={`flex items-center justify-center italic ${NOTE_SUMMARY_SCROLL}`}
-                              style={{ color: 'var(--text-muted)' }}
-                            >
-                              No summary available
-                            </div>
-                          )}
-                          {editingNoteId === note.id && noteEditError ? (
-                            <p className="text-xs mt-2" style={{ color: 'var(--error)' }}>
-                              {noteEditError}
-                            </p>
-                          ) : null}
-
-                          {(() => {
-                            const diarRaw = getNoteDiarizationRaw(note);
-                            const showDiarized = hasUsableDiarization(diarRaw);
-                            const plainTx = note.transcription?.trim();
-                            if (!showDiarized && !plainTx) return null;
-                            return (
-                              <div className="mt-6 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
-                                <h4 className="text-sm font-semibold mb-2" style={{ color: 'var(--text)' }}>
-                                  Transcription
-                                </h4>
-                                {showDiarized ? (
-                                  <TranscriptDiarizedEditor
-                                    segments={normalizeTranscript(diarRaw)}
-                                    onSegmentsChange={(next) =>
-                                      setNotes((prev) =>
-                                        prev.map((n) =>
-                                          n.id === note.id
-                                            ? { ...n, diarization: next }
-                                            : n
-                                        )
-                                      )
-                                    }
-                                    noteId={note.id}
-                                    onSummaryEditChange={(nextSummary) =>
-                                      setNotes((prev) =>
-                                        prev.map((n) =>
-                                          n.id === note.id ? { ...n, summary_edit: nextSummary } : n
-                                        )
-                                      )
-                                    }
-                                    scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
-                                  />
-                                ) : (
-                                  <div
-                                    className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                              {/* Tab bar */}
+                              <div
+                                className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3"
+                                style={{ borderColor: 'var(--border)' }}
+                              >
+                                <div className="-mb-px flex gap-1 sm:gap-6" role="tablist">
+                                  <button
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activeTab === 'summary'}
+                                    onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
+                                    className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
                                     style={{
-                                      backgroundColor: 'var(--bg)',
-                                      color: 'var(--text-secondary)',
+                                      borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
+                                      color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                                     }}
                                   >
-                                    {plainTx}
+                                    Summary
+                                  </button>
+                                  {hasTranscription && (
+                                    <button
+                                      type="button"
+                                      role="tab"
+                                      aria-selected={activeTab === 'transcription'}
+                                      onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
+                                      className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                      style={{
+                                        borderBottomColor: activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
+                                        color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
+                                      }}
+                                    >
+                                      Transcription
+                                    </button>
+                                  )}
+                                </div>
+                                {activeTab === 'summary' && (
+                                  <div className="flex shrink-0 items-center gap-2 pb-2">
+                                    {editingNoteId === note.id ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleSaveNoteEdit(note)}
+                                        disabled={savingNoteId === note.id}
+                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
+                                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                      >
+                                        {savingNoteId === note.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                        Done
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartNoteEdit(note)}
+                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                        style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                      >
+                                        <Pencil className="h-3 w-3" />
+                                        Edit
+                                      </button>
+                                    )}
                                   </div>
                                 )}
                               </div>
-                            );
-                          })()}
-                        </div>
+
+                              {/* Panel content */}
+                              <div className="p-4">
+                                {activeTab === 'summary' && (
+                                  <>
+                                    {editingNoteId === note.id ? (
+                                      <textarea
+                                        value={noteEditDraft}
+                                        onChange={(e) => setNoteEditDraft(e.target.value)}
+                                        className={`w-full resize-none ${NOTE_SUMMARY_SCROLL}`}
+                                        style={{ color: 'var(--text)' }}
+                                      />
+                                    ) : note.summary_edit || note.summary ? (
+                                      <div className={`prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text)' }}>
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary_edit || note.summary || ''}</ReactMarkdown>
+                                      </div>
+                                    ) : (
+                                      <div className={`flex items-center justify-center italic ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text-muted)' }}>
+                                        No summary available
+                                      </div>
+                                    )}
+                                    {editingNoteId === note.id && noteEditError ? (
+                                      <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{noteEditError}</p>
+                                    ) : null}
+                                  </>
+                                )}
+                                {activeTab === 'transcription' && hasTranscription && (
+                                  showDiarized ? (
+                                    <TranscriptDiarizedEditor
+                                      segments={normalizeTranscript(diarRaw)}
+                                      onSegmentsChange={(next) =>
+                                        setNotes((prev) => prev.map((n) => n.id === note.id ? { ...n, diarization: next } : n))
+                                      }
+                                      noteId={note.id}
+                                      onSummaryEditChange={(nextSummary) =>
+                                        setNotes((prev) => prev.map((n) => n.id === note.id ? { ...n, summary_edit: nextSummary } : n))
+                                      }
+                                      scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
+                                    />
+                                  ) : (
+                                    <div className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`} style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}>
+                                      {plainTx}
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -844,6 +1019,176 @@ const SummaryHistory: React.FC = () => {
                 Delete
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Forward to Teams modal */}
+      {forwardModalNoteId && (() => {
+        const note = notes.find((n) => n.id === forwardModalNoteId);
+        if (!note) return null;
+        return (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+            role="presentation"
+            onClick={() => { if (!isForwarding) { setForwardModalNoteId(null); setSelectedForwardChatId(null); } }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
+              style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5" style={{ borderColor: 'var(--border)' }}>
+                <div>
+                  <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Forward to Teams</h2>
+                  <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    Choose a chat, then click <span className="font-medium" style={{ color: 'var(--text)' }}>Forward Summary</span>.
+                  </p>
+                </div>
+                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><X className="h-5 w-5" aria-hidden /></button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-4 py-3 sm:px-5">
+                {teamsChatsLoading ? (
+                  <div className="flex items-center justify-center py-10">
+                    <div className="h-8 w-8 animate-spin rounded-full border-b-2" style={{ borderColor: 'var(--accent)' }} />
+                  </div>
+                ) : teamsChatsError ? (
+                  <p className="text-sm" style={{ color: 'var(--error)' }}>{teamsChatsError}</p>
+                ) : teamsChats.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-10">
+                    <MessageSquare className="mb-3 h-10 w-10" style={{ color: 'var(--text-muted)' }} aria-hidden />
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No Teams chats found</p>
+                  </div>
+                ) : (
+                  <div className="max-h-[min(50vh,22rem)] overflow-y-auto custom-scrollbar rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+                    <div className="space-y-2 p-2">
+                      {teamsChats.filter((c) => c.members && c.members.length > 1).map((chat) => (
+                        <div
+                          key={chat.id}
+                          onClick={() => setSelectedForwardChatId(chat.id === selectedForwardChatId ? null : chat.id)}
+                          className="chat-item flex cursor-pointer items-center gap-4 rounded-lg p-4 transition-all"
+                          style={{ borderColor: chat.id === selectedForwardChatId ? 'var(--accent)' : undefined, backgroundColor: chat.id === selectedForwardChatId ? 'var(--accent-light)' : undefined }}
+                        >
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: chat.id === selectedForwardChatId ? 'var(--accent)' : 'var(--accent-light)' }}>
+                            <Users className="h-5 w-5" style={{ color: chat.id === selectedForwardChatId ? '#fff' : 'var(--accent)' }} aria-hidden />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium" style={{ color: 'var(--text)' }}>
+                              {chat.topic || (chat.members?.filter((m) => m.email?.toLowerCase() !== user?.email?.toLowerCase()).map((m) => m.displayName).join(', ')) || 'Chat'}
+                            </p>
+                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                              {chat.chatType === 'oneOnOne' ? 'Direct message' : 'Group chat'}
+                              {chat.members && ` • ${chat.members.length} members`}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {forwardError ? <p className="mt-3 text-xs" style={{ color: 'var(--error)' }}>{forwardError}</p> : null}
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3 sm:px-5" style={{ borderColor: 'var(--border)' }}>
+                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Cancel</button>
+                <button
+                  type="button"
+                  disabled={!selectedForwardChatId || isForwarding || forwardSuccess}
+                  onClick={() => void handleForwardSummary(note)}
+                  className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ backgroundColor: forwardSuccess ? 'var(--success)' : 'var(--accent)', color: '#fff' }}
+                >
+                  {isForwarding ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden />Sending…</> : forwardSuccess ? <><Check className="h-4 w-4" aria-hidden />Sent!</> : 'Forward Summary'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Generate Profile modal */}
+      {profileModalNoteId && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => { if (profileGenStep !== 'finding-speakers' && profileGenStep !== 'generating') setProfileModalNoteId(null); }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="flex max-h-[min(92vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+              <div>
+                <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Generate Profile</h2>
+                <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>AI-generated speaker profiles from the meeting transcript</p>
+              </div>
+              <button type="button" disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'} onClick={() => setProfileModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><X className="h-5 w-5" aria-hidden /></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-5 py-4">
+              {(profileGenStep === 'finding-speakers' || profileGenStep === 'generating') && (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div className="mb-5 h-10 w-10 animate-spin rounded-full border-4 border-t-transparent" style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} aria-hidden />
+                  <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{profileGenStep === 'finding-speakers' ? 'Looking up speaker data…' : 'Generating profiles with AI…'}</p>
+                </div>
+              )}
+              {profileGenStep === 'error' && <div className="rounded-lg border p-4" style={{ borderColor: 'var(--error)', backgroundColor: 'var(--error-light)' }}><p className="text-sm font-medium" style={{ color: 'var(--error)' }}>{profileGenError}</p></div>}
+              {profileGenStep === 'ready' && (
+                <div className="space-y-4">
+                  {generatedProfiles.map((profile) => (
+                    <div key={profile.speakerName} className="overflow-hidden rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+                      <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold" style={{ backgroundColor: 'color-mix(in srgb, var(--accent) 20%, var(--bg-secondary))', color: 'var(--accent)' }}>{profile.speakerName.slice(0, 2).toUpperCase()}</div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>{profile.speakerName}</p>
+                            <span className="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: profile.isNew ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'color-mix(in srgb, var(--success) 15%, transparent)', color: profile.isNew ? 'var(--accent)' : 'var(--success)' }}>{profile.isNew ? 'New profile' : 'Updated profile'}</span>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {profile.saved ? <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--success)' }}><Check className="h-3.5 w-3.5" />Saved</span> : null}
+                          {profile.saveError ? <span className="text-xs" style={{ color: 'var(--error)' }}>{profile.saveError}</span> : null}
+                          {!profile.saved && (
+                            <button type="button" disabled={profile.saving} onClick={() => void handleSaveHistoryProfile(profile.speakerName)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
+                              {profile.saving ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving…</> : <><Save className="h-3.5 w-3.5" />Save Profile</>}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="p-4">
+                        <textarea
+                          value={profile.draft}
+                          disabled={profile.saved}
+                          onChange={(e) => setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === profile.speakerName ? { ...p, draft: e.target.value, saved: false } : p))}
+                          className="custom-scrollbar w-full resize-y rounded-lg border p-3 text-sm leading-relaxed outline-none disabled:opacity-70"
+                          style={{ minHeight: '12rem', backgroundColor: 'var(--bg-secondary)', color: 'var(--text)', borderColor: 'var(--border)' }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {profileGenStep === 'ready' && (
+              <div className="flex shrink-0 items-center justify-between gap-3 border-t px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{generatedProfiles.filter((p) => p.saved).length} of {generatedProfiles.length} profile{generatedProfiles.length !== 1 ? 's' : ''} saved</p>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Close</button>
+                  <button type="button" disabled={generatedProfiles.some((p) => p.saving)} onClick={() => generatedProfiles.filter((p) => !p.saved).forEach((p) => void handleSaveHistoryProfile(p.speakerName))} className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
+                    {generatedProfiles.some((p) => p.saving) ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save All'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {profileGenStep === 'error' && (
+              <div className="flex shrink-0 justify-end border-t px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+                <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Close</button>
+              </div>
+            )}
           </div>
         </div>
       )}

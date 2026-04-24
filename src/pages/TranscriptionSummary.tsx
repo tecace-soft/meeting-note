@@ -791,10 +791,11 @@ const TranscriptionSummary: React.FC = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      <main className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6">
-        <div className="max-w-7xl mx-auto space-y-8">
+      <main className="min-h-0 flex-1 flex flex-col overflow-hidden p-4 md:p-6">
+        <div className="w-full max-w-7xl mx-auto flex-1 min-h-0 flex flex-col">
           {/* File Upload Section */}
-          <section>
+          <section className="flex-1 min-h-0 flex flex-col">
+            <div className="shrink-0">
             <h2 className="text-lg font-medium mb-4" style={{ color: 'var(--text)' }}>
               Summarize Audio File
             </h2>
@@ -1063,11 +1064,13 @@ const TranscriptionSummary: React.FC = () => {
               </div>
             </div>
 
+            </div>{/* end shrink-0 upload area */}
+
             {/* Summary Result */}
             {(isSummarizing || summaryResult || summaryError) && (
-              <div className="mt-4 card rounded-lg p-4 md:p-6">
+              <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden card rounded-lg">
                 {isSummarizing && (
-                  <div className="flex flex-col items-center justify-center py-8">
+                  <div className="flex flex-1 flex-col items-center justify-center py-8">
                     <div className="relative">
                       <div className="w-12 h-12 rounded-full border-4 border-t-transparent animate-spin" 
                         style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
@@ -1087,10 +1090,10 @@ const TranscriptionSummary: React.FC = () => {
                 )}
 
                 {summaryResult && !isSummarizing && (
-                  <div className="space-y-4">
+                  <div className="flex flex-1 min-h-0 flex-col px-4 pt-4 md:px-6 md:pt-5">
                     {summaryResult.transcript.length > 0 ? (
                       <div
-                        className="flex flex-wrap items-end justify-between gap-3 border-b"
+                        className="flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"
                         style={{ borderColor: 'var(--border)' }}
                       >
                         <div
@@ -1165,7 +1168,7 @@ const TranscriptionSummary: React.FC = () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
                           Summary
                         </h3>
@@ -1206,7 +1209,7 @@ const TranscriptionSummary: React.FC = () => {
                     )}
 
                     {(summaryResult.transcript.length === 0 || resultsTab === 'summary') && (
-                      <div>
+                      <div className="flex flex-1 min-h-0 flex-col pt-4">
                         {isEditingSummary ? (
                           <textarea
                             value={editedSummary}
@@ -1214,7 +1217,7 @@ const TranscriptionSummary: React.FC = () => {
                               setEditedSummary(e.target.value);
                               setSummaryEditError(null);
                             }}
-                            className="custom-scrollbar h-72 min-h-0 w-full max-md:h-[min(52vh,24rem)] max-md:min-h-[11rem] resize-none overflow-y-auto rounded-lg border-2 p-4 text-sm leading-relaxed max-md:p-4 max-md:text-base"
+                            className="custom-scrollbar flex-1 min-h-0 w-full resize-none overflow-y-auto rounded-lg border-2 p-4 text-sm leading-relaxed"
                             style={{
                               backgroundColor: 'var(--bg-secondary)',
                               color: 'var(--text)',
@@ -1224,7 +1227,7 @@ const TranscriptionSummary: React.FC = () => {
                           />
                         ) : (
                           <div
-                            className="prose prose-sm custom-scrollbar h-72 min-h-0 max-w-none max-md:h-[min(52vh,24rem)] max-md:min-h-[11rem] overflow-y-auto rounded-lg p-4 text-sm leading-relaxed max-md:text-base"
+                            className="prose prose-sm custom-scrollbar flex-1 min-h-0 max-w-none overflow-y-auto rounded-lg p-4 text-sm leading-relaxed"
                             style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
                           >
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedSummary}</ReactMarkdown>
@@ -1239,22 +1242,24 @@ const TranscriptionSummary: React.FC = () => {
                     )}
 
                     {summaryResult.transcript.length > 0 && resultsTab === 'transcription' ? (
-                      <TranscriptDiarizedEditor
-                        segments={summaryResult.transcript}
-                        onSegmentsChange={(next) =>
-                          setSummaryResult((prev) => (prev ? { ...prev, transcript: next } : prev))
-                        }
-                        noteId={currentNoteId}
-                        onSummaryEditChange={(nextSummary) => {
-                          setEditedSummary(nextSummary);
-                          setSummaryResult((prev) => (prev ? { ...prev, summary: nextSummary } : prev));
-                        }}
-                        scrollContainerClassName="h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]"
-                      />
+                      <div className="flex flex-1 min-h-0 flex-col pt-4">
+                        <TranscriptDiarizedEditor
+                          segments={summaryResult.transcript}
+                          onSegmentsChange={(next) =>
+                            setSummaryResult((prev) => (prev ? { ...prev, transcript: next } : prev))
+                          }
+                          noteId={currentNoteId}
+                          onSummaryEditChange={(nextSummary) => {
+                            setEditedSummary(nextSummary);
+                            setSummaryResult((prev) => (prev ? { ...prev, summary: nextSummary } : prev));
+                          }}
+                          scrollContainerClassName="flex-1 min-h-0"
+                        />
+                      </div>
                     ) : null}
 
                     <div
-                      className="flex flex-wrap justify-end gap-2 border-t pt-4"
+                      className="flex shrink-0 flex-wrap justify-end gap-2 border-t py-4"
                       style={{ borderColor: 'var(--border)' }}
                     >
                       <button
