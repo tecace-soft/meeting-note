@@ -51,13 +51,13 @@ interface ChatInfo {
 
 /** Fixed scroll height for plain transcription (no diarization). */
 const NOTE_DETAIL_SCROLL_BODY =
-  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar rounded-lg p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed';
+  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar rounded-lg p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed';
 
 /** Summary view/edit: fixed height scroll, no border or fill — text uses theme foreground. */
 const NOTE_SUMMARY_SCROLL =
-  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed rounded-lg';
+  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed rounded-lg';
 
-const NOTE_TRANSCRIPT_SCROLL_CLASS = 'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]';
+const NOTE_TRANSCRIPT_SCROLL_CLASS = 'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)]';
 
 interface GeneratedHistoryProfile {
   speakerId: string | null;

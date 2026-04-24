@@ -642,7 +642,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               role="dialog"
               aria-modal="true"
               aria-labelledby="speaker-profile-title"
-              className="flex max-h-[min(90vh,720px)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border shadow-xl"
+              className="flex max-h-[min(90vh,720px)] w-full max-w-[1344px] flex-col overflow-hidden rounded-xl border shadow-xl"
               style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
               onClick={(e) => e.stopPropagation()}
             >
