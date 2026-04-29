@@ -14,6 +14,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   Pencil,
+  RefreshCw,
   Save,
   Trash2,
   UserCircle,
@@ -133,6 +134,10 @@ const SummaryHistory: React.FC = () => {
   const [isForwarding, setIsForwarding] = useState(false);
   const [forwardError, setForwardError] = useState<string | null>(null);
   const [forwardSuccess, setForwardSuccess] = useState(false);
+
+  // Regenerate summary state
+  const [regeneratingNoteId, setRegeneratingNoteId] = useState<string | null>(null);
+  const [regenerateNoteError, setRegenerateNoteError] = useState<Record<string, string>>({});
 
   // Generate Profile state
   const [profileModalNoteId, setProfileModalNoteId] = useState<string | null>(null);
@@ -463,6 +468,57 @@ const SummaryHistory: React.FC = () => {
     }
   };
 
+  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook-test/532f465d-d198-4f59-ba75-20c39d41a079';
+
+  const handleRegenerateNoteSummary = async (note: Note) => {
+    if (!user?.id) return;
+    const diarRaw = getNoteDiarizationRaw(note);
+    const segments = hasUsableDiarization(diarRaw) ? normalizeTranscript(diarRaw) : [];
+    if (segments.length === 0) {
+      setRegenerateNoteError((prev) => ({ ...prev, [note.id]: 'No diarized transcription found for this note.' }));
+      return;
+    }
+    setRegeneratingNoteId(note.id);
+    setRegenerateNoteError((prev) => { const n = { ...prev }; delete n[note.id]; return n; });
+
+    try {
+      const uniqueSpeakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
+      const { data: speakerRows } = await supabase
+        .from('speaker').select('name, profile').eq('user_id', user.id).in('name', uniqueSpeakers);
+
+      const speakerProfiles = ((speakerRows ?? []) as { name: string; profile: string | null }[])
+        .filter((s) => s.profile)
+        .map((s) => ({
+          speakerName: s.name,
+          profile: (() => { try { return JSON.parse(s.profile!); } catch { return s.profile; } })(),
+        }));
+
+      const response = await fetch(REGENERATE_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          noteId: note.id,
+          diarization: segments,
+          previousSummary: note.summary_edit || note.summary || '',
+          speakerProfiles,
+        }),
+      });
+
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      const result = await response.json();
+      const newSummary = typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
+      if (!newSummary) throw new Error('No summary returned from webhook');
+
+      setNotes((prev) => prev.map((n) => n.id === note.id ? { ...n, summary_edit: newSummary } : n));
+      setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }));
+    } catch (err: unknown) {
+      console.error('Regenerate summary failed:', err);
+      setRegenerateNoteError((prev) => ({ ...prev, [note.id]: err instanceof Error ? err.message : 'Regeneration failed' }));
+    } finally {
+      setRegeneratingNoteId(null);
+    }
+  };
+
   const handleOpenProfileModal = async (note: Note) => {
     setOpenNoteMenuId(null);
     setProfileModalNoteId(note.id);
@@ -490,11 +546,13 @@ const SummaryHistory: React.FC = () => {
           const existingProfile = record?.profile?.trim() || null;
           const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
             'generate-profile',
-            { body: { speakerName, transcriptText, existingProfile, apiKey: openAiKey }, headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
+            { body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: openAiKey }, headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
           );
           if (error) throw new Error(`Edge function error for "${speakerName}": ${error.message}`);
           if (data?.error) throw new Error(data.error);
-          return { speakerId: record?.id ?? null, speakerName, draft: data?.profile ?? '', isNew: !existingProfile, saving: false, saved: false, saveError: null, expanded: true };
+          let draft = data?.profile ?? '';
+          try { draft = JSON.stringify(JSON.parse(draft), null, 2); } catch { /* keep as-is */ }
+          return { speakerId: record?.id ?? null, speakerName, draft, isNew: !existingProfile, saving: false, saved: false, saveError: null, expanded: true };
         })
       );
       setGeneratedProfiles(results);
@@ -801,6 +859,19 @@ const SummaryHistory: React.FC = () => {
                                 </div>
                                 {activeTab === 'summary' && (
                                   <div className="flex shrink-0 items-center gap-2 pb-2">
+                                    <button
+                                      type="button"
+                                      disabled={regeneratingNoteId === note.id || !hasUsableDiarization(diarRaw)}
+                                      onClick={() => void handleRegenerateNoteSummary(note)}
+                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-40"
+                                      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                      title={!hasUsableDiarization(diarRaw) ? 'Requires diarized transcription' : 'Regenerate summary using speaker profiles'}
+                                    >
+                                      {regeneratingNoteId === note.id
+                                        ? <><Loader2 className="h-3 w-3 animate-spin" />Regenerating…</>
+                                        : <><RefreshCw className="h-3 w-3" />Regenerate</>
+                                      }
+                                    </button>
                                     {editingNoteId === note.id ? (
                                       <button
                                         type="button"
@@ -850,6 +921,9 @@ const SummaryHistory: React.FC = () => {
                                     {editingNoteId === note.id && noteEditError ? (
                                       <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{noteEditError}</p>
                                     ) : null}
+                                    {regenerateNoteError[note.id] ? (
+                                      <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{regenerateNoteError[note.id]}</p>
+                                    ) : null}
                                   </>
                                 )}
                                 {activeTab === 'transcription' && hasTranscription && (
@@ -860,9 +934,6 @@ const SummaryHistory: React.FC = () => {
                                         setNotes((prev) => prev.map((n) => n.id === note.id ? { ...n, diarization: next } : n))
                                       }
                                       noteId={note.id}
-                                      onSummaryEditChange={(nextSummary) =>
-                                        setNotes((prev) => prev.map((n) => n.id === note.id ? { ...n, summary_edit: nextSummary } : n))
-                                      }
                                       scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
                                     />
                                   ) : (
@@ -1164,7 +1235,7 @@ const SummaryHistory: React.FC = () => {
                           value={profile.draft}
                           disabled={profile.saved}
                           onChange={(e) => setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === profile.speakerName ? { ...p, draft: e.target.value, saved: false } : p))}
-                          className="custom-scrollbar w-full resize-y rounded-lg border p-3 text-sm leading-relaxed outline-none disabled:opacity-70"
+                          className="custom-scrollbar w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none disabled:opacity-70"
                           style={{ minHeight: '12rem', backgroundColor: 'var(--bg-secondary)', color: 'var(--text)', borderColor: 'var(--border)' }}
                         />
                       </div>

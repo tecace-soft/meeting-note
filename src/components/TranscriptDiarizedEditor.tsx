@@ -1,9 +1,8 @@
 import React, { useId, useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2, Pencil, Save, Trash2, User, X } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useAuth } from '../context/AuthContext';
+import { isOntologyProfile, parseOntology, type SpeakerOntology } from '../lib/speakerOntology';
 import { supabase } from '../config/supabaseConfig';
 import {
   applySpeakerReplacements,
@@ -34,7 +33,6 @@ export interface TranscriptDiarizedEditorProps {
   segments: TranscriptSegment[];
   onSegmentsChange: (next: TranscriptSegment[]) => void;
   noteId: string | null;
-  onSummaryEditChange?: (nextSummary: string) => void;
   /** Tailwind height/overflow classes for the segment list (default: max-h-96). */
   scrollContainerClassName?: string;
 }
@@ -43,7 +41,6 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   segments,
   onSegmentsChange,
   noteId,
-  onSummaryEditChange,
   scrollContainerClassName,
 }) => {
   const scopeGroupId = useId();
@@ -81,38 +78,6 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setProfileDraft('');
     setProfileSaveError(null);
   }, []);
-
-  const applySpeakerRenameToSummary = (summaryText: string, fromSpeaker: string, toSpeaker: string): string => {
-    const from = fromSpeaker.trim();
-    const to = toSpeaker.trim();
-    if (!from || !to || from.toLowerCase() === to.toLowerCase()) return summaryText;
-    const escapedFrom = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return summaryText.replace(new RegExp(escapedFrom, 'gi'), to);
-  };
-
-  const persistSummarySpeakerRename = async (
-    targetNoteId: string,
-    fromSpeaker: string,
-    toSpeaker: string
-  ): Promise<string | null> => {
-    const { data, error } = await supabase
-      .from('note')
-      .select('summary_edit, summary')
-      .eq('id', targetNoteId)
-      .single();
-    if (error) throw error;
-
-    const row = (data as { summary_edit?: string | null; summary?: string | null } | null) ?? null;
-    const sourceSummary = row?.summary_edit ?? row?.summary ?? '';
-    const nextSummary = applySpeakerRenameToSummary(sourceSummary, fromSpeaker, toSpeaker);
-
-    const { error: updateError } = await supabase
-      .from('note')
-      .update({ summary_edit: nextSummary })
-      .eq('id', targetNoteId);
-    if (updateError) throw updateError;
-    return nextSummary;
-  };
 
   const loadSpeakersForMenu = useCallback(async () => {
     if (!user?.id) {
@@ -201,7 +166,16 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     const profile = row.profile?.trim() || null;
     setSpeakerProfileView({ id: row.id, name: row.name, profile });
     setIsEditingProfile(false);
-    setProfileDraft(profile ?? '');
+    // Pretty-print JSON draft if it's an ontology, otherwise keep as-is
+    if (profile && isOntologyProfile(profile)) {
+      try {
+        setProfileDraft(JSON.stringify(JSON.parse(profile), null, 2));
+      } catch {
+        setProfileDraft(profile);
+      }
+    } else {
+      setProfileDraft(profile ?? '');
+    }
     setProfileSaveError(null);
   };
 
@@ -269,7 +243,6 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setSpeakerMenuError(null);
     setSpeakerChangeSaving(true);
     try {
-      let nextSummaryText: string | null = null;
       const exists = savedSpeakers.some((s) => s.name.toLowerCase() === chosenName.toLowerCase());
       if (!exists) {
         const { data: inserted, error: insertError } = await supabase
@@ -302,18 +275,10 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
 
       if (noteId) {
         await persistNoteDiarization(noteId, nextTranscript);
-        nextSummaryText = await persistSummarySpeakerRename(
-          noteId,
-          speakerMenu.originalSpeaker,
-          chosenName
-        );
       }
 
       startTransition(() => {
         onSegmentsChange(nextTranscript);
-        if (nextSummaryText != null) {
-          onSummaryEditChange?.(nextSummaryText);
-        }
       });
       closeSpeakerMenu();
     } catch (err: unknown) {
@@ -734,27 +699,20 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   <textarea
                     value={profileDraft}
                     onChange={(e) => setProfileDraft(e.target.value)}
-                    className="custom-scrollbar w-full resize-none rounded-lg border p-3 text-sm leading-relaxed outline-none"
+                    className="custom-scrollbar w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none"
                     style={{
-                      minHeight: '20rem',
+                      minHeight: '24rem',
                       backgroundColor: 'var(--bg-secondary)',
                       color: 'var(--text)',
                       borderColor: 'var(--border)',
                     }}
                     onFocus={(e) => { e.target.style.outline = '2px solid var(--accent)'; e.target.style.outlineOffset = '0'; }}
                     onBlur={(e) => { e.target.style.outline = 'none'; }}
-                    placeholder="Enter profile in markdown…"
+                    placeholder="{}"
                     autoFocus
                   />
                 ) : speakerProfileView.profile ? (
-                  <div
-                    className="prose prose-sm max-w-none text-sm leading-relaxed"
-                    style={{ color: 'var(--text)' }}
-                  >
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {speakerProfileView.profile}
-                    </ReactMarkdown>
-                  </div>
+                  <OntologyView raw={speakerProfileView.profile} />
                 ) : (
                   <div
                     className="flex flex-col items-center justify-center py-12 text-center"
@@ -781,5 +739,172 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     </>
   );
 };
+
+/* ── Ontology view component ───────────────────────────────────────── */
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-4">
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>{title}</h4>
+      {children}
+    </div>
+  );
+}
+
+function Chip({ label }: { label: string }) {
+  return (
+    <span className="inline-block rounded-full border px-2 py-0.5 text-xs" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>{label}</span>
+  );
+}
+
+function Badge({ label, variant = 'neutral' }: { label: string; variant?: 'active' | 'completed' | 'open' | 'resolved' | 'high' | 'neutral' }) {
+  const colors: Record<string, string> = {
+    active: 'color-mix(in srgb, var(--accent) 15%, transparent)',
+    completed: 'color-mix(in srgb, var(--success) 15%, transparent)',
+    open: 'color-mix(in srgb, #f59e0b 15%, transparent)',
+    resolved: 'color-mix(in srgb, var(--success) 15%, transparent)',
+    high: 'color-mix(in srgb, var(--error) 15%, transparent)',
+    neutral: 'var(--bg-secondary)',
+  };
+  return (
+    <span
+      className="inline-block rounded px-1.5 py-0.5 text-xs font-medium capitalize"
+      style={{ backgroundColor: colors[variant] ?? colors.neutral, color: 'var(--text-secondary)' }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function statusVariant(s: string): 'active' | 'completed' | 'open' | 'resolved' | 'neutral' {
+  if (s === 'active') return 'active';
+  if (s === 'completed') return 'completed';
+  if (s === 'open') return 'open';
+  if (s === 'resolved') return 'resolved';
+  return 'neutral';
+}
+
+function OntologyView({ raw }: { raw: string }) {
+  if (!isOntologyProfile(raw)) {
+    // Legacy markdown fallback: plain text
+    return <pre className="whitespace-pre-wrap text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{raw}</pre>;
+  }
+
+  const o = parseOntology(raw);
+  if (!o) {
+    return (
+      <pre className="custom-scrollbar overflow-x-auto rounded-lg p-3 text-xs" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}>
+        {raw}
+      </pre>
+    );
+  }
+
+  return (
+    <div className="space-y-1 text-sm" style={{ color: 'var(--text)' }}>
+      {/* Identity */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {o.professional_context?.role && (
+          <span className="font-medium" style={{ color: 'var(--text)' }}>{o.professional_context.role}</span>
+        )}
+        {o.professional_context?.company && (
+          <span style={{ color: 'var(--text-secondary)' }}>@ {o.professional_context.company}</span>
+        )}
+        {o.identity_confidence > 0 && (
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            {Math.round(o.identity_confidence * 100)}% confidence
+          </span>
+        )}
+      </div>
+
+      {o.summary_for_meeting_context && (
+        <Section title="Meeting Context">
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{o.summary_for_meeting_context}</p>
+        </Section>
+      )}
+
+      {o.professional_context?.domains?.length > 0 && (
+        <Section title="Domains">
+          <div className="flex flex-wrap gap-1.5">{o.professional_context.domains.map((d) => <Chip key={d} label={d} />)}</div>
+        </Section>
+      )}
+
+      {o.active_projects?.length > 0 && (
+        <Section title="Projects">
+          <div className="space-y-2">
+            {o.active_projects.map((p, i) => (
+              <div key={i} className="rounded-lg border p-2.5 text-sm" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium">{p.name}</span>
+                  {p.status && <Badge label={p.status} variant={statusVariant(p.status)} />}
+                  {p.importance && p.importance !== 'unknown' && <Badge label={p.importance} variant={p.importance === 'high' ? 'high' : 'neutral'} />}
+                </div>
+                {p.role_in_project && <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>{p.role_in_project}</p>}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {o.responsibilities?.length > 0 && (
+        <Section title="Responsibilities">
+          <ul className="space-y-1">
+            {o.responsibilities.map((r, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: 'var(--accent)' }} />
+                <span style={{ color: 'var(--text-secondary)' }}>{r.description}</span>
+                {r.status && r.status !== 'unknown' && <Badge label={r.status} variant={statusVariant(r.status)} />}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {o.relationships?.length > 0 && (
+        <Section title="Relationships">
+          <div className="space-y-2">
+            {o.relationships.map((r, i) => (
+              <div key={i} className="text-sm">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium">{r.person_or_group}</span>
+                  {r.relationship_type && r.relationship_type !== 'unknown' && <Chip label={r.relationship_type.replace('_', ' ')} />}
+                </div>
+                {r.context && <p className="mt-0.5 text-xs" style={{ color: 'var(--text-secondary)' }}>{r.context}</p>}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {o.open_threads?.filter((t) => t.status !== 'resolved').length > 0 && (
+        <Section title="Open Threads">
+          <div className="space-y-2">
+            {o.open_threads.filter((t) => t.status !== 'resolved').map((t, i) => (
+              <div key={i} className="rounded-lg border p-2.5 text-sm" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium">{t.topic}</span>
+                  {t.priority && t.priority !== 'unknown' && <Badge label={t.priority} variant={t.priority === 'high' ? 'high' : 'neutral'} />}
+                  {t.status && <Badge label={t.status} variant={statusVariant(t.status)} />}
+                </div>
+                {t.summary && <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>{t.summary}</p>}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {o.aliases?.length > 0 && (
+        <Section title="Aliases">
+          <div className="flex flex-wrap gap-1.5">{o.aliases.map((a) => <Chip key={a} label={a} />)}</div>
+        </Section>
+      )}
+
+      {o.last_updated_at && (
+        <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+          Last updated: {new Date(o.last_updated_at).toLocaleString()}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default TranscriptDiarizedEditor;

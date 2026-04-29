@@ -20,6 +20,7 @@ import {
   Send,
   Check,
   Pencil,
+  RefreshCw,
   Save,
   MoreVertical,
   History,
@@ -40,6 +41,7 @@ import {
   persistNoteDiarization,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
+import { buildSpeakerContextForSummary } from '../lib/speakerOntology';
 
 interface GeneratedProfile {
   speakerId: string | null;
@@ -105,6 +107,8 @@ const TranscriptionSummary: React.FC = () => {
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [isForwardTeamsModalOpen, setIsForwardTeamsModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
   const [profileGenError, setProfileGenError] = useState<string | null>(null);
   const [generatedProfiles, setGeneratedProfiles] = useState<GeneratedProfile[]>([]);
@@ -508,6 +512,27 @@ const TranscriptionSummary: React.FC = () => {
       const noteId = generateNoteId();
       setCurrentNoteId(noteId);
 
+      // Fetch saved speaker profiles to enrich the summary prompt with ontology context
+      let speakerContext = '';
+      if (user?.id) {
+        try {
+          const { data: speakerRows } = await supabase
+            .from('speaker')
+            .select('name, profile')
+            .eq('user_id', user.id);
+          if (speakerRows && speakerRows.length > 0) {
+            const contexts = (speakerRows as { name: string; profile: string | null }[])
+              .map((s) => buildSpeakerContextForSummary(s.name, s.profile))
+              .filter(Boolean);
+            if (contexts.length > 0) {
+              speakerContext = contexts.join('\n\n');
+            }
+          }
+        } catch {
+          // Non-fatal: proceed without speaker context
+        }
+      }
+
       const response = await fetch(
         'https://n8n.srv1153481.hstgr.cloud/webhook/e616c0f9-df5f-471b-ad68-579919548ed7',
         {
@@ -522,6 +547,7 @@ const TranscriptionSummary: React.FC = () => {
             userId: user?.id || '',
             userName: user?.displayName || '',
             noteId: noteId,
+            ...(speakerContext ? { speakerContext } : {}),
           }),
         }
       );
@@ -708,7 +734,7 @@ const TranscriptionSummary: React.FC = () => {
           const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
             'generate-profile',
             {
-              body: { speakerName, transcriptText, existingProfile, apiKey: openAiKey },
+              body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: openAiKey },
               headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
             }
           );
@@ -716,10 +742,14 @@ const TranscriptionSummary: React.FC = () => {
           if (error) throw new Error(`Edge function error for "${speakerName}": ${error.message}`);
           if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
 
+          // Pretty-print JSON for display
+          let draft = data?.profile ?? '';
+          try { draft = JSON.stringify(JSON.parse(draft), null, 2); } catch { /* keep as-is */ }
+
           return {
             speakerId: record?.id ?? null,
             speakerName,
-            draft: data?.profile ?? '',
+            draft,
             isNew: !existingProfile,
             saving: false,
             saved: false,
@@ -772,6 +802,55 @@ const TranscriptionSummary: React.FC = () => {
             : p
         )
       );
+    }
+  };
+
+  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook-test/532f465d-d198-4f59-ba75-20c39d41a079';
+
+  const handleRegenerateSummary = async () => {
+    if (!summaryResult || !currentNoteId || !user?.id) return;
+    setIsRegenerating(true);
+    setRegenerateError(null);
+    try {
+      const uniqueSpeakers = [...new Set(summaryResult.transcript.map((s) => s.speaker).filter(Boolean))];
+      const { data: speakerRows } = await supabase
+        .from('speaker')
+        .select('name, profile')
+        .eq('user_id', user.id)
+        .in('name', uniqueSpeakers);
+
+      const speakerProfiles = ((speakerRows ?? []) as { name: string; profile: string | null }[])
+        .filter((s) => s.profile)
+        .map((s) => ({
+          speakerName: s.name,
+          profile: (() => { try { return JSON.parse(s.profile!); } catch { return s.profile; } })(),
+        }));
+
+      const response = await fetch(REGENERATE_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          noteId: currentNoteId,
+          diarization: summaryResult.transcript,
+          previousSummary: editedSummary,
+          speakerProfiles,
+        }),
+      });
+
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+
+      const result = await response.json();
+      const newSummary = typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
+      if (!newSummary) throw new Error('No summary returned from webhook');
+
+      setEditedSummary(newSummary);
+      setSummaryResult((prev) => (prev ? { ...prev, summary: newSummary } : prev));
+      setResultsTab('summary');
+    } catch (err: unknown) {
+      console.error('Regenerate summary failed:', err);
+      setRegenerateError(err instanceof Error ? err.message : 'Regeneration failed');
+    } finally {
+      setIsRegenerating(false);
     }
   };
 
@@ -1249,10 +1328,6 @@ const TranscriptionSummary: React.FC = () => {
                             setSummaryResult((prev) => (prev ? { ...prev, transcript: next } : prev))
                           }
                           noteId={currentNoteId}
-                          onSummaryEditChange={(nextSummary) => {
-                            setEditedSummary(nextSummary);
-                            setSummaryResult((prev) => (prev ? { ...prev, summary: nextSummary } : prev));
-                          }}
                           scrollContainerClassName="flex-1 min-h-0"
                         />
                       </div>
@@ -1306,7 +1381,24 @@ const TranscriptionSummary: React.FC = () => {
                         <UserCircle className="h-4 w-4" aria-hidden />
                         Generate Profile
                       </button>
+                      <button
+                        type="button"
+                        disabled={isRegenerating || summaryResult.transcript.length === 0}
+                        onClick={() => void handleRegenerateSummary()}
+                        className={resultActionBtnClass}
+                      >
+                        {isRegenerating ? (
+                          <><Loader2 className="h-4 w-4 animate-spin" aria-hidden />Regenerating…</>
+                        ) : (
+                          <><RefreshCw className="h-4 w-4" aria-hidden />Regenerate Summary</>
+                        )}
+                      </button>
                     </div>
+                    {regenerateError ? (
+                      <p className="shrink-0 px-1 pb-2 text-xs" style={{ color: 'var(--error)' }}>
+                        {regenerateError}
+                      </p>
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -1691,7 +1783,7 @@ const TranscriptionSummary: React.FC = () => {
                                 )
                               )
                             }
-                            className="custom-scrollbar w-full resize-y rounded-lg border p-3 text-sm leading-relaxed outline-none transition-colors focus:border-transparent disabled:opacity-70"
+                            className="custom-scrollbar w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none transition-colors focus:border-transparent disabled:opacity-70"
                             style={{
                               minHeight: '16rem',
                               backgroundColor: 'var(--bg-secondary)',
@@ -1705,10 +1797,10 @@ const TranscriptionSummary: React.FC = () => {
                             onBlur={(e) => {
                               e.target.style.outline = 'none';
                             }}
-                            placeholder="Generated profile will appear here…"
+                            placeholder="{}"
                           />
                           <p className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                            Markdown supported · Edit before saving
+                            JSON ontology · Edit before saving
                           </p>
                         </div>
                       )}
