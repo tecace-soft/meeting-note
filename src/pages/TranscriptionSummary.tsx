@@ -29,8 +29,6 @@ import {
   Square,
   Play,
   Pause,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -51,7 +49,6 @@ interface GeneratedProfile {
   saving: boolean;
   saved: boolean;
   saveError: string | null;
-  expanded: boolean;
 }
 
 interface UploadedFile {
@@ -730,16 +727,22 @@ const TranscriptionSummary: React.FC = () => {
           const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
           const existingProfile = record?.profile?.trim() || null;
 
-          const openAiKey = (import.meta.env.VITE_OPENAI_API_KEY as string | undefined) ?? '';
+          const geminiKey =
+            (import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ??
+            (import.meta.env.VITE_GOOGLE_API_KEY as string | undefined) ??
+            '';
           const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
             'generate-profile',
             {
-              body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: openAiKey },
+              body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: geminiKey },
               headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
             }
           );
 
-          if (error) throw new Error(`Edge function error for "${speakerName}": ${error.message}`);
+          if (error) {
+            const detail = (data as { error?: string } | null)?.error ?? error.message;
+            throw new Error(`Edge function error for "${speakerName}": ${detail}`);
+          }
           if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
 
           let draft = canonicalOntologyProfileString(data?.profile ?? '');
@@ -752,7 +755,6 @@ const TranscriptionSummary: React.FC = () => {
             saving: false,
             saved: false,
             saveError: null,
-            expanded: true,
           };
         })
       );
@@ -1638,14 +1640,14 @@ const TranscriptionSummary: React.FC = () => {
                   Generate Profile
                 </h2>
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  AI-generated speaker profiles based on the meeting transcript
+                  AI-generated speaker profiles from the meeting transcript
                 </p>
               </div>
               <button
                 type="button"
                 disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'}
                 onClick={() => setIsProfileModalOpen(false)}
-                className="rounded-md p-2 transition-opacity disabled:opacity-40"
+                className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70"
                 style={{ color: 'var(--text-muted)' }}
                 aria-label="Close"
               >
@@ -1664,9 +1666,6 @@ const TranscriptionSummary: React.FC = () => {
                   />
                   <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>
                     {profileGenStep === 'finding-speakers' ? 'Looking up speaker data…' : 'Generating profiles with AI…'}
-                  </p>
-                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {profileGenStep === 'generating' && 'This may take a moment for each speaker'}
                   </p>
                 </div>
               )}
@@ -1749,62 +1748,30 @@ const TranscriptionSummary: React.FC = () => {
                               )}
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setGeneratedProfiles((prev) =>
-                                prev.map((p) =>
-                                  p.speakerName === profile.speakerName ? { ...p, expanded: !p.expanded } : p
-                                )
-                              )
-                            }
-                            className="rounded-md p-1.5 transition-opacity hover:opacity-70"
-                            style={{ color: 'var(--text-muted)' }}
-                            aria-label={profile.expanded ? 'Collapse' : 'Expand'}
-                          >
-                            {profile.expanded ? (
-                              <ChevronUp className="h-4 w-4" aria-hidden />
-                            ) : (
-                              <ChevronDown className="h-4 w-4" aria-hidden />
-                            )}
-                          </button>
                         </div>
                       </div>
 
-                      {/* Editable textarea */}
-                      {profile.expanded && (
-                        <div className="p-4">
-                          <textarea
-                            value={profile.draft}
-                            disabled={profile.saved}
-                            onChange={(e) =>
-                              setGeneratedProfiles((prev) =>
-                                prev.map((p) =>
-                                  p.speakerName === profile.speakerName ? { ...p, draft: e.target.value, saved: false } : p
-                                )
+                      <div className="p-4">
+                        <textarea
+                          value={profile.draft}
+                          disabled={profile.saved}
+                          onChange={(e) =>
+                            setGeneratedProfiles((prev) =>
+                              prev.map((p) =>
+                                p.speakerName === profile.speakerName ? { ...p, draft: e.target.value, saved: false } : p
                               )
-                            }
-                            className="custom-scrollbar w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none transition-colors focus:border-transparent disabled:opacity-70"
-                            style={{
-                              minHeight: '16rem',
-                              backgroundColor: 'var(--bg-secondary)',
-                              color: 'var(--text)',
-                              borderColor: 'var(--border)',
-                            }}
-                            onFocus={(e) => {
-                              e.target.style.outline = '2px solid var(--accent)';
-                              e.target.style.outlineOffset = '0px';
-                            }}
-                            onBlur={(e) => {
-                              e.target.style.outline = 'none';
-                            }}
-                            placeholder="{}"
-                          />
-                          <p className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                            JSON ontology · Edit before saving
-                          </p>
-                        </div>
-                      )}
+                            )
+                          }
+                          className="custom-scrollbar w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none disabled:opacity-70"
+                          style={{
+                            minHeight: '12rem',
+                            backgroundColor: 'var(--bg-secondary)',
+                            color: 'var(--text)',
+                            borderColor: 'var(--border)',
+                          }}
+                          placeholder="{}"
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>

@@ -894,7 +894,7 @@ function OntologyView({ raw }: { raw: string }) {
     );
   }
 
-  const entries = Object.entries(o as Record<string, unknown>);
+  const entries = Object.entries(o as unknown as Record<string, unknown>);
   return (
     <div className={baseClassName} style={baseStyle}>
       <div className="space-y-0">

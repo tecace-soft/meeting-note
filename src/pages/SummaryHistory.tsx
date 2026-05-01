@@ -54,15 +54,21 @@ interface ChatInfo {
   members: { displayName: string; email: string }[];
 }
 
-/** Fixed scroll height for plain transcription (no diarization). */
-const NOTE_DETAIL_SCROLL_BODY =
-  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar rounded-lg p-3 max-md:p-4 text-base leading-relaxed';
+/** Shared scroll region — aligns with TranscriptionSummary result panel heights. */
+const NOTE_CONTENT_SCROLL =
+  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar';
 
-/** Summary view/edit: fixed height scroll, no border or fill — text uses theme foreground. */
-const NOTE_SUMMARY_SCROLL =
-  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-base leading-relaxed rounded-lg';
+/** Plain transcription (no diarization): readable body text and padding like transcript editor. */
+const NOTE_DETAIL_SCROLL_BODY = `${NOTE_CONTENT_SCROLL} rounded-lg p-4 text-base leading-relaxed`;
 
-const NOTE_TRANSCRIPT_SCROLL_CLASS = 'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)]';
+/** Summary markdown (read): matches TranscriptionSummary prose + spacing. */
+const NOTE_SUMMARY_MARKDOWN = `prose prose-sm max-w-none ${NOTE_CONTENT_SCROLL} rounded-lg p-4 text-sm leading-relaxed`;
+
+/** Summary edit textarea: matches TranscriptionSummary edit field. */
+const NOTE_SUMMARY_TEXTAREA = `w-full resize-none ${NOTE_CONTENT_SCROLL} rounded-lg border-2 p-4 text-sm leading-relaxed`;
+
+const NOTE_TRANSCRIPT_SCROLL_CLASS =
+  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)]';
 
 interface GeneratedHistoryProfile {
   speakerId: string | null;
@@ -72,7 +78,6 @@ interface GeneratedHistoryProfile {
   saving: boolean;
   saved: boolean;
   saveError: string | null;
-  expanded: boolean;
 }
 
 const NOTES_PAGE_SIZE = 10;
@@ -596,19 +601,25 @@ const SummaryHistory: React.FC = () => {
       });
       const transcriptText = segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
       setProfileGenStep('generating');
-      const openAiKey = (import.meta.env.VITE_OPENAI_API_KEY as string | undefined) ?? '';
+      const geminiKey =
+        (import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ??
+        (import.meta.env.VITE_GOOGLE_API_KEY as string | undefined) ??
+        '';
       const results = await Promise.all(
         uniqueSpeakers.map(async (speakerName): Promise<GeneratedHistoryProfile> => {
           const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
           const existingProfile = record?.profile?.trim() || null;
           const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
             'generate-profile',
-            { body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: openAiKey }, headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
+            { body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: geminiKey }, headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
           );
-          if (error) throw new Error(`Edge function error for "${speakerName}": ${error.message}`);
-          if (data?.error) throw new Error(data.error);
+          if (error) {
+            const detail = (data as { error?: string } | null)?.error ?? error.message;
+            throw new Error(`Edge function error for "${speakerName}": ${detail}`);
+          }
+          if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
           let draft = canonicalOntologyProfileString(data?.profile ?? '');
-          return { speakerId: record?.id ?? null, speakerName, draft, isNew: !existingProfile, saving: false, saved: false, saveError: null, expanded: true };
+          return { speakerId: record?.id ?? null, speakerName, draft, isNew: !existingProfile, saving: false, saved: false, saveError: null };
         })
       );
       setGeneratedProfiles(results);
@@ -909,16 +920,16 @@ const SummaryHistory: React.FC = () => {
                             >
                               {/* Tab bar */}
                               <div
-                                className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3"
+                                className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-6"
                                 style={{ borderColor: 'var(--border)' }}
                               >
-                                <div className="-mb-px flex gap-1 sm:gap-6" role="tablist">
+                                <div className="-mb-px flex min-w-0 gap-1 sm:gap-6" role="tablist">
                                   <button
                                     type="button"
                                     role="tab"
                                     aria-selected={activeTab === 'summary'}
                                     onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                    className="border-b-2 px-3 pb-2.5 pt-1 text-base font-medium transition-colors sm:px-4"
+                                    className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
                                     style={{
                                       borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
                                       color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
@@ -932,7 +943,7 @@ const SummaryHistory: React.FC = () => {
                                       role="tab"
                                       aria-selected={activeTab === 'transcription'}
                                       onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
-                                      className="border-b-2 px-3 pb-2.5 pt-1 text-base font-medium transition-colors sm:px-4"
+                                      className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
                                       style={{
                                         borderBottomColor: activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
                                         color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
@@ -970,23 +981,33 @@ const SummaryHistory: React.FC = () => {
                                 )}
                               </div>
 
-                              {/* Panel content */}
-                              <div className="p-4 pb-3">
+                              {/* Panel content — padding/typography aligned with TranscriptionSummary */}
+                              <div className="px-4 pt-4 pb-4 md:px-6">
                                 {activeTab === 'summary' && (
                                   <>
                                     {editingNoteId === note.id ? (
                                       <textarea
                                         value={noteEditDraft}
                                         onChange={(e) => setNoteEditDraft(e.target.value)}
-                                        className={`w-full resize-none ${NOTE_SUMMARY_SCROLL}`}
-                                        style={{ color: 'var(--text)' }}
+                                        className={NOTE_SUMMARY_TEXTAREA}
+                                        style={{
+                                          backgroundColor: 'var(--bg-secondary)',
+                                          color: 'var(--text)',
+                                          borderColor: 'var(--accent)',
+                                        }}
                                       />
                                     ) : note.summary_edit || note.summary ? (
-                                      <div className={`prose max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text)' }}>
+                                      <div
+                                        className={NOTE_SUMMARY_MARKDOWN}
+                                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
+                                      >
                                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary_edit || note.summary || ''}</ReactMarkdown>
                                       </div>
                                     ) : (
-                                      <div className={`flex items-center justify-center italic ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text-muted)' }}>
+                                      <div
+                                        className={`flex items-center justify-center italic ${NOTE_CONTENT_SCROLL} rounded-lg p-4 text-sm leading-relaxed`}
+                                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
+                                      >
                                         No summary available
                                       </div>
                                     )}
@@ -1009,7 +1030,10 @@ const SummaryHistory: React.FC = () => {
                                       scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
                                     />
                                   ) : (
-                                    <div className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`} style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}>
+                                    <div
+                                      className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                                    >
                                       {plainTx}
                                     </div>
                                   )

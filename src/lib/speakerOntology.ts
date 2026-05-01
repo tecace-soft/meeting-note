@@ -1,3 +1,9 @@
+/** Model confidence in inferred facts for this block (0.0–1.0). */
+export function clampConfidence01(n: unknown): number {
+  if (typeof n !== 'number' || Number.isNaN(n)) return 0;
+  return Math.min(1, Math.max(0, n));
+}
+
 export interface SpeakerOntology {
   schema_version: string;
   speaker_id: string;
@@ -8,24 +14,28 @@ export interface SpeakerOntology {
     company: string;
     role: string;
     domains: string[];
+    confidence: number;
   };
   active_projects: {
     name: string;
     role_in_project: string;
     status: string;
     importance: string;
+    confidence: number;
   }[];
   relationships: {
     person_or_group: string;
     relationship_type: string;
     context: string;
     related_projects: string[];
+    confidence: number;
   }[];
   responsibilities: {
     description: string;
     scope: string;
     related_projects: string[];
     status: string;
+    confidence: number;
   }[];
   open_threads: {
     topic: string;
@@ -33,13 +43,91 @@ export interface SpeakerOntology {
     priority: string;
     summary: string;
     related_projects: string[];
+    confidence: number;
   }[];
   evidence: {
     source: string;
     quote_or_paraphrase: string;
     supports: string[];
+    confidence: number;
   }[];
   last_updated_at: string;
+}
+
+function mapProfessionalContext(pc: Record<string, unknown>): SpeakerOntology['professional_context'] {
+  return {
+    company: typeof pc.company === 'string' ? pc.company : '',
+    role: typeof pc.role === 'string' ? pc.role : '',
+    domains: Array.isArray(pc.domains) ? pc.domains.filter((x): x is string => typeof x === 'string') : [],
+    confidence: clampConfidence01(pc.confidence),
+  };
+}
+
+function mapActiveProject(o: Record<string, unknown>): SpeakerOntology['active_projects'][number] {
+  return {
+    name: typeof o.name === 'string' ? o.name : '',
+    role_in_project: typeof o.role_in_project === 'string' ? o.role_in_project : '',
+    status: typeof o.status === 'string' ? o.status : '',
+    importance: typeof o.importance === 'string' ? o.importance : '',
+    confidence: clampConfidence01(o.confidence),
+  };
+}
+
+function mapRelationship(o: Record<string, unknown>): SpeakerOntology['relationships'][number] {
+  return {
+    person_or_group: typeof o.person_or_group === 'string' ? o.person_or_group : '',
+    relationship_type: typeof o.relationship_type === 'string' ? o.relationship_type : '',
+    context: typeof o.context === 'string' ? o.context : '',
+    related_projects: Array.isArray(o.related_projects)
+      ? o.related_projects.filter((x): x is string => typeof x === 'string')
+      : [],
+    confidence: clampConfidence01(o.confidence),
+  };
+}
+
+function mapResponsibility(o: Record<string, unknown>): SpeakerOntology['responsibilities'][number] {
+  return {
+    description: typeof o.description === 'string' ? o.description : '',
+    scope: typeof o.scope === 'string' ? o.scope : '',
+    related_projects: Array.isArray(o.related_projects)
+      ? o.related_projects.filter((x): x is string => typeof x === 'string')
+      : [],
+    status: typeof o.status === 'string' ? o.status : '',
+    confidence: clampConfidence01(o.confidence),
+  };
+}
+
+function mapOpenThread(o: Record<string, unknown>): SpeakerOntology['open_threads'][number] {
+  return {
+    topic: typeof o.topic === 'string' ? o.topic : '',
+    status: typeof o.status === 'string' ? o.status : '',
+    priority: typeof o.priority === 'string' ? o.priority : '',
+    summary: typeof o.summary === 'string' ? o.summary : '',
+    related_projects: Array.isArray(o.related_projects)
+      ? o.related_projects.filter((x): x is string => typeof x === 'string')
+      : [],
+    confidence: clampConfidence01(o.confidence),
+  };
+}
+
+function mapEvidence(o: Record<string, unknown>): SpeakerOntology['evidence'][number] {
+  return {
+    source: typeof o.source === 'string' ? o.source : '',
+    quote_or_paraphrase: typeof o.quote_or_paraphrase === 'string' ? o.quote_or_paraphrase : '',
+    supports: Array.isArray(o.supports) ? o.supports.filter((x): x is string => typeof x === 'string') : [],
+    confidence: clampConfidence01(o.confidence),
+  };
+}
+
+function mapObjectArray<T>(arr: unknown, fn: (o: Record<string, unknown>) => T): T[] {
+  if (!Array.isArray(arr)) return [];
+  const out: T[] = [];
+  for (const item of arr) {
+    if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      out.push(fn(item as Record<string, unknown>));
+    }
+  }
+  return out;
 }
 
 /** Canonical ontology — drops deprecated/extra keys (e.g. summary_for_meeting_context). */
@@ -47,10 +135,10 @@ export function normalizeOntologyLoose(parsed: unknown): SpeakerOntology | null 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const p = parsed as Record<string, unknown>;
   const pcRaw = p.professional_context;
-  const pc =
+  const pcObj =
     pcRaw && typeof pcRaw === 'object' && !Array.isArray(pcRaw)
-      ? (pcRaw as Record<string, unknown>)
-      : {};
+      ? mapProfessionalContext(pcRaw as Record<string, unknown>)
+      : mapProfessionalContext({});
 
   return {
     schema_version: typeof p.schema_version === 'string' ? p.schema_version : '1.0',
@@ -58,16 +146,12 @@ export function normalizeOntologyLoose(parsed: unknown): SpeakerOntology | null 
     display_name: typeof p.display_name === 'string' ? p.display_name : '',
     aliases: Array.isArray(p.aliases) ? p.aliases.filter((x): x is string => typeof x === 'string') : [],
     identity_confidence: typeof p.identity_confidence === 'number' ? p.identity_confidence : 0,
-    professional_context: {
-      company: typeof pc.company === 'string' ? pc.company : '',
-      role: typeof pc.role === 'string' ? pc.role : '',
-      domains: Array.isArray(pc.domains) ? pc.domains.filter((x): x is string => typeof x === 'string') : [],
-    },
-    active_projects: Array.isArray(p.active_projects) ? (p.active_projects as SpeakerOntology['active_projects']) : [],
-    relationships: Array.isArray(p.relationships) ? (p.relationships as SpeakerOntology['relationships']) : [],
-    responsibilities: Array.isArray(p.responsibilities) ? (p.responsibilities as SpeakerOntology['responsibilities']) : [],
-    open_threads: Array.isArray(p.open_threads) ? (p.open_threads as SpeakerOntology['open_threads']) : [],
-    evidence: Array.isArray(p.evidence) ? (p.evidence as SpeakerOntology['evidence']) : [],
+    professional_context: pcObj,
+    active_projects: mapObjectArray(p.active_projects, mapActiveProject),
+    relationships: mapObjectArray(p.relationships, mapRelationship),
+    responsibilities: mapObjectArray(p.responsibilities, mapResponsibility),
+    open_threads: mapObjectArray(p.open_threads, mapOpenThread),
+    evidence: mapObjectArray(p.evidence, mapEvidence),
     last_updated_at: typeof p.last_updated_at === 'string' ? p.last_updated_at : new Date().toISOString(),
   };
 }
