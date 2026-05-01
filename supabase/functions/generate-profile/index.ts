@@ -97,30 +97,51 @@ function wrapMarkdownProfile(raw: string, speakerName: string, speakerId: string
   };
 }
 
-function parseOntologyResponse(raw: string, speakerName: string, speakerId: string): SpeakerOntology {
-  // Strip any accidental markdown code fences
+/** Strip deprecated keys and normalize before passing existing profile into the update prompt. */
+function sanitizeExistingOntologyForUpdate(raw: string, speakerName: string, speakerId: string): string {
   const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   try {
-    const parsed = JSON.parse(stripped) as SpeakerOntology;
-    // Ensure required fields exist
-    return {
-      schema_version: parsed.schema_version ?? '1.0',
-      speaker_id: parsed.speaker_id || speakerId,
-      display_name: parsed.display_name || speakerName,
-      aliases: parsed.aliases ?? [],
-      identity_confidence: typeof parsed.identity_confidence === 'number' ? parsed.identity_confidence : 0,
-      professional_context: {
-        company: parsed.professional_context?.company ?? '',
-        role: parsed.professional_context?.role ?? '',
-        domains: parsed.professional_context?.domains ?? [],
-      },
-      active_projects: parsed.active_projects ?? [],
-      relationships: parsed.relationships ?? [],
-      responsibilities: parsed.responsibilities ?? [],
-      open_threads: parsed.open_threads ?? [],
-      evidence: parsed.evidence ?? [],
-      last_updated_at: parsed.last_updated_at || new Date().toISOString(),
-    };
+    const parsed = JSON.parse(stripped) as Record<string, unknown>;
+    delete parsed.summary_for_meeting_context;
+    const normalized = parseOntologyResponse(JSON.stringify(parsed), speakerName, speakerId);
+    return JSON.stringify(normalized, null, 2);
+  } catch {
+    return stripped;
+  }
+}
+
+/** Allowlisted parse — never preserves summary_for_meeting_context or other unknown keys. */
+function ontologyFromLooseParsed(parsed: Record<string, unknown>, speakerName: string, speakerId: string): SpeakerOntology {
+  const pcRaw = parsed.professional_context;
+  const pc =
+    pcRaw && typeof pcRaw === 'object' && !Array.isArray(pcRaw)
+      ? (pcRaw as Record<string, unknown>)
+      : {};
+  return {
+    schema_version: typeof parsed.schema_version === 'string' ? parsed.schema_version : '1.0',
+    speaker_id: typeof parsed.speaker_id === 'string' ? parsed.speaker_id : speakerId,
+    display_name: typeof parsed.display_name === 'string' ? parsed.display_name : speakerName,
+    aliases: Array.isArray(parsed.aliases) ? parsed.aliases.filter((x): x is string => typeof x === 'string') : [],
+    identity_confidence: typeof parsed.identity_confidence === 'number' ? parsed.identity_confidence : 0,
+    professional_context: {
+      company: typeof pc.company === 'string' ? pc.company : '',
+      role: typeof pc.role === 'string' ? pc.role : '',
+      domains: Array.isArray(pc.domains) ? pc.domains.filter((x): x is string => typeof x === 'string') : [],
+    },
+    active_projects: Array.isArray(parsed.active_projects) ? (parsed.active_projects as SpeakerOntology['active_projects']) : [],
+    relationships: Array.isArray(parsed.relationships) ? (parsed.relationships as SpeakerOntology['relationships']) : [],
+    responsibilities: Array.isArray(parsed.responsibilities) ? (parsed.responsibilities as SpeakerOntology['responsibilities']) : [],
+    open_threads: Array.isArray(parsed.open_threads) ? (parsed.open_threads as SpeakerOntology['open_threads']) : [],
+    evidence: Array.isArray(parsed.evidence) ? (parsed.evidence as SpeakerOntology['evidence']) : [],
+    last_updated_at: typeof parsed.last_updated_at === 'string' ? parsed.last_updated_at : new Date().toISOString(),
+  };
+}
+
+function parseOntologyResponse(raw: string, speakerName: string, speakerId: string): SpeakerOntology {
+  const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  try {
+    const parsed = JSON.parse(stripped) as Record<string, unknown>;
+    return ontologyFromLooseParsed(parsed, speakerName, speakerId);
   } catch (e) {
     console.error('Failed to parse ontology JSON. Raw output:', raw, 'Error:', e);
     return fallbackOntology(speakerName, speakerId);
@@ -131,31 +152,23 @@ const NEW_PROFILE_SYSTEM = `You are a speaker ontology extraction engine for a m
 
 Your job is to create a practical, lightweight speaker memory ontology from a diarized meeting transcript.
 
-The goal is not to create a perfect academic ontology. The goal is to create structured speaker context that helps future meeting summaries become more accurate, relevant, and consistent.`;
+The goal is not to create a perfect academic ontology. The goal is to create structured speaker context that helps future meeting notes become more accurate, relevant, and consistent.
+
+Your JSON output must contain ONLY the keys shown in the required structure. Never output summary_for_meeting_context or any other key not listed there.`;
 
 const UPDATE_PROFILE_SYSTEM = `You are a speaker ontology update engine for a meeting note application.
 
 Your job is to update an existing lightweight speaker memory ontology using a new diarized meeting transcript.
 
-The goal is to preserve useful speaker context while adding new professional information that improves future meeting summaries.`;
+The goal is to preserve useful speaker context while adding new professional information that improves future meeting summaries.
 
-function buildNewProfilePrompt(name: string, speakerId: string, transcript: string, currentDate: string): string {
-  return `Create a new speaker ontology for ${name} using the meeting transcript below.
+Never output deprecated fields. The field summary_for_meeting_context is not part of the schema and must not appear in your JSON output.`;
 
-Rules:
-- Use only information that is explicitly stated or strongly supported by the transcript.
-- Do not invent personal details, titles, companies, relationships, or responsibilities.
-- Prefer useful business/professional context over personality analysis.
-- Avoid storing sensitive personal information.
-- If a field is unknown, use an empty string, empty array, or low confidence.
-- Keep the ontology compact and useful for future meeting summarization.
-- Output valid JSON only. Do not output markdown.
-
-Required JSON structure:
-{
+function requiredOntologyJsonSchema(speakerId: string, displayName: string, lastUpdated: string): string {
+  return `{
   "schema_version": "1.0",
   "speaker_id": "${speakerId}",
-  "display_name": "${name}",
+  "display_name": "${displayName}",
   "aliases": [],
   "identity_confidence": 0.0,
   "professional_context": {
@@ -203,14 +216,37 @@ Required JSON structure:
       "supports": []
     }
   ],
-  "last_updated_at": "${currentDate}"
+  "last_updated_at": "${lastUpdated}"
+}`;
 }
+
+function buildNewProfilePrompt(name: string, speakerId: string, transcript: string, currentDate: string): string {
+  return `Create a new speaker ontology for ${name} using the meeting transcript below.
+
+Rules:
+- Use only information that is explicitly stated or strongly supported by the transcript.
+- Do not invent personal details, titles, companies, relationships, or responsibilities.
+- Prefer useful business/professional context over personality analysis.
+- Avoid storing sensitive personal information.
+- If a field is unknown, use an empty string, empty array, or low confidence.
+- Keep the ontology compact and useful for downstream meeting notes.
+- Output valid JSON only. Do not output markdown.
+- Output ONLY the keys in the required structure below. Never output summary_for_meeting_context or any other extra key.
+
+Required JSON structure:
+${requiredOntologyJsonSchema(speakerId, name, currentDate)}
 
 Transcript:
 ${transcript}`;
 }
 
-function buildUpdateProfilePrompt(name: string, existingOntologyJson: string, transcript: string, currentDate: string): string {
+function buildUpdateProfilePrompt(
+  name: string,
+  speakerId: string,
+  existingOntologyJson: string,
+  transcript: string,
+  currentDate: string
+): string {
   return `Update the existing ontology for ${name} using the new transcript below.
 
 Rules:
@@ -220,8 +256,9 @@ Rules:
 - Merge similar items instead of creating near-duplicates.
 - Use only information that is explicitly stated or strongly supported.
 - Do not add sensitive personal information.
-- Keep the ontology compact and useful for future meeting summarization.
+- Keep the ontology compact and useful for downstream meeting notes.
 - Output valid JSON only. Do not output markdown.
+- Output ONLY the keys in the required structure below. Never output summary_for_meeting_context or any other extra key, even if it appeared in the existing ontology.
 
 Merge behavior:
 - If the same project appears again, update its role, status, or importance only if the new transcript adds useful information.
@@ -232,21 +269,8 @@ Merge behavior:
 - Add short evidence entries only for important new or changed facts.
 - Update last_updated_at to "${currentDate}".
 
-Required JSON structure:
-{
-  "schema_version": "1.0",
-  "speaker_id": "",
-  "display_name": "",
-  "aliases": [],
-  "identity_confidence": 0.0,
-  "professional_context": { "company": "", "role": "", "domains": [] },
-  "active_projects": [],
-  "relationships": [],
-  "responsibilities": [],
-  "open_threads": [],
-  "evidence": [],
-  "last_updated_at": "${currentDate}"
-}
+Required JSON structure (same shape as new profiles; fill arrays/objects according to merged content):
+${requiredOntologyJsonSchema(speakerId, name, currentDate)}
 
 Existing ontology:
 ${existingOntologyJson}
@@ -287,13 +311,13 @@ serve(async (req) => {
         const wrapped = wrapMarkdownProfile(existingProfile, speakerName, resolvedSpeakerId);
         existingOntologyJson = JSON.stringify(wrapped, null, 2);
       } else {
-        existingOntologyJson = existingProfile.trim();
+        existingOntologyJson = sanitizeExistingOntologyForUpdate(existingProfile.trim(), speakerName, resolvedSpeakerId);
       }
     }
 
     const systemPrompt = existingOntologyJson ? UPDATE_PROFILE_SYSTEM : NEW_PROFILE_SYSTEM;
     const userPrompt = existingOntologyJson
-      ? buildUpdateProfilePrompt(speakerName, existingOntologyJson, transcriptText, currentDate)
+      ? buildUpdateProfilePrompt(speakerName, resolvedSpeakerId, existingOntologyJson, transcriptText, currentDate)
       : buildNewProfilePrompt(speakerName, resolvedSpeakerId, transcriptText, currentDate);
 
     const openAiRes = await fetch('https://api.openai.com/v1/chat/completions', {

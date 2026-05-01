@@ -2,7 +2,7 @@ import React, { useId, useState, useEffect, useRef, useCallback, startTransition
 import { createPortal } from 'react-dom';
 import { Loader2, Pencil, Save, Trash2, User, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { isOntologyProfile, parseOntology, type SpeakerOntology } from '../lib/speakerOntology';
+import { canonicalOntologyProfileString, isOntologyProfile, parseOntology, type SpeakerOntology } from '../lib/speakerOntology';
 import { supabase } from '../config/supabaseConfig';
 import {
   applySpeakerReplacements,
@@ -184,16 +184,18 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setSavingProfile(true);
     setProfileSaveError(null);
     try {
+      const toSave = canonicalOntologyProfileString(profileDraft);
       const { error } = await supabase
         .from('speaker')
-        .update({ profile: profileDraft })
+        .update({ profile: toSave })
         .eq('id', speakerProfileView.id)
         .eq('user_id', user.id);
       if (error) throw error;
-      setSpeakerProfileView((prev) => (prev ? { ...prev, profile: profileDraft } : prev));
+      setSpeakerProfileView((prev) => (prev ? { ...prev, profile: toSave } : prev));
       setSavedSpeakers((prev) =>
-        prev.map((s) => (s.id === speakerProfileView.id ? { ...s, profile: profileDraft } : s))
+        prev.map((s) => (s.id === speakerProfileView.id ? { ...s, profile: toSave } : s))
       );
+      setProfileDraft(toSave);
       setIsEditingProfile(false);
     } catch (err: unknown) {
       setProfileSaveError(err instanceof Error ? err.message : 'Failed to save profile');

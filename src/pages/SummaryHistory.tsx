@@ -27,6 +27,7 @@ import { marked } from 'marked';
 import { Client } from '@microsoft/microsoft-graph-client';
 import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
 import { getNoteDiarizationRaw, hasUsableDiarization, normalizeTranscript, type TranscriptSegment } from '../lib/transcriptSegments';
+import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { getTeamsChats, sendChatMessage, type TeamsChat } from '../services/graphService';
 
 interface Note {
@@ -606,8 +607,7 @@ const SummaryHistory: React.FC = () => {
           );
           if (error) throw new Error(`Edge function error for "${speakerName}": ${error.message}`);
           if (data?.error) throw new Error(data.error);
-          let draft = data?.profile ?? '';
-          try { draft = JSON.stringify(JSON.parse(draft), null, 2); } catch { /* keep as-is */ }
+          let draft = canonicalOntologyProfileString(data?.profile ?? '');
           return { speakerId: record?.id ?? null, speakerName, draft, isNew: !existingProfile, saving: false, saved: false, saveError: null, expanded: true };
         })
       );
@@ -625,14 +625,17 @@ const SummaryHistory: React.FC = () => {
     if (!profile) return;
     setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: true, saveError: null } : p));
     try {
+      const toSave = canonicalOntologyProfileString(profile.draft);
       if (profile.speakerId) {
-        const { error } = await supabase.from('speaker').update({ profile: profile.draft }).eq('id', profile.speakerId).eq('user_id', user.id);
+        const { error } = await supabase.from('speaker').update({ profile: toSave }).eq('id', profile.speakerId).eq('user_id', user.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from('speaker').insert({ user_id: user.id, name: speakerName, profile: profile.draft });
+        const { error } = await supabase.from('speaker').insert({ user_id: user.id, name: speakerName, profile: toSave });
         if (error) throw error;
       }
-      setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: false, saved: true } : p));
+      setGeneratedProfiles((prev) =>
+        prev.map((p) => (p.speakerName === speakerName ? { ...p, draft: toSave, saving: false, saved: true } : p))
+      );
     } catch (err: unknown) {
       setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: false, saveError: err instanceof Error ? err.message : 'Save failed' } : p));
     }
