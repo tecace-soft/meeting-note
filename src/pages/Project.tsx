@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../config/supabaseConfig';
+import { useAuth } from '../context/AuthContext';
 import {
   Calendar,
   ChevronDown,
@@ -54,16 +55,64 @@ interface ChatMessage {
   content: string;
 }
 
+interface SessionRow {
+  id: string;
+  created_at?: string | null;
+  project_id?: string | number | null;
+}
+
+interface ChatRow {
+  id: string;
+  session_id: string;
+  message?: string | null;
+  response?: string | null;
+  repsonse?: string | null;
+  created_at?: string | null;
+}
+
 function extractWebhookResponse(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return '';
   const value = (payload as { response?: unknown }).response;
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function generateSessionId(): string {
+  const now = new Date();
+  const yy = String(now.getFullYear() % 100).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+
+  const random = Array.from(crypto.getRandomValues(new Uint8Array(8)), (n) => String(n % 10)).join('');
+  return `${yy}${mm}${dd}${hh}${min}${ss}_${random}`;
+}
+
+function getChatResponseValue(chat: ChatRow): string {
+  const value = chat.response ?? chat.repsonse ?? '';
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildChatMessages(rows: ChatRow[]): ChatMessage[] {
+  const sorted = [...rows].sort(
+    (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+  );
+  return sorted.flatMap((row) => {
+    const items: ChatMessage[] = [];
+    const userContent = (row.message || '').trim();
+    const assistantContent = getChatResponseValue(row);
+    if (userContent) items.push({ id: `u-${row.id}`, role: 'user', content: userContent });
+    if (assistantContent) items.push({ id: `a-${row.id}`, role: 'assistant', content: assistantContent });
+    return items;
+  });
+}
+
 const PROJECT_CHAT_WEBHOOK_URL =
   'https://n8n.srv1153481.hstgr.cloud/webhook/9fe1b3b5-9e2e-4b23-8775-b38fc21e4b4d';
 
 const Project: React.FC = () => {
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const projectId = searchParams.get('id');
   const projectIdFilterValue: string | number =
@@ -72,6 +121,7 @@ const Project: React.FC = () => {
   const [project, setProject] = useState<ProjectRow | null>(null);
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
+  const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, 'summary' | 'transcription'>>({});
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
@@ -89,9 +139,15 @@ const Project: React.FC = () => {
 
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [projectSessions, setProjectSessions] = useState<SessionRow[]>([]);
+  const [sessionChatsById, setSessionChatsById] = useState<Record<string, ChatRow[]>>({});
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [chatSending, setChatSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'notes' | 'chats'>('notes');
+  const [activeTab, setActiveTab] = useState<'notes' | 'chats'>('chats');
   const [isLowerSectionExpanded, setIsLowerSectionExpanded] = useState(true);
 
   const noteMenuRef = useRef<HTMLDivElement>(null);
@@ -157,9 +213,76 @@ const Project: React.FC = () => {
     setChatMessages([]);
     setChatError(null);
     setChatInput('');
-    setActiveTab('notes');
+    setChatSessionId(null);
+    setSelectedSessionId(null);
+    setProjectSessions([]);
+    setSessionChatsById({});
+    setSessionsError(null);
+    setActiveTab('chats');
     setIsLowerSectionExpanded(true);
   }, [projectId]);
+
+  useEffect(() => {
+    const resolvedProjectId = project?.id ?? projectId;
+    if (!resolvedProjectId) return;
+
+    const loadSessions = async () => {
+      try {
+        setSessionsLoading(true);
+        setSessionsError(null);
+
+        const { data: sessionData, error: sessionError } = await supabase
+          .from('session')
+          .select('id, created_at, project_id')
+          .eq('project_id', resolvedProjectId)
+          .order('created_at', { ascending: false });
+
+        if (sessionError) throw sessionError;
+        const sessions = (sessionData as SessionRow[]) || [];
+        setProjectSessions(sessions);
+
+        if (sessions.length === 0) {
+          setSessionChatsById({});
+          return;
+        }
+
+        const sessionIds = sessions.map((s) => s.id);
+        const { data: chatData, error: chatLoadError } = await supabase
+          .from('chat')
+          .select('*')
+          .in('session_id', sessionIds)
+          .order('created_at', { ascending: true });
+        if (chatLoadError) throw chatLoadError;
+
+        const grouped = ((chatData as ChatRow[]) || []).reduce<Record<string, ChatRow[]>>((acc, row) => {
+          if (!acc[row.session_id]) acc[row.session_id] = [];
+          acc[row.session_id].push(row);
+          return acc;
+        }, {});
+        setSessionChatsById(grouped);
+
+        if (selectedSessionId && !sessions.some((s) => s.id === selectedSessionId)) {
+          setSelectedSessionId(null);
+          setChatSessionId(null);
+          setChatMessages([]);
+        }
+      } catch (err: unknown) {
+        setSessionsError(err instanceof Error ? err.message : 'Failed to load chat sessions');
+      } finally {
+        setSessionsLoading(false);
+      }
+    };
+
+    void loadSessions();
+  }, [project?.id, projectId, selectedSessionId]);
+
+  const handleSelectSession = (sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    setChatSessionId(sessionId);
+    setChatMessages(buildChatMessages(sessionChatsById[sessionId] || []));
+    setChatError(null);
+    setIsLowerSectionExpanded(false);
+  };
 
   const formatDate = (value?: string | null): string => {
     if (!value) return 'Unknown date';
@@ -192,6 +315,12 @@ const Project: React.FC = () => {
     e?.preventDefault();
     const trimmed = chatInput.trim();
     if (!trimmed || !projectId || chatSending) return;
+    if (!user?.id) {
+      setChatError('Missing authenticated user.');
+      return;
+    }
+
+    const resolvedProjectId = project?.id ?? projectId;
 
     setChatError(null);
     setChatSending(true);
@@ -209,7 +338,7 @@ const Project: React.FC = () => {
       const res = await fetch(PROJECT_CHAT_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: trimmed, project_id: projectId }),
+        body: JSON.stringify({ message: trimmed, project_id: resolvedProjectId }),
       });
 
       const rawText = await res.text();
@@ -228,6 +357,68 @@ const Project: React.FC = () => {
       if (!assistantContent) {
         throw new Error('Webhook response missing "response" field');
       }
+
+      const isNewSession = chatSessionId == null;
+      const sessionIdForMessage = chatSessionId ?? generateSessionId();
+
+      if (isNewSession) {
+        const { error: sessionInsertError } = await supabase.from('session').insert({
+          id: sessionIdForMessage,
+          project_id: resolvedProjectId,
+        });
+        if (sessionInsertError) throw sessionInsertError;
+      }
+
+      const basePayload = {
+        message: trimmed,
+        user_id: user.id,
+        session_id: sessionIdForMessage,
+        project_id: resolvedProjectId,
+      };
+
+      let insertError: Error | null = null;
+      const { error: preferredInsertError } = await supabase
+        .from('chat')
+        .insert([{ ...basePayload, response: assistantContent }]);
+
+      if (preferredInsertError) {
+        const missingResponseColumn = /response/i.test(preferredInsertError.message || '');
+        if (missingResponseColumn) {
+          const { error: fallbackInsertError } = await supabase
+            .from('chat')
+            .insert([{ ...basePayload, repsonse: assistantContent }]);
+          if (fallbackInsertError) {
+            insertError = fallbackInsertError;
+          }
+        } else {
+          insertError = preferredInsertError;
+        }
+      }
+
+      if (insertError) throw insertError;
+      if (!chatSessionId) setChatSessionId(sessionIdForMessage);
+      if (!selectedSessionId) setSelectedSessionId(sessionIdForMessage);
+
+      const insertedAt = new Date().toISOString();
+      if (isNewSession) {
+        setProjectSessions((prev) => [
+          { id: sessionIdForMessage, created_at: insertedAt, project_id: resolvedProjectId },
+          ...prev,
+        ]);
+      }
+      setSessionChatsById((prev) => ({
+        ...prev,
+        [sessionIdForMessage]: [
+          ...(prev[sessionIdForMessage] || []),
+          {
+            id: `local-${Date.now()}`,
+            session_id: sessionIdForMessage,
+            message: trimmed,
+            response: assistantContent,
+            created_at: insertedAt,
+          },
+        ],
+      }));
 
       setChatMessages((prev) => [
         ...prev,
@@ -365,8 +556,8 @@ const Project: React.FC = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
-        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
+      <main className="flex h-full min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
           <h1
             className="flex flex-shrink-0 items-center gap-3 text-3xl font-semibold"
             style={{ color: 'var(--text)' }}
@@ -376,41 +567,45 @@ const Project: React.FC = () => {
           </h1>
 
           <div
-            className={`overflow-hidden transition-all duration-300 ease-out ${
-              hasConversation ? 'max-h-[60vh] opacity-100' : 'max-h-0 opacity-0'
+            className={`min-h-0 overflow-hidden transition-all duration-300 ease-out ${
+              hasConversation
+                ? 'flex min-h-0 flex-1 flex-col opacity-100'
+                : 'max-h-0 shrink-0 overflow-hidden opacity-0'
             }`}
           >
-            <section className="card flex min-h-0 flex-col overflow-hidden rounded-lg p-4">
-              <h2 className="mb-2 flex-shrink-0 text-base font-medium" style={{ color: 'var(--text)' }}>
+            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              <h2 className="mb-3 flex-shrink-0 text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
                 Conversation
               </h2>
               <div
                 ref={chatScrollRef}
-                className="custom-scrollbar flex min-h-0 max-h-[45vh] flex-1 flex-col gap-3 overflow-y-auto rounded-lg border p-4"
-                style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+                className="custom-scrollbar flex min-h-0 w-full min-w-0 flex-1 flex-col gap-6 overflow-y-auto py-1"
               >
-                {chatMessages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`max-w-[95%] rounded-lg px-3 py-2 text-sm ${m.role === 'user' ? 'ml-auto' : 'mr-auto'}`}
-                    style={{
-                      backgroundColor: m.role === 'user' ? 'var(--accent-light)' : 'var(--card)',
-                      color: 'var(--text)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    {m.role === 'assistant' ? (
-                      <div className="prose prose-sm max-w-none">
+                {chatMessages.map((m) =>
+                  m.role === 'user' ? (
+                    <div key={m.id} className="flex w-full justify-end">
+                      <div
+                        className="max-w-[min(90%,36rem)] rounded-3xl px-4 py-2.5 text-[calc(1rem+2px)] leading-relaxed"
+                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                      >
+                        <p className="whitespace-pre-wrap">{m.content}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      key={m.id}
+                      className="w-full min-w-0 text-[calc(1rem+2px)] font-medium leading-relaxed"
+                      style={{ color: 'var(--text)' }}
+                    >
+                      <div className="prose max-w-none prose-headings:scroll-mt-4 prose-headings:font-semibold">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                       </div>
-                    ) : (
-                      <p className="whitespace-pre-wrap">{m.content}</p>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  )
+                )}
                 {chatSending ? (
-                  <div className="mr-auto flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  <div className="flex w-full items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
                     Waiting for reply...
                   </div>
                 ) : null}
@@ -422,25 +617,22 @@ const Project: React.FC = () => {
             onSubmit={(ev) => {
               void handleSendChat(ev);
             }}
-            className="card flex flex-shrink-0 items-center gap-2 rounded-xl p-2"
+            className="flex flex-shrink-0 items-center gap-2 rounded-full border-0 py-1.5 pl-4 pr-1.5 shadow-none transition-[background-color] duration-200"
+            style={{ backgroundColor: 'var(--bg-secondary)' }}
           >
             <input
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder={`New chat in ${project?.name || 'Project'}`}
               disabled={chatSending || !projectId}
-              className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm disabled:opacity-60"
-              style={{
-                backgroundColor: 'var(--bg)',
-                borderColor: 'var(--border)',
-                color: 'var(--text)',
-              }}
+              className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[calc(1rem+2px)] leading-relaxed outline-none ring-0 placeholder:text-[color:var(--text-muted)] placeholder:opacity-90 focus:border-0 focus:ring-0 focus:outline-none disabled:opacity-60"
+              style={{ color: 'var(--text)' }}
               aria-label="Chat message"
             />
             <button
               type="submit"
               disabled={chatSending || !chatInput.trim() || !projectId}
-              className="inline-flex flex-shrink-0 items-center justify-center rounded-lg px-3 py-2 disabled:opacity-50"
+              className="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full disabled:opacity-50"
               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
               title="Send message"
               aria-label="Send message"
@@ -459,18 +651,6 @@ const Project: React.FC = () => {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('notes')}
-                className="rounded-full px-3 py-1.5 text-sm font-medium"
-                style={
-                  activeTab === 'notes'
-                    ? { backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }
-                    : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
-                }
-              >
-                Project Notes
-              </button>
-              <button
-                type="button"
                 onClick={() => setActiveTab('chats')}
                 className="rounded-full px-3 py-1.5 text-sm font-medium"
                 style={
@@ -480,6 +660,18 @@ const Project: React.FC = () => {
                 }
               >
                 Chats
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('notes')}
+                className="rounded-full px-3 py-1.5 text-sm font-medium"
+                style={
+                  activeTab === 'notes'
+                    ? { backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }
+                    : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
+                }
+              >
+                Project Notes
               </button>
             </div>
 
@@ -641,112 +833,129 @@ const Project: React.FC = () => {
 
                           <div className={`collapse-container collapse-container--instant ${expandedNoteId === note.id ? 'expanded' : 'collapsed'}`}>
                             <div className="collapse-content">
-                              <div className="p-4 border-t" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                  <h4 className="shrink-0 text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                    Summary
-                                  </h4>
-                                  <div className="flex shrink-0 items-center gap-2">
-                                    {editingNoteId === note.id ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleSaveNoteEdit(note)}
-                                        disabled={savingNoteId === note.id}
-                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium disabled:opacity-50"
-                                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                      >
-                                        {savingNoteId === note.id ? (
-                                          <Loader2 className="h-3 w-3 animate-spin" />
-                                        ) : (
-                                          <Save className="h-3 w-3" />
-                                        )}
-                                        Done
-                                      </button>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartNoteEdit(note)}
-                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
-                                        style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                      >
-                                        <Pencil className="h-3 w-3" />
-                                        Edit
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
+                              {(() => {
+                                const diarRaw = getNoteDiarizationRaw(note);
+                                const showDiarized = hasUsableDiarization(diarRaw);
+                                const plainTx = note.transcription?.trim();
+                                const hasTranscription = showDiarized || Boolean(plainTx);
+                                const activeTab = noteExpandedTab[note.id] ?? 'summary';
 
-                                {editingNoteId === note.id ? (
-                                  <textarea
-                                    value={noteEditDraft}
-                                    onChange={(e) => setNoteEditDraft(e.target.value)}
-                                    className={`w-full resize-none ${NOTE_SUMMARY_SCROLL}`}
-                                    style={{ color: 'var(--text)' }}
-                                  />
-                                ) : note.summary_edit || note.summary ? (
-                                  <div
-                                    className={`prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`}
-                                    style={{ color: 'var(--text)' }}
-                                  >
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                      {note.summary_edit || note.summary || ''}
-                                    </ReactMarkdown>
-                                  </div>
-                                ) : (
-                                  <div
-                                    className={`flex items-center justify-center italic ${NOTE_SUMMARY_SCROLL}`}
-                                    style={{ color: 'var(--text-muted)' }}
-                                  >
-                                    No summary available
-                                  </div>
-                                )}
-
-                                {editingNoteId === note.id && noteEditError ? (
-                                  <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
-                                    {noteEditError}
-                                  </p>
-                                ) : null}
-
-                                {(() => {
-                                  const diarRaw = getNoteDiarizationRaw(note);
-                                  const showDiarized = hasUsableDiarization(diarRaw);
-                                  const plainTx = note.transcription?.trim();
-                                  if (!showDiarized && !plainTx) return null;
-                                  return (
-                                    <div className="mt-6 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
-                                      <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                        Transcription
-                                      </h4>
-                                      {showDiarized ? (
-                                        <TranscriptDiarizedEditor
-                                          segments={normalizeTranscript(diarRaw)}
-                                          onSegmentsChange={(next) =>
-                                            setNotes((prev) =>
-                                              prev.map((n) =>
-                                                n.id === note.id
-                                                  ? { ...n, diarization: next }
-                                                  : n
-                                              )
-                                            )
-                                          }
-                                          noteId={note.id}
-                                          scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
-                                        />
-                                      ) : (
-                                        <div
-                                          className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                                return (
+                                  <div className="border-t" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+                                    <div className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3" style={{ borderColor: 'var(--border)' }}>
+                                      <div className="-mb-px flex gap-1 sm:gap-6" role="tablist">
+                                        <button
+                                          type="button"
+                                          role="tab"
+                                          aria-selected={activeTab === 'summary'}
+                                          onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
+                                          className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
                                           style={{
-                                            backgroundColor: 'var(--bg)',
-                                            color: 'var(--text-secondary)',
+                                            borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
+                                            color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                                           }}
                                         >
-                                          {plainTx}
+                                          Summary
+                                        </button>
+                                        {hasTranscription ? (
+                                          <button
+                                            type="button"
+                                            role="tab"
+                                            aria-selected={activeTab === 'transcription'}
+                                            onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
+                                            className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                            style={{
+                                              borderBottomColor: activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
+                                              color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
+                                            }}
+                                          >
+                                            Transcription
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                      {activeTab === 'summary' ? (
+                                        <div className="flex shrink-0 items-center gap-2 pb-2">
+                                          {editingNoteId === note.id ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => void handleSaveNoteEdit(note)}
+                                              disabled={savingNoteId === note.id}
+                                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium disabled:opacity-50"
+                                              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                            >
+                                              {savingNoteId === note.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                              Done
+                                            </button>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleStartNoteEdit(note)}
+                                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                                              style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                            >
+                                              <Pencil className="h-3 w-3" />
+                                              Edit
+                                            </button>
+                                          )}
                                         </div>
-                                      )}
+                                      ) : null}
                                     </div>
-                                  );
-                                })()}
-                              </div>
+
+                                    <div className="p-4 pb-3">
+                                      {activeTab === 'summary' ? (
+                                        <>
+                                          {editingNoteId === note.id ? (
+                                            <textarea
+                                              value={noteEditDraft}
+                                              onChange={(e) => setNoteEditDraft(e.target.value)}
+                                              className={`w-full resize-none ${NOTE_SUMMARY_SCROLL}`}
+                                              style={{ color: 'var(--text)' }}
+                                            />
+                                          ) : note.summary_edit || note.summary ? (
+                                            <div className={`prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text)' }}>
+                                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary_edit || note.summary || ''}</ReactMarkdown>
+                                            </div>
+                                          ) : (
+                                            <div className={`flex items-center justify-center italic ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text-muted)' }}>
+                                              No summary available
+                                            </div>
+                                          )}
+                                          {editingNoteId === note.id && noteEditError ? (
+                                            <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
+                                              {noteEditError}
+                                            </p>
+                                          ) : null}
+                                        </>
+                                      ) : null}
+
+                                      {activeTab === 'transcription' && hasTranscription ? (
+                                        showDiarized ? (
+                                          <TranscriptDiarizedEditor
+                                            segments={normalizeTranscript(diarRaw)}
+                                            onSegmentsChange={(next) =>
+                                              setNotes((prev) =>
+                                                prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
+                                              )
+                                            }
+                                            noteId={note.id}
+                                            scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
+                                          />
+                                        ) : (
+                                          <div
+                                            className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                                            style={{
+                                              backgroundColor: 'var(--bg)',
+                                              color: 'var(--text-secondary)',
+                                            }}
+                                          >
+                                            {plainTx}
+                                          </div>
+                                        )
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -755,13 +964,57 @@ const Project: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <div
-                  className="flex min-h-0 flex-1 items-center justify-center rounded-lg border py-8"
-                  style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
-                >
-                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                    Chats tab coming soon.
-                  </p>
+                <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+                  {sessionsLoading ? (
+                    <div className="flex h-full items-center justify-center py-10">
+                      <Loader2 className="h-5 w-5 animate-spin" style={{ color: 'var(--text-muted)' }} />
+                    </div>
+                  ) : sessionsError ? (
+                    <div className="py-6 text-sm" style={{ color: 'var(--error)' }}>
+                      {sessionsError}
+                    </div>
+                  ) : projectSessions.length === 0 ? (
+                    <div className="py-6 text-sm" style={{ color: 'var(--text-muted)' }}>
+                      No chat sessions yet.
+                    </div>
+                  ) : (
+                    <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+                      {projectSessions.map((session) => {
+                        const rows = sessionChatsById[session.id] || [];
+                        const firstResponse =
+                          rows.map((row) => getChatResponseValue(row)).find((value) => Boolean(value)) ||
+                          'No response yet';
+                        const firstMessage = rows.map((row) => (row.message || '').trim()).find((value) => Boolean(value)) || '';
+                        const isSelected = selectedSessionId === session.id;
+                        return (
+                          <button
+                            key={session.id}
+                            type="button"
+                            onClick={() => handleSelectSession(session.id)}
+                            className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-3 py-4 text-left transition-colors hover:bg-[var(--bg-secondary)]"
+                            style={isSelected ? { backgroundColor: 'var(--bg-secondary)' } : undefined}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-base font-semibold" style={{ color: 'var(--text)' }}>
+                                {firstResponse}
+                              </p>
+                              {firstMessage ? (
+                                <p className="mt-0.5 truncate text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                  {firstMessage}
+                                </p>
+                              ) : null}
+                            </div>
+                            <p className="shrink-0 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                              {new Date(session.created_at || Date.now()).toLocaleDateString([], {
+                                month: 'short',
+                                day: 'numeric',
+                              })}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </section>

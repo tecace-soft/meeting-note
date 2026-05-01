@@ -296,13 +296,13 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   return (
     <>
       <div
-        className={`rounded-lg p-4 text-sm leading-relaxed overflow-y-auto custom-scrollbar space-y-3 ${scrollContainerClassName ?? 'max-h-96'}`}
+        className={`rounded-lg p-4 text-base leading-relaxed overflow-y-auto custom-scrollbar space-y-3 ${scrollContainerClassName ?? 'max-h-96'}`}
         style={{ backgroundColor: 'var(--bg-secondary)' }}
       >
         {segments.map((seg, idx) => (
-          <div key={idx} className="flex items-start gap-3">
+          <div key={idx} className="flex min-h-[75px] items-center gap-3">
             <div
-              className="flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+              className="flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold"
               style={{
                 backgroundColor: 'color-mix(in srgb, var(--accent) 22%, var(--bg-secondary))',
                 color: 'var(--text)',
@@ -314,7 +314,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               <button
                 type="button"
                 data-transcript-speaker-trigger
-                className="text-left text-sm font-semibold transition-opacity hover:opacity-90"
+                className="text-left text-base font-semibold transition-opacity hover:opacity-90"
                 style={{ color: 'var(--accent)' }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -324,7 +324,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                 {seg.speaker.trim() || 'Speaker'}
               </button>
               <div
-                className="mt-0.5 text-sm font-normal leading-relaxed whitespace-pre-wrap"
+                className="mt-0.5 text-base font-normal leading-relaxed whitespace-pre-wrap"
                 style={{ color: 'var(--text-secondary)' }}
               >
                 {seg.text}

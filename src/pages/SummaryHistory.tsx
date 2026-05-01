@@ -40,6 +40,9 @@ interface Note {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+  /** String array or json/jsonb; Supabase may return a JSON string. */
+  tag?: unknown;
+  tags?: unknown;
   /** Legacy column name; still read so diarized UI works until fully migrated. */
   created_at?: string;
 }
@@ -52,11 +55,11 @@ interface ChatInfo {
 
 /** Fixed scroll height for plain transcription (no diarization). */
 const NOTE_DETAIL_SCROLL_BODY =
-  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar rounded-lg p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed';
+  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar rounded-lg p-3 max-md:p-4 text-base leading-relaxed';
 
 /** Summary view/edit: fixed height scroll, no border or fill — text uses theme foreground. */
 const NOTE_SUMMARY_SCROLL =
-  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed rounded-lg';
+  'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-base leading-relaxed rounded-lg';
 
 const NOTE_TRANSCRIPT_SCROLL_CLASS = 'h-[60vh] min-h-[20rem] max-md:min-h-[11rem] max-md:h-[min(75vh,60vh)]';
 
@@ -74,6 +77,39 @@ interface GeneratedHistoryProfile {
 const NOTES_PAGE_SIZE = 10;
 
 /** When totalPages > 5, compress middle with ellipses; otherwise list every page. */
+function normalizeTagList(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    if (s.startsWith('[') || s.startsWith('{')) {
+      try {
+        return normalizeTagList(JSON.parse(s) as unknown);
+      } catch {
+        return s.split(',').map((t) => t.trim()).filter(Boolean);
+      }
+    }
+    return s.split(',').map((t) => t.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (item == null) continue;
+    if (typeof item === 'string') {
+      const t = item.trim();
+      if (t) out.push(t);
+    } else if (typeof item === 'object') {
+      const o = item as Record<string, unknown>;
+      const label = o.label ?? o.name ?? o.value;
+      if (typeof label === 'string' && label.trim()) out.push(label.trim());
+    } else {
+      const t = String(item).trim();
+      if (t) out.push(t);
+    }
+  }
+  return out;
+}
+
 function getPaginationItems(totalPages: number, currentPage: number): (number | 'ellipsis')[] {
   if (totalPages <= 0) return [];
   if (totalPages <= 5) {
@@ -305,6 +341,26 @@ const SummaryHistory: React.FC = () => {
     return 'Untitled note';
   };
 
+  const getNoteTags = (note: Note): string[] => {
+    const fromTag = normalizeTagList(note.tag);
+    if (fromTag.length) return fromTag;
+    return normalizeTagList(note.tags);
+  };
+
+  const getNoteParticipantsLabel = (note: Note): string => {
+    const diarRaw = getNoteDiarizationRaw(note);
+    if (!hasUsableDiarization(diarRaw)) return 'Participants: None';
+    const participants = Array.from(
+      new Set(
+        normalizeTranscript(diarRaw)
+          .map((seg) => seg.speaker.trim())
+          .filter((name) => Boolean(name))
+      )
+    );
+    if (participants.length === 0) return 'Participants: None';
+    return `Participants: ${participants.join(', ')}`;
+  };
+
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(notesTotalCount / NOTES_PAGE_SIZE)),
     [notesTotalCount]
@@ -468,7 +524,7 @@ const SummaryHistory: React.FC = () => {
     }
   };
 
-  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook-test/532f465d-d198-4f59-ba75-20c39d41a079';
+  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook/532f465d-d198-4f59-ba75-20c39d41a079';
 
   const handleRegenerateNoteSummary = async (note: Note) => {
     if (!user?.id) return;
@@ -661,23 +717,27 @@ const SummaryHistory: React.FC = () => {
                 </div>
                 <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
                   <div className="space-y-3">
-                {notes.map(note => (
+                {notes.map((note) => {
+                  const noteTags = getNoteTags(note);
+                  return (
                   <div
                     key={note.id}
                     className="chat-item card rounded-lg overflow-visible transition-all"
                   >
                     <div
                       onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
-                      className="grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0 px-3 py-3 transition-all sm:px-4 sm:py-3.5"
+                      className="grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-stretch gap-x-3 gap-y-0 px-3 py-3 transition-all sm:px-4 sm:py-3.5"
                       style={{ backgroundColor: expandedNoteId === note.id ? 'var(--bg-secondary)' : undefined }}
                     >
-                      <div
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                        style={{ backgroundColor: 'var(--accent-light)' }}
-                      >
-                        <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                      <div className="flex min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch">
+                        <div
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                          style={{ backgroundColor: 'var(--accent-light)' }}
+                        >
+                          <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                        </div>
                       </div>
-                      <div className="min-w-0 overflow-hidden pr-1">
+                      <div className="min-w-0 pr-1">
                         {renamingNoteId === note.id ? (
                           <input
                             autoFocus
@@ -706,41 +766,51 @@ const SummaryHistory: React.FC = () => {
                             }}
                           />
                         ) : (
-                          <p
-                            className="truncate text-sm font-medium leading-snug"
-                            style={{ color: 'var(--text)' }}
-                            title={getNoteDisplayTitle(note)}
-                          >
-                            {getNoteDisplayTitle(note)}
-                          </p>
+                          <>
+                            <p
+                              className="truncate text-base font-semibold leading-snug"
+                              style={{ color: 'var(--text)' }}
+                              title={getNoteDisplayTitle(note)}
+                            >
+                              {getNoteDisplayTitle(note)}
+                            </p>
+                            {noteTags.length > 0 ? (
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {noteTags.map((tagLabel, tagIdx) => (
+                                  <span
+                                    key={`${note.id}-tag-${tagIdx}`}
+                                    className="inline-flex max-w-full rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug break-words"
+                                    style={{
+                                      backgroundColor: 'var(--accent-light)',
+                                      color: 'var(--text-secondary)',
+                                    }}
+                                    title={tagLabel}
+                                  >
+                                    {tagLabel}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </>
                         )}
-                        <p
-                          className="mt-0.5 truncate text-xs leading-snug"
-                          style={{ color: 'var(--text-muted)' }}
-                          title={
-                            !chatId && note.chat_id
-                              ? `Created by ${note.user_name} · Chat ${note.chat_id}`
-                              : `Created by ${note.user_name}`
-                          }
-                        >
-                          Created by {note.user_name}
-                          {!chatId && note.chat_id ? (
-                            <>
-                              {' '}
-                              · Chat:{' '}
-                              <span className="tabular-nums">{note.chat_id}</span>
-                            </>
-                          ) : null}
-                        </p>
                       </div>
-                      <div className="flex h-10 shrink-0 items-center justify-end gap-1.5 sm:gap-3">
-                        <div
-                          className="flex min-w-0 max-w-[5rem] items-center gap-1 truncate text-xs sm:max-w-[9rem] md:max-w-none"
-                          style={{ color: 'var(--text-muted)' }}
-                          title={formatDate(note.created_at)}
-                        >
-                          <Calendar className="h-3 w-3 shrink-0" aria-hidden />
-                          <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
+                      <div className="flex min-h-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
+                        <div className="flex min-h-0 min-w-0 max-w-[13rem] flex-col items-end justify-center text-right">
+                          <div
+                            className="flex min-w-0 items-center gap-1 text-sm"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title={formatDate(note.created_at)}
+                          >
+                            <Calendar className="h-3 w-3 shrink-0" aria-hidden />
+                            <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
+                          </div>
+                          <p
+                            className="mt-1 truncate text-sm leading-snug"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title={getNoteParticipantsLabel(note)}
+                          >
+                            {getNoteParticipantsLabel(note)}
+                          </p>
                         </div>
                         <div
                           className="relative flex h-10 w-10 shrink-0 items-center justify-center"
@@ -751,14 +821,14 @@ const SummaryHistory: React.FC = () => {
                             type="button"
                             onClick={() => setOpenNoteMenuId((prev) => (prev === note.id ? null : note.id))}
                             className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
-                            style={{ color: 'var(--text-muted)' }}
+                            style={{ color: 'var(--text-secondary)' }}
                             aria-label={`Note actions for ${getNoteDisplayTitle(note)}`}
                           >
                             <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
                           </button>
                           {openNoteMenuId === note.id ? (
                             <div
-                              className="absolute right-0 top-full z-20 mt-1 w-[162px] rounded-xl border p-2 shadow-lg"
+                              className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border p-2 shadow-lg"
                               style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
                             >
                               <button
@@ -784,6 +854,18 @@ const SummaryHistory: React.FC = () => {
                               >
                                 <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
                                 Generate Profile
+                              </button>
+                              <button
+                                type="button"
+                                disabled={regeneratingNoteId === note.id || !hasUsableDiarization(getNoteDiarizationRaw(note))}
+                                onClick={() => { setOpenNoteMenuId(null); void handleRegenerateNoteSummary(note); }}
+                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
+                                title={!hasUsableDiarization(getNoteDiarizationRaw(note)) ? 'Requires diarized transcription' : undefined}
+                              >
+                                {regeneratingNoteId === note.id
+                                  ? <><Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
+                                  : <><RefreshCw className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
+                                }
                               </button>
                               <button
                                 type="button"
@@ -833,7 +915,7 @@ const SummaryHistory: React.FC = () => {
                                     role="tab"
                                     aria-selected={activeTab === 'summary'}
                                     onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                    className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                    className="border-b-2 px-3 pb-2.5 pt-1 text-base font-medium transition-colors sm:px-4"
                                     style={{
                                       borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
                                       color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
@@ -847,7 +929,7 @@ const SummaryHistory: React.FC = () => {
                                       role="tab"
                                       aria-selected={activeTab === 'transcription'}
                                       onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
-                                      className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                      className="border-b-2 px-3 pb-2.5 pt-1 text-base font-medium transition-colors sm:px-4"
                                       style={{
                                         borderBottomColor: activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
                                         color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
@@ -859,19 +941,6 @@ const SummaryHistory: React.FC = () => {
                                 </div>
                                 {activeTab === 'summary' && (
                                   <div className="flex shrink-0 items-center gap-2 pb-2">
-                                    <button
-                                      type="button"
-                                      disabled={regeneratingNoteId === note.id || !hasUsableDiarization(diarRaw)}
-                                      onClick={() => void handleRegenerateNoteSummary(note)}
-                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-40"
-                                      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                      title={!hasUsableDiarization(diarRaw) ? 'Requires diarized transcription' : 'Regenerate summary using speaker profiles'}
-                                    >
-                                      {regeneratingNoteId === note.id
-                                        ? <><Loader2 className="h-3 w-3 animate-spin" />Regenerating…</>
-                                        : <><RefreshCw className="h-3 w-3" />Regenerate</>
-                                      }
-                                    </button>
                                     {editingNoteId === note.id ? (
                                       <button
                                         type="button"
@@ -899,7 +968,7 @@ const SummaryHistory: React.FC = () => {
                               </div>
 
                               {/* Panel content */}
-                              <div className="p-4">
+                              <div className="p-4 pb-3">
                                 {activeTab === 'summary' && (
                                   <>
                                     {editingNoteId === note.id ? (
@@ -910,7 +979,7 @@ const SummaryHistory: React.FC = () => {
                                         style={{ color: 'var(--text)' }}
                                       />
                                     ) : note.summary_edit || note.summary ? (
-                                      <div className={`prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text)' }}>
+                                      <div className={`prose max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text)' }}>
                                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary_edit || note.summary || ''}</ReactMarkdown>
                                       </div>
                                     ) : (
@@ -943,13 +1012,57 @@ const SummaryHistory: React.FC = () => {
                                   )
                                 )}
                               </div>
+
+                              {/* Action buttons */}
+                              <div
+                                className="flex flex-wrap justify-end gap-2 border-t px-4 py-3"
+                                style={{ borderColor: 'var(--border)' }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => { navigate(`/save-summary?note_id=${note.id}`); }}
+                                  className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium"
+                                >
+                                  <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                                  Save to OneDrive
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleOpenForwardModal(note)}
+                                  className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium"
+                                >
+                                  <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                  Forward to Teams
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleOpenProfileModal(note)}
+                                  className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium"
+                                >
+                                  <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                                  Generate Profile
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={regeneratingNoteId === note.id || !hasUsableDiarization(diarRaw)}
+                                  onClick={() => void handleRegenerateNoteSummary(note)}
+                                  className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                  {regeneratingNoteId === note.id ? (
+                                    <><Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
+                                  ) : (
+                                    <><RefreshCw className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
+                                  )}
+                                </button>
+                              </div>
                             </div>
                           );
                         })()}
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                   </div>
                 </div>
                 {totalPages > 1 ? (

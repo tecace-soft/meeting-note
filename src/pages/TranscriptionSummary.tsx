@@ -805,7 +805,7 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
-  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook-test/532f465d-d198-4f59-ba75-20c39d41a079';
+  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook/532f465d-d198-4f59-ba75-20c39d41a079';
 
   const handleRegenerateSummary = async () => {
     if (!summaryResult || !currentNoteId || !user?.id) return;

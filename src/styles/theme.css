@@ -1,53 +1,53 @@
 /* Theme CSS Variables for Meeting Note App */
 
 :root[data-theme="light"] {
-  --bg: #ffffff;
-  --bg-secondary: #f7f7f8;
+  --bg: #f8f9fb;
+  --bg-secondary: #eef0f4;
   --card: #ffffff;
-  --text: #2d2d2d;
-  --text-secondary: #6e6e80;
-  --text-muted: #8e8ea0;
-  --border: #e5e5e5;
-  --border-light: #f0f0f0;
-  --primary: #2d2d2d;
-  --primary-hover: #1a1a1a;
+  --text: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --border: #dde1e7;
+  --border-light: #edf0f4;
+  --primary: #18181b;
+  --primary-hover: #09090b;
   --primary-light: #f0f0f0;
   --accent: #0078d4;
   --accent-hover: #106ebe;
-  --accent-light: #deecf9;
-  --success: #4caf50;
-  --success-light: #e8f5e8;
-  --error: #f44336;
-  --error-light: #ffebee;
-  --warning: #ff9800;
-  --warning-light: #fff3e0;
-  --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --accent-light: #daeeff;
+  --success: #16a34a;
+  --success-light: #dcfce7;
+  --error: #dc2626;
+  --error-light: #fee2e2;
+  --warning: #d97706;
+  --warning-light: #fef3c7;
+  --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 4px 8px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
 
 :root[data-theme="dark"] {
-  --bg: #212121;
-  --bg-secondary: #2f2f2f;
-  --card: #2f2f2f;
-  --text: #ececec;
-  --text-secondary: #b4b4b4;
-  --text-muted: #8a8a8a;
-  --border: #404040;
-  --border-light: #4a4a4a;
-  --primary: #ececec;
+  --bg: #1c1c1f;
+  --bg-secondary: #28282c;
+  --card: #2c2c30;
+  --text: #f4f4f5;
+  --text-secondary: #b4b4be;
+  --text-muted: #78788c;
+  --border: #3f3f46;
+  --border-light: #52525b;
+  --primary: #f4f4f5;
   --primary-hover: #ffffff;
-  --primary-light: #404040;
-  --accent: #2899f5;
-  --accent-hover: #5ab3f8;
-  --accent-light: #1a3d5c;
-  --success: #4caf50;
-  --success-light: #1b5e20;
-  --error: #f44336;
-  --error-light: #b71c1c;
-  --warning: #ff9800;
-  --warning-light: #e65100;
-  --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.3), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-  --shadow-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  --primary-light: #3f3f46;
+  --accent: #3b9eff;
+  --accent-hover: #60b0ff;
+  --accent-light: #1a3550;
+  --success: #22c55e;
+  --success-light: #14532d;
+  --error: #f87171;
+  --error-light: #7f1d1d;
+  --warning: #fbbf24;
+  --warning-light: #78350f;
+  --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 4px 8px -1px rgba(0, 0, 0, 0.45), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
 }
 
 body {
@@ -299,16 +299,18 @@ body {
 .prose h3 { font-size: 1.1em; }
 
 .prose p {
-  margin-bottom: 0.75em;
+  margin-bottom: 0.85em;
+  line-height: 1.8;
 }
 
 .prose ul, .prose ol {
   margin-left: 1.5em;
-  margin-bottom: 0.75em;
+  margin-bottom: 0.85em;
 }
 
 .prose li {
-  margin-bottom: 0.25em;
+  margin-bottom: 0.35em;
+  line-height: 1.75;
 }
 
 .prose ul {
