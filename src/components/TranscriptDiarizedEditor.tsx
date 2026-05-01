@@ -742,167 +742,169 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
 
 /* ── Ontology view component ───────────────────────────────────────── */
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function toReadableKey(key: string): string {
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function isObjectLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function renderPrimitive(value: unknown): string {
+  if (value === null || value === undefined || value === '') return 'None';
+  return String(value);
+}
+
+function JsonLikeNode({
+  label,
+  value,
+  depth = 0,
+  innerFieldLabels = false,
+}: {
+  label: string;
+  value: unknown;
+  depth?: number;
+  /** True for fields inside any object (including nested objects), same look as array item fields */
+  innerFieldLabels?: boolean;
+}) {
+  const labelText = toReadableKey(label);
+  const indentClass = depth > 0 ? 'ml-4' : '';
+  const isArray = Array.isArray(value);
+  const isObject = isObjectLike(value);
+  const labelColor = innerFieldLabels ? 'var(--text-muted)' : 'var(--text-secondary)';
+
+  if (!isArray && !isObject) {
+    return (
+      <div className={`grid grid-cols-[220px_1fr] items-start gap-3 py-1.5 ${indentClass}`}>
+        <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
+          {labelText}
+        </div>
+        <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>
+          {renderPrimitive(value)}
+        </div>
+      </div>
+    );
+  }
+
+  if (isArray) {
+    const arr = value as unknown[];
+    const allPrimitive = arr.every((item) => !Array.isArray(item) && !isObjectLike(item));
+    if (!allPrimitive) {
+      return (
+        <div className={`py-1.5 ${indentClass}`}>
+          <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
+            {labelText}
+          </div>
+          {arr.length === 0 ? (
+            <div className="ml-4 text-[17px] leading-7" style={{ color: 'var(--text)' }}>None</div>
+          ) : (
+            <div className="ml-4 mt-2 space-y-3">
+              {arr.map((item, idx) => (
+                <div key={idx} className="rounded-md border p-3" style={{ borderColor: 'var(--border)' }}>
+                  {isObjectLike(item) ? (
+                    <div className="space-y-2">
+                      {Object.entries(item).map(([k, v]) => (
+                        <JsonLikeNode
+                          key={k}
+                          label={k}
+                          value={v}
+                          depth={depth + 1}
+                          innerFieldLabels
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>
+                      {renderPrimitive(item)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className={`grid grid-cols-[220px_1fr] items-start gap-3 py-1.5 ${indentClass}`}>
+        <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
+          {labelText}
+        </div>
+        {arr.length === 0 ? (
+          <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>None</div>
+        ) : allPrimitive ? (
+          <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>
+            {arr.map((item) => renderPrimitive(item)).join(', ')}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  const obj = value as Record<string, unknown>;
   return (
-    <div className="mb-4">
-      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>{title}</h4>
-      {children}
+    <div className={indentClass}>
+      <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
+        {labelText}
+      </div>
+      <div className="ml-4 mt-2 space-y-3">
+        {Object.entries(obj).map(([k, v]) => (
+          <JsonLikeNode
+            key={k}
+            label={k}
+            value={v}
+            depth={depth + 1}
+            innerFieldLabels
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
-function Chip({ label }: { label: string }) {
-  return (
-    <span className="inline-block rounded-full border px-2 py-0.5 text-xs" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>{label}</span>
-  );
-}
-
-function Badge({ label, variant = 'neutral' }: { label: string; variant?: 'active' | 'completed' | 'open' | 'resolved' | 'high' | 'neutral' }) {
-  const colors: Record<string, string> = {
-    active: 'color-mix(in srgb, var(--accent) 15%, transparent)',
-    completed: 'color-mix(in srgb, var(--success) 15%, transparent)',
-    open: 'color-mix(in srgb, #f59e0b 15%, transparent)',
-    resolved: 'color-mix(in srgb, var(--success) 15%, transparent)',
-    high: 'color-mix(in srgb, var(--error) 15%, transparent)',
-    neutral: 'var(--bg-secondary)',
-  };
-  return (
-    <span
-      className="inline-block rounded px-1.5 py-0.5 text-xs font-medium capitalize"
-      style={{ backgroundColor: colors[variant] ?? colors.neutral, color: 'var(--text-secondary)' }}
-    >
-      {label}
-    </span>
-  );
-}
-
-function statusVariant(s: string): 'active' | 'completed' | 'open' | 'resolved' | 'neutral' {
-  if (s === 'active') return 'active';
-  if (s === 'completed') return 'completed';
-  if (s === 'open') return 'open';
-  if (s === 'resolved') return 'resolved';
-  return 'neutral';
-}
-
 function OntologyView({ raw }: { raw: string }) {
+  const baseClassName = 'custom-scrollbar overflow-x-auto rounded-lg border p-5';
+  const baseStyle = {
+    borderColor: 'var(--border)',
+    backgroundColor: 'var(--bg-secondary)',
+    color: 'var(--text)',
+  } as const;
+
   if (!isOntologyProfile(raw)) {
-    // Legacy markdown fallback: plain text
-    return <pre className="whitespace-pre-wrap text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{raw}</pre>;
+    return (
+      <div className={baseClassName} style={baseStyle}>
+        <pre className="whitespace-pre-wrap text-[17px] leading-7" style={{ color: 'var(--text)' }}>{raw}</pre>
+      </div>
+    );
   }
 
   const o = parseOntology(raw);
   if (!o) {
     return (
-      <pre className="custom-scrollbar overflow-x-auto rounded-lg p-3 text-xs" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}>
-        {raw}
-      </pre>
+      <div className={baseClassName} style={baseStyle}>
+        <pre className="whitespace-pre-wrap text-[17px] leading-7" style={{ color: 'var(--text)' }}>{raw}</pre>
+      </div>
     );
   }
 
+  const entries = Object.entries(o as Record<string, unknown>);
   return (
-    <div className="space-y-1 text-sm" style={{ color: 'var(--text)' }}>
-      {/* Identity */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        {o.professional_context?.role && (
-          <span className="font-medium" style={{ color: 'var(--text)' }}>{o.professional_context.role}</span>
-        )}
-        {o.professional_context?.company && (
-          <span style={{ color: 'var(--text-secondary)' }}>@ {o.professional_context.company}</span>
-        )}
-        {o.identity_confidence > 0 && (
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {Math.round(o.identity_confidence * 100)}% confidence
-          </span>
-        )}
+    <div className={baseClassName} style={baseStyle}>
+      <div className="space-y-0">
+        {entries.map(([key, value], idx) => (
+          <div
+            key={key}
+            className={idx === 0 ? '' : 'mt-5'}
+          >
+            <JsonLikeNode label={key} value={value} />
+          </div>
+        ))}
       </div>
-
-      {o.summary_for_meeting_context && (
-        <Section title="Meeting Context">
-          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{o.summary_for_meeting_context}</p>
-        </Section>
-      )}
-
-      {o.professional_context?.domains?.length > 0 && (
-        <Section title="Domains">
-          <div className="flex flex-wrap gap-1.5">{o.professional_context.domains.map((d) => <Chip key={d} label={d} />)}</div>
-        </Section>
-      )}
-
-      {o.active_projects?.length > 0 && (
-        <Section title="Projects">
-          <div className="space-y-2">
-            {o.active_projects.map((p, i) => (
-              <div key={i} className="rounded-lg border p-2.5 text-sm" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-medium">{p.name}</span>
-                  {p.status && <Badge label={p.status} variant={statusVariant(p.status)} />}
-                  {p.importance && p.importance !== 'unknown' && <Badge label={p.importance} variant={p.importance === 'high' ? 'high' : 'neutral'} />}
-                </div>
-                {p.role_in_project && <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>{p.role_in_project}</p>}
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {o.responsibilities?.length > 0 && (
-        <Section title="Responsibilities">
-          <ul className="space-y-1">
-            {o.responsibilities.map((r, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: 'var(--accent)' }} />
-                <span style={{ color: 'var(--text-secondary)' }}>{r.description}</span>
-                {r.status && r.status !== 'unknown' && <Badge label={r.status} variant={statusVariant(r.status)} />}
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {o.relationships?.length > 0 && (
-        <Section title="Relationships">
-          <div className="space-y-2">
-            {o.relationships.map((r, i) => (
-              <div key={i} className="text-sm">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-medium">{r.person_or_group}</span>
-                  {r.relationship_type && r.relationship_type !== 'unknown' && <Chip label={r.relationship_type.replace('_', ' ')} />}
-                </div>
-                {r.context && <p className="mt-0.5 text-xs" style={{ color: 'var(--text-secondary)' }}>{r.context}</p>}
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {o.open_threads?.filter((t) => t.status !== 'resolved').length > 0 && (
-        <Section title="Open Threads">
-          <div className="space-y-2">
-            {o.open_threads.filter((t) => t.status !== 'resolved').map((t, i) => (
-              <div key={i} className="rounded-lg border p-2.5 text-sm" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-medium">{t.topic}</span>
-                  {t.priority && t.priority !== 'unknown' && <Badge label={t.priority} variant={t.priority === 'high' ? 'high' : 'neutral'} />}
-                  {t.status && <Badge label={t.status} variant={statusVariant(t.status)} />}
-                </div>
-                {t.summary && <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>{t.summary}</p>}
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {o.aliases?.length > 0 && (
-        <Section title="Aliases">
-          <div className="flex flex-wrap gap-1.5">{o.aliases.map((a) => <Chip key={a} label={a} />)}</div>
-        </Section>
-      )}
-
-      {o.last_updated_at && (
-        <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-          Last updated: {new Date(o.last_updated_at).toLocaleString()}
-        </p>
-      )}
     </div>
   );
 }

@@ -19,7 +19,6 @@ interface SpeakerOntology {
   display_name: string;
   aliases: string[];
   identity_confidence: number;
-  summary_for_meeting_context: string;
   professional_context: {
     company: string;
     role: string;
@@ -65,7 +64,6 @@ function fallbackOntology(speakerName: string, speakerId: string): SpeakerOntolo
     display_name: speakerName,
     aliases: [],
     identity_confidence: 0,
-    summary_for_meeting_context: '',
     professional_context: { company: '', role: '', domains: [] },
     active_projects: [],
     relationships: [],
@@ -84,9 +82,18 @@ function isMarkdownProfile(raw: string): boolean {
 
 /** Wrap a legacy markdown profile into a minimal ontology. */
 function wrapMarkdownProfile(raw: string, speakerName: string, speakerId: string): SpeakerOntology {
+  const summary = raw.trim();
   return {
     ...fallbackOntology(speakerName, speakerId),
-    summary_for_meeting_context: raw.trim(),
+    evidence: summary
+      ? [
+          {
+            source: 'transcript',
+            quote_or_paraphrase: summary,
+            supports: ['legacy_profile_migration'],
+          },
+        ]
+      : [],
   };
 }
 
@@ -102,7 +109,6 @@ function parseOntologyResponse(raw: string, speakerName: string, speakerId: stri
       display_name: parsed.display_name || speakerName,
       aliases: parsed.aliases ?? [],
       identity_confidence: typeof parsed.identity_confidence === 'number' ? parsed.identity_confidence : 0,
-      summary_for_meeting_context: parsed.summary_for_meeting_context ?? '',
       professional_context: {
         company: parsed.professional_context?.company ?? '',
         role: parsed.professional_context?.role ?? '',
@@ -143,7 +149,6 @@ Rules:
 - Avoid storing sensitive personal information.
 - If a field is unknown, use an empty string, empty array, or low confidence.
 - Keep the ontology compact and useful for future meeting summarization.
-- Keep summary_for_meeting_context concise: 2–3 sentences maximum.
 - Output valid JSON only. Do not output markdown.
 
 Required JSON structure:
@@ -153,7 +158,6 @@ Required JSON structure:
   "display_name": "${name}",
   "aliases": [],
   "identity_confidence": 0.0,
-  "summary_for_meeting_context": "",
   "professional_context": {
     "company": "",
     "role": "",
@@ -217,7 +221,6 @@ Rules:
 - Use only information that is explicitly stated or strongly supported.
 - Do not add sensitive personal information.
 - Keep the ontology compact and useful for future meeting summarization.
-- Keep summary_for_meeting_context concise: 2–3 sentences maximum.
 - Output valid JSON only. Do not output markdown.
 
 Merge behavior:
@@ -236,7 +239,6 @@ Required JSON structure:
   "display_name": "",
   "aliases": [],
   "identity_confidence": 0.0,
-  "summary_for_meeting_context": "",
   "professional_context": { "company": "", "role": "", "domains": [] },
   "active_projects": [],
   "relationships": [],
