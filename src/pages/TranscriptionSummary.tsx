@@ -8,6 +8,7 @@ import {
   shouldUseResumableUpload,
   uploadWithTus,
 } from '../services/supabaseResumableUpload';
+import { ensurePublicStorageUrlReady } from '../lib/storagePublicReady';
 import {
   Upload,
   File,
@@ -445,7 +446,7 @@ const TranscriptionSummary: React.FC = () => {
 
       const { data: urlData } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(filePath);
 
-      console.log('Supabase public URL:', urlData.publicUrl);
+      await ensurePublicStorageUrlReady(urlData.publicUrl);
 
       setUploadedFiles((prev) =>
         prev.map((f) =>

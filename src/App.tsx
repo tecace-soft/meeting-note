@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { MsalProvider } from '@azure/msal-react';
@@ -15,6 +15,27 @@ import AppShell from './components/AppShell';
 const msalInstance = new PublicClientApplication(msalConfig);
 
 const App: React.FC = () => {
+  const [msalReady, setMsalReady] = useState(false);
+
+  useEffect(() => {
+    void msalInstance
+      .initialize()
+      .then(() => msalInstance.handleRedirectPromise())
+      .catch((e) => console.error('MSAL init or redirect handling failed:', e))
+      .finally(() => setMsalReady(true));
+  }, []);
+
+  if (!msalReady) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ backgroundColor: 'var(--bg, #0f172a)', color: 'var(--text, #e2e8f0)' }}
+      >
+        <p className="text-sm">Loading…</p>
+      </div>
+    );
+  }
+
   return (
     <MsalProvider instance={msalInstance}>
       <ThemeProvider>

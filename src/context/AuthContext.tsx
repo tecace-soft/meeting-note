@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
 import { loginRequest } from '../config/msalConfig';
+import { shouldUseRedirectInteraction } from '../lib/msalRedirect';
 
 interface User {
   id: string;
@@ -43,41 +44,65 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [accounts, inProgress]);
 
-  const login = async () => {
+  const login = useCallback(async () => {
+    if (shouldUseRedirectInteraction()) {
+      await instance.loginRedirect(loginRequest);
+      return;
+    }
     try {
       await instance.loginPopup(loginRequest);
     } catch (error) {
       console.error('Login failed:', error);
       throw error;
     }
-  };
+  }, [instance]);
 
-  const logout = () => {
-    instance.logoutPopup({
-      postLogoutRedirectUri: '/',
-    });
-  };
+  const logout = useCallback(() => {
+    const post = typeof window !== 'undefined' ? `${window.location.origin}/` : '/';
+    if (shouldUseRedirectInteraction()) {
+      void instance.logoutRedirect({ postLogoutRedirectUri: post });
+    } else {
+      instance.logoutPopup({
+        postLogoutRedirectUri: post,
+      });
+    }
+  }, [instance]);
 
-  const getAccessToken = async (): Promise<string | null> => {
-    if (accounts.length === 0) return null;
-
+  const getAccessToken = useCallback(async (): Promise<string | null> => {
+    const all = instance.getAllAccounts();
+    if (all.length === 0) return null;
+    const account = all[0] as AccountInfo;
     try {
       const response = await instance.acquireTokenSilent({
         ...loginRequest,
-        account: accounts[0] as AccountInfo,
+        account,
       });
       return response.accessToken;
     } catch (error) {
       console.error('Failed to acquire token silently:', error);
+      if (shouldUseRedirectInteraction()) {
+        try {
+          await instance.acquireTokenRedirect({
+            ...loginRequest,
+            account,
+          });
+        } catch (redirectError) {
+          console.error('acquireTokenRedirect failed:', redirectError);
+        }
+        return null;
+      }
       try {
-        const response = await instance.acquireTokenPopup(loginRequest);
+        const response = await instance.acquireTokenPopup({
+          ...loginRequest,
+          account,
+        });
         return response.accessToken;
       } catch (popupError) {
         console.error('Failed to acquire token via popup:', popupError);
         return null;
       }
     }
-  };
+  }, [instance]);
 
   const value: AuthContextType = {
     user,
@@ -88,11 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     getAccessToken,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = (): AuthContextType => {
@@ -102,4 +123,3 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
-

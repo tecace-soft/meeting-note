@@ -24,7 +24,8 @@ export const msalConfig: Configuration = {
   },
   cache: {
     cacheLocation: 'localStorage',
-    storeAuthStateInCookie: false,
+    /** Helps some mobile Safari flows when using redirect-based auth. */
+    storeAuthStateInCookie: true,
   },
   system: {
     loggerOptions: {
