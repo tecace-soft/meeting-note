@@ -18,13 +18,12 @@ function renderPrimitive(value: unknown): string {
   return String(value);
 }
 
-/** Subtle panel for array-of-object items — no full border box. */
+/** Subtle panel for array-of-object items */
 const arrayItemShellClass =
   'relative overflow-hidden rounded-xl py-3 pl-4 pr-3 sm:pl-5 sm:pr-4';
 
 const arrayItemShellStyle: React.CSSProperties = {
   backgroundColor: 'color-mix(in srgb, var(--accent) 7%, var(--bg-secondary))',
-  borderLeft: '3px solid var(--accent)',
 };
 
 function JsonLikeNode({
@@ -65,7 +64,7 @@ function JsonLikeNode({
 
     if (!allPrimitive) {
       return (
-        <div className="space-y-2">
+        <div className={depth === 0 ? 'space-y-1' : 'space-y-2'}>
           <div
             className={depth === 0 ? 'text-xs font-semibold uppercase tracking-[0.06em]' : labelClass}
             style={{ color: depth === 0 ? 'var(--text-muted)' : 'var(--text-secondary)' }}
@@ -73,9 +72,9 @@ function JsonLikeNode({
             {labelText}
           </div>
           {arr.length === 0 ? (
-            <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[15px] leading-relaxed" style={{ color: 'var(--text)' }}>
               None
-            </p>
+            </div>
           ) : (
             <ul className="m-0 list-none space-y-2 p-0">
               {arr.map((item, idx) => (
@@ -111,7 +110,7 @@ function JsonLikeNode({
           {labelText}
         </div>
         {arr.length === 0 ? (
-          <div className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
+          <div className="text-[15px] leading-relaxed" style={{ color: 'var(--text)' }}>
             None
           </div>
         ) : (
@@ -135,18 +134,14 @@ function JsonLikeNode({
         {labelText}
       </div>
       <div
-        className={
-          depth === 0
-            ? 'mt-2 rounded-xl p-3 sm:p-4'
-            : 'mt-1.5 border-l-2 pl-3 sm:pl-4'
-        }
+        className={depth === 0 ? 'mt-1 rounded-xl p-3 sm:p-4' : 'mt-1'}
         style={
           depth === 0
             ? {
                 backgroundColor: 'color-mix(in srgb, var(--bg) 88%, var(--accent))',
                 border: '1px solid color-mix(in srgb, var(--border) 70%, transparent)',
               }
-            : { borderColor: 'color-mix(in srgb, var(--accent) 35%, var(--border))' }
+            : undefined
         }
       >
         <div className="space-y-0">
@@ -222,7 +217,7 @@ export function SpeakerOntologyView({ raw, embedded = false }: { raw: string; em
       }
       style={shellStyle}
     >
-      <div className={embedded ? 'space-y-5' : 'space-y-6'}>
+      <div className="space-y-2">
         {entries.map(([key, value]) => (
           <section key={key}>
             <JsonLikeNode label={key} value={value} depth={0} />

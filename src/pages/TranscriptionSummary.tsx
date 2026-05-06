@@ -41,6 +41,9 @@ import {
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
+import { DEFAULT_SUMMARY_PROMPT } from '../constants/defaultSummaryPrompt';
+
+const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 
 interface GeneratedProfile {
   speakerId: string | null;
@@ -305,6 +308,55 @@ const TranscriptionSummary: React.FC = () => {
       navigate('/');
     }
   }, [isAuthenticated, isLoading, navigate]);
+
+  useEffect(() => {
+    if (!user?.id || !isAuthenticated) return;
+    let cancelled = false;
+    const ensureSummaryPrompt = async () => {
+      try {
+        const { data, error } = await supabase
+          .from(SUMMARY_PROMPT_TABLE)
+          .select('prompt')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) throw error;
+
+        if (!data) {
+          const { error: insertError } = await supabase.from(SUMMARY_PROMPT_TABLE).insert({
+            user_id: user.id,
+            prompt: DEFAULT_SUMMARY_PROMPT,
+          });
+          if (cancelled) return;
+          if (insertError) {
+            const code = (insertError as { code?: string }).code;
+            if (code === '23505') {
+              const { data: rowAfterRace, error: fetchErr } = await supabase
+                .from(SUMMARY_PROMPT_TABLE)
+                .select('prompt')
+                .eq('user_id', user.id)
+                .maybeSingle();
+              if (cancelled) return;
+              if (fetchErr) throw fetchErr;
+              setSummaryPrompt(typeof rowAfterRace?.prompt === 'string' ? rowAfterRace.prompt : '');
+            } else {
+              console.error('summary_prompt insert:', insertError);
+            }
+          } else {
+            setSummaryPrompt(DEFAULT_SUMMARY_PROMPT);
+          }
+        } else {
+          setSummaryPrompt(typeof data.prompt === 'string' ? data.prompt : '');
+        }
+      } catch (e) {
+        if (!cancelled) console.error('Failed to load summary prompt:', e);
+      }
+    };
+    void ensureSummaryPrompt();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, isAuthenticated]);
 
   useEffect(() => {
     const fetchChats = async () => {
