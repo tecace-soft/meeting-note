@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../config/supabaseConfig';
 import { useAuth } from '../context/AuthContext';
@@ -6,6 +6,7 @@ import {
   Calendar,
   ChevronDown,
   ChevronUp,
+  FilePlus,
   FileText,
   Folder,
   FolderMinus,
@@ -15,16 +16,21 @@ import {
   Save,
   Send,
   Trash2,
+  X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
-import { getNoteDiarizationRaw, hasUsableDiarization, normalizeTranscript } from '../lib/transcriptSegments';
+import {
+  getNoteDiarizationRaw,
+  hasUsableDiarization,
+  normalizeTranscript,
+} from '../lib/transcriptSegments';
 
 interface ProjectRow {
   id: string;
   name: string;
-  notes?: string[] | null;
+  notes?: Array<string | number> | null;
 }
 
 interface NoteRow {
@@ -35,8 +41,37 @@ interface NoteRow {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+  tag?: unknown;
+  tags?: unknown;
   created_at?: string | null;
   projects?: Array<string | number> | null;
+}
+
+function getNoteSummaryText(note: NoteRow): string {
+  return (note.summary_edit?.trim() || note.summary?.trim() || '').trim();
+}
+
+function getNoteTranscriptionText(note: NoteRow): string {
+  const plain = note.transcription?.trim();
+  if (plain) return plain;
+  const segments = normalizeTranscript(getNoteDiarizationRaw(note));
+  if (segments.length === 0) return '';
+  return segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+}
+
+function formatNoteModalDate(createdAt?: string | null): string {
+  if (!createdAt) return 'Unknown date';
+  try {
+    return new Date(createdAt).toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return 'Unknown date';
+  }
 }
 
 /** Fixed scroll height for plain transcription (no diarization). */
@@ -94,6 +129,39 @@ function getChatResponseValue(chat: ChatRow): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeTagList(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    if (s.startsWith('[') || s.startsWith('{')) {
+      try {
+        return normalizeTagList(JSON.parse(s) as unknown);
+      } catch {
+        return s.split(',').map((t) => t.trim()).filter(Boolean);
+      }
+    }
+    return s.split(',').map((t) => t.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (item == null) continue;
+    if (typeof item === 'string') {
+      const t = item.trim();
+      if (t) out.push(t);
+    } else if (typeof item === 'object') {
+      const o = item as Record<string, unknown>;
+      const label = o.label ?? o.name ?? o.value;
+      if (typeof label === 'string' && label.trim()) out.push(label.trim());
+    } else {
+      const t = String(item).trim();
+      if (t) out.push(t);
+    }
+  }
+  return out;
+}
+
 function buildChatMessages(rows: ChatRow[]): ChatMessage[] {
   const sorted = [...rows].sort(
     (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
@@ -113,7 +181,7 @@ const PROJECT_CHAT_WEBHOOK_URL =
 
 const Project: React.FC = () => {
   const { user } = useAuth();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const projectId = searchParams.get('id');
   const projectIdFilterValue: string | number =
     projectId == null ? '' : Number.isNaN(Number(projectId)) ? projectId : Number(projectId);
@@ -149,6 +217,14 @@ const Project: React.FC = () => {
   const [chatError, setChatError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'notes' | 'chats'>('chats');
   const [isLowerSectionExpanded, setIsLowerSectionExpanded] = useState(true);
+
+  const [isAddNotesModalOpen, setIsAddNotesModalOpen] = useState(false);
+  const [pickerNotes, setPickerNotes] = useState<NoteRow[]>([]);
+  const [addNotesPickerLoading, setAddNotesPickerLoading] = useState(false);
+  const [selectedNoteIdsToAdd, setSelectedNoteIdsToAdd] = useState<string[]>([]);
+  const [addModalExpandedNoteId, setAddModalExpandedNoteId] = useState<string | null>(null);
+  const [addNotesSaving, setAddNotesSaving] = useState(false);
+  const [addNotesModalError, setAddNotesModalError] = useState<string | null>(null);
 
   const noteMenuRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -295,6 +371,32 @@ const Project: React.FC = () => {
     });
   };
 
+  const getNoteDisplayTitle = (note: NoteRow): string => {
+    const n = note.name?.trim();
+    if (n) return n;
+    return 'Untitled note';
+  };
+
+  const getNoteTags = (note: NoteRow): string[] => {
+    const fromTag = normalizeTagList(note.tag);
+    if (fromTag.length) return fromTag;
+    return normalizeTagList(note.tags);
+  };
+
+  const getNoteParticipantsLabel = (note: NoteRow): string => {
+    const diarRaw = getNoteDiarizationRaw(note);
+    if (!hasUsableDiarization(diarRaw)) return 'None';
+    const participants = Array.from(
+      new Set(
+        normalizeTranscript(diarRaw)
+          .map((seg) => seg.speaker.trim())
+          .filter((name) => Boolean(name))
+      )
+    );
+    if (participants.length === 0) return 'None';
+    return participants.join(', ');
+  };
+
   const toIdValue = (id: string): string | number => {
     const asNumber = Number(id);
     return Number.isNaN(asNumber) ? id : asNumber;
@@ -310,6 +412,34 @@ const Project: React.FC = () => {
     if (projectUpdateError) throw projectUpdateError;
     setProject((prev) => (prev ? { ...prev, notes: next } : prev));
   };
+
+  const addNoteIdsToProjectNotes = async (noteIds: string[]) => {
+    if (!projectId || !project) return;
+    const existing = (project.notes || []).map(String);
+    const mergedIds = [...existing];
+    for (const id of noteIds) {
+      if (!mergedIds.includes(id)) mergedIds.push(id);
+    }
+    const next = mergedIds.map((id) => {
+      const n = Number(id);
+      return Number.isNaN(n) ? id : n;
+    });
+    const { error: projectUpdateError } = await supabase
+      .from('project')
+      .update({ notes: next })
+      .eq('id', projectId);
+    if (projectUpdateError) throw projectUpdateError;
+    setProject((prev) => (prev ? { ...prev, notes: next } : prev));
+  };
+
+  const notesAvailableToAdd = useMemo(() => {
+    const pid = String(projectIdFilterValue);
+    return [...pickerNotes]
+      .filter((n) => !(n.projects || []).some((p) => String(p) === pid))
+      .sort(
+        (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      );
+  }, [pickerNotes, projectIdFilterValue]);
 
   const handleSendChat = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -513,6 +643,86 @@ const Project: React.FC = () => {
     }
   };
 
+  const openAddNotesModal = useCallback(async () => {
+    if (!user?.id) return;
+    setAddNotesModalError(null);
+    setSelectedNoteIdsToAdd([]);
+    setAddModalExpandedNoteId(null);
+    setIsAddNotesModalOpen(true);
+    setAddNotesPickerLoading(true);
+    setPickerNotes([]);
+    try {
+      const { data, error } = await supabase
+        .from('note')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setPickerNotes((data as NoteRow[]) || []);
+    } catch (err: unknown) {
+      setAddNotesModalError(err instanceof Error ? err.message : 'Failed to load notes');
+    } finally {
+      setAddNotesPickerLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    const flag = searchParams.get('addNotes');
+    if (!projectId || (flag !== '1' && flag !== 'true')) return;
+    setActiveTab('notes');
+    void openAddNotesModal();
+    const next = new URLSearchParams(searchParams);
+    next.delete('addNotes');
+    setSearchParams(next, { replace: true });
+  }, [projectId, searchParams, setSearchParams, openAddNotesModal]);
+
+  const toggleAddNoteSelection = (noteId: string) => {
+    setSelectedNoteIdsToAdd((prev) =>
+      prev.includes(noteId) ? prev.filter((id) => id !== noteId) : [...prev, noteId]
+    );
+  };
+
+  const handleConfirmAddNotesToProject = async () => {
+    if (!projectId || !project || selectedNoteIdsToAdd.length === 0) return;
+    const noteProjectIdTyped = toIdValue(projectId);
+    setAddNotesSaving(true);
+    setAddNotesModalError(null);
+    try {
+      const mergedLocalNotes: NoteRow[] = [];
+      for (const noteId of selectedNoteIdsToAdd) {
+        const note = pickerNotes.find((n) => n.id === noteId);
+        if (!note) continue;
+        const existing = Array.isArray(note.projects) ? note.projects : [];
+        const nextProjects = Array.from(
+          new Set([...existing.map((p) => String(p)), String(noteProjectIdTyped)])
+        ).map((p) => {
+          const asNumber = Number(p);
+          return Number.isNaN(asNumber) ? p : asNumber;
+        });
+        const { error } = await supabase.from('note').update({ projects: nextProjects }).eq('id', noteId);
+        if (error) throw error;
+        mergedLocalNotes.push({ ...note, projects: nextProjects });
+      }
+      await addNoteIdsToProjectNotes(selectedNoteIdsToAdd);
+      setNotes((prev) => {
+        const existingIds = new Set(prev.map((n) => n.id));
+        const newOnes = mergedLocalNotes.filter((n) => !existingIds.has(n.id));
+        const combined = [...newOnes, ...prev];
+        combined.sort(
+          (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+        );
+        return combined;
+      });
+      setIsAddNotesModalOpen(false);
+      setSelectedNoteIdsToAdd([]);
+      setAddModalExpandedNoteId(null);
+    } catch (err: unknown) {
+      setAddNotesModalError(err instanceof Error ? err.message : 'Failed to add notes to project');
+    } finally {
+      setAddNotesSaving(false);
+    }
+  };
+
   const handleOpenDeleteNote = (note: NoteRow) => {
     setOpenNoteMenuId(null);
     setDeleteNoteError(null);
@@ -693,9 +903,26 @@ const Project: React.FC = () => {
                 : 'h-0 shrink-0 flex-[0_0_0] opacity-0 pointer-events-none'
             }`}
           >
-            <section className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-6">
+            <section
+              className={`flex min-h-0 flex-1 flex-col overflow-hidden ${
+                activeTab !== 'notes' ? 'px-4 md:px-6' : ''
+              }`}
+            >
               {activeTab === 'notes' ? (
-                <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-0 md:px-5">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  <div className="flex shrink-0 justify-start pb-3">
+                    <button
+                      type="button"
+                      onClick={() => void openAddNotesModal()}
+                      disabled={!projectId || !user?.id}
+                      className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      <FilePlus className="h-4 w-4 shrink-0" aria-hidden />
+                      Add notes
+                    </button>
+                  </div>
+                  <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-0">
                   {error ? (
                     <p className="text-sm" style={{ color: 'var(--error)' }}>{error}</p>
                   ) : notes.length === 0 ? (
@@ -709,20 +936,30 @@ const Project: React.FC = () => {
                           {noteActionError}
                         </p>
                       ) : null}
-                      {notes.map((note) => (
-                        <div key={note.id} className="chat-item card rounded-lg overflow-visible">
+                      {notes.map((note) => {
+                        const noteTags = getNoteTags(note);
+                        const visibleTags = noteTags.slice(0, 3);
+                        const hasMoreTags = noteTags.length > 3;
+                        const allTagsTooltip = noteTags.join(', ');
+                        return (
+                        <div key={note.id} className="chat-item card rounded-lg overflow-visible transition-all">
                           <div
                             onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
-                            className="grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 sm:px-4 sm:py-3.5"
-                            style={{ backgroundColor: expandedNoteId === note.id ? 'var(--bg-secondary)' : undefined }}
+                            className="grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-stretch gap-x-3 gap-y-0 px-3 py-3 transition-all sm:px-4 sm:py-3.5"
+                            style={{
+                              backgroundColor: expandedNoteId === note.id ? 'var(--bg-secondary)' : undefined,
+                              borderColor: expandedNoteId === note.id ? 'var(--accent)' : undefined,
+                            }}
                           >
-                            <div
-                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                              style={{ backgroundColor: 'var(--accent-light)' }}
-                            >
-                              <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                            <div className="flex min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch">
+                              <div
+                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                                style={{ backgroundColor: 'var(--accent-light)' }}
+                              >
+                                <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                              </div>
                             </div>
-                            <div className="min-w-0 overflow-hidden pr-1">
+                            <div className="min-w-0 pr-1">
                               {renamingNoteId === note.id ? (
                                 <input
                                   autoFocus
@@ -751,30 +988,63 @@ const Project: React.FC = () => {
                                   }}
                                 />
                               ) : (
-                                <p
-                                  className="truncate text-sm font-medium leading-snug"
-                                  style={{ color: 'var(--text)' }}
-                                  title={note.name?.trim() || 'Untitled note'}
-                                >
-                                  {note.name?.trim() || 'Untitled note'}
-                                </p>
+                                <>
+                                  <p
+                                    className="block w-[min(350px,100%)] max-w-[350px] truncate text-base font-semibold leading-snug"
+                                    style={{ color: 'var(--text)' }}
+                                    title={getNoteDisplayTitle(note)}
+                                  >
+                                    {getNoteDisplayTitle(note)}
+                                  </p>
+                                  {noteTags.length > 0 ? (
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                      {visibleTags.map((tagLabel, tagIdx) => (
+                                        <span
+                                          key={`${note.id}-tag-${tagIdx}`}
+                                          className="inline-flex max-w-full rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug break-words"
+                                          style={{
+                                            backgroundColor: 'var(--accent-light)',
+                                            color: 'var(--text-secondary)',
+                                          }}
+                                          title={tagLabel}
+                                        >
+                                          {tagLabel}
+                                        </span>
+                                      ))}
+                                      {hasMoreTags ? (
+                                        <span
+                                          className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug"
+                                          style={{
+                                            backgroundColor: 'var(--bg-secondary)',
+                                            color: 'var(--text-secondary)',
+                                          }}
+                                          title={allTagsTooltip}
+                                        >
+                                          ...
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
+                                </>
                               )}
-                              <p
-                                className="mt-0.5 truncate text-xs leading-snug"
-                                style={{ color: 'var(--text-muted)' }}
-                                title={`Created by ${note.user_name || 'Unknown'}`}
-                              >
-                                Created by {note.user_name || 'Unknown'}
-                              </p>
                             </div>
-                            <div className="flex h-10 shrink-0 items-center justify-end gap-1.5 sm:gap-3">
-                              <div
-                                className="flex min-w-0 max-w-[5rem] items-center gap-1 truncate text-xs sm:max-w-[9rem] md:max-w-none"
-                                style={{ color: 'var(--text-muted)' }}
-                                title={formatDate(note.created_at)}
-                              >
-                                <Calendar className="h-3 w-3 shrink-0" aria-hidden />
-                                <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
+                            <div className="flex min-h-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
+                              <div className="flex min-h-0 min-w-0 max-w-[13rem] flex-col items-end justify-center text-right">
+                                <div
+                                  className="flex min-w-0 items-center gap-1 text-sm"
+                                  style={{ color: 'var(--text-secondary)' }}
+                                  title={formatDate(note.created_at)}
+                                >
+                                  <Calendar className="h-3 w-3 shrink-0" aria-hidden />
+                                  <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
+                                </div>
+                                <p
+                                  className="mt-1 truncate text-sm leading-snug"
+                                  style={{ color: 'var(--text-secondary)' }}
+                                  title={getNoteParticipantsLabel(note)}
+                                >
+                                  {getNoteParticipantsLabel(note)}
+                                </p>
                               </div>
                               <div
                                 className="relative flex h-10 w-10 shrink-0 items-center justify-center"
@@ -959,9 +1229,10 @@ const Project: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                      ))}
+                      )})}
                     </div>
                   )}
+                </div>
                 </div>
               ) : (
                 <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
@@ -1021,6 +1292,220 @@ const Project: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {isAddNotesModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (!addNotesSaving) {
+              setIsAddNotesModalOpen(false);
+              setAddModalExpandedNoteId(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-notes-to-project-title"
+            className="flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl sm:max-w-6xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-4 sm:px-6 sm:py-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <div>
+                <h3 id="add-notes-to-project-title" className="text-lg font-semibold sm:text-xl" style={{ color: 'var(--text)' }}>
+                  Add notes to project
+                </h3>
+                <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  Select meeting notes that are not already in this project. Expand a row to preview summary and transcription.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!addNotesSaving) {
+                    setIsAddNotesModalOpen(false);
+                    setAddModalExpandedNoteId(null);
+                  }
+                }}
+                className="rounded-md p-2"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                aria-label="Close modal"
+                disabled={addNotesSaving}
+              >
+                <X className="h-5 w-5" aria-hidden />
+              </button>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-2 pt-4 sm:px-6 sm:pt-5">
+              <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
+                {addNotesPickerLoading ? (
+                  <div className="flex min-h-[12rem] flex-1 items-center justify-center py-6">
+                    <div className="card rounded-lg p-8 text-center">
+                      <div
+                        className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-b-2"
+                        style={{ borderColor: 'var(--accent)' }}
+                        aria-hidden
+                      />
+                      <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                        Loading your notes...
+                      </p>
+                    </div>
+                  </div>
+                ) : notesAvailableToAdd.length === 0 ? (
+                  <div className="flex min-h-[12rem] flex-1 items-center justify-center py-6">
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      No other notes available to add (all your notes are already in this project, or you have no notes yet).
+                    </p>
+                  </div>
+                ) : (
+                  <ul className="space-y-3">
+                    {notesAvailableToAdd.map((note) => {
+                      const checked = selectedNoteIdsToAdd.includes(note.id);
+                      const expanded = addModalExpandedNoteId === note.id;
+                      const title = note.name?.trim() || 'Untitled note';
+                      const summaryPreview = getNoteSummaryText(note);
+                      const transcriptionPreview = getNoteTranscriptionText(note);
+                      return (
+                        <li key={note.id} className="chat-item card overflow-visible rounded-lg transition-all">
+                          <div
+                            className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 sm:px-4 sm:py-3.5"
+                            style={{
+                              backgroundColor: expanded || checked ? 'var(--bg-secondary)' : undefined,
+                            }}
+                          >
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleAddNoteSelection(note.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-4 w-4 shrink-0 rounded border"
+                                style={{ borderColor: 'var(--border)', accentColor: 'var(--accent)' }}
+                                aria-label={`Add ${title} to project`}
+                              />
+                            </div>
+                            <div className="min-w-0 overflow-hidden pr-1">
+                              <p
+                                className="truncate text-sm font-medium leading-snug"
+                                style={{ color: 'var(--text)' }}
+                                title={title}
+                              >
+                                {title}
+                              </p>
+                              <p
+                                className="mt-0.5 truncate text-xs leading-snug"
+                                style={{ color: 'var(--text-muted)' }}
+                                title={formatNoteModalDate(note.created_at)}
+                              >
+                                {formatNoteModalDate(note.created_at)}
+                              </p>
+                            </div>
+                            <div className="flex h-10 shrink-0 items-center justify-end">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAddModalExpandedNoteId((id) => (id === note.id ? null : note.id))
+                                }
+                                className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
+                                style={{ color: 'var(--text-muted)' }}
+                                aria-expanded={expanded}
+                                aria-label={expanded ? 'Collapse note details' : 'Expand note details'}
+                              >
+                                <ChevronDown
+                                  className={`h-5 w-5 shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                                  aria-hidden
+                                />
+                              </button>
+                            </div>
+                          </div>
+                          {expanded ? (
+                            <div
+                              className="border-t p-4"
+                              style={{
+                                borderColor: 'var(--border)',
+                                backgroundColor: 'var(--bg-secondary)',
+                              }}
+                            >
+                              <div>
+                                <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                  Summary
+                                </h4>
+                                <div
+                                  className="custom-scrollbar max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
+                                  style={{ color: 'var(--text)' }}
+                                >
+                                  {summaryPreview || 'No summary for this note.'}
+                                </div>
+                              </div>
+                              <div
+                                className="mt-6 border-t pt-4"
+                                style={{ borderColor: 'var(--border)' }}
+                              >
+                                <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                  Transcription
+                                </h4>
+                                <div
+                                  className="custom-scrollbar max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
+                                  style={{
+                                    backgroundColor: 'var(--bg)',
+                                    color: 'var(--text-secondary)',
+                                  }}
+                                >
+                                  {transcriptionPreview || 'No transcription for this note.'}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            {addNotesModalError ? (
+              <p className="shrink-0 px-4 py-2 text-sm sm:px-6" style={{ color: 'var(--error)' }}>
+                {addNotesModalError}
+              </p>
+            ) : null}
+
+            <div
+              className="flex shrink-0 justify-end gap-3 border-t px-4 py-4 sm:px-6"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddNotesModalOpen(false);
+                  setAddModalExpandedNoteId(null);
+                }}
+                className="rounded-lg px-4 py-2.5 text-sm font-medium"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                disabled={addNotesSaving}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmAddNotesToProject()}
+                className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium disabled:opacity-60"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                disabled={addNotesSaving || selectedNoteIdsToAdd.length === 0}
+              >
+                {addNotesSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                Add to project
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isDeleteNoteOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>

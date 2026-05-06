@@ -859,7 +859,8 @@ const TranscriptionSummary: React.FC = () => {
   };
 
   const resultActionBtnClass =
-    'result-action-btn flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50';
+    'result-action-btn flex min-h-[2.75rem] w-full min-w-0 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-start sm:px-4 sm:py-2';
+  const resultActionBtnLabelClass = 'hidden truncate sm:inline';
 
   if (isLoading) {
     return (
@@ -1338,11 +1339,13 @@ const TranscriptionSummary: React.FC = () => {
                     ) : null}
 
                     <div
-                      className="flex shrink-0 flex-wrap justify-end gap-2 border-t py-4"
+                      className="grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-4 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
                       style={{ borderColor: 'var(--border)' }}
                     >
                       <button
                         type="button"
+                        title="Save to OneDrive"
+                        aria-label="Save to OneDrive"
                         onClick={() => {
                           const completedFile = uploadedFiles.find((f) => f.status === 'completed' && f.publicUrl);
                           const audioUrl = completedFile?.publicUrl ? encodeURIComponent(completedFile.publicUrl) : '';
@@ -1351,50 +1354,74 @@ const TranscriptionSummary: React.FC = () => {
                         }}
                         className={resultActionBtnClass}
                       >
-                        <HardDrive className="h-4 w-4" aria-hidden />
-                        Save to OneDrive
+                        <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                        <span className={resultActionBtnLabelClass}>Save to OneDrive</span>
                       </button>
                       <button
                         type="button"
+                        title={
+                          isForwarding
+                            ? 'Sending to Teams'
+                            : forwardSuccess
+                              ? 'Sent to Teams'
+                              : 'Forward to Teams'
+                        }
+                        aria-label={
+                          isForwarding
+                            ? 'Sending to Teams'
+                            : forwardSuccess
+                              ? 'Sent to Teams'
+                              : 'Forward to Teams'
+                        }
                         onClick={() => setIsForwardTeamsModalOpen(true)}
                         disabled={isForwarding}
                         className={resultActionBtnClass}
                       >
                         {isForwarding ? (
                           <>
-                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                            Sending...
+                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                            <span className={resultActionBtnLabelClass}>Sending...</span>
                           </>
                         ) : forwardSuccess ? (
                           <>
                             <Check className="h-4 w-4 shrink-0" style={{ color: 'var(--success)' }} aria-hidden />
-                            Sent!
+                            <span className={resultActionBtnLabelClass}>Sent!</span>
                           </>
                         ) : (
                           <>
-                            <Users className="h-4 w-4" aria-hidden />
-                            Forward to Teams
+                            <Users className="h-4 w-4 shrink-0" aria-hidden />
+                            <span className={resultActionBtnLabelClass}>Forward to Teams</span>
                           </>
                         )}
                       </button>
                       <button
                         type="button"
+                        title="Generate Profile"
+                        aria-label="Generate Profile"
                         onClick={() => void handleGenerateProfile()}
                         className={resultActionBtnClass}
                       >
-                        <UserCircle className="h-4 w-4" aria-hidden />
-                        Generate Profile
+                        <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                        <span className={resultActionBtnLabelClass}>Generate Profile</span>
                       </button>
                       <button
                         type="button"
+                        title={isRegenerating ? 'Regenerating summary' : 'Regenerate Summary'}
+                        aria-label={isRegenerating ? 'Regenerating summary' : 'Regenerate Summary'}
                         disabled={isRegenerating || summaryResult.transcript.length === 0}
                         onClick={() => void handleRegenerateSummary()}
                         className={resultActionBtnClass}
                       >
                         {isRegenerating ? (
-                          <><Loader2 className="h-4 w-4 animate-spin" aria-hidden />Regenerating…</>
+                          <>
+                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                            <span className={resultActionBtnLabelClass}>Regenerating…</span>
+                          </>
                         ) : (
-                          <><RefreshCw className="h-4 w-4" aria-hidden />Regenerate Summary</>
+                          <>
+                            <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                            <span className={resultActionBtnLabelClass}>Regenerate Summary</span>
+                          </>
                         )}
                       </button>
                     </div>

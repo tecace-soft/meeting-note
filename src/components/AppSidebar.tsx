@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
+  FilePlus,
   FileText,
   FolderPlus,
   History,
@@ -483,6 +484,11 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     else if (mobileOverlay) onMobileOverlayNavigate?.();
   };
 
+  const handleOpenAccountSettings = () => {
+    navigate('/account-settings');
+    if (mobileOverlay) onMobileOverlayNavigate?.();
+  };
+
   return (
     <aside
       className={
@@ -662,6 +668,23 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                             >
                               <button
                                 type="button"
+                                onClick={() => {
+                                  setOpenProjectMenuId(null);
+                                  navigate(`/project?id=${encodeURIComponent(p.id)}&addNotes=1`);
+                                  if (mobileOverlay) onMobileOverlayNavigate?.();
+                                }}
+                                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                style={{ color: 'var(--text)' }}
+                              >
+                                <FilePlus className="h-4 w-4" aria-hidden />
+                                Add notes
+                              </button>
+                              <div
+                                className="my-1 h-px"
+                                style={{ backgroundColor: 'var(--border)' }}
+                              />
+                              <button
+                                type="button"
                                 onClick={() => handleOpenRenameProject(p)}
                                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                 style={{ color: 'var(--text)' }}
@@ -735,9 +758,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
         {isAuthenticated && user ? (
           <>
-            <div
-              className={`flex items-center gap-2 rounded-lg py-1 ${collapsed ? 'justify-center px-0' : 'px-2'}`}
+            <button
+              type="button"
+              onClick={handleOpenAccountSettings}
+              className={`flex w-full items-center gap-2 rounded-lg py-1 text-left transition-opacity hover:opacity-90 ${collapsed ? 'justify-center px-0' : 'px-2'}`}
               style={{ color: 'var(--text)' }}
+              title={collapsed ? 'Account Settings' : undefined}
+              aria-label="Open account settings"
             >
               <div
                 className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-sm font-medium"
@@ -754,7 +781,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   </p>
                 </div>
               )}
-            </div>
+            </button>
             <button
               type="button"
               onClick={logout}

@@ -2,7 +2,8 @@ import React, { useId, useState, useEffect, useRef, useCallback, startTransition
 import { createPortal } from 'react-dom';
 import { Loader2, Pencil, Save, Trash2, User, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { canonicalOntologyProfileString, isOntologyProfile, parseOntology, type SpeakerOntology } from '../lib/speakerOntology';
+import { canonicalOntologyProfileString, isOntologyProfile, type SpeakerOntology } from '../lib/speakerOntology';
+import { SpeakerOntologyView } from './SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
 import {
   applySpeakerReplacements,
@@ -714,7 +715,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                     autoFocus
                   />
                 ) : speakerProfileView.profile ? (
-                  <OntologyView raw={speakerProfileView.profile} />
+                  <SpeakerOntologyView raw={speakerProfileView.profile} />
                 ) : (
                   <div
                     className="flex flex-col items-center justify-center py-12 text-center"
@@ -741,174 +742,5 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     </>
   );
 };
-
-/* ── Ontology view component ───────────────────────────────────────── */
-
-function toReadableKey(key: string): string {
-  return key
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-function isObjectLike(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function renderPrimitive(value: unknown): string {
-  if (value === null || value === undefined || value === '') return 'None';
-  return String(value);
-}
-
-function JsonLikeNode({
-  label,
-  value,
-  depth = 0,
-  innerFieldLabels = false,
-}: {
-  label: string;
-  value: unknown;
-  depth?: number;
-  /** True for fields inside any object (including nested objects), same look as array item fields */
-  innerFieldLabels?: boolean;
-}) {
-  const labelText = toReadableKey(label);
-  const indentClass = depth > 0 ? 'ml-4' : '';
-  const isArray = Array.isArray(value);
-  const isObject = isObjectLike(value);
-  const labelColor = innerFieldLabels ? 'var(--text-muted)' : 'var(--text-secondary)';
-
-  if (!isArray && !isObject) {
-    return (
-      <div className={`grid grid-cols-[220px_1fr] items-start gap-3 py-1.5 ${indentClass}`}>
-        <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
-          {labelText}
-        </div>
-        <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>
-          {renderPrimitive(value)}
-        </div>
-      </div>
-    );
-  }
-
-  if (isArray) {
-    const arr = value as unknown[];
-    const allPrimitive = arr.every((item) => !Array.isArray(item) && !isObjectLike(item));
-    if (!allPrimitive) {
-      return (
-        <div className={`py-1.5 ${indentClass}`}>
-          <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
-            {labelText}
-          </div>
-          {arr.length === 0 ? (
-            <div className="ml-4 text-[17px] leading-7" style={{ color: 'var(--text)' }}>None</div>
-          ) : (
-            <div className="ml-4 mt-2 space-y-3">
-              {arr.map((item, idx) => (
-                <div key={idx} className="rounded-md border p-3" style={{ borderColor: 'var(--border)' }}>
-                  {isObjectLike(item) ? (
-                    <div className="space-y-2">
-                      {Object.entries(item).map(([k, v]) => (
-                        <JsonLikeNode
-                          key={k}
-                          label={k}
-                          value={v}
-                          depth={depth + 1}
-                          innerFieldLabels
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>
-                      {renderPrimitive(item)}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <div className={`grid grid-cols-[220px_1fr] items-start gap-3 py-1.5 ${indentClass}`}>
-        <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
-          {labelText}
-        </div>
-        {arr.length === 0 ? (
-          <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>None</div>
-        ) : allPrimitive ? (
-          <div className="text-[17px] leading-7" style={{ color: 'var(--text)' }}>
-            {arr.map((item) => renderPrimitive(item)).join(', ')}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  const obj = value as Record<string, unknown>;
-  return (
-    <div className={indentClass}>
-      <div className="text-[15px] font-semibold leading-7" style={{ color: labelColor }}>
-        {labelText}
-      </div>
-      <div className="ml-4 mt-2 space-y-3">
-        {Object.entries(obj).map(([k, v]) => (
-          <JsonLikeNode
-            key={k}
-            label={k}
-            value={v}
-            depth={depth + 1}
-            innerFieldLabels
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function OntologyView({ raw }: { raw: string }) {
-  const baseClassName = 'custom-scrollbar overflow-x-auto rounded-lg border p-5';
-  const baseStyle = {
-    borderColor: 'var(--border)',
-    backgroundColor: 'var(--bg-secondary)',
-    color: 'var(--text)',
-  } as const;
-
-  if (!isOntologyProfile(raw)) {
-    return (
-      <div className={baseClassName} style={baseStyle}>
-        <pre className="whitespace-pre-wrap text-[17px] leading-7" style={{ color: 'var(--text)' }}>{raw}</pre>
-      </div>
-    );
-  }
-
-  const o = parseOntology(raw);
-  if (!o) {
-    return (
-      <div className={baseClassName} style={baseStyle}>
-        <pre className="whitespace-pre-wrap text-[17px] leading-7" style={{ color: 'var(--text)' }}>{raw}</pre>
-      </div>
-    );
-  }
-
-  const entries = Object.entries(o as unknown as Record<string, unknown>);
-  return (
-    <div className={baseClassName} style={baseStyle}>
-      <div className="space-y-0">
-        {entries.map(([key, value], idx) => (
-          <div
-            key={key}
-            className={idx === 0 ? '' : 'mt-5'}
-          >
-            <JsonLikeNode label={key} value={value} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export default TranscriptDiarizedEditor;

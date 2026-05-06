@@ -10,6 +10,7 @@ import TranscriptionSummary from './pages/TranscriptionSummary';
 import SummaryHistory from './pages/SummaryHistory';
 import SaveSummary from './pages/SaveSummary';
 import Project from './pages/Project';
+import AccountSettings from './pages/AccountSettings';
 import AppShell from './components/AppShell';
 
 const msalInstance = new PublicClientApplication(msalConfig);
@@ -49,6 +50,7 @@ const App: React.FC = () => {
                   <Route path="/summary-history" element={<SummaryHistory />} />
                   <Route path="/save-summary" element={<SaveSummary />} />
                   <Route path="/project" element={<Project />} />
+                  <Route path="/account-settings" element={<AccountSettings />} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
