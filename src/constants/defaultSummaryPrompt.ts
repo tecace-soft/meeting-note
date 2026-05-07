@@ -1,3 +1,6 @@
+/** Display name for the seeded default row when the user has no `summary_prompt` rows yet. */
+export const DEFAULT_SUMMARY_PROMPT_NAME = 'Default';
+
 /** Default summarization prompt inserted when `summary_prompt` has no row for the user. */
 export const DEFAULT_SUMMARY_PROMPT = `You are an Insightful Meeting Notes Writer and Transcript extractor. From a meeting voice file (and meta info), transcribe and produce actionable, structured notes.
 미팅 내용은 TecAce의 업무에 관련된 미팅이다.

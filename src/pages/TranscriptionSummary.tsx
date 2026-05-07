@@ -41,7 +41,7 @@ import {
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
-import { DEFAULT_SUMMARY_PROMPT } from '../constants/defaultSummaryPrompt';
+import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 
@@ -93,7 +93,11 @@ const TranscriptionSummary: React.FC = () => {
   const [chatsError, setChatsError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [summaryPrompt, setSummaryPrompt] = useState('');
+  const [summaryPromptRows, setSummaryPromptRows] = useState<{ id: string; name: string; prompt: string }[]>([]);
+  const [selectedSummaryPromptId, setSelectedSummaryPromptId] = useState<string | null>(null);
+  const [summaryPromptsLoading, setSummaryPromptsLoading] = useState(true);
+  /** Optional free-text instructions; separate from the saved summarization template (`promptId`). */
+  const [optionalInstructions, setOptionalInstructions] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string } | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -310,53 +314,84 @@ const TranscriptionSummary: React.FC = () => {
   }, [isAuthenticated, isLoading, navigate]);
 
   useEffect(() => {
-    if (!user?.id || !isAuthenticated) return;
+    if (!user?.id || !isAuthenticated) {
+      setSummaryPromptRows([]);
+      setSelectedSummaryPromptId(null);
+      setSummaryPromptsLoading(false);
+      setOptionalInstructions('');
+      return;
+    }
     let cancelled = false;
-    const ensureSummaryPrompt = async () => {
+
+    const loadSummaryPrompts = async () => {
+      setSummaryPromptsLoading(true);
       try {
-        const { data, error } = await supabase
+        const { data: rows, error } = await supabase
           .from(SUMMARY_PROMPT_TABLE)
-          .select('prompt')
+          .select('id, name, prompt')
           .eq('user_id', user.id)
-          .maybeSingle();
+          .order('name', { ascending: true });
+
         if (cancelled) return;
         if (error) throw error;
 
-        if (!data) {
+        let list = (rows ?? []) as { id: string; name: string; prompt: string }[];
+
+        if (list.length === 0) {
           const { error: insertError } = await supabase.from(SUMMARY_PROMPT_TABLE).insert({
             user_id: user.id,
+            name: DEFAULT_SUMMARY_PROMPT_NAME,
             prompt: DEFAULT_SUMMARY_PROMPT,
           });
           if (cancelled) return;
           if (insertError) {
             const code = (insertError as { code?: string }).code;
-            if (code === '23505') {
-              const { data: rowAfterRace, error: fetchErr } = await supabase
-                .from(SUMMARY_PROMPT_TABLE)
-                .select('prompt')
-                .eq('user_id', user.id)
-                .maybeSingle();
-              if (cancelled) return;
-              if (fetchErr) throw fetchErr;
-              setSummaryPrompt(typeof rowAfterRace?.prompt === 'string' ? rowAfterRace.prompt : '');
-            } else {
+            if (code !== '23505') {
               console.error('summary_prompt insert:', insertError);
             }
-          } else {
-            setSummaryPrompt(DEFAULT_SUMMARY_PROMPT);
           }
-        } else {
-          setSummaryPrompt(typeof data.prompt === 'string' ? data.prompt : '');
+          const { data: rowsAfter, error: refetchError } = await supabase
+            .from(SUMMARY_PROMPT_TABLE)
+            .select('id, name, prompt')
+            .eq('user_id', user.id)
+            .order('name', { ascending: true });
+          if (cancelled) return;
+          if (refetchError) throw refetchError;
+          list = (rowsAfter ?? []) as typeof list;
         }
+
+        setSummaryPromptRows(list);
+
+        const storageKey = `mn.selectedSummaryPrompt.${user.id}`;
+        const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
+        let pick = stored && list.some((r) => r.id === stored) ? stored : null;
+        if (!pick && list.length > 0) {
+          const def = list.find((r) => r.name === DEFAULT_SUMMARY_PROMPT_NAME);
+          pick = def?.id ?? list[0].id;
+        }
+        setSelectedSummaryPromptId(pick);
       } catch (e) {
-        if (!cancelled) console.error('Failed to load summary prompt:', e);
+        if (!cancelled) console.error('Failed to load summary prompts:', e);
+      } finally {
+        if (!cancelled) setSummaryPromptsLoading(false);
       }
     };
-    void ensureSummaryPrompt();
+
+    void loadSummaryPrompts();
     return () => {
       cancelled = true;
     };
   }, [user?.id, isAuthenticated]);
+
+  const handleSummaryPromptSelect = useCallback(
+    (promptId: string) => {
+      setSelectedSummaryPromptId(promptId);
+      if (user?.id && typeof localStorage !== 'undefined') {
+        localStorage.setItem(`mn.selectedSummaryPrompt.${user.id}`, promptId);
+      }
+    },
+    [user?.id]
+  );
 
   useEffect(() => {
     const fetchChats = async () => {
@@ -549,7 +584,11 @@ const TranscriptionSummary: React.FC = () => {
 
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
-    
+    if (!selectedSummaryPromptId) {
+      setSummaryError('Select a summarization prompt.');
+      return;
+    }
+
     const completedFiles = uploadedFiles.filter(f => f.status === 'completed' && f.publicUrl);
     if (completedFiles.length === 0) return;
 
@@ -593,7 +632,8 @@ const TranscriptionSummary: React.FC = () => {
           body: JSON.stringify({
             downloadUrl: file.publicUrl,
             fileName: file.name,
-            instructions: summaryPrompt,
+            instructions: optionalInstructions,
+            promptId: selectedSummaryPromptId,
             userId: user?.id || '',
             userName: user?.displayName || '',
             noteId: noteId,
@@ -1156,45 +1196,86 @@ const TranscriptionSummary: React.FC = () => {
             <div className={`collapse-container ${showPromptSection ? 'expanded' : 'collapsed'}`}>
               <div className="collapse-content">
               <div className="mt-4 card rounded-lg p-4">
-                <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
-                  Add instructions (optional)
-                </label>
-                <div className="flex gap-3 items-end">
-                  <textarea
-                    value={summaryPrompt}
-                    onChange={(e) => setSummaryPrompt(e.target.value)}
-                    placeholder="e.g., Focus on action items and decisions..."
-                    className="flex-grow px-4 py-2 rounded-lg text-sm resize-y min-h-[40px]"
-                    style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text)',
-                      height: '40px',
-                      maxHeight: '200px',
-                    }}
-                    disabled={isSummarizing}
-                  />
-                  <button
-                    onClick={handleSummarize}
-                    disabled={isSummarizing || !hasCompletedFiles}
-                    className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed h-[40px]"
-                    style={{
-                      backgroundColor: 'var(--accent)',
-                      color: '#ffffff',
-                    }}
-                  >
-                    {isSummarizing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Summarizing...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="w-4 h-4" />
-                        Summarize
-                      </>
-                    )}
-                  </button>
+                <div className="flex w-full min-w-0 flex-col gap-4 md:flex-row md:items-start md:gap-4">
+                  <div className="min-w-0 flex-1 basis-0">
+                    <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
+                      Add instructions (optional)
+                    </label>
+                    <textarea
+                      value={optionalInstructions}
+                      onChange={(e) => setOptionalInstructions(e.target.value)}
+                      placeholder="e.g., Focus on action items and decisions..."
+                      rows={1}
+                      className="box-border h-10 min-h-[2.5rem] w-full max-w-full min-w-0 resize-y rounded-lg border px-3 py-2 text-sm leading-normal outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60 max-h-[200px]"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text)',
+                      }}
+                      disabled={isSummarizing}
+                      aria-label="Optional additional instructions"
+                    />
+                  </div>
+                  <div className="flex min-w-0 w-full flex-col md:w-auto md:max-w-full md:shrink-0">
+                    <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
+                      Select summarization prompt
+                    </label>
+                    <div className="flex min-w-0 w-full flex-col gap-2 md:w-max md:max-w-full md:flex-row md:flex-nowrap md:items-center md:gap-3">
+                      <select
+                        value={selectedSummaryPromptId ?? ''}
+                        onChange={(e) => handleSummaryPromptSelect(e.target.value)}
+                        disabled={
+                          summaryPromptsLoading || isSummarizing || summaryPromptRows.length === 0
+                        }
+                        className="box-border h-10 w-full min-w-0 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60 md:w-[calc(9rem+80px)] md:flex-none md:shrink-0"
+                        style={{
+                          backgroundColor: 'var(--bg-secondary)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text)',
+                        }}
+                        aria-label="Choose summarization prompt by name"
+                      >
+                        {summaryPromptsLoading ? (
+                          <option value="">Loading templates…</option>
+                        ) : summaryPromptRows.length === 0 ? (
+                          <option value="">No prompts available</option>
+                        ) : (
+                          summaryPromptRows.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => void handleSummarize()}
+                        disabled={
+                          isSummarizing ||
+                          !hasCompletedFiles ||
+                          !selectedSummaryPromptId ||
+                          summaryPromptRows.length === 0
+                        }
+                        className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 sm:px-5"
+                        style={{
+                          backgroundColor: 'var(--accent)',
+                          color: '#ffffff',
+                        }}
+                      >
+                        {isSummarizing ? (
+                          <>
+                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                            Summarizing...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="h-4 w-4 shrink-0" />
+                            Summarize
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
               </div>

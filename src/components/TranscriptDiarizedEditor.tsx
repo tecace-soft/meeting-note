@@ -1,10 +1,11 @@
-import React, { useId, useState, useEffect, useRef, useCallback, startTransition } from 'react';
+import React, { useId, useState, useEffect, useRef, useCallback, useMemo, startTransition } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2, Pencil, Save, Trash2, User, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { canonicalOntologyProfileString, isOntologyProfile, type SpeakerOntology } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
+import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import {
   applySpeakerReplacements,
   getTranscriptAvatarLabel,
@@ -296,6 +297,18 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     s.name.toLowerCase().includes(speakerNameInput.trim().toLowerCase())
   );
 
+  const matchedSelfSpeaker = useMemo(
+    () => findBestSpeakerRowForMsAccount(savedSpeakers, user?.displayName ?? ''),
+    [savedSpeakers, user?.displayName]
+  );
+
+  const displayOrderedSpeakers = useMemo(() => {
+    if (!matchedSelfSpeaker) return filteredSavedSpeakers;
+    const selfRow = filteredSavedSpeakers.find((s) => s.id === matchedSelfSpeaker.id);
+    if (!selfRow) return filteredSavedSpeakers;
+    return [selfRow, ...filteredSavedSpeakers.filter((s) => s.id !== matchedSelfSpeaker.id)];
+  }, [filteredSavedSpeakers, matchedSelfSpeaker]);
+
   return (
     <>
       <div
@@ -412,7 +425,10 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   </p>
                 ) : (
                   <ul className="max-h-[13.5rem] overflow-y-auto custom-scrollbar" style={{ maxHeight: '13.5rem' }}>
-                    {filteredSavedSpeakers.map((row, i) => (
+                    {displayOrderedSpeakers.map((row, i) => {
+                      const isMe = matchedSelfSpeaker?.id === row.id;
+                      const labelText = isMe ? `${row.name} (me)` : row.name;
+                      return (
                       <li
                         key={row.id}
                         className="flex items-center border-b last:border-b-0"
@@ -440,7 +456,15 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                           >
                             {getTranscriptAvatarLabel(row.name)}
                           </span>
-                          <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
+                          <span className="min-w-0 flex-1 truncate font-medium">
+                            {row.name}
+                            {isMe ? (
+                              <span className="font-normal" style={{ color: 'var(--text-muted)' }}>
+                                {' '}
+                                (me)
+                              </span>
+                            ) : null}
+                          </span>
                         </button>
                         <button
                           type="button"
@@ -449,8 +473,8 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                             openSpeakerProfileView(row);
                           }}
                           className="flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-md text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--bg-secondary)] hover:text-[var(--accent)]"
-                          title={`View profile for "${row.name}"`}
-                          aria-label={`View profile for ${row.name}`}
+                          title={`View profile for "${labelText}"`}
+                          aria-label={`View profile for ${labelText}`}
                         >
                           <User className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         </button>
@@ -462,13 +486,14 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                             openSpeakerDeleteConfirm(row);
                           }}
                           className="flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-md text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--bg-secondary)] hover:text-[var(--error)] disabled:opacity-40"
-                          title={`Remove "${row.name}" from saved speakers`}
-                          aria-label={`Delete saved speaker ${row.name}`}
+                          title={`Remove "${labelText}" from saved speakers`}
+                          aria-label={`Delete saved speaker ${labelText}`}
                         >
                           <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         </button>
                       </li>
-                    ))}
+                    );
+                    })}
                   </ul>
                 )}
               </div>

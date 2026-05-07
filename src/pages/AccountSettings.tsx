@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, Loader2, Pencil, Save, User } from 'lucide-react';
+import { ChevronDown, Loader2, Pencil, Plus, Save, Trash2, User, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
-import { DEFAULT_SUMMARY_PROMPT } from '../constants/defaultSummaryPrompt';
+import { DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 
 /** Supabase table name (exact identifier in your project). */
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 
 type SettingsTab = 'account' | 'summary' | 'speaker';
+
+type SummaryPromptRow = { id: string; name: string; prompt: string };
 
 type SpeakerRow = { id: string; name: string; profile: string | null };
 
@@ -26,11 +28,24 @@ const AccountSettings: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('account');
 
-  const [summaryPromptDraft, setSummaryPromptDraft] = useState('');
-  const [summaryPromptLoading, setSummaryPromptLoading] = useState(false);
-  const [summaryPromptSaving, setSummaryPromptSaving] = useState(false);
-  const [summaryPromptError, setSummaryPromptError] = useState<string | null>(null);
-  const [summaryPromptSaved, setSummaryPromptSaved] = useState(false);
+  const [summaryPrompts, setSummaryPrompts] = useState<SummaryPromptRow[]>([]);
+  const [summaryPromptListLoading, setSummaryPromptListLoading] = useState(false);
+  const [summaryPromptListError, setSummaryPromptListError] = useState<string | null>(null);
+  const [expandedSummaryPromptId, setExpandedSummaryPromptId] = useState<string | null>(null);
+  const [expandedPromptDraft, setExpandedPromptDraft] = useState('');
+  const [savePromptSaving, setSavePromptSaving] = useState(false);
+  const [savePromptError, setSavePromptError] = useState<string | null>(null);
+  const [savePromptOkFlash, setSavePromptOkFlash] = useState(false);
+
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createPrompt, setCreatePrompt] = useState('');
+  const [createSaving, setCreateSaving] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const [pendingDeletePrompt, setPendingDeletePrompt] = useState<{ id: string; name: string } | null>(null);
+  const [deletePromptSaving, setDeletePromptSaving] = useState(false);
+  const [deletePromptError, setDeletePromptError] = useState<string | null>(null);
 
   const [speakersLoad, setSpeakersLoad] = useState<SpeakersLoadState>({ status: 'idle' });
 
@@ -68,29 +83,24 @@ const AccountSettings: React.FC = () => {
     let cancelled = false;
 
     const load = async () => {
-      setSummaryPromptLoading(true);
-      setSummaryPromptError(null);
+      setSummaryPromptListLoading(true);
+      setSummaryPromptListError(null);
       try {
         const { data, error } = await supabase
           .from(SUMMARY_PROMPT_TABLE)
-          .select('prompt')
+          .select('id, name, prompt')
           .eq('user_id', user.id)
-          .maybeSingle();
+          .order('name', { ascending: true });
 
         if (cancelled) return;
         if (error) throw error;
-
-        if (!data) {
-          setSummaryPromptDraft(DEFAULT_SUMMARY_PROMPT);
-        } else {
-          setSummaryPromptDraft(typeof data.prompt === 'string' ? data.prompt : '');
-        }
+        setSummaryPrompts((data ?? []) as SummaryPromptRow[]);
       } catch (err: unknown) {
         if (!cancelled) {
-          setSummaryPromptError(err instanceof Error ? err.message : 'Failed to load summary prompt');
+          setSummaryPromptListError(err instanceof Error ? err.message : 'Failed to load summary prompts');
         }
       } finally {
-        if (!cancelled) setSummaryPromptLoading(false);
+        if (!cancelled) setSummaryPromptListLoading(false);
       }
     };
 
@@ -99,6 +109,14 @@ const AccountSettings: React.FC = () => {
       cancelled = true;
     };
   }, [user?.id, isAuthenticated]);
+
+  useEffect(() => {
+    if (activeTab !== 'summary') {
+      setCreateModalOpen(false);
+      setExpandedSummaryPromptId(null);
+      setCreateError(null);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (!user?.id || !isAuthenticated) return;
@@ -197,43 +215,100 @@ const AccountSettings: React.FC = () => {
     }
   }, [user?.id, otherSpeakerEditingId, otherSpeakerDraft]);
 
-  const handleSaveSummaryPrompt = useCallback(async () => {
-    if (!user?.id) return;
-    setSummaryPromptSaving(true);
-    setSummaryPromptError(null);
-    setSummaryPromptSaved(false);
+  const handleSaveExpandedSummaryPrompt = useCallback(async () => {
+    if (!user?.id || !expandedSummaryPromptId) return;
+    setSavePromptSaving(true);
+    setSavePromptError(null);
+    setSavePromptOkFlash(false);
     try {
-      const { error: updateError } = await supabase
+      const { error } = await supabase
         .from(SUMMARY_PROMPT_TABLE)
-        .update({ prompt: summaryPromptDraft })
+        .update({ prompt: expandedPromptDraft })
+        .eq('id', expandedSummaryPromptId)
         .eq('user_id', user.id);
-
-      if (updateError) throw updateError;
-
-      const { data: existing, error: readError } = await supabase
-        .from(SUMMARY_PROMPT_TABLE)
-        .select('user_id')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (readError) throw readError;
-
-      if (!existing) {
-        const { error: insertError } = await supabase.from(SUMMARY_PROMPT_TABLE).insert({
-          user_id: user.id,
-          prompt: summaryPromptDraft,
-        });
-        if (insertError) throw insertError;
-      }
-
-      setSummaryPromptSaved(true);
-      window.setTimeout(() => setSummaryPromptSaved(false), 2500);
+      if (error) throw error;
+      setSummaryPrompts((prev) =>
+        prev.map((r) => (r.id === expandedSummaryPromptId ? { ...r, prompt: expandedPromptDraft } : r))
+      );
+      setSavePromptOkFlash(true);
+      window.setTimeout(() => setSavePromptOkFlash(false), 2500);
     } catch (err: unknown) {
-      setSummaryPromptError(err instanceof Error ? err.message : 'Failed to save summary prompt');
+      setSavePromptError(err instanceof Error ? err.message : 'Failed to save prompt');
     } finally {
-      setSummaryPromptSaving(false);
+      setSavePromptSaving(false);
     }
-  }, [user?.id, summaryPromptDraft]);
+  }, [user?.id, expandedSummaryPromptId, expandedPromptDraft]);
+
+  const openCreatePromptModal = useCallback(() => {
+    setCreateError(null);
+    setCreateName('');
+    setCreatePrompt('');
+    setCreateModalOpen(true);
+  }, []);
+
+  const handleCreateSummaryPrompt = useCallback(async () => {
+    if (!user?.id) return;
+    const nameTrim = createName.trim();
+    const promptTrim = createPrompt.trim();
+    if (!nameTrim || !promptTrim) {
+      setCreateError('Name and prompt are required.');
+      return;
+    }
+    setCreateSaving(true);
+    setCreateError(null);
+    try {
+      const { data, error } = await supabase
+        .from(SUMMARY_PROMPT_TABLE)
+        .insert({ user_id: user.id, name: nameTrim, prompt: promptTrim })
+        .select('id, name, prompt')
+        .maybeSingle();
+      if (error) {
+        const code = (error as { code?: string }).code;
+        if (code === '23505') {
+          setCreateError('A prompt with this name already exists.');
+          return;
+        }
+        throw error;
+      }
+      if (data) {
+        setSummaryPrompts((prev) => [...prev, data as SummaryPromptRow].sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      setCreateModalOpen(false);
+      setCreateName('');
+      setCreatePrompt('');
+    } catch (err: unknown) {
+      setCreateError(err instanceof Error ? err.message : 'Failed to create prompt');
+    } finally {
+      setCreateSaving(false);
+    }
+  }, [user?.id, createName, createPrompt]);
+
+  const openDeletePromptModal = useCallback((row: SummaryPromptRow) => {
+    if (row.name === DEFAULT_SUMMARY_PROMPT_NAME) return;
+    setDeletePromptError(null);
+    setPendingDeletePrompt({ id: row.id, name: row.name });
+  }, []);
+
+  const handleConfirmDeleteSummaryPrompt = useCallback(async () => {
+    if (!user?.id || !pendingDeletePrompt) return;
+    if (pendingDeletePrompt.name === DEFAULT_SUMMARY_PROMPT_NAME) return;
+    const { id } = pendingDeletePrompt;
+    setDeletePromptSaving(true);
+    setDeletePromptError(null);
+    try {
+      const { error } = await supabase.from(SUMMARY_PROMPT_TABLE).delete().eq('id', id).eq('user_id', user.id);
+      if (error) throw error;
+      setSummaryPrompts((prev) => prev.filter((r) => r.id !== id));
+      setExpandedSummaryPromptId((prev) => (prev === id ? null : prev));
+      setPendingDeletePrompt(null);
+      setSavePromptError(null);
+      setSavePromptOkFlash(false);
+    } catch (err: unknown) {
+      setDeletePromptError(err instanceof Error ? err.message : 'Failed to delete prompt');
+    } finally {
+      setDeletePromptSaving(false);
+    }
+  }, [user?.id, pendingDeletePrompt]);
 
   if (isLoading) {
     return (
@@ -288,7 +363,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Summary prompt
+                Summary prompts
               </button>
               <button
                 type="button"
@@ -493,58 +568,153 @@ const AccountSettings: React.FC = () => {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                        Summary prompt
+                        Summary prompts
                       </h3>
                       <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                        Default instructions sent with meeting summarization (stored per account).
+                        Named templates stored on your account. The Meeting Note page can choose which template to send with
+                        summarization.
                       </p>
                     </div>
                     <button
                       type="button"
-                      disabled={summaryPromptSaving || summaryPromptLoading || !user?.id}
-                      onClick={() => void handleSaveSummaryPrompt()}
+                      disabled={summaryPromptListLoading || !user?.id}
+                      onClick={openCreatePromptModal}
                       className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                     >
-                      {summaryPromptSaving ? (
-                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                      ) : (
-                        <Save className="h-4 w-4" aria-hidden />
-                      )}
-                      Save
+                      <Plus className="h-4 w-4" aria-hidden />
+                      New prompt
                     </button>
                   </div>
 
-                  {summaryPromptLoading ? (
-                    <div className="mt-4 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                  {summaryPromptListLoading ? (
+                    <div className="mt-6 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
                       <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden />
-                      Loading prompt…
+                      Loading prompts…
                     </div>
+                  ) : summaryPromptListError ? (
+                    <p className="mt-6 text-sm" style={{ color: 'var(--error)' }}>
+                      {summaryPromptListError}
+                    </p>
+                  ) : summaryPrompts.length === 0 ? (
+                    <p className="mt-6 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      No prompts yet. Create one with <span className="font-medium">New prompt</span>, or open Meeting Note—
+                      a default prompt is created automatically on first visit.
+                    </p>
                   ) : (
-                    <textarea
-                      value={summaryPromptDraft}
-                      onChange={(e) => setSummaryPromptDraft(e.target.value)}
-                      className="custom-scrollbar mt-4 min-h-[18rem] w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                      style={{
-                        backgroundColor: 'var(--bg-secondary)',
-                        color: 'var(--text)',
-                        borderColor: 'var(--border)',
-                      }}
-                      spellCheck={false}
-                      aria-label="Summary prompt template"
-                    />
-                  )}
+                    <div className="mt-6 space-y-2">
+                      {summaryPrompts.map((row) => {
+                        const isExpanded = expandedSummaryPromptId === row.id;
+                        return (
+                          <div
+                            key={row.id}
+                            className="overflow-hidden rounded-xl border"
+                            style={{ borderColor: 'var(--border)' }}
+                          >
+                            <button
+                              type="button"
+                              aria-expanded={isExpanded}
+                              aria-controls={`summary-prompt-panel-${row.id}`}
+                              id={`summary-prompt-trigger-${row.id}`}
+                              onClick={() => {
+                                setSavePromptError(null);
+                                setSavePromptOkFlash(false);
+                                setExpandedSummaryPromptId((prev) => {
+                                  if (prev === row.id) return null;
+                                  setExpandedPromptDraft(row.prompt);
+                                  return row.id;
+                                });
+                              }}
+                              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:opacity-95"
+                              style={{
+                                backgroundColor: isExpanded ? 'var(--bg-secondary)' : 'transparent',
+                              }}
+                            >
+                              <span className="min-w-0 flex-1 truncate font-medium" style={{ color: 'var(--text)' }}>
+                                {row.name}
+                              </span>
+                              <ChevronDown
+                                className={`h-4 w-4 shrink-0 transition-transform duration-200 ${
+                                  isExpanded ? 'rotate-180' : ''
+                                }`}
+                                style={{ color: 'var(--text-muted)' }}
+                                aria-hidden
+                              />
+                            </button>
 
-                  {summaryPromptError ? (
-                    <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>
-                      {summaryPromptError}
-                    </p>
-                  ) : null}
-                  {summaryPromptSaved ? (
-                    <p className="mt-2 text-sm" style={{ color: 'var(--success)' }}>
-                      Saved.
-                    </p>
-                  ) : null}
+                            {isExpanded ? (
+                              <div
+                                id={`summary-prompt-panel-${row.id}`}
+                                role="region"
+                                aria-labelledby={`summary-prompt-trigger-${row.id}`}
+                                className="border-t px-4 pb-4 pt-3"
+                                style={{ borderColor: 'var(--border)' }}
+                              >
+                                <textarea
+                                  value={expandedPromptDraft}
+                                  onChange={(e) => setExpandedPromptDraft(e.target.value)}
+                                  className="custom-scrollbar min-h-[18rem] w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                                  style={{
+                                    backgroundColor: 'var(--bg-secondary)',
+                                    color: 'var(--text)',
+                                    borderColor: 'var(--border)',
+                                  }}
+                                  spellCheck={false}
+                                  aria-label={`Prompt text for ${row.name}`}
+                                />
+                                {savePromptError ? (
+                                  <p className="mt-3 text-sm" style={{ color: 'var(--error)' }}>
+                                    {savePromptError}
+                                  </p>
+                                ) : null}
+                                {savePromptOkFlash ? (
+                                  <p className="mt-3 text-sm" style={{ color: 'var(--success)' }}>
+                                    Saved.
+                                  </p>
+                                ) : null}
+                                <div
+                                  className={`mt-3 flex flex-wrap items-center gap-2 ${
+                                    row.name === DEFAULT_SUMMARY_PROMPT_NAME ? 'justify-end' : 'justify-between'
+                                  }`}
+                                >
+                                  {row.name !== DEFAULT_SUMMARY_PROMPT_NAME ? (
+                                    <button
+                                      type="button"
+                                      disabled={savePromptSaving || deletePromptSaving || !user?.id}
+                                      onClick={() => openDeletePromptModal(row)}
+                                      className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                                      style={{
+                                        borderColor: 'var(--error)',
+                                        color: 'var(--error)',
+                                        backgroundColor: 'transparent',
+                                      }}
+                                    >
+                                      <Trash2 className="h-4 w-4" aria-hidden />
+                                      Delete
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    disabled={savePromptSaving || deletePromptSaving || !user?.id}
+                                    onClick={() => void handleSaveExpandedSummaryPrompt()}
+                                    className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                  >
+                                    {savePromptSaving ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                                    ) : (
+                                      <Save className="h-4 w-4" aria-hidden />
+                                    )}
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </section>
               ) : null}
 
@@ -763,6 +933,183 @@ const AccountSettings: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {createModalOpen ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (!createSaving) setCreateModalOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-summary-prompt-title"
+            className="flex max-h-[min(90vh,640px)] w-full max-w-lg flex-col overflow-hidden rounded-xl border shadow-xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <h2 id="create-summary-prompt-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+                New summary prompt
+              </h2>
+              <button
+                type="button"
+                disabled={createSaving}
+                onClick={() => setCreateModalOpen(false)}
+                className="rounded-md p-2 transition-opacity disabled:opacity-50"
+                style={{ color: 'var(--text-muted)' }}
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" aria-hidden />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+              <label className="block text-sm font-medium" style={{ color: 'var(--text)' }}>
+                Name
+              </label>
+              <input
+                type="text"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  color: 'var(--text)',
+                  borderColor: 'var(--border)',
+                }}
+                placeholder="e.g. Weekly standup"
+                disabled={createSaving}
+                autoComplete="off"
+              />
+              <label className="mt-4 block text-sm font-medium" style={{ color: 'var(--text)' }}>
+                Prompt
+              </label>
+              <textarea
+                value={createPrompt}
+                onChange={(e) => setCreatePrompt(e.target.value)}
+                className="custom-scrollbar mt-1.5 min-h-[12rem] w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  color: 'var(--text)',
+                  borderColor: 'var(--border)',
+                }}
+                spellCheck={false}
+                placeholder="Instructions for the summarization model…"
+                disabled={createSaving}
+              />
+              {createError ? (
+                <p className="mt-3 text-sm" style={{ color: 'var(--error)' }}>
+                  {createError}
+                </p>
+              ) : null}
+            </div>
+            <div
+              className="flex shrink-0 flex-wrap justify-end gap-2 border-t px-4 py-3 sm:px-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <button
+                type="button"
+                disabled={createSaving}
+                onClick={() => setCreateModalOpen(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={createSaving || !user?.id}
+                onClick={() => void handleCreateSummaryPrompt()}
+                className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                {createSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingDeletePrompt ? (
+        <div
+          className="fixed inset-0 z-[71] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (!deletePromptSaving) setPendingDeletePrompt(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-summary-prompt-title"
+            className="flex w-full max-w-md flex-col overflow-hidden rounded-xl border shadow-xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <h2 id="delete-summary-prompt-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+                Delete prompt
+              </h2>
+              <button
+                type="button"
+                disabled={deletePromptSaving}
+                onClick={() => setPendingDeletePrompt(null)}
+                className="rounded-md p-2 transition-opacity disabled:opacity-50"
+                style={{ color: 'var(--text-muted)' }}
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" aria-hidden />
+              </button>
+            </div>
+            <div className="px-4 py-4 sm:px-5">
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                Delete <span className="font-medium" style={{ color: 'var(--text)' }}>{pendingDeletePrompt.name}</span>?
+                This cannot be undone.
+              </p>
+              {deletePromptError ? (
+                <p className="mt-3 text-sm" style={{ color: 'var(--error)' }}>
+                  {deletePromptError}
+                </p>
+              ) : null}
+            </div>
+            <div
+              className="flex shrink-0 flex-wrap justify-end gap-2 border-t px-4 py-3 sm:px-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <button
+                type="button"
+                disabled={deletePromptSaving}
+                onClick={() => setPendingDeletePrompt(null)}
+                className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
+                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletePromptSaving || !user?.id}
+                onClick={() => void handleConfirmDeleteSummaryPrompt()}
+                className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                style={{ borderColor: 'var(--error)', color: 'var(--error)', backgroundColor: 'transparent' }}
+              >
+                {deletePromptSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Trash2 className="h-4 w-4" aria-hidden />}
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

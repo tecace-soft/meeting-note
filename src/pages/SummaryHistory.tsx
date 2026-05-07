@@ -54,21 +54,23 @@ interface ChatInfo {
   members: { displayName: string; email: string }[];
 }
 
-/** Shared scroll region — aligns with TranscriptionSummary result panel heights. */
-const NOTE_CONTENT_SCROLL =
-  'h-full min-h-0 overflow-y-auto custom-scrollbar';
+/** Fixed scroll viewport — matches transcription panel (`max-h-96`). */
+const NOTE_PANEL_SCROLL_CLASS =
+  'h-96 max-h-96 min-h-0 overflow-y-auto custom-scrollbar rounded-lg';
 
-/** Plain transcription (no diarization): readable body text and padding like transcript editor. */
-const NOTE_DETAIL_SCROLL_BODY = `${NOTE_CONTENT_SCROLL} rounded-lg p-4 text-base leading-relaxed`;
+/** Plain transcription (no diarization): same fixed height as summary. */
+const NOTE_DETAIL_SCROLL_BODY = `${NOTE_PANEL_SCROLL_CLASS} whitespace-pre-wrap p-4 text-base leading-relaxed`;
 
-/** Summary markdown (read): matches TranscriptionSummary prose + spacing. */
-const NOTE_SUMMARY_MARKDOWN = `prose prose-sm max-w-none ${NOTE_CONTENT_SCROLL} rounded-lg p-4 text-sm leading-relaxed`;
+/** Summary markdown (read): same fixed height + scroll as transcription. */
+const NOTE_SUMMARY_MARKDOWN = `prose prose-sm max-w-none ${NOTE_PANEL_SCROLL_CLASS} p-4 text-sm leading-relaxed`;
 
-/** Summary edit textarea: matches TranscriptionSummary edit field. */
-const NOTE_SUMMARY_TEXTAREA = `w-full resize-none ${NOTE_CONTENT_SCROLL} rounded-lg border-2 p-4 text-sm leading-relaxed`;
+/** Summary edit textarea: same fixed height + scroll. */
+const NOTE_SUMMARY_TEXTAREA = `w-full resize-none ${NOTE_PANEL_SCROLL_CLASS} border-2 p-4 text-sm leading-relaxed`;
 
-const NOTE_TRANSCRIPT_SCROLL_CLASS =
-  'h-full min-h-0';
+/** Match TranscriptionSummary result actions (icons-only on mobile, labels from sm+). */
+const RESULT_ACTION_BTN_CLASS =
+  'result-action-btn flex min-h-[2.75rem] w-full min-w-0 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-start sm:px-4 sm:py-2';
+const RESULT_ACTION_BTN_LABEL_CLASS = 'hidden truncate sm:inline';
 
 interface GeneratedHistoryProfile {
   speakerId: string | null;
@@ -154,7 +156,11 @@ const SummaryHistory: React.FC = () => {
   const [noteEditDraft, setNoteEditDraft] = useState('');
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
   const [noteEditError, setNoteEditError] = useState<string | null>(null);
-  const noteMenuRef = useRef<HTMLDivElement>(null);
+  /** Mobile + desktop each render a menu anchor for the open note; click-outside checks both. */
+  const noteMenuAnchorsRef = useRef<{ mobile: HTMLDivElement | null; desktop: HTMLDivElement | null }>({
+    mobile: null,
+    desktop: null,
+  });
   const [openNoteMenuId, setOpenNoteMenuId] = useState<string | null>(null);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renameNoteDraft, setRenameNoteDraft] = useState('');
@@ -196,10 +202,10 @@ const SummaryHistory: React.FC = () => {
   useEffect(() => {
     if (!openNoteMenuId) return;
     const onDocMouseDown = (event: MouseEvent) => {
-      if (!noteMenuRef.current) return;
-      if (!noteMenuRef.current.contains(event.target as Node)) {
-        setOpenNoteMenuId(null);
-      }
+      const { mobile, desktop } = noteMenuAnchorsRef.current;
+      const target = event.target as Node;
+      if ((mobile && mobile.contains(target)) || (desktop && desktop.contains(target))) return;
+      setOpenNoteMenuId(null);
     };
     document.addEventListener('mousedown', onDocMouseDown);
     return () => document.removeEventListener('mousedown', onDocMouseDown);
@@ -379,11 +385,6 @@ const SummaryHistory: React.FC = () => {
 
   const notesRangeStart = notesTotalCount === 0 ? 0 : (notesPage - 1) * NOTES_PAGE_SIZE + 1;
   const notesRangeEnd = Math.min(notesPage * NOTES_PAGE_SIZE, notesTotalCount);
-  const selectedNote = notes.find((n) => n.id === expandedNoteId) ?? null;
-  const hasSelectedNote = Boolean(selectedNote);
-  /** Collapsed: same max width as page title block; expanded: two-column master-detail. */
-  const sectionMaxWidth = hasSelectedNote ? '113rem' : '56rem';
-
   const handleStartNoteEdit = (note: Note) => {
     setEditingNoteId(note.id);
     setNoteEditDraft(note.summary_edit || note.summary || '');
@@ -670,10 +671,7 @@ const SummaryHistory: React.FC = () => {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
-        <div
-          className="mx-auto flex h-full min-h-0 w-full min-w-0 flex-col gap-4 transition-[max-width] duration-300 ease-out"
-          style={{ maxWidth: sectionMaxWidth }}
-        >
+        <div className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[56rem] flex-col gap-4 transition-[max-width] duration-300 ease-out">
           {/* Chat / scope header — same column width as notes (single max-width parent) */}
           <div className="w-full shrink-0">
             {chatId ? (
@@ -720,12 +718,7 @@ const SummaryHistory: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div
-                className={`flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 ${hasSelectedNote ? 'xl:flex-row' : ''}`}
-              >
-                <section
-                  className={`card flex min-h-0 min-w-0 flex-1 flex-col rounded-lg p-3 ${hasSelectedNote ? 'w-full max-w-4xl xl:mx-0' : 'w-full max-w-none'}`}
-                >
+              <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-lg p-3">
                   <div className="mb-2 shrink-0 space-y-1">
                     {noteListActionError ? (
                       <p className="text-xs" style={{ color: 'var(--error)' }}>
@@ -752,24 +745,135 @@ const SummaryHistory: React.FC = () => {
                         return (
                           <div
                             key={note.id}
+                            className={`overflow-hidden rounded-lg transition-colors ${isSelected ? 'border-2' : ''}`}
+                            style={{
+                              borderColor: isSelected ? 'var(--accent)' : undefined,
+                              backgroundColor: isSelected ? 'var(--bg-secondary)' : undefined,
+                            }}
+                          >
+                            <div
                             onClick={() =>
                               setExpandedNoteId((prev) => (prev === note.id ? null : note.id))
                             }
-                            className="chat-item card grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-stretch gap-x-3 gap-y-0 rounded-lg px-3 py-3 transition-all sm:px-4 sm:py-3.5"
-                            style={{
-                              backgroundColor: isSelected ? 'var(--bg-secondary)' : undefined,
-                              borderColor: isSelected ? 'var(--accent)' : undefined,
-                            }}
+                            className={`chat-item flex cursor-pointer flex-col gap-3 rounded-lg px-3 py-3 transition-all sm:grid sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:items-stretch sm:gap-x-3 sm:gap-y-0 sm:px-4 sm:py-3.5 ${isSelected ? '' : 'card'}`}
+                            style={
+                              isSelected
+                                ? {
+                                    backgroundColor: 'transparent',
+                                    borderColor: 'transparent',
+                                    boxShadow: 'none',
+                                  }
+                                : undefined
+                            }
                           >
-                            <div className="flex min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch">
-                              <div
-                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                                style={{ backgroundColor: 'var(--accent-light)' }}
-                              >
-                                <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                            <div className="flex min-w-0 flex-col gap-2.5 sm:hidden">
+                              <div className="flex items-start justify-between gap-2">
+                                <div
+                                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                                  style={{ backgroundColor: 'var(--accent-light)' }}
+                                >
+                                  <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                                </div>
+                                <div
+                                  className="relative flex h-10 w-10 shrink-0 items-center justify-center"
+                                  ref={(el) => {
+                                    noteMenuAnchorsRef.current.mobile =
+                                      openNoteMenuId === note.id ? el : null;
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenNoteMenuId((prev) => (prev === note.id ? null : note.id))}
+                                    className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                    aria-label={`Note actions for ${getNoteDisplayTitle(note)}`}
+                                  >
+                                    <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
+                                  </button>
+                                  {openNoteMenuId === note.id ? (
+                                    <div
+                                      className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border p-2 shadow-lg"
+                                      style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setOpenNoteMenuId(null);
+                                          navigate(`/save-summary?note_id=${note.id}`);
+                                        }}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                                        Save to OneDrive
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleOpenForwardModal(note)}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                        Forward to Teams
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleOpenProfileModal(note)}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                                        Generate Profile
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          regeneratingNoteId === note.id ||
+                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
+                                        }
+                                        onClick={() => {
+                                          setOpenNoteMenuId(null);
+                                          void handleRegenerateNoteSummary(note);
+                                        }}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
+                                        title={
+                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
+                                            ? 'Requires diarized transcription'
+                                            : undefined
+                                        }
+                                      >
+                                        {regeneratingNoteId === note.id ? (
+                                          <>
+                                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                            Regenerating…
+                                          </>
+                                        ) : (
+                                          <>
+                                            <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                                            Regenerate Summary
+                                          </>
+                                        )}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartRenameNote(note)}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+                                        Rename Note
+                                      </button>
+                                      <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenDeleteNote(note)}
+                                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
+                                        style={{ color: 'var(--error)' }}
+                                      >
+                                        <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                                        Delete Note
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
                               </div>
-                            </div>
-                            <div className="min-w-0 pr-1">
                               {renamingNoteId === note.id ? (
                                 <input
                                   autoFocus
@@ -800,17 +904,17 @@ const SummaryHistory: React.FC = () => {
                               ) : (
                                 <>
                                   <p
-                                    className="block w-[min(350px,100%)] max-w-[350px] truncate text-base font-semibold leading-snug"
+                                    className="min-w-0 truncate text-base font-semibold leading-snug"
                                     style={{ color: 'var(--text)' }}
                                     title={getNoteDisplayTitle(note)}
                                   >
                                     {getNoteDisplayTitle(note)}
                                   </p>
                                   {noteTags.length > 0 ? (
-                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                    <div className="flex flex-wrap gap-1.5">
                                       {visibleTags.map((tagLabel, tagIdx) => (
                                         <span
-                                          key={`${note.id}-tag-${tagIdx}`}
+                                          key={`${note.id}-m-tag-${tagIdx}`}
                                           className="inline-flex max-w-full rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug break-words"
                                           style={{
                                             backgroundColor: 'var(--accent-light)',
@@ -837,102 +941,456 @@ const SummaryHistory: React.FC = () => {
                                   ) : null}
                                 </>
                               )}
-                            </div>
-                            <div className="flex min-h-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
-                              <div className="flex min-h-0 min-w-0 max-w-[13rem] flex-col items-end justify-center text-right">
-                                <div
-                                  className="flex min-w-0 items-center gap-1 text-sm"
-                                  style={{ color: 'var(--text-secondary)' }}
-                                  title={formatDate(note.created_at)}
-                                >
-                                  <Calendar className="h-3 w-3 shrink-0" aria-hidden />
-                                  <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
-                                </div>
-                                <p
-                                  className="mt-1 truncate text-sm leading-snug"
-                                  style={{ color: 'var(--text-secondary)' }}
-                                  title={getNoteParticipantsLabel(note)}
-                                >
-                                  {getNoteParticipantsLabel(note)}
-                                </p>
+                              <div
+                                className="flex items-center gap-1.5 text-sm"
+                                style={{ color: 'var(--text-secondary)' }}
+                              >
+                                <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                                <span className="min-w-0 break-words">{formatDate(note.created_at)}</span>
                               </div>
                               <div
-                                className="relative flex h-10 w-10 shrink-0 items-center justify-center"
-                                ref={openNoteMenuId === note.id ? noteMenuRef : undefined}
-                                onClick={(e) => e.stopPropagation()}
+                                className="flex items-start gap-1.5 text-sm"
+                                style={{ color: 'var(--text-secondary)' }}
                               >
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenNoteMenuId((prev) => (prev === note.id ? null : note.id))}
-                                  className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
-                                  style={{ color: 'var(--text-secondary)' }}
-                                  aria-label={`Note actions for ${getNoteDisplayTitle(note)}`}
-                                >
-                                  <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
-                                </button>
-                                {openNoteMenuId === note.id ? (
-                                  <div
-                                    className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border p-2 shadow-lg"
-                                    style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
-                                  >
-                                    <button
-                                      type="button"
-                                      onClick={() => { setOpenNoteMenuId(null); navigate(`/save-summary?note_id=${note.id}`); }}
-                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                    >
-                                      <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
-                                      Save to OneDrive
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleOpenForwardModal(note)}
-                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                    >
-                                      <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                      Forward to Teams
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleOpenProfileModal(note)}
-                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                    >
-                                      <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                                      Generate Profile
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={regeneratingNoteId === note.id || !hasUsableDiarization(getNoteDiarizationRaw(note))}
-                                      onClick={() => { setOpenNoteMenuId(null); void handleRegenerateNoteSummary(note); }}
-                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
-                                      title={!hasUsableDiarization(getNoteDiarizationRaw(note)) ? 'Requires diarized transcription' : undefined}
-                                    >
-                                      {regeneratingNoteId === note.id
-                                        ? <><Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
-                                        : <><RefreshCw className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
-                                      }
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleStartRenameNote(note)}
-                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                    >
-                                      <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                                      Rename Note
-                                    </button>
-                                    <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenDeleteNote(note)}
-                                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
-                                      style={{ color: 'var(--error)' }}
-                                    >
-                                      <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                                      Delete Note
-                                    </button>
-                                  </div>
-                                ) : null}
+                                <Users className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                                <span className="min-w-0 break-words leading-snug">
+                                  {getNoteParticipantsLabel(note)}
+                                </span>
                               </div>
                             </div>
+
+                            <div className="hidden sm:contents">
+                              <div className="flex min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch">
+                                <div
+                                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                                  style={{ backgroundColor: 'var(--accent-light)' }}
+                                >
+                                  <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                                </div>
+                              </div>
+                              <div className="min-w-0 pr-1">
+                                {renamingNoteId === note.id ? (
+                                  <input
+                                    autoFocus
+                                    value={renameNoteDraft}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={(e) => setRenameNoteDraft(e.target.value)}
+                                    onBlur={() => {
+                                      void handleSaveRenameNote(note.id);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        void handleSaveRenameNote(note.id);
+                                      } else if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        setRenamingNoteId(null);
+                                        setRenameNoteDraft('');
+                                      }
+                                    }}
+                                    maxLength={200}
+                                    className="w-full min-w-0 rounded px-1 py-0.5 text-sm font-medium"
+                                    style={{
+                                      color: 'var(--text)',
+                                      backgroundColor: 'var(--accent-light)',
+                                      outline: '1px solid var(--accent)',
+                                    }}
+                                  />
+                                ) : (
+                                  <>
+                                    <p
+                                      className="block w-[min(350px,100%)] max-w-[350px] truncate text-base font-semibold leading-snug"
+                                      style={{ color: 'var(--text)' }}
+                                      title={getNoteDisplayTitle(note)}
+                                    >
+                                      {getNoteDisplayTitle(note)}
+                                    </p>
+                                    {noteTags.length > 0 ? (
+                                      <div className="mt-2 flex flex-wrap gap-1.5">
+                                        {visibleTags.map((tagLabel, tagIdx) => (
+                                          <span
+                                            key={`${note.id}-tag-${tagIdx}`}
+                                            className="inline-flex max-w-full rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug break-words"
+                                            style={{
+                                              backgroundColor: 'var(--accent-light)',
+                                              color: 'var(--text-secondary)',
+                                            }}
+                                            title={tagLabel}
+                                          >
+                                            {tagLabel}
+                                          </span>
+                                        ))}
+                                        {hasMoreTags ? (
+                                          <span
+                                            className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug"
+                                            style={{
+                                              backgroundColor: 'var(--bg-secondary)',
+                                              color: 'var(--text-secondary)',
+                                            }}
+                                            title={allTagsTooltip}
+                                          >
+                                            ...
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </>
+                                )}
+                              </div>
+                              <div className="flex min-h-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
+                                <div className="flex min-h-0 min-w-0 max-w-[13rem] flex-col items-end justify-center text-right">
+                                  <div
+                                    className="flex min-w-0 items-center gap-1 text-sm"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                    title={formatDate(note.created_at)}
+                                  >
+                                    <Calendar className="h-3 w-3 shrink-0" aria-hidden />
+                                    <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
+                                  </div>
+                                  <p
+                                    className="mt-1 truncate text-sm leading-snug"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                    title={getNoteParticipantsLabel(note)}
+                                  >
+                                    {getNoteParticipantsLabel(note)}
+                                  </p>
+                                </div>
+                                <div
+                                  className="relative flex h-10 w-10 shrink-0 items-center justify-center"
+                                  ref={(el) => {
+                                    noteMenuAnchorsRef.current.desktop =
+                                      openNoteMenuId === note.id ? el : null;
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenNoteMenuId((prev) => (prev === note.id ? null : note.id))}
+                                    className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                    aria-label={`Note actions for ${getNoteDisplayTitle(note)}`}
+                                  >
+                                    <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
+                                  </button>
+                                  {openNoteMenuId === note.id ? (
+                                    <div
+                                      className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border p-2 shadow-lg"
+                                      style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setOpenNoteMenuId(null);
+                                          navigate(`/save-summary?note_id=${note.id}`);
+                                        }}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                                        Save to OneDrive
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleOpenForwardModal(note)}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                        Forward to Teams
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleOpenProfileModal(note)}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                                        Generate Profile
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          regeneratingNoteId === note.id ||
+                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
+                                        }
+                                        onClick={() => {
+                                          setOpenNoteMenuId(null);
+                                          void handleRegenerateNoteSummary(note);
+                                        }}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
+                                        title={
+                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
+                                            ? 'Requires diarized transcription'
+                                            : undefined
+                                        }
+                                      >
+                                        {regeneratingNoteId === note.id ? (
+                                          <>
+                                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                            Regenerating…
+                                          </>
+                                        ) : (
+                                          <>
+                                            <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                                            Regenerate Summary
+                                          </>
+                                        )}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartRenameNote(note)}
+                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      >
+                                        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+                                        Rename Note
+                                      </button>
+                                      <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenDeleteNote(note)}
+                                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
+                                        style={{ color: 'var(--error)' }}
+                                      >
+                                        <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                                        Delete Note
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                            {isSelected
+                              ? (() => {
+                                  const diarRaw = getNoteDiarizationRaw(note);
+                                  const showDiarized = hasUsableDiarization(diarRaw);
+                                  const plainTx = note.transcription?.trim();
+                                  const hasTranscription = showDiarized || Boolean(plainTx);
+                                  const activeTab = noteExpandedTab[note.id] ?? 'summary';
+                                  return (
+                                    <div
+                                      className="border-t"
+                                      style={{
+                                        borderTopColor: 'color-mix(in srgb, var(--accent) 18%, var(--border))',
+                                        backgroundColor: 'transparent',
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                      role="region"
+                                      aria-label="Note detail"
+                                    >
+                                      <div className="flex min-h-0 flex-col">
+                                        <div
+                                          className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
+                                          style={{ borderColor: 'var(--border)' }}
+                                        >
+                                          <div className="-mb-px flex min-w-0 gap-1 sm:gap-6" role="tablist">
+                                            <button
+                                              type="button"
+                                              role="tab"
+                                              aria-selected={activeTab === 'summary'}
+                                              onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
+                                              className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                              style={{
+                                                borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
+                                                color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
+                                              }}
+                                            >
+                                              Summary
+                                            </button>
+                                            {hasTranscription && (
+                                              <button
+                                                type="button"
+                                                role="tab"
+                                                aria-selected={activeTab === 'transcription'}
+                                                onClick={() =>
+                                                  setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))
+                                                }
+                                                className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                                style={{
+                                                  borderBottomColor:
+                                                    activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
+                                                  color:
+                                                    activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
+                                                }}
+                                              >
+                                                Transcription
+                                              </button>
+                                            )}
+                                          </div>
+                                          {activeTab === 'summary' && (
+                                            <div className="flex shrink-0 items-center gap-2 pb-2">
+                                              {editingNoteId === note.id ? (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => void handleSaveNoteEdit(note)}
+                                                  disabled={savingNoteId === note.id}
+                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
+                                                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                                >
+                                                  {savingNoteId === note.id ? (
+                                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                                  ) : (
+                                                    <Save className="h-3 w-3" />
+                                                  )}
+                                                  Done
+                                                </button>
+                                              ) : (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleStartNoteEdit(note)}
+                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                                >
+                                                  <Pencil className="h-3 w-3" />
+                                                  Edit
+                                                </button>
+                                              )}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="min-h-0 flex-1 px-4 pb-4 pt-4 md:px-5">
+                                          {activeTab === 'summary' && (
+                                            <>
+                                              {editingNoteId === note.id ? (
+                                                <textarea
+                                                  value={noteEditDraft}
+                                                  onChange={(e) => setNoteEditDraft(e.target.value)}
+                                                  className={`min-h-0 flex-1 ${NOTE_SUMMARY_TEXTAREA}`}
+                                                  style={{
+                                                    backgroundColor: 'var(--bg-secondary)',
+                                                    color: 'var(--text)',
+                                                    borderColor: 'var(--accent)',
+                                                  }}
+                                                />
+                                              ) : note.summary_edit || note.summary ? (
+                                                <div
+                                                  className={NOTE_SUMMARY_MARKDOWN}
+                                                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
+                                                >
+                                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                    {note.summary_edit || note.summary || ''}
+                                                  </ReactMarkdown>
+                                                </div>
+                                              ) : (
+                                                <div
+                                                  className={`flex items-center justify-center italic ${NOTE_PANEL_SCROLL_CLASS} border border-dashed p-4 text-sm leading-relaxed`}
+                                                  style={{
+                                                    backgroundColor: 'var(--bg-secondary)',
+                                                    color: 'var(--text-muted)',
+                                                    borderColor: 'var(--border)',
+                                                  }}
+                                                >
+                                                  No summary available
+                                                </div>
+                                              )}
+                                              {editingNoteId === note.id && noteEditError ? (
+                                                <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
+                                                  {noteEditError}
+                                                </p>
+                                              ) : null}
+                                              {regenerateNoteError[note.id] ? (
+                                                <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
+                                                  {regenerateNoteError[note.id]}
+                                                </p>
+                                              ) : null}
+                                            </>
+                                          )}
+                                          {activeTab === 'transcription' && hasTranscription && (
+                                            <>
+                                              {showDiarized ? (
+                                                <TranscriptDiarizedEditor
+                                                  segments={normalizeTranscript(diarRaw)}
+                                                  onSegmentsChange={(next) =>
+                                                    setNotes((prev) =>
+                                                      prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
+                                                    )
+                                                  }
+                                                  noteId={note.id}
+                                                  scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
+                                                />
+                                              ) : (
+                                                <div
+                                                  className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                                                  style={{
+                                                    backgroundColor: 'var(--bg-secondary)',
+                                                    color: 'var(--text-secondary)',
+                                                  }}
+                                                >
+                                                  {plainTx}
+                                                </div>
+                                              )}
+                                            </>
+                                          )}
+                                        </div>
+                                        <div
+                                          className="grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-4 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
+                                          style={{ borderColor: 'var(--border)' }}
+                                        >
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              navigate(`/save-summary?note_id=${note.id}`);
+                                            }}
+                                            className={RESULT_ACTION_BTN_CLASS}
+                                            title="Save to OneDrive"
+                                            aria-label="Save to OneDrive"
+                                          >
+                                            <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save to OneDrive</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleOpenForwardModal(note)}
+                                            className={RESULT_ACTION_BTN_CLASS}
+                                            title="Forward to Teams"
+                                            aria-label="Forward to Teams"
+                                          >
+                                            <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward to Teams</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleOpenProfileModal(note)}
+                                            className={RESULT_ACTION_BTN_CLASS}
+                                            title="Generate Profile"
+                                            aria-label="Generate Profile"
+                                          >
+                                            <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Generate Profile</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={regeneratingNoteId === note.id || !hasUsableDiarization(diarRaw)}
+                                            onClick={() => void handleRegenerateNoteSummary(note)}
+                                            className={RESULT_ACTION_BTN_CLASS}
+                                            title={
+                                              !hasUsableDiarization(diarRaw)
+                                                ? 'Requires diarized transcription'
+                                                : regeneratingNoteId === note.id
+                                                  ? 'Regenerating summary'
+                                                  : 'Regenerate Summary'
+                                            }
+                                            aria-label={
+                                              regeneratingNoteId === note.id
+                                                ? 'Regenerating summary'
+                                                : 'Regenerate Summary'
+                                            }
+                                          >
+                                            {regeneratingNoteId === note.id ? (
+                                              <>
+                                                <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerating…</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate Summary</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })()
+                              : null}
                           </div>
                         );
                       })}
@@ -1014,184 +1472,6 @@ const SummaryHistory: React.FC = () => {
                     </nav>
                   ) : null}
                 </section>
-                <section
-                  className={`card min-h-0 overflow-hidden rounded-lg transition-all duration-300 ease-out ${hasSelectedNote ? 'xl:w-full xl:max-w-4xl xl:opacity-100' : 'pointer-events-none xl:w-0 xl:opacity-0'}`}
-                  style={{
-                    transform: hasSelectedNote ? 'translateX(0)' : 'translateX(12px)',
-                  }}
-                >
-                  {selectedNote ? (() => {
-                    const diarRaw = getNoteDiarizationRaw(selectedNote);
-                    const showDiarized = hasUsableDiarization(diarRaw);
-                    const plainTx = selectedNote.transcription?.trim();
-                    const hasTranscription = showDiarized || Boolean(plainTx);
-                    const activeTab = noteExpandedTab[selectedNote.id] ?? 'summary';
-                    return (
-                      <div className="flex h-full min-h-0 flex-col">
-                        <div
-                          className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
-                          style={{ borderColor: 'var(--border)' }}
-                        >
-                          <div className="-mb-px flex min-w-0 gap-1 sm:gap-6" role="tablist">
-                            <button
-                              type="button"
-                              role="tab"
-                              aria-selected={activeTab === 'summary'}
-                              onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [selectedNote.id]: 'summary' }))}
-                              className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
-                              style={{
-                                borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
-                                color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
-                              }}
-                            >
-                              Summary
-                            </button>
-                            {hasTranscription && (
-                              <button
-                                type="button"
-                                role="tab"
-                                aria-selected={activeTab === 'transcription'}
-                                onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [selectedNote.id]: 'transcription' }))}
-                                className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
-                                style={{
-                                  borderBottomColor: activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
-                                  color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
-                                }}
-                              >
-                                Transcription
-                              </button>
-                            )}
-                          </div>
-                          {activeTab === 'summary' && (
-                            <div className="flex shrink-0 items-center gap-2 pb-2">
-                              {editingNoteId === selectedNote.id ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSaveNoteEdit(selectedNote)}
-                                  disabled={savingNoteId === selectedNote.id}
-                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
-                                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                >
-                                  {savingNoteId === selectedNote.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                                  Done
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleStartNoteEdit(selectedNote)}
-                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                  Edit
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <div className="min-h-0 flex-1 px-4 pb-4 pt-4 md:px-5">
-                          {activeTab === 'summary' && (
-                            <>
-                              {editingNoteId === selectedNote.id ? (
-                                <textarea
-                                  value={noteEditDraft}
-                                  onChange={(e) => setNoteEditDraft(e.target.value)}
-                                  className={`min-h-0 flex-1 ${NOTE_SUMMARY_TEXTAREA}`}
-                                  style={{
-                                    backgroundColor: 'var(--bg-secondary)',
-                                    color: 'var(--text)',
-                                    borderColor: 'var(--accent)',
-                                  }}
-                                />
-                              ) : selectedNote.summary_edit || selectedNote.summary ? (
-                                <div
-                                  className={NOTE_SUMMARY_MARKDOWN}
-                                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
-                                >
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedNote.summary_edit || selectedNote.summary || ''}</ReactMarkdown>
-                                </div>
-                              ) : (
-                                <div
-                                  className={`flex items-center justify-center italic ${NOTE_CONTENT_SCROLL} rounded-lg p-4 text-sm leading-relaxed`}
-                                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
-                                >
-                                  No summary available
-                                </div>
-                              )}
-                              {editingNoteId === selectedNote.id && noteEditError ? (
-                                <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{noteEditError}</p>
-                              ) : null}
-                              {regenerateNoteError[selectedNote.id] ? (
-                                <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{regenerateNoteError[selectedNote.id]}</p>
-                              ) : null}
-                            </>
-                          )}
-                          {activeTab === 'transcription' && hasTranscription && (
-                            showDiarized ? (
-                              <TranscriptDiarizedEditor
-                                segments={normalizeTranscript(diarRaw)}
-                                onSegmentsChange={(next) =>
-                                  setNotes((prev) => prev.map((n) => n.id === selectedNote.id ? { ...n, diarization: next } : n))
-                                }
-                                noteId={selectedNote.id}
-                                scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
-                              />
-                            ) : (
-                              <div
-                                className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
-                                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                              >
-                                {plainTx}
-                              </div>
-                            )
-                          )}
-                        </div>
-                        <div
-                          className="flex flex-wrap justify-end gap-2 border-t px-4 py-3 md:px-5"
-                          style={{ borderColor: 'var(--border)' }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => { navigate(`/save-summary?note_id=${selectedNote.id}`); }}
-                            className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium"
-                          >
-                            <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
-                            Save to OneDrive
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleOpenForwardModal(selectedNote)}
-                            className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium"
-                          >
-                            <Users className="h-4 w-4 shrink-0" aria-hidden />
-                            Forward to Teams
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleOpenProfileModal(selectedNote)}
-                            className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium"
-                          >
-                            <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                            Generate Profile
-                          </button>
-                          <button
-                            type="button"
-                            disabled={regeneratingNoteId === selectedNote.id || !hasUsableDiarization(diarRaw)}
-                            onClick={() => void handleRegenerateNoteSummary(selectedNote)}
-                            className="result-action-btn flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            {regeneratingNoteId === selectedNote.id ? (
-                              <><Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
-                            ) : (
-                              <><RefreshCw className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })() : null}
-                </section>
-              </div>
             )}
           </div>
         </div>
