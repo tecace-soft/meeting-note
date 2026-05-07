@@ -20,6 +20,7 @@ import {
   Loader2,
   Send,
   Check,
+  Copy,
   Pencil,
   RefreshCw,
   Save,
@@ -117,7 +118,11 @@ const TranscriptionSummary: React.FC = () => {
   const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
   const [profileGenError, setProfileGenError] = useState<string | null>(null);
   const [generatedProfiles, setGeneratedProfiles] = useState<GeneratedProfile[]>([]);
+  const [isSaveAllConfirmOpen, setIsSaveAllConfirmOpen] = useState(false);
+  const [saveAllStatus, setSaveAllStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [saveAllErrorDetails, setSaveAllErrorDetails] = useState<string[]>([]);
   const [resultsTab, setResultsTab] = useState<'summary' | 'transcription'>('summary');
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Recording states
   const [isRecording, setIsRecording] = useState(false);
@@ -861,10 +866,10 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
-  const handleSaveProfile = async (speakerName: string) => {
-    if (!user?.id) return;
+  const handleSaveProfile = async (speakerName: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!user?.id) return { ok: false, error: 'Missing authenticated user.' };
     const profile = generatedProfiles.find((p) => p.speakerName === speakerName);
-    if (!profile) return;
+    if (!profile) return { ok: false, error: `Profile "${speakerName}" not found.` };
 
     setGeneratedProfiles((prev) =>
       prev.map((p) => (p.speakerName === speakerName ? { ...p, saving: true, saveError: null } : p))
@@ -890,15 +895,42 @@ const TranscriptionSummary: React.FC = () => {
           p.speakerName === speakerName ? { ...p, draft: toSave, saving: false, saved: true } : p
         )
       );
+      return { ok: true };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Save failed';
       setGeneratedProfiles((prev) =>
         prev.map((p) =>
           p.speakerName === speakerName
-            ? { ...p, saving: false, saveError: err instanceof Error ? err.message : 'Save failed' }
+            ? { ...p, saving: false, saveError: message }
             : p
         )
       );
+      return { ok: false, error: message };
     }
+  };
+
+  const handleConfirmSaveAllProfiles = async () => {
+    const unsaved = generatedProfiles.filter((p) => !p.saved);
+    if (unsaved.length === 0) {
+      setSaveAllStatus('success');
+      setSaveAllErrorDetails([]);
+      setIsProfileModalOpen(false);
+      return;
+    }
+    setSaveAllStatus('saving');
+    setSaveAllErrorDetails([]);
+    const failures: string[] = [];
+    for (const profile of unsaved) {
+      const result = await handleSaveProfile(profile.speakerName);
+      if (!result.ok) failures.push(`${profile.speakerName}: ${result.error || 'Save failed'}`);
+    }
+    if (failures.length === 0) {
+      setSaveAllStatus('success');
+      setIsProfileModalOpen(false);
+      return;
+    }
+    setSaveAllErrorDetails(failures);
+    setSaveAllStatus('error');
   };
 
   const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook/532f465d-d198-4f59-ba75-20c39d41a079';
@@ -953,6 +985,20 @@ const TranscriptionSummary: React.FC = () => {
   const resultActionBtnClass =
     'result-action-btn flex min-h-[2.75rem] w-full min-w-0 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-start sm:px-4 sm:py-2';
   const resultActionBtnLabelClass = 'hidden truncate sm:inline';
+
+  const handleCopyText = useCallback(async (text: string, key: string) => {
+    const value = text.trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => {
+        setCopiedKey((prev) => (prev === key ? null : prev));
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
+    }
+  }, []);
 
   if (isLoading) {
     return (
@@ -1249,6 +1295,20 @@ const TranscriptionSummary: React.FC = () => {
                       </select>
                       <button
                         type="button"
+                        disabled={!selectedSummaryPromptId || summaryPromptsLoading}
+                        onClick={() => {
+                          const selected = summaryPromptRows.find((r) => r.id === selectedSummaryPromptId);
+                          void handleCopyText(selected?.prompt ?? '', 'summary-prompt');
+                        }}
+                        className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                        title="Copy summary prompt"
+                        aria-label="Copy summary prompt"
+                      >
+                        {copiedKey === 'summary-prompt' ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => void handleSummarize()}
                         disabled={
                           isSummarizing ||
@@ -1350,6 +1410,26 @@ const TranscriptionSummary: React.FC = () => {
                         </div>
                         <div className="flex shrink-0 items-center gap-2 pb-2">
                           <button
+                            type="button"
+                            onClick={() =>
+                              void handleCopyText(
+                                resultsTab === 'summary' ? editedSummary : formatTranscriptText(summaryResult.transcript),
+                                resultsTab === 'summary' ? 'summary-result' : 'transcription-result'
+                              )
+                            }
+                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                            title={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                            aria-label={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                          >
+                            {copiedKey === (resultsTab === 'summary' ? 'summary-result' : 'transcription-result') ? (
+                              <Check className="h-3 w-3" aria-hidden />
+                            ) : (
+                              <Copy className="h-3 w-3" aria-hidden />
+                            )}
+                            Copy
+                          </button>
+                          <button
                             onClick={() => setShowDiscardModal(true)}
                             className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                             style={{
@@ -1390,6 +1470,17 @@ const TranscriptionSummary: React.FC = () => {
                           Summary
                         </h3>
                         <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyText(editedSummary, 'summary-result')}
+                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                            title="Copy summary"
+                            aria-label="Copy summary"
+                          >
+                            {copiedKey === 'summary-result' ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
+                            Copy
+                          </button>
                           <button
                             onClick={() => setShowDiscardModal(true)}
                             className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
@@ -1529,13 +1620,13 @@ const TranscriptionSummary: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        title="Generate Profile"
-                        aria-label="Generate Profile"
+                        title="Sync Profile"
+                        aria-label="Sync Profile"
                         onClick={() => void handleGenerateProfile()}
                         className={resultActionBtnClass}
                       >
                         <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                        <span className={resultActionBtnLabelClass}>Generate Profile</span>
+                        <span className={resultActionBtnLabelClass}>Sync Profile</span>
                       </button>
                       <button
                         type="button"
@@ -1883,6 +1974,21 @@ const TranscriptionSummary: React.FC = () => {
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyText(profile.draft, `profile-${profile.speakerName}`)}
+                            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity"
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                            title={`Copy profile for ${profile.speakerName}`}
+                            aria-label={`Copy profile for ${profile.speakerName}`}
+                          >
+                            {copiedKey === `profile-${profile.speakerName}` ? (
+                              <Check className="h-3.5 w-3.5" aria-hidden />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5" aria-hidden />
+                            )}
+                            Copy
+                          </button>
                           {profile.saved && (
                             <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--success)' }}>
                               <Check className="h-3.5 w-3.5" aria-hidden />
@@ -1962,8 +2068,9 @@ const TranscriptionSummary: React.FC = () => {
                     type="button"
                     disabled={generatedProfiles.some((p) => p.saving)}
                     onClick={() => {
-                      const unsaved = generatedProfiles.filter((p) => !p.saved);
-                      unsaved.forEach((p) => void handleSaveProfile(p.speakerName));
+                      setSaveAllStatus('idle');
+                      setSaveAllErrorDetails([]);
+                      setIsSaveAllConfirmOpen(true);
                     }}
                     className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
@@ -1992,6 +2099,99 @@ const TranscriptionSummary: React.FC = () => {
                   Close
                 </button>
               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isSaveAllConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (saveAllStatus !== 'saving') setIsSaveAllConfirmOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-lg rounded-xl border p-5 shadow-xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {saveAllStatus === 'idle' && (
+              <>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Save all profiles?</h3>
+                <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  This will save all unsaved speaker profiles to Supabase.
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsSaveAllConfirmOpen(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmSaveAllProfiles()}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
+                    Confirm Save All
+                  </button>
+                </div>
+              </>
+            )}
+            {saveAllStatus === 'saving' && (
+              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                Saving profiles...
+              </div>
+            )}
+            {saveAllStatus === 'success' && (
+              <>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Profiles saved</h3>
+                <p className="mt-2 text-sm" style={{ color: 'var(--success)' }}>
+                  All profiles were successfully saved to Supabase.
+                </p>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsSaveAllConfirmOpen(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
+            {saveAllStatus === 'error' && (
+              <>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Failed to save all profiles</h3>
+                <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>
+                  Some profiles could not be saved to Supabase.
+                </p>
+                <ul className="mt-2 max-h-40 list-disc space-y-1 overflow-y-auto pl-5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {saveAllErrorDetails.map((detail, idx) => (
+                    <li key={`${detail}-${idx}`}>{detail}</li>
+                  ))}
+                </ul>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsSaveAllConfirmOpen(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>

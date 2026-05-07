@@ -5,6 +5,7 @@ import { supabase, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
 import {
   Calendar,
   Check,
+  Copy,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -54,9 +55,9 @@ interface ChatInfo {
   members: { displayName: string; email: string }[];
 }
 
-/** Fixed scroll viewport — matches transcription panel (`max-h-96`). */
+/** Mobile keeps fixed panel height; desktop fills available detail pane height. */
 const NOTE_PANEL_SCROLL_CLASS =
-  'h-96 max-h-96 min-h-0 overflow-y-auto custom-scrollbar rounded-lg';
+  'h-96 max-h-96 min-h-0 overflow-y-auto custom-scrollbar rounded-lg md:h-full md:max-h-none';
 
 /** Plain transcription (no diarization): same fixed height as summary. */
 const NOTE_DETAIL_SCROLL_BODY = `${NOTE_PANEL_SCROLL_CLASS} whitespace-pre-wrap p-4 text-base leading-relaxed`;
@@ -192,6 +193,10 @@ const SummaryHistory: React.FC = () => {
   const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
   const [profileGenError, setProfileGenError] = useState<string | null>(null);
   const [generatedProfiles, setGeneratedProfiles] = useState<GeneratedHistoryProfile[]>([]);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [isSaveAllConfirmOpen, setIsSaveAllConfirmOpen] = useState(false);
+  const [saveAllStatus, setSaveAllStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [saveAllErrorDetails, setSaveAllErrorDetails] = useState<string[]>([]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -385,6 +390,7 @@ const SummaryHistory: React.FC = () => {
 
   const notesRangeStart = notesTotalCount === 0 ? 0 : (notesPage - 1) * NOTES_PAGE_SIZE + 1;
   const notesRangeEnd = Math.min(notesPage * NOTES_PAGE_SIZE, notesTotalCount);
+  const selectedNote = notes.find((n) => n.id === expandedNoteId) ?? null;
   const handleStartNoteEdit = (note: Note) => {
     setEditingNoteId(note.id);
     setNoteEditDraft(note.summary_edit || note.summary || '');
@@ -635,10 +641,10 @@ const SummaryHistory: React.FC = () => {
     }
   };
 
-  const handleSaveHistoryProfile = async (speakerName: string) => {
-    if (!user?.id) return;
+  const handleSaveHistoryProfile = async (speakerName: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!user?.id) return { ok: false, error: 'Missing authenticated user.' };
     const profile = generatedProfiles.find((p) => p.speakerName === speakerName);
-    if (!profile) return;
+    if (!profile) return { ok: false, error: `Profile "${speakerName}" not found.` };
     setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: true, saveError: null } : p));
     try {
       const toSave = canonicalOntologyProfileString(profile.draft);
@@ -652,8 +658,49 @@ const SummaryHistory: React.FC = () => {
       setGeneratedProfiles((prev) =>
         prev.map((p) => (p.speakerName === speakerName ? { ...p, draft: toSave, saving: false, saved: true } : p))
       );
+      return { ok: true };
     } catch (err: unknown) {
-      setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: false, saveError: err instanceof Error ? err.message : 'Save failed' } : p));
+      const message = err instanceof Error ? err.message : 'Save failed';
+      setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: false, saveError: message } : p));
+      return { ok: false, error: message };
+    }
+  };
+
+  const handleConfirmSaveAllProfiles = async () => {
+    const unsaved = generatedProfiles.filter((p) => !p.saved);
+    if (unsaved.length === 0) {
+      setSaveAllStatus('success');
+      setSaveAllErrorDetails([]);
+      setProfileModalNoteId(null);
+      return;
+    }
+    setSaveAllStatus('saving');
+    setSaveAllErrorDetails([]);
+    const failures: string[] = [];
+    for (const profile of unsaved) {
+      const result = await handleSaveHistoryProfile(profile.speakerName);
+      if (!result.ok) failures.push(`${profile.speakerName}: ${result.error || 'Save failed'}`);
+    }
+    if (failures.length === 0) {
+      setSaveAllStatus('success');
+      setProfileModalNoteId(null);
+      return;
+    }
+    setSaveAllErrorDetails(failures);
+    setSaveAllStatus('error');
+  };
+
+  const handleCopyText = async (text: string, key: string) => {
+    const value = text.trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => {
+        setCopiedKey((prev) => (prev === key ? null : prev));
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
     }
   };
 
@@ -671,7 +718,11 @@ const SummaryHistory: React.FC = () => {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
-        <div className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[56rem] flex-col gap-4 transition-[max-width] duration-300 ease-out">
+        <div
+          className={`mx-auto flex h-full min-h-0 w-full min-w-0 flex-col gap-4 transition-[max-width] duration-300 ease-out ${
+            selectedNote ? 'max-w-[90rem]' : 'max-w-[56rem]'
+          }`}
+        >
           {/* Chat / scope header — same column width as notes (single max-width parent) */}
           <div className="w-full shrink-0">
             {chatId ? (
@@ -718,6 +769,11 @@ const SummaryHistory: React.FC = () => {
                 </div>
               </div>
             ) : (
+              <div
+                className={`grid min-h-0 w-full min-w-0 flex-1 gap-4 transition-[grid-template-columns] duration-300 ease-out ${
+                  selectedNote ? 'md:grid-cols-[minmax(26rem,34rem)_minmax(0,1fr)]' : 'md:grid-cols-1'
+                }`}
+              >
               <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-lg p-3">
                   <div className="mb-2 shrink-0 space-y-1">
                     {noteListActionError ? (
@@ -738,16 +794,17 @@ const SummaryHistory: React.FC = () => {
                     <div className="space-y-2">
                       {notes.map((note) => {
                         const noteTags = getNoteTags(note);
-                        const visibleTags = noteTags.slice(0, 3);
-                        const hasMoreTags = noteTags.length > 3;
-                        const allTagsTooltip = noteTags.join(', ');
                         const isSelected = expandedNoteId === note.id;
+                        const limitTagsForAllRows = Boolean(expandedNoteId);
+                        const visibleTags = limitTagsForAllRows ? [] : noteTags;
+                        const hasMoreTags = limitTagsForAllRows && noteTags.length > 0;
+                        const allTagsTooltip = noteTags.join(', ');
                         return (
                           <div
                             key={note.id}
-                            className={`overflow-hidden rounded-lg transition-colors ${isSelected ? 'border-2' : ''}`}
+                            className="overflow-hidden rounded-lg border transition-colors"
                             style={{
-                              borderColor: isSelected ? 'var(--accent)' : undefined,
+                              borderColor: isSelected ? 'var(--accent)' : 'var(--border)',
                               backgroundColor: isSelected ? 'var(--bg-secondary)' : undefined,
                             }}
                           >
@@ -911,7 +968,13 @@ const SummaryHistory: React.FC = () => {
                                     {getNoteDisplayTitle(note)}
                                   </p>
                                   {noteTags.length > 0 ? (
-                                    <div className="flex flex-wrap gap-1.5">
+                                    <div
+                                      className={
+                                        limitTagsForAllRows
+                                          ? 'flex flex-nowrap items-center gap-1.5 overflow-hidden'
+                                          : 'flex flex-wrap gap-1.5'
+                                      }
+                                    >
                                       {visibleTags.map((tagLabel, tagIdx) => (
                                         <span
                                           key={`${note.id}-m-tag-${tagIdx}`}
@@ -929,7 +992,7 @@ const SummaryHistory: React.FC = () => {
                                         <span
                                           className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug"
                                           style={{
-                                            backgroundColor: 'var(--bg-secondary)',
+                                            backgroundColor: 'var(--accent-light)',
                                             color: 'var(--text-secondary)',
                                           }}
                                           title={allTagsTooltip}
@@ -1006,7 +1069,13 @@ const SummaryHistory: React.FC = () => {
                                       {getNoteDisplayTitle(note)}
                                     </p>
                                     {noteTags.length > 0 ? (
-                                      <div className="mt-2 flex flex-wrap gap-1.5">
+                                      <div
+                                        className={
+                                          limitTagsForAllRows
+                                            ? 'mt-2 flex flex-nowrap items-center gap-1.5 overflow-hidden'
+                                            : 'mt-2 flex flex-wrap gap-1.5'
+                                        }
+                                      >
                                         {visibleTags.map((tagLabel, tagIdx) => (
                                           <span
                                             key={`${note.id}-tag-${tagIdx}`}
@@ -1024,7 +1093,7 @@ const SummaryHistory: React.FC = () => {
                                           <span
                                             className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium leading-snug"
                                             style={{
-                                              backgroundColor: 'var(--bg-secondary)',
+                                              backgroundColor: 'var(--accent-light)',
                                               color: 'var(--text-secondary)',
                                             }}
                                             title={allTagsTooltip}
@@ -1157,8 +1226,11 @@ const SummaryHistory: React.FC = () => {
                               </div>
                             </div>
                           </div>
-                            {isSelected
-                              ? (() => {
+                            <div className="md:hidden">
+                              <div className={`collapse-container ${isSelected ? 'expanded' : 'collapsed'}`}>
+                              <div className="collapse-content">
+                              {isSelected
+                                ? (() => {
                                   const diarRaw = getNoteDiarizationRaw(note);
                                   const showDiarized = hasUsableDiarization(diarRaw);
                                   const plainTx = note.transcription?.trim();
@@ -1214,40 +1286,55 @@ const SummaryHistory: React.FC = () => {
                                               </button>
                                             )}
                                           </div>
-                                          {activeTab === 'summary' && (
-                                            <div className="flex shrink-0 items-center gap-2 pb-2">
-                                              {editingNoteId === note.id ? (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => void handleSaveNoteEdit(note)}
-                                                  disabled={savingNoteId === note.id}
-                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
-                                                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                                >
-                                                  {savingNoteId === note.id ? (
-                                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                                  ) : (
-                                                    <Save className="h-3 w-3" />
-                                                  )}
-                                                  Done
-                                                </button>
-                                              ) : (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleStartNoteEdit(note)}
-                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                                >
-                                                  <Pencil className="h-3 w-3" />
-                                                  Edit
-                                                </button>
-                                              )}
-                                            </div>
-                                          )}
                                         </div>
-                                        <div className="min-h-0 flex-1 px-4 pb-4 pt-4 md:px-5">
+                                        <div className="min-h-0 flex flex-1 flex-col overflow-hidden px-4 pb-4 pt-4 md:px-5">
                                           {activeTab === 'summary' && (
                                             <>
+                                              <div className="mb-2 flex shrink-0 items-center justify-end gap-2">
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)
+                                                  }
+                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                                  title="Copy summary"
+                                                  aria-label="Copy summary"
+                                                >
+                                                  {copiedKey === `summary-${note.id}` ? (
+                                                    <Check className="h-3 w-3" />
+                                                  ) : (
+                                                    <Copy className="h-3 w-3" />
+                                                  )}
+                                                  Copy
+                                                </button>
+                                                {editingNoteId === note.id ? (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void handleSaveNoteEdit(note)}
+                                                    disabled={savingNoteId === note.id}
+                                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
+                                                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                                  >
+                                                    {savingNoteId === note.id ? (
+                                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                                    ) : (
+                                                      <Save className="h-3 w-3" />
+                                                    )}
+                                                    Done
+                                                  </button>
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleStartNoteEdit(note)}
+                                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                                  >
+                                                    <Pencil className="h-3 w-3" />
+                                                    Edit
+                                                  </button>
+                                                )}
+                                              </div>
                                               {editingNoteId === note.id ? (
                                                 <textarea
                                                   value={noteEditDraft}
@@ -1293,18 +1380,44 @@ const SummaryHistory: React.FC = () => {
                                             </>
                                           )}
                                           {activeTab === 'transcription' && hasTranscription && (
-                                            <>
-                                              {showDiarized ? (
-                                                <TranscriptDiarizedEditor
-                                                  segments={normalizeTranscript(diarRaw)}
-                                                  onSegmentsChange={(next) =>
-                                                    setNotes((prev) =>
-                                                      prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
+                                            <div className="min-h-0 flex flex-1 flex-col">
+                                              <div className="mb-2 flex justify-end">
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    void handleCopyText(
+                                                      showDiarized
+                                                        ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
+                                                        : plainTx || '',
+                                                      `transcription-${note.id}`
                                                     )
                                                   }
-                                                  noteId={note.id}
-                                                  scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
-                                                />
+                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                                  title="Copy transcription"
+                                                  aria-label="Copy transcription"
+                                                >
+                                                  {copiedKey === `transcription-${note.id}` ? (
+                                                    <Check className="h-3 w-3" />
+                                                  ) : (
+                                                    <Copy className="h-3 w-3" />
+                                                  )}
+                                                  Copy
+                                                </button>
+                                              </div>
+                                              {showDiarized ? (
+                                                <div className="min-h-0 flex-1">
+                                                  <TranscriptDiarizedEditor
+                                                    segments={normalizeTranscript(diarRaw)}
+                                                    onSegmentsChange={(next) =>
+                                                      setNotes((prev) =>
+                                                        prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
+                                                      )
+                                                    }
+                                                    noteId={note.id}
+                                                    scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
+                                                  />
+                                                </div>
                                               ) : (
                                                 <div
                                                   className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
@@ -1316,7 +1429,7 @@ const SummaryHistory: React.FC = () => {
                                                   {plainTx}
                                                 </div>
                                               )}
-                                            </>
+                                            </div>
                                           )}
                                         </div>
                                         <div
@@ -1349,11 +1462,11 @@ const SummaryHistory: React.FC = () => {
                                             type="button"
                                             onClick={() => void handleOpenProfileModal(note)}
                                             className={RESULT_ACTION_BTN_CLASS}
-                                            title="Generate Profile"
-                                            aria-label="Generate Profile"
+                                            title="Sync Profile"
+                                            aria-label="Sync Profile"
                                           >
                                             <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Generate Profile</span>
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Sync Profile</span>
                                           </button>
                                           <button
                                             type="button"
@@ -1390,7 +1503,10 @@ const SummaryHistory: React.FC = () => {
                                     </div>
                                   );
                                 })()
-                              : null}
+                                : null}
+                              </div>
+                              </div>
+                            </div>
                           </div>
                         );
                       })}
@@ -1472,6 +1588,281 @@ const SummaryHistory: React.FC = () => {
                     </nav>
                   ) : null}
                 </section>
+                {selectedNote ? (
+                <section className="card hidden min-h-0 min-w-0 flex-col rounded-lg md:flex">
+                  {(
+                    (() => {
+                      const note = selectedNote;
+                      const diarRaw = getNoteDiarizationRaw(note);
+                      const showDiarized = hasUsableDiarization(diarRaw);
+                      const plainTx = note.transcription?.trim();
+                      const hasTranscription = showDiarized || Boolean(plainTx);
+                      const activeTab = noteExpandedTab[note.id] ?? 'summary';
+                      return (
+                        <div
+                          className="flex min-h-0 flex-1 flex-col"
+                          onClick={(e) => e.stopPropagation()}
+                          role="region"
+                          aria-label="Note detail"
+                        >
+                          <div
+                            className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
+                            style={{ borderColor: 'var(--border)' }}
+                          >
+                            <div className="-mb-px flex min-w-0 gap-1 sm:gap-6" role="tablist">
+                              <button
+                                type="button"
+                                role="tab"
+                                aria-selected={activeTab === 'summary'}
+                                onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
+                                className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                style={{
+                                  borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
+                                  color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
+                                }}
+                              >
+                                Summary
+                              </button>
+                              {hasTranscription && (
+                                <button
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={activeTab === 'transcription'}
+                                  onClick={() =>
+                                    setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))
+                                  }
+                                  className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                  style={{
+                                    borderBottomColor:
+                                      activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
+                                    color:
+                                      activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
+                                  }}
+                                >
+                                  Transcription
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <div className="min-h-0 flex flex-1 flex-col overflow-hidden px-4 pb-4 pt-4 md:px-5">
+                            {activeTab === 'summary' && (
+                              <>
+                                <div className="mb-2 flex shrink-0 items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)
+                                    }
+                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    title="Copy summary"
+                                    aria-label="Copy summary"
+                                  >
+                                    {copiedKey === `summary-${note.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                    Copy
+                                  </button>
+                                  {editingNoteId === note.id ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleSaveNoteEdit(note)}
+                                      disabled={savingNoteId === note.id}
+                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
+                                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                    >
+                                      {savingNoteId === note.id ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <Save className="h-3 w-3" />
+                                      )}
+                                      Done
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStartNoteEdit(note)}
+                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                      Edit
+                                    </button>
+                                  )}
+                                </div>
+                                {editingNoteId === note.id ? (
+                                  <textarea
+                                    value={noteEditDraft}
+                                    onChange={(e) => setNoteEditDraft(e.target.value)}
+                                    className={`min-h-0 flex-1 ${NOTE_SUMMARY_TEXTAREA}`}
+                                    style={{
+                                      backgroundColor: 'var(--bg-secondary)',
+                                      color: 'var(--text)',
+                                      borderColor: 'var(--accent)',
+                                    }}
+                                  />
+                                ) : note.summary_edit || note.summary ? (
+                                  <div
+                                    className={NOTE_SUMMARY_MARKDOWN}
+                                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
+                                  >
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                      {note.summary_edit || note.summary || ''}
+                                    </ReactMarkdown>
+                                  </div>
+                                ) : (
+                                  <div
+                                    className={`flex items-center justify-center italic ${NOTE_PANEL_SCROLL_CLASS} border border-dashed p-4 text-sm leading-relaxed`}
+                                    style={{
+                                      backgroundColor: 'var(--bg-secondary)',
+                                      color: 'var(--text-muted)',
+                                      borderColor: 'var(--border)',
+                                    }}
+                                  >
+                                    No summary available
+                                  </div>
+                                )}
+                                {editingNoteId === note.id && noteEditError ? (
+                                  <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
+                                    {noteEditError}
+                                  </p>
+                                ) : null}
+                                {regenerateNoteError[note.id] ? (
+                                  <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
+                                    {regenerateNoteError[note.id]}
+                                  </p>
+                                ) : null}
+                              </>
+                            )}
+                            {activeTab === 'transcription' && hasTranscription && (
+                              <div className="min-h-0 flex flex-1 flex-col">
+                                <div className="mb-2 flex justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleCopyText(
+                                        showDiarized
+                                          ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
+                                          : plainTx || '',
+                                        `transcription-${note.id}`
+                                      )
+                                    }
+                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    title="Copy transcription"
+                                    aria-label="Copy transcription"
+                                  >
+                                    {copiedKey === `transcription-${note.id}` ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                    Copy
+                                  </button>
+                                </div>
+                                {showDiarized ? (
+                                  <div className="min-h-0 flex-1">
+                                    <TranscriptDiarizedEditor
+                                      segments={normalizeTranscript(diarRaw)}
+                                      onSegmentsChange={(next) =>
+                                        setNotes((prev) =>
+                                          prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
+                                        )
+                                      }
+                                      noteId={note.id}
+                                      scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
+                                    />
+                                  </div>
+                                ) : (
+                                  <div
+                                    className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                                    style={{
+                                      backgroundColor: 'var(--bg-secondary)',
+                                      color: 'var(--text-secondary)',
+                                    }}
+                                  >
+                                    {plainTx}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div
+                            className="grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-4 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
+                            style={{ borderColor: 'var(--border)' }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigate(`/save-summary?note_id=${note.id}`);
+                              }}
+                              className={RESULT_ACTION_BTN_CLASS}
+                              title="Save to OneDrive"
+                              aria-label="Save to OneDrive"
+                            >
+                              <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save to OneDrive</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleOpenForwardModal(note)}
+                              className={RESULT_ACTION_BTN_CLASS}
+                              title="Forward to Teams"
+                              aria-label="Forward to Teams"
+                            >
+                              <Users className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward to Teams</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleOpenProfileModal(note)}
+                              className={RESULT_ACTION_BTN_CLASS}
+                              title="Sync Profile"
+                              aria-label="Sync Profile"
+                            >
+                              <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Sync Profile</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={regeneratingNoteId === note.id || !hasUsableDiarization(diarRaw)}
+                              onClick={() => void handleRegenerateNoteSummary(note)}
+                              className={RESULT_ACTION_BTN_CLASS}
+                              title={
+                                !hasUsableDiarization(diarRaw)
+                                  ? 'Requires diarized transcription'
+                                  : regeneratingNoteId === note.id
+                                    ? 'Regenerating summary'
+                                    : 'Regenerate Summary'
+                              }
+                              aria-label={
+                                regeneratingNoteId === note.id
+                                  ? 'Regenerating summary'
+                                  : 'Regenerate Summary'
+                              }
+                            >
+                              {regeneratingNoteId === note.id ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                  <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerating…</span>
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                                  <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate Summary</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()
+                  )}
+                </section>
+                ) : null}
+              </div>
             )}
           </div>
         </div>
@@ -1665,6 +2056,21 @@ const SummaryHistory: React.FC = () => {
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyText(profile.draft, `history-profile-${profile.speakerName}`)}
+                            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity"
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                            title={`Copy profile for ${profile.speakerName}`}
+                            aria-label={`Copy profile for ${profile.speakerName}`}
+                          >
+                            {copiedKey === `history-profile-${profile.speakerName}` ? (
+                              <Check className="h-3.5 w-3.5" aria-hidden />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5" aria-hidden />
+                            )}
+                            Copy
+                          </button>
                           {profile.saved ? <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--success)' }}><Check className="h-3.5 w-3.5" />Saved</span> : null}
                           {profile.saveError ? <span className="text-xs" style={{ color: 'var(--error)' }}>{profile.saveError}</span> : null}
                           {!profile.saved && (
@@ -1693,7 +2099,17 @@ const SummaryHistory: React.FC = () => {
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{generatedProfiles.filter((p) => p.saved).length} of {generatedProfiles.length} profile{generatedProfiles.length !== 1 ? 's' : ''} saved</p>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Close</button>
-                  <button type="button" disabled={generatedProfiles.some((p) => p.saving)} onClick={() => generatedProfiles.filter((p) => !p.saved).forEach((p) => void handleSaveHistoryProfile(p.speakerName))} className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
+                  <button
+                    type="button"
+                    disabled={generatedProfiles.some((p) => p.saving)}
+                    onClick={() => {
+                      setSaveAllStatus('idle');
+                      setSaveAllErrorDetails([]);
+                      setIsSaveAllConfirmOpen(true);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
                     {generatedProfiles.some((p) => p.saving) ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save All'}
                   </button>
                 </div>
@@ -1703,6 +2119,98 @@ const SummaryHistory: React.FC = () => {
               <div className="flex shrink-0 justify-end border-t px-5 py-3" style={{ borderColor: 'var(--border)' }}>
                 <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Close</button>
               </div>
+            )}
+          </div>
+        </div>
+      )}
+      {isSaveAllConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (saveAllStatus !== 'saving') setIsSaveAllConfirmOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-lg rounded-xl border p-5 shadow-xl"
+            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {saveAllStatus === 'idle' && (
+              <>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Save all profiles?</h3>
+                <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  This will save all unsaved speaker profiles to Supabase.
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsSaveAllConfirmOpen(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmSaveAllProfiles()}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
+                    Confirm Save All
+                  </button>
+                </div>
+              </>
+            )}
+            {saveAllStatus === 'saving' && (
+              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                Saving profiles...
+              </div>
+            )}
+            {saveAllStatus === 'success' && (
+              <>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Profiles saved</h3>
+                <p className="mt-2 text-sm" style={{ color: 'var(--success)' }}>
+                  All profiles were successfully saved to Supabase.
+                </p>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsSaveAllConfirmOpen(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
+            {saveAllStatus === 'error' && (
+              <>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Failed to save all profiles</h3>
+                <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>
+                  Some profiles could not be saved to Supabase.
+                </p>
+                <ul className="mt-2 max-h-40 list-disc space-y-1 overflow-y-auto pl-5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {saveAllErrorDetails.map((detail, idx) => (
+                    <li key={`${detail}-${idx}`}>{detail}</li>
+                  ))}
+                </ul>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsSaveAllConfirmOpen(false)}
+                    className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>

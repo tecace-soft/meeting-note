@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, Loader2, Pencil, Plus, Save, Trash2, User, X } from 'lucide-react';
+import { Check, ChevronDown, Copy, Loader2, Pencil, Plus, Save, Trash2, User, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
@@ -60,6 +60,7 @@ const AccountSettings: React.FC = () => {
   const [otherSpeakerDraft, setOtherSpeakerDraft] = useState('');
   const [otherSpeakerSaving, setOtherSpeakerSaving] = useState(false);
   const [otherSpeakerSaveError, setOtherSpeakerSaveError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const matchedSelf = useMemo((): SpeakerRow | null => {
     if (speakersLoad.status !== 'ready') return null;
@@ -310,6 +311,20 @@ const AccountSettings: React.FC = () => {
     }
   }, [user?.id, pendingDeletePrompt]);
 
+  const handleCopyText = useCallback(async (text: string, key: string) => {
+    const value = text.trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => {
+        setCopiedKey((prev) => (prev === key ? null : prev));
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
+    }
+  }, []);
+
   if (isLoading) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
@@ -524,19 +539,34 @@ const AccountSettings: React.FC = () => {
 
                       <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-3">
                         {speakerProfileEditing ? (
-                          <textarea
-                            value={speakerProfileDraft}
-                            onChange={(e) => setSpeakerProfileDraft(e.target.value)}
-                            className="custom-scrollbar min-h-[min(18rem,40vh)] w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                            style={{
-                              backgroundColor: 'var(--bg-secondary)',
-                              color: 'var(--text)',
-                              borderColor: 'var(--border)',
-                            }}
-                            spellCheck={false}
-                            aria-label="Speaker profile JSON"
-                            placeholder="{}"
-                          />
+                          <>
+                            <div className="mb-2 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyText(speakerProfileDraft, 'self-speaker-profile')}
+                                className="inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                                style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                title="Copy speaker profile JSON"
+                                aria-label="Copy speaker profile JSON"
+                              >
+                                {copiedKey === 'self-speaker-profile' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                                Copy
+                              </button>
+                            </div>
+                            <textarea
+                              value={speakerProfileDraft}
+                              onChange={(e) => setSpeakerProfileDraft(e.target.value)}
+                              className="custom-scrollbar min-h-[min(18rem,40vh)] w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                              style={{
+                                backgroundColor: 'var(--bg-secondary)',
+                                color: 'var(--text)',
+                                borderColor: 'var(--border)',
+                              }}
+                              spellCheck={false}
+                              aria-label="Speaker profile JSON"
+                              placeholder="{}"
+                            />
+                          </>
                         ) : matchedSelf.profile ? (
                           <SpeakerOntologyView raw={matchedSelf.profile} embedded />
                         ) : (
@@ -650,6 +680,19 @@ const AccountSettings: React.FC = () => {
                                 className="border-t px-4 pb-4 pt-3"
                                 style={{ borderColor: 'var(--border)' }}
                               >
+                                <div className="mb-2 flex justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleCopyText(expandedPromptDraft, `summary-prompt-${row.id}`)}
+                                    className="inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    title={`Copy prompt for ${row.name}`}
+                                    aria-label={`Copy prompt for ${row.name}`}
+                                  >
+                                    {copiedKey === `summary-prompt-${row.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                                    Copy
+                                  </button>
+                                </div>
                                 <textarea
                                   value={expandedPromptDraft}
                                   onChange={(e) => setExpandedPromptDraft(e.target.value)}
@@ -809,51 +852,8 @@ const AccountSettings: React.FC = () => {
                                 className="border-t px-4 pb-4 pt-3"
                                 style={{ borderColor: 'var(--border)' }}
                               >
-                                <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
-                                  {isEditing ? (
-                                    <>
-                                      <button
-                                        type="button"
-                                        disabled={otherSpeakerSaving}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          const p = sp.profile?.trim() || null;
-                                          if (p && isOntologyProfile(p)) {
-                                            try {
-                                              setOtherSpeakerDraft(JSON.stringify(JSON.parse(p), null, 2));
-                                            } catch {
-                                              setOtherSpeakerDraft(p);
-                                            }
-                                          } else {
-                                            setOtherSpeakerDraft(p ?? '');
-                                          }
-                                          setOtherSpeakerEditingId(null);
-                                          setOtherSpeakerSaveError(null);
-                                        }}
-                                        className="rounded-lg px-3 py-2 text-sm transition-opacity disabled:opacity-50"
-                                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                                      >
-                                        Cancel
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={otherSpeakerSaving || !user?.id}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          void handleSaveOtherSpeakerProfile();
-                                        }}
-                                        className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                      >
-                                        {otherSpeakerSaving ? (
-                                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                                        ) : (
-                                          <Save className="h-4 w-4" aria-hidden />
-                                        )}
-                                        Save
-                                      </button>
-                                    </>
-                                  ) : (
+                                {!isEditing ? (
+                                  <div className="mb-3 flex justify-end">
                                     <button
                                       type="button"
                                       onClick={(e) => {
@@ -877,8 +877,8 @@ const AccountSettings: React.FC = () => {
                                       <Pencil className="h-4 w-4" aria-hidden />
                                       Edit profile
                                     </button>
-                                  )}
-                                </div>
+                                  </div>
+                                ) : null}
 
                                 {otherSpeakerSaveError && isEditing ? (
                                   <p className="mb-3 text-sm" style={{ color: 'var(--error)' }}>
@@ -891,19 +891,76 @@ const AccountSettings: React.FC = () => {
                                   onClick={(e) => e.stopPropagation()}
                                 >
                                   {isEditing ? (
-                                    <textarea
-                                      value={otherSpeakerDraft}
-                                      onChange={(e) => setOtherSpeakerDraft(e.target.value)}
-                                      className="custom-scrollbar min-h-[14rem] w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                                      style={{
-                                        backgroundColor: 'var(--bg-secondary)',
-                                        color: 'var(--text)',
-                                        borderColor: 'var(--border)',
-                                      }}
-                                      spellCheck={false}
-                                      aria-label={`Edit profile JSON for ${sp.name}`}
-                                      placeholder="{}"
-                                    />
+                                    <>
+                                      <div className="mb-2 flex justify-end">
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleCopyText(otherSpeakerDraft, `other-speaker-${sp.id}`)}
+                                          className="inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                                          style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                          title={`Copy profile JSON for ${sp.name}`}
+                                          aria-label={`Copy profile JSON for ${sp.name}`}
+                                        >
+                                          {copiedKey === `other-speaker-${sp.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                                          Copy
+                                        </button>
+                                      </div>
+                                      <textarea
+                                        value={otherSpeakerDraft}
+                                        onChange={(e) => setOtherSpeakerDraft(e.target.value)}
+                                        className="custom-scrollbar min-h-[14rem] w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                                        style={{
+                                          backgroundColor: 'var(--bg-secondary)',
+                                          color: 'var(--text)',
+                                          borderColor: 'var(--border)',
+                                        }}
+                                        spellCheck={false}
+                                        aria-label={`Edit profile JSON for ${sp.name}`}
+                                        placeholder="{}"
+                                      />
+                                      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={otherSpeakerSaving}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const p = sp.profile?.trim() || null;
+                                            if (p && isOntologyProfile(p)) {
+                                              try {
+                                                setOtherSpeakerDraft(JSON.stringify(JSON.parse(p), null, 2));
+                                              } catch {
+                                                setOtherSpeakerDraft(p);
+                                              }
+                                            } else {
+                                              setOtherSpeakerDraft(p ?? '');
+                                            }
+                                            setOtherSpeakerEditingId(null);
+                                            setOtherSpeakerSaveError(null);
+                                          }}
+                                          className="rounded-lg px-3 py-2 text-sm transition-opacity disabled:opacity-50"
+                                          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={otherSpeakerSaving || !user?.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void handleSaveOtherSpeakerProfile();
+                                          }}
+                                          className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                                          style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                        >
+                                          {otherSpeakerSaving ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                                          ) : (
+                                            <Save className="h-4 w-4" aria-hidden />
+                                          )}
+                                          Save
+                                        </button>
+                                      </div>
+                                    </>
                                   ) : sp.profile ? (
                                     <SpeakerOntologyView raw={sp.profile} embedded />
                                   ) : (
@@ -1003,6 +1060,20 @@ const AccountSettings: React.FC = () => {
                 placeholder="Instructions for the summarization model…"
                 disabled={createSaving}
               />
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void handleCopyText(createPrompt, 'create-summary-prompt')}
+                  className="inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                  title="Copy prompt draft"
+                  aria-label="Copy prompt draft"
+                  disabled={!createPrompt.trim()}
+                >
+                  {copiedKey === 'create-summary-prompt' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  Copy
+                </button>
+              </div>
               {createError ? (
                 <p className="mt-3 text-sm" style={{ color: 'var(--error)' }}>
                   {createError}

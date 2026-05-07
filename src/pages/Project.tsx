@@ -4,8 +4,10 @@ import { supabase } from '../config/supabaseConfig';
 import { useAuth } from '../context/AuthContext';
 import {
   Calendar,
+  Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   FilePlus,
   FileText,
   Folder,
@@ -225,6 +227,7 @@ const Project: React.FC = () => {
   const [addModalExpandedNoteId, setAddModalExpandedNoteId] = useState<string | null>(null);
   const [addNotesSaving, setAddNotesSaving] = useState(false);
   const [addNotesModalError, setAddNotesModalError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const noteMenuRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -753,6 +756,20 @@ const Project: React.FC = () => {
     }
   };
 
+  const handleCopyText = async (text: string, key: string) => {
+    const value = text.trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => {
+        setCopiedKey((prev) => (prev === key ? null : prev));
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
@@ -1145,6 +1162,21 @@ const Project: React.FC = () => {
                                       </div>
                                       {activeTab === 'summary' ? (
                                         <div className="flex shrink-0 items-center gap-2 pb-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `project-summary-${note.id}`)}
+                                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                                            style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                            title="Copy summary"
+                                            aria-label="Copy summary"
+                                          >
+                                            {copiedKey === `project-summary-${note.id}` ? (
+                                              <Check className="h-3 w-3" />
+                                            ) : (
+                                              <Copy className="h-3 w-3" />
+                                            )}
+                                            Copy
+                                          </button>
                                           {editingNoteId === note.id ? (
                                             <button
                                               type="button"
@@ -1199,28 +1231,54 @@ const Project: React.FC = () => {
                                       ) : null}
 
                                       {activeTab === 'transcription' && hasTranscription ? (
-                                        showDiarized ? (
-                                          <TranscriptDiarizedEditor
-                                            segments={normalizeTranscript(diarRaw)}
-                                            onSegmentsChange={(next) =>
-                                              setNotes((prev) =>
-                                                prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
-                                              )
-                                            }
-                                            noteId={note.id}
-                                            scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
-                                          />
-                                        ) : (
-                                          <div
-                                            className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
-                                            style={{
-                                              backgroundColor: 'var(--bg)',
-                                              color: 'var(--text-secondary)',
-                                            }}
-                                          >
-                                            {plainTx}
+                                        <>
+                                          <div className="mb-2 flex justify-end">
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                void handleCopyText(
+                                                  showDiarized
+                                                    ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
+                                                    : plainTx || '',
+                                                  `project-transcription-${note.id}`
+                                                )
+                                              }
+                                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
+                                              style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                              title="Copy transcription"
+                                              aria-label="Copy transcription"
+                                            >
+                                              {copiedKey === `project-transcription-${note.id}` ? (
+                                                <Check className="h-3 w-3" />
+                                              ) : (
+                                                <Copy className="h-3 w-3" />
+                                              )}
+                                              Copy
+                                            </button>
                                           </div>
-                                        )
+                                          {showDiarized ? (
+                                            <TranscriptDiarizedEditor
+                                              segments={normalizeTranscript(diarRaw)}
+                                              onSegmentsChange={(next) =>
+                                                setNotes((prev) =>
+                                                  prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
+                                                )
+                                              }
+                                              noteId={note.id}
+                                              scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
+                                            />
+                                          ) : (
+                                            <div
+                                              className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
+                                              style={{
+                                                backgroundColor: 'var(--bg)',
+                                                color: 'var(--text-secondary)',
+                                              }}
+                                            >
+                                              {plainTx}
+                                            </div>
+                                          )}
+                                        </>
                                       ) : null}
                                     </div>
                                   </div>
@@ -1433,9 +1491,21 @@ const Project: React.FC = () => {
                               }}
                             >
                               <div>
-                                <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                  Summary
-                                </h4>
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                  <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                    Summary
+                                  </h4>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleCopyText(summaryPreview, `picker-summary-${note.id}`)}
+                                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium"
+                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    title="Copy summary"
+                                    aria-label="Copy summary"
+                                  >
+                                    {copiedKey === `picker-summary-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                  </button>
+                                </div>
                                 <div
                                   className="custom-scrollbar max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
                                   style={{ color: 'var(--text)' }}
@@ -1447,9 +1517,21 @@ const Project: React.FC = () => {
                                 className="mt-6 border-t pt-4"
                                 style={{ borderColor: 'var(--border)' }}
                               >
-                                <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                  Transcription
-                                </h4>
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                  <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                    Transcription
+                                  </h4>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleCopyText(transcriptionPreview, `picker-transcription-${note.id}`)}
+                                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium"
+                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    title="Copy transcription"
+                                    aria-label="Copy transcription"
+                                  >
+                                    {copiedKey === `picker-transcription-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                  </button>
+                                </div>
                                 <div
                                   className="custom-scrollbar max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
                                   style={{
