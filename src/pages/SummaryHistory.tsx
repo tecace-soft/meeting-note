@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
@@ -163,6 +164,7 @@ const SummaryHistory: React.FC = () => {
     desktop: null,
   });
   const [openNoteMenuId, setOpenNoteMenuId] = useState<string | null>(null);
+  const [noteMenuPos, setNoteMenuPos] = useState<{ top: number; right: number } | null>(null);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renameNoteDraft, setRenameNoteDraft] = useState('');
   const [deleteNoteTarget, setDeleteNoteTarget] = useState<Note | null>(null);
@@ -211,6 +213,7 @@ const SummaryHistory: React.FC = () => {
       const target = event.target as Node;
       if ((mobile && mobile.contains(target)) || (desktop && desktop.contains(target))) return;
       setOpenNoteMenuId(null);
+      setNoteMenuPos(null);
     };
     document.addEventListener('mousedown', onDocMouseDown);
     return () => document.removeEventListener('mousedown', onDocMouseDown);
@@ -832,7 +835,7 @@ const SummaryHistory: React.FC = () => {
                                   <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
                                 </div>
                                 <div
-                                  className="relative flex h-10 w-10 shrink-0 items-center justify-center"
+                                  className="flex h-10 w-10 shrink-0 items-center justify-center"
                                   ref={(el) => {
                                     noteMenuAnchorsRef.current.mobile =
                                       openNoteMenuId === note.id ? el : null;
@@ -841,94 +844,22 @@ const SummaryHistory: React.FC = () => {
                                 >
                                   <button
                                     type="button"
-                                    onClick={() => setOpenNoteMenuId((prev) => (prev === note.id ? null : note.id))}
+                                    onClick={(e) => {
+                                      if (openNoteMenuId === note.id) {
+                                        setOpenNoteMenuId(null);
+                                        setNoteMenuPos(null);
+                                      } else {
+                                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                        setNoteMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                                        setOpenNoteMenuId(note.id);
+                                      }
+                                    }}
                                     className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
                                     style={{ color: 'var(--text-secondary)' }}
                                     aria-label={`Note actions for ${getNoteDisplayTitle(note)}`}
                                   >
                                     <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
                                   </button>
-                                  {openNoteMenuId === note.id ? (
-                                    <div
-                                      className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border p-2 shadow-lg"
-                                      style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setOpenNoteMenuId(null);
-                                          navigate(`/save-summary?note_id=${note.id}`);
-                                        }}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
-                                        Save to OneDrive
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleOpenForwardModal(note)}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                        Forward to Teams
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleOpenProfileModal(note)}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                                        Generate Profile
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={
-                                          regeneratingNoteId === note.id ||
-                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
-                                        }
-                                        onClick={() => {
-                                          setOpenNoteMenuId(null);
-                                          void handleRegenerateNoteSummary(note);
-                                        }}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
-                                        title={
-                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
-                                            ? 'Requires diarized transcription'
-                                            : undefined
-                                        }
-                                      >
-                                        {regeneratingNoteId === note.id ? (
-                                          <>
-                                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                                            Regenerating…
-                                          </>
-                                        ) : (
-                                          <>
-                                            <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
-                                            Regenerate Summary
-                                          </>
-                                        )}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartRenameNote(note)}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                                        Rename Note
-                                      </button>
-                                      <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenDeleteNote(note)}
-                                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
-                                        style={{ color: 'var(--error)' }}
-                                      >
-                                        <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                                        Delete Note
-                                      </button>
-                                    </div>
-                                  ) : null}
                                 </div>
                               </div>
                               {renamingNoteId === note.id ? (
@@ -1125,7 +1056,7 @@ const SummaryHistory: React.FC = () => {
                                   </p>
                                 </div>
                                 <div
-                                  className="relative flex h-10 w-10 shrink-0 items-center justify-center"
+                                  className="flex h-10 w-10 shrink-0 items-center justify-center"
                                   ref={(el) => {
                                     noteMenuAnchorsRef.current.desktop =
                                       openNoteMenuId === note.id ? el : null;
@@ -1134,94 +1065,22 @@ const SummaryHistory: React.FC = () => {
                                 >
                                   <button
                                     type="button"
-                                    onClick={() => setOpenNoteMenuId((prev) => (prev === note.id ? null : note.id))}
+                                    onClick={(e) => {
+                                      if (openNoteMenuId === note.id) {
+                                        setOpenNoteMenuId(null);
+                                        setNoteMenuPos(null);
+                                      } else {
+                                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                        setNoteMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                                        setOpenNoteMenuId(note.id);
+                                      }
+                                    }}
                                     className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
                                     style={{ color: 'var(--text-secondary)' }}
                                     aria-label={`Note actions for ${getNoteDisplayTitle(note)}`}
                                   >
                                     <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
                                   </button>
-                                  {openNoteMenuId === note.id ? (
-                                    <div
-                                      className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border p-2 shadow-lg"
-                                      style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setOpenNoteMenuId(null);
-                                          navigate(`/save-summary?note_id=${note.id}`);
-                                        }}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
-                                        Save to OneDrive
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleOpenForwardModal(note)}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                        Forward to Teams
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleOpenProfileModal(note)}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                                        Generate Profile
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={
-                                          regeneratingNoteId === note.id ||
-                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
-                                        }
-                                        onClick={() => {
-                                          setOpenNoteMenuId(null);
-                                          void handleRegenerateNoteSummary(note);
-                                        }}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
-                                        title={
-                                          !hasUsableDiarization(getNoteDiarizationRaw(note))
-                                            ? 'Requires diarized transcription'
-                                            : undefined
-                                        }
-                                      >
-                                        {regeneratingNoteId === note.id ? (
-                                          <>
-                                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                                            Regenerating…
-                                          </>
-                                        ) : (
-                                          <>
-                                            <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
-                                            Regenerate Summary
-                                          </>
-                                        )}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartRenameNote(note)}
-                                        className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      >
-                                        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                                        Rename Note
-                                      </button>
-                                      <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenDeleteNote(note)}
-                                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
-                                        style={{ color: 'var(--error)' }}
-                                      >
-                                        <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                                        Delete Note
-                                      </button>
-                                    </div>
-                                  ) : null}
                                 </div>
                               </div>
                             </div>
@@ -2215,6 +2074,79 @@ const SummaryHistory: React.FC = () => {
           </div>
         </div>
       )}
+      {(() => {
+        const menuNote = openNoteMenuId ? notes.find((n) => n.id === openNoteMenuId) ?? null : null;
+        if (!menuNote || !noteMenuPos) return null;
+        return createPortal(
+          <div
+            className="fixed z-[200] w-[180px] rounded-xl border p-2 shadow-lg"
+            style={{
+              top: noteMenuPos.top,
+              right: noteMenuPos.right,
+              backgroundColor: 'var(--card)',
+              borderColor: 'var(--border)',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); navigate(`/save-summary?note_id=${menuNote.id}`); }}
+              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+            >
+              <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+              Save to OneDrive
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); void handleOpenForwardModal(menuNote); }}
+              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+            >
+              <Users className="h-4 w-4 shrink-0" aria-hidden />
+              Forward to Teams
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); void handleOpenProfileModal(menuNote); }}
+              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+            >
+              <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+              Generate Profile
+            </button>
+            <button
+              type="button"
+              disabled={regeneratingNoteId === menuNote.id || !hasUsableDiarization(getNoteDiarizationRaw(menuNote))}
+              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); void handleRegenerateNoteSummary(menuNote); }}
+              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
+              title={!hasUsableDiarization(getNoteDiarizationRaw(menuNote)) ? 'Requires diarized transcription' : undefined}
+            >
+              {regeneratingNoteId === menuNote.id ? (
+                <><Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
+              ) : (
+                <><RefreshCw className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); handleStartRenameNote(menuNote); }}
+              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+            >
+              <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+              Rename Note
+            </button>
+            <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+            <button
+              type="button"
+              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); handleOpenDeleteNote(menuNote); }}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
+              style={{ color: 'var(--error)' }}
+            >
+              <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+              Delete Note
+            </button>
+          </div>,
+          document.body
+        );
+      })()}
     </div>
   );
 };

@@ -133,6 +133,10 @@ const TranscriptionSummary: React.FC = () => {
   const [playbackProgress, setPlaybackProgress] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  /** Tailwind `md` is 768px — used to mirror “mobile” layout behavior. */
+  const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
+  );
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -146,6 +150,15 @@ const TranscriptionSummary: React.FC = () => {
       return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [openMenuChatId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(max-width: 767px)');
+    const sync = () => setIsNarrowViewport(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
 
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
@@ -586,6 +599,11 @@ const TranscriptionSummary: React.FC = () => {
 
   const hasCompletedFiles = uploadedFiles.some(f => f.status === 'completed');
   const showPromptSection = isRecording || recordedAudioUrl || uploadedFiles.length > 0;
+  const summaryFlowActive =
+    isSummarizing || isRegenerating || summaryResult !== null || summaryError !== null;
+  const promptSectionLayoutExpanded =
+    showPromptSection &&
+    (!isNarrowViewport || !summaryFlowActive);
 
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
@@ -1238,8 +1256,10 @@ const TranscriptionSummary: React.FC = () => {
               </div>
             </div>
 
-            {/* Summarize Prompt */}
-            <div className={`collapse-container ${showPromptSection ? 'expanded' : 'collapsed'}`}>
+            {/* Summarize Prompt — collapses on narrow viewports during/after summary flow so results can use height */}
+            <div
+              className={`collapse-container ${promptSectionLayoutExpanded ? 'expanded' : 'collapsed'}`}
+            >
               <div className="collapse-content">
               <div className="mt-4 card rounded-lg p-4">
                 <div className="flex w-full min-w-0 flex-col gap-4 md:flex-row md:items-start md:gap-4">
@@ -1266,7 +1286,7 @@ const TranscriptionSummary: React.FC = () => {
                     <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
                       Select summarization prompt
                     </label>
-                    <div className="flex min-w-0 w-full flex-col gap-2 md:w-max md:max-w-full md:flex-row md:flex-nowrap md:items-center md:gap-3">
+                    <div className="flex min-w-0 w-full flex-col gap-4 md:w-max md:max-w-full md:flex-row md:flex-nowrap md:items-center md:gap-3">
                       <select
                         value={selectedSummaryPromptId ?? ''}
                         onChange={(e) => handleSummaryPromptSelect(e.target.value)}
@@ -1293,20 +1313,6 @@ const TranscriptionSummary: React.FC = () => {
                           ))
                         )}
                       </select>
-                      <button
-                        type="button"
-                        disabled={!selectedSummaryPromptId || summaryPromptsLoading}
-                        onClick={() => {
-                          const selected = summaryPromptRows.find((r) => r.id === selectedSummaryPromptId);
-                          void handleCopyText(selected?.prompt ?? '', 'summary-prompt');
-                        }}
-                        className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                        title="Copy summary prompt"
-                        aria-label="Copy summary prompt"
-                      >
-                        {copiedKey === 'summary-prompt' ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
-                      </button>
                       <button
                         type="button"
                         onClick={() => void handleSummarize()}
@@ -1345,7 +1351,7 @@ const TranscriptionSummary: React.FC = () => {
 
             {/* Summary Result */}
             {(isSummarizing || summaryResult || summaryError) && (
-              <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden card rounded-lg">
+              <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden card rounded-lg max-md:mt-2">
                 {isSummarizing && (
                   <div className="flex flex-1 flex-col items-center justify-center py-8">
                     <div className="relative">

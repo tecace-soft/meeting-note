@@ -3,10 +3,13 @@ import { useMsal, useIsAuthenticated } from '@azure/msal-react';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
 import { loginRequest } from '../config/msalConfig';
 import { shouldUseRedirectInteraction } from '../lib/msalRedirect';
+import { ensureSelfSpeakerRowForUser } from '../lib/ensureSelfSpeakerRow';
 
 interface User {
   id: string;
   displayName: string;
+  /** Original Microsoft `account.name` when present; used for speaker identity + auto-create. */
+  microsoftAccountName: string | null;
   email: string;
   avatar?: string;
 }
@@ -35,6 +38,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser({
           id: account.localAccountId,
           displayName: account.name || 'User',
+          microsoftAccountName: account.name ?? null,
           email: account.username,
         });
       } else {
@@ -43,6 +47,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(false);
     }
   }, [accounts, inProgress]);
+
+  useEffect(() => {
+    if (inProgress !== InteractionStatus.None || !isAuthenticated || !user?.id) return;
+    const msName = user.microsoftAccountName?.trim();
+    if (!msName) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await ensureSelfSpeakerRowForUser(user.id, msName);
+      } catch (e) {
+        if (!cancelled) console.error('ensureSelfSpeakerRowForUser:', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [inProgress, isAuthenticated, user?.id, user?.microsoftAccountName]);
 
   const login = useCallback(async () => {
     if (shouldUseRedirectInteraction()) {

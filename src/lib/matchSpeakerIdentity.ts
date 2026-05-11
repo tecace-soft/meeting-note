@@ -25,6 +25,22 @@ export interface SpeakerRowLike {
   name: string;
 }
 
+/**
+ * Latin-script name for a new speaker row: drops parenthetical segments and non‑Latin scripts.
+ * Example: "Gene Kim (김진)" → "Gene Kim"
+ */
+export function deriveSelfSpeakerNameFromMsDisplayName(raw: string): string | null {
+  let s = raw.replace(/\([^)]*\)/g, ' ');
+  s = s.replace(/[^a-zA-Z]+/g, ' ');
+  s = s.trim().replace(/\s+/g, ' ');
+  if (!s) return null;
+  return s
+    .split(' ')
+    .map((w) => (w.length ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : ''))
+    .filter(Boolean)
+    .join(' ');
+}
+
 /** Pick the best speaker row whose normalized name matches the MS account display name. */
 export function findBestSpeakerRowForMsAccount<T extends SpeakerRowLike>(
   rows: T[],
