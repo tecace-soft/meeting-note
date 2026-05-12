@@ -4,25 +4,24 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
 import {
+  ArrowsReload01,
   Calendar,
+  Chat,
   Check,
-  Copy,
   ChevronLeft,
   ChevronRight,
-  FileText,
-  Forward,
-  HardDrive,
-  Loader2,
-  MessageSquare,
+  CloseMd,
+  Cloud,
+  Copy,
+  EditPencilLine01,
+  FileDocument,
+  Loading,
   MoreHorizontal,
-  Pencil,
-  RefreshCw,
   Save,
-  Trash2,
+  TrashFull,
   UserCircle,
   Users,
-  X,
-} from 'lucide-react';
+} from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
@@ -765,7 +764,7 @@ const SummaryHistory: React.FC = () => {
             ) : notesTotalCount === 0 ? (
               <div className="flex min-h-0 flex-1 items-center justify-center">
                 <div className="card rounded-lg p-8 text-center">
-                  <FileText className="mx-auto mb-4 h-12 w-12" style={{ color: 'var(--text-muted)' }} />
+                  <FileDocument className="mx-auto mb-4 h-12 w-12" style={{ color: 'var(--text-muted)' }} />
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                     {chatId ? 'No meeting notes found for this chat' : 'No meeting notes found for your account'}
                   </p>
@@ -832,7 +831,7 @@ const SummaryHistory: React.FC = () => {
                                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
                                   style={{ backgroundColor: 'var(--accent-light)' }}
                                 >
-                                  <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                                  <FileDocument className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
                                 </div>
                                 <div
                                   className="flex h-10 w-10 shrink-0 items-center justify-center"
@@ -959,7 +958,7 @@ const SummaryHistory: React.FC = () => {
                                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
                                   style={{ backgroundColor: 'var(--accent-light)' }}
                                 >
-                                  <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                                  <FileDocument className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
                                 </div>
                               </div>
                               <div className="min-w-0 pr-1">
@@ -1108,18 +1107,17 @@ const SummaryHistory: React.FC = () => {
                                     >
                                       <div className="flex min-h-0 flex-col">
                                         <div
-                                          className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
+                                          className="results-header flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
                                           style={{ borderColor: 'var(--border)' }}
                                         >
-                                          <div className="-mb-px flex min-w-0 gap-1 sm:gap-6" role="tablist">
+                                          <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
                                             <button
                                               type="button"
                                               role="tab"
                                               aria-selected={activeTab === 'summary'}
                                               onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                              className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                              className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                                               style={{
-                                                borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
                                                 color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                                               }}
                                             >
@@ -1133,10 +1131,8 @@ const SummaryHistory: React.FC = () => {
                                                 onClick={() =>
                                                   setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))
                                                 }
-                                                className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                                className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                                                 style={{
-                                                  borderBottomColor:
-                                                    activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
                                                   color:
                                                     activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
                                                 }}
@@ -1176,7 +1172,7 @@ const SummaryHistory: React.FC = () => {
                                                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                                                   >
                                                     {savingNoteId === note.id ? (
-                                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                                      <Loading className="h-3 w-3 animate-spin" />
                                                     ) : (
                                                       <Save className="h-3 w-3" />
                                                     )}
@@ -1189,7 +1185,7 @@ const SummaryHistory: React.FC = () => {
                                                     className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                                                     style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
                                                   >
-                                                    <Pencil className="h-3 w-3" />
+                                                    <EditPencilLine01 className="h-3 w-3" />
                                                     Edit
                                                   </button>
                                                 )}
@@ -1304,7 +1300,7 @@ const SummaryHistory: React.FC = () => {
                                             title="Save to OneDrive"
                                             aria-label="Save to OneDrive"
                                           >
-                                            <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                                            <Cloud className="h-4 w-4 shrink-0" aria-hidden />
                                             <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save to OneDrive</span>
                                           </button>
                                           <button
@@ -1347,12 +1343,12 @@ const SummaryHistory: React.FC = () => {
                                           >
                                             {regeneratingNoteId === note.id ? (
                                               <>
-                                                <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                                <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                                                 <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerating…</span>
                                               </>
                                             ) : (
                                               <>
-                                                <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                                                <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
                                                 <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate Summary</span>
                                               </>
                                             )}
@@ -1465,18 +1461,17 @@ const SummaryHistory: React.FC = () => {
                           aria-label="Note detail"
                         >
                           <div
-                            className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
+                            className="results-header flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
                             style={{ borderColor: 'var(--border)' }}
                           >
-                            <div className="-mb-px flex min-w-0 gap-1 sm:gap-6" role="tablist">
+                            <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
                               <button
                                 type="button"
                                 role="tab"
                                 aria-selected={activeTab === 'summary'}
                                 onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                                 style={{
-                                  borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
                                   color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                                 }}
                               >
@@ -1490,10 +1485,8 @@ const SummaryHistory: React.FC = () => {
                                   onClick={() =>
                                     setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))
                                   }
-                                  className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                  className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                                   style={{
-                                    borderBottomColor:
-                                      activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
                                     color:
                                       activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
                                   }}
@@ -1533,7 +1526,7 @@ const SummaryHistory: React.FC = () => {
                                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                                     >
                                       {savingNoteId === note.id ? (
-                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                        <Loading className="h-3 w-3 animate-spin" />
                                       ) : (
                                         <Save className="h-3 w-3" />
                                       )}
@@ -1546,7 +1539,7 @@ const SummaryHistory: React.FC = () => {
                                       className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                                       style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
                                     >
-                                      <Pencil className="h-3 w-3" />
+                                      <EditPencilLine01 className="h-3 w-3" />
                                       Edit
                                     </button>
                                   )}
@@ -1649,7 +1642,7 @@ const SummaryHistory: React.FC = () => {
                             )}
                           </div>
                           <div
-                            className="grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-4 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
+                            className="grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-4 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5"
                             style={{ borderColor: 'var(--border)' }}
                           >
                             <button
@@ -1661,7 +1654,7 @@ const SummaryHistory: React.FC = () => {
                               title="Save to OneDrive"
                               aria-label="Save to OneDrive"
                             >
-                              <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                              <Cloud className="h-4 w-4 shrink-0" aria-hidden />
                               <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save to OneDrive</span>
                             </button>
                             <button
@@ -1704,12 +1697,12 @@ const SummaryHistory: React.FC = () => {
                             >
                               {regeneratingNoteId === note.id ? (
                                 <>
-                                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                  <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                                   <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerating…</span>
                                 </>
                               ) : (
                                 <>
-                                  <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                                  <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
                                   <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate Summary</span>
                                 </>
                               )}
@@ -1780,7 +1773,7 @@ const SummaryHistory: React.FC = () => {
                 style={{ backgroundColor: 'var(--error)', color: '#fff' }}
                 disabled={deletingNote}
               >
-                {deletingNote ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                 Delete
               </button>
             </div>
@@ -1801,18 +1794,20 @@ const SummaryHistory: React.FC = () => {
             <div
               role="dialog"
               aria-modal="true"
-              className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
-              style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+              className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5" style={{ borderColor: 'var(--border)' }}>
+              <div
+                className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-5"
+                style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
+              >
                 <div>
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Forward to Teams</h2>
                   <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
                     Choose a chat, then click <span className="font-medium" style={{ color: 'var(--text)' }}>Forward Summary</span>.
                   </p>
                 </div>
-                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><X className="h-5 w-5" aria-hidden /></button>
+                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><CloseMd className="h-5 w-5" aria-hidden /></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-4 py-3 sm:px-5">
                 {teamsChatsLoading ? (
@@ -1823,11 +1818,11 @@ const SummaryHistory: React.FC = () => {
                   <p className="text-sm" style={{ color: 'var(--error)' }}>{teamsChatsError}</p>
                 ) : teamsChats.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-10">
-                    <MessageSquare className="mb-3 h-10 w-10" style={{ color: 'var(--text-muted)' }} aria-hidden />
+                    <Chat className="mb-3 h-10 w-10" style={{ color: 'var(--text-muted)' }} aria-hidden />
                     <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No Teams chats found</p>
                   </div>
                 ) : (
-                  <div className="max-h-[min(50vh,22rem)] overflow-y-auto custom-scrollbar rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+                  <div className="max-h-[min(50vh,22rem)] overflow-y-auto custom-scrollbar rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                     <div className="space-y-2 p-2">
                       {teamsChats.filter((c) => c.members && c.members.length > 1).map((chat) => (
                         <div
@@ -1864,7 +1859,7 @@ const SummaryHistory: React.FC = () => {
                   className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                   style={{ backgroundColor: forwardSuccess ? 'var(--success)' : 'var(--accent)', color: '#fff' }}
                 >
-                  {isForwarding ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden />Sending…</> : forwardSuccess ? <><Check className="h-4 w-4" aria-hidden />Sent!</> : 'Forward Summary'}
+                  {isForwarding ? <><Loading className="h-4 w-4 animate-spin" aria-hidden />Sending…</> : forwardSuccess ? <><Check className="h-4 w-4" aria-hidden />Sent!</> : 'Forward Summary'}
                 </button>
               </div>
             </div>
@@ -1883,16 +1878,18 @@ const SummaryHistory: React.FC = () => {
           <div
             role="dialog"
             aria-modal="true"
-            className="flex max-h-[min(92vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            className="flex max-h-[min(92vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+            <div
+              className="flex shrink-0 items-center justify-between gap-3 px-5 py-4"
+              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
+            >
               <div>
                 <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Generate Profile</h2>
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>AI-generated speaker profiles from the meeting transcript</p>
               </div>
-              <button type="button" disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'} onClick={() => setProfileModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><X className="h-5 w-5" aria-hidden /></button>
+              <button type="button" disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'} onClick={() => setProfileModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><CloseMd className="h-5 w-5" aria-hidden /></button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-5 py-4">
               {(profileGenStep === 'finding-speakers' || profileGenStep === 'generating') && (
@@ -1934,7 +1931,7 @@ const SummaryHistory: React.FC = () => {
                           {profile.saveError ? <span className="text-xs" style={{ color: 'var(--error)' }}>{profile.saveError}</span> : null}
                           {!profile.saved && (
                             <button type="button" disabled={profile.saving} onClick={() => void handleSaveHistoryProfile(profile.speakerName)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
-                              {profile.saving ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving…</> : <><Save className="h-3.5 w-3.5" />Save Profile</>}
+                              {profile.saving ? <><Loading className="h-3.5 w-3.5 animate-spin" />Saving…</> : <><Save className="h-3.5 w-3.5" />Save Profile</>}
                             </button>
                           )}
                         </div>
@@ -1969,7 +1966,7 @@ const SummaryHistory: React.FC = () => {
                     className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
-                    {generatedProfiles.some((p) => p.saving) ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save All'}
+                    {generatedProfiles.some((p) => p.saving) ? <><Loading className="h-4 w-4 animate-spin" />Saving…</> : 'Save All'}
                   </button>
                 </div>
               </div>
@@ -2026,7 +2023,7 @@ const SummaryHistory: React.FC = () => {
             )}
             {saveAllStatus === 'saving' && (
               <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                <Loading className="h-4 w-4 animate-spin" aria-hidden />
                 Saving profiles...
               </div>
             )}
@@ -2093,7 +2090,7 @@ const SummaryHistory: React.FC = () => {
               onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); navigate(`/save-summary?note_id=${menuNote.id}`); }}
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
-              <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+              <Cloud className="h-4 w-4 shrink-0" aria-hidden />
               Save to OneDrive
             </button>
             <button
@@ -2120,9 +2117,9 @@ const SummaryHistory: React.FC = () => {
               title={!hasUsableDiarization(getNoteDiarizationRaw(menuNote)) ? 'Requires diarized transcription' : undefined}
             >
               {regeneratingNoteId === menuNote.id ? (
-                <><Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
+                <><Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
               ) : (
-                <><RefreshCw className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
+                <><ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
               )}
             </button>
             <button
@@ -2130,7 +2127,7 @@ const SummaryHistory: React.FC = () => {
               onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); handleStartRenameNote(menuNote); }}
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
-              <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+              <EditPencilLine01 className="h-4 w-4 shrink-0" aria-hidden />
               Rename Note
             </button>
             <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
@@ -2140,7 +2137,7 @@ const SummaryHistory: React.FC = () => {
               className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
               style={{ color: 'var(--error)' }}
             >
-              <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+              <TrashFull className="h-4 w-4 shrink-0" aria-hidden />
               Delete Note
             </button>
           </div>,
@@ -2152,4 +2149,3 @@ const SummaryHistory: React.FC = () => {
 };
 
 export default SummaryHistory;
-

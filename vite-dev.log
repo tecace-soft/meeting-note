@@ -1,0 +1,50 @@
+
+  [32m[1mVITE[22m v4.5.14[39m  [2mready in [0m[1m360[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5174[22m/[39m
+[2m10:10:52 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css[22m
+[2m10:10:52 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:11:13 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/ui/wantedCompat.tsx, /src/index.css[22m
+[2m10:11:50 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:12:10 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppSidebar.tsx, /src/index.css[22m
+[2m10:12:10 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m10:12:10 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m10:12:59 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/TranscriptDiarizedEditor.tsx, /src/index.css[22m
+[2m10:19:27 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m10:19:27 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:20:06 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:29:05 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m10:29:19 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:30:01 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mdist/index.html[22m
+[2m10:35:06 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m10:35:20 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:37:08 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m10:37:30 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:39:50 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/TranscriptDiarizedEditor.tsx, /src/index.css[22m
+[2m10:40:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:43:23 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mdist/index.html[22m
+[2m10:45:59 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:57:30 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m10:57:48 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:00:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:00:40 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m11:03:30 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m11:03:53 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:05:06 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mdist/index.html[22m
+[2m11:05:26 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:08:26 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m11:08:26 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/TranscriptDiarizedEditor.tsx, /src/index.css[22m
+[2m11:09:03 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:13:24 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m11:29:34 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m11:38:06 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m12:00:49 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m12:01:08 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m1:12:10 PM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mdist/index.html[22m
+[2m1:48:13 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m1:52:40 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m1:52:50 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m2:03:44 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m2:04:44 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m2:05:49 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m2:07:41 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m

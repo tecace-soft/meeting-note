@@ -1,6 +1,6 @@
 import React, { useId, useState, useEffect, useRef, useCallback, useMemo, startTransition } from 'react';
 import { createPortal } from 'react-dom';
-import { Loader2, Pencil, Save, Trash2, User, X } from 'lucide-react';
+import { CloseMd, EditPencilLine01, Loading, Save, TrashFull, User01 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
 import { canonicalOntologyProfileString, isOntologyProfile, type SpeakerOntology } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
@@ -313,7 +313,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     <>
       <div
         className={`rounded-lg p-4 text-base leading-relaxed overflow-y-auto custom-scrollbar space-y-3 ${scrollContainerClassName ?? 'max-h-96'}`}
-        style={{ backgroundColor: 'var(--bg-secondary)' }}
+        style={{ backgroundColor: 'transparent' }}
       >
         {segments.map((seg, idx) => (
           <div key={idx} className="flex min-h-[75px] items-center gap-3">
@@ -354,14 +354,12 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         createPortal(
           <div
             ref={speakerMenuPanelRef}
-            className="fixed z-[70] max-h-[min(100vh-1rem,520px)] overflow-hidden rounded-xl border shadow-xl flex flex-col"
+            className="fixed z-[70] max-h-[min(100vh-1rem,520px)] overflow-hidden rounded-xl app-surface-elevated flex flex-col"
             style={{
               top: speakerMenu.top,
               left: speakerMenu.left,
               width: SPEAKER_MENU_WIDTH,
-              backgroundColor: 'var(--bg)',
-              borderColor: 'var(--border)',
-              boxShadow: '0 16px 48px rgba(0,0,0,0.35)',
+              backgroundColor: 'var(--surface)',
             }}
             role="dialog"
             aria-labelledby="change-speaker-title"
@@ -377,7 +375,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                 style={{ color: 'var(--text-muted)' }}
                 aria-label="Close"
               >
-                <X className="h-4 w-4" />
+                <CloseMd className="h-4 w-4" />
               </button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
@@ -389,29 +387,20 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   setPickedSpeakerId(null);
                 }}
                 placeholder="Search or type a new name…"
-                className="w-full rounded-lg border px-3 py-2 text-sm outline-none ring-0 transition-shadow focus:border-transparent focus:ring-2"
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                 style={{
-                  backgroundColor: 'var(--bg-secondary)',
+                  backgroundColor: 'var(--surface-subtle)',
                   color: 'var(--text)',
                   borderColor: 'var(--border)',
-                  boxShadow: '0 0 0 0 transparent',
-                }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = 'var(--accent)';
-                  e.target.style.boxShadow = '0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'var(--border)';
-                  e.target.style.boxShadow = 'none';
                 }}
               />
               <div
-                className="mt-3 min-h-0 flex-1 overflow-hidden rounded-lg border"
-                style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+                className="mt-3 min-h-0 flex-1 overflow-hidden rounded-lg"
+                style={{ backgroundColor: 'var(--surface-subtle)' }}
               >
                 {speakersLoading ? (
                   <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin" style={{ color: 'var(--accent)' }} />
+                    <Loading className="h-6 w-6 animate-spin" style={{ color: 'var(--accent)' }} />
                   </div>
                 ) : speakersFetchError ? (
                   <p className="p-3 text-xs" style={{ color: 'var(--error)' }}>
@@ -476,7 +465,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                           title={`View profile for "${labelText}"`}
                           aria-label={`View profile for ${labelText}`}
                         >
-                          <User className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                          <User01 className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         </button>
                         <button
                           type="button"
@@ -489,7 +478,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                           title={`Remove "${labelText}" from saved speakers`}
                           aria-label={`Delete saved speaker ${labelText}`}
                         >
-                          <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                          <TrashFull className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         </button>
                       </li>
                     );
@@ -538,7 +527,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               >
                 {speakerChangeSaving ? (
                   <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loading className="h-4 w-4 animate-spin" />
                     Applying…
                   </span>
                 ) : (
@@ -568,8 +557,8 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               role="alertdialog"
               aria-modal="true"
               aria-labelledby="delete-speaker-title"
-              className="w-full max-w-sm rounded-lg border p-4 shadow-xl sm:p-5"
-              style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+              className="w-full max-w-sm rounded-lg app-surface-elevated p-4 sm:p-5"
+              style={{ backgroundColor: 'var(--surface)' }}
               onClick={(e) => e.stopPropagation()}
             >
               <h3 id="delete-speaker-title" className="text-base font-semibold" style={{ color: 'var(--text)' }}>
@@ -598,7 +587,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                     }
                   }}
                   className="rounded-lg px-3 py-2 text-sm transition-opacity disabled:opacity-50"
-                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                  style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
                 >
                   Cancel
                 </button>
@@ -609,7 +598,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
                   style={{ backgroundColor: 'var(--error)', color: '#fff' }}
                 >
-                  {deletingSpeakerId ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                  {deletingSpeakerId ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                   Delete
                 </button>
               </div>
@@ -635,8 +624,8 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               role="dialog"
               aria-modal="true"
               aria-labelledby="speaker-profile-title"
-              className="flex max-h-[min(90vh,720px)] w-full max-w-[1344px] flex-col overflow-hidden rounded-xl border shadow-xl"
-              style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+              className="flex max-h-[min(90vh,720px)] w-full max-w-[1344px] flex-col overflow-hidden rounded-xl app-surface-elevated"
+              style={{ backgroundColor: 'var(--surface)' }}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -670,7 +659,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                           setProfileSaveError(null);
                         }}
                         className="rounded-lg px-3 py-1.5 text-sm transition-opacity disabled:opacity-50"
-                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                        style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
                       >
                         Cancel
                       </button>
@@ -682,7 +671,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                         style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                       >
                         {savingProfile ? (
-                          <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />Saving…</>
+                          <><Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />Saving…</>
                         ) : (
                           <><Save className="h-3.5 w-3.5" aria-hidden />Save</>
                         )}
@@ -696,9 +685,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                         setIsEditingProfile(true);
                       }}
                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-opacity hover:opacity-80"
-                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                      style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
                     >
-                      <Pencil className="h-3.5 w-3.5" aria-hidden />
+                      <EditPencilLine01 className="h-3.5 w-3.5" aria-hidden />
                       Edit
                     </button>
                   )}
@@ -710,7 +699,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                     style={{ color: 'var(--text-muted)' }}
                     aria-label="Close"
                   >
-                    <X className="h-4 w-4" aria-hidden />
+                    <CloseMd className="h-4 w-4" aria-hidden />
                   </button>
                 </div>
               </div>
@@ -730,12 +719,10 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                     className="custom-scrollbar w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none"
                     style={{
                       minHeight: '24rem',
-                      backgroundColor: 'var(--bg-secondary)',
+                      backgroundColor: 'var(--surface-subtle)',
                       color: 'var(--text)',
                       borderColor: 'var(--border)',
                     }}
-                    onFocus={(e) => { e.target.style.outline = '2px solid var(--accent)'; e.target.style.outlineOffset = '0'; }}
-                    onBlur={(e) => { e.target.style.outline = 'none'; }}
                     placeholder="{}"
                     autoFocus
                   />
@@ -746,7 +733,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                     className="flex flex-col items-center justify-center py-12 text-center"
                     style={{ color: 'var(--text-muted)' }}
                   >
-                    <User className="mb-3 h-10 w-10 opacity-40" aria-hidden />
+                    <User01 className="mb-3 h-10 w-10 opacity-40" aria-hidden />
                     <p className="text-sm">No profile yet for this speaker.</p>
                     <button
                       type="button"
@@ -754,7 +741,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                       className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-opacity hover:opacity-80"
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                     >
-                      <Pencil className="h-3.5 w-3.5" aria-hidden />
+                      <EditPencilLine01 className="h-3.5 w-3.5" aria-hidden />
                       Create profile
                     </button>
                   </div>

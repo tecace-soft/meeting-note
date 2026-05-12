@@ -10,28 +10,27 @@ import {
 } from '../services/supabaseResumableUpload';
 import { ensurePublicStorageUrlReady } from '../lib/storagePublicReady';
 import {
-  Upload,
-  File,
-  MessageSquare,
-  Users,
-  UserCircle,
-  Clock,
-  X,
-  Loader2,
-  Send,
+  ArrowsReload01,
+  Chat,
   Check,
+  CloseMd,
+  Cloud,
+  CloudUpload,
   Copy,
-  Pencil,
-  RefreshCw,
-  Save,
+  EditPencilLine01,
+  FileBlank,
+  ListOrdered,
+  Loading,
   MoreVertical,
-  History,
-  HardDrive,
-  Mic,
-  Square,
-  Play,
+  PaperPlane,
   Pause,
-} from 'lucide-react';
+  Play,
+  Save,
+  Stop,
+  UserCircle,
+  UserVoice,
+  Users,
+} from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
@@ -1030,7 +1029,7 @@ const TranscriptionSummary: React.FC = () => {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
+    <div className="transcription-summary-page flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       <main className="min-h-0 flex-1 flex flex-col overflow-hidden p-4 md:p-6">
         <div className="w-full max-w-7xl mx-auto flex-1 min-h-0 flex flex-col">
           {/* File Upload Section */}
@@ -1045,19 +1044,24 @@ const TranscriptionSummary: React.FC = () => {
               <div className="collapse-content">
                 <div className="flex flex-col md:flex-row items-stretch gap-4">
                   {/* Record Option */}
-                  <div
-                    className="flex-1 card rounded-lg p-4 md:p-6 text-center transition-all"
-                    style={{ border: isRecording ? '2px solid var(--error)' : '2px dashed var(--border)' }}
+                  <button
+                    type="button"
+                    onClick={isRecording ? stopRecording : startRecording}
+                    className="record-audio-panel flex-1 card rounded-lg p-4 md:p-6 text-center transition-all"
+                    style={{
+                      border: isRecording
+                        ? '1px solid color-mix(in srgb, var(--error) 42%, var(--border))'
+                        : '1px solid var(--surface)',
+                    }}
                   >
                     {!isRecording ? (
                       <>
-                        <button
-                          onClick={startRecording}
-                          className="w-16 h-16 rounded-full mx-auto mb-3 flex items-center justify-center transition-all hover:scale-105"
+                        <span
+                          className="record-audio-icon w-16 h-16 rounded-full mx-auto mb-3 flex items-center justify-center"
                           style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                         >
-                          <Mic className="w-7 h-7" />
-                        </button>
+                          <UserVoice className="h-7 w-7" />
+                        </span>
                         <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
                           Record Audio
                         </p>
@@ -1072,13 +1076,12 @@ const TranscriptionSummary: React.FC = () => {
                             className="absolute inset-0 rounded-full animate-ping opacity-25"
                             style={{ backgroundColor: 'var(--error)' }}
                           />
-                          <button
-                            onClick={stopRecording}
-                            className="relative w-16 h-16 rounded-full flex items-center justify-center transition-all hover:scale-105"
+                          <span
+                            className="record-audio-icon relative w-16 h-16 rounded-full flex items-center justify-center"
                             style={{ backgroundColor: 'var(--error)', color: '#fff' }}
                           >
-                            <Square className="w-6 h-6" fill="currentColor" />
-                          </button>
+                            <Stop className="h-6 w-6" fill="currentColor" />
+                          </span>
                         </div>
                         <p className="text-lg font-mono font-medium mb-1" style={{ color: 'var(--error)' }}>
                           {formatRecordingTime(recordingTime)}
@@ -1088,7 +1091,7 @@ const TranscriptionSummary: React.FC = () => {
                         </p>
                       </>
                     )}
-                  </div>
+                  </button>
 
                   {/* OR Divider */}
                   <div className="flex md:flex-col items-center justify-center gap-2 py-2 md:py-0 md:px-2">
@@ -1100,7 +1103,7 @@ const TranscriptionSummary: React.FC = () => {
                   {/* Upload Option — label + native input avoids iOS issues with programmatic .click() */}
                   <label
                     htmlFor="meeting-audio-upload"
-                    className={`flex-1 drop-zone rounded-lg p-6 text-center cursor-pointer transition-all block min-h-[8rem] ${isDragging ? 'drag-over' : ''}`}
+                    className={`upload-audio-panel flex-1 drop-zone rounded-lg p-6 text-center cursor-pointer transition-all block min-h-[8rem] ${isDragging ? 'drag-over' : ''}`}
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
                     onDrop={handleDrop}
@@ -1114,7 +1117,7 @@ const TranscriptionSummary: React.FC = () => {
                       onChange={handleFileSelect}
                       className="sr-only"
                     />
-                    <Upload className="w-10 h-10 mx-auto mb-3" style={{ color: 'var(--text-muted)' }} />
+                    <CloudUpload className="mx-auto mb-3 h-10 w-10" style={{ color: 'var(--text-muted)' }} />
                     <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
                       Upload Audio File
                     </p>
@@ -1182,7 +1185,7 @@ const TranscriptionSummary: React.FC = () => {
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                     >
-                      <X className="w-4 h-4" />
+                      <CloseMd className="w-4 h-4" />
                       Discard
                     </button>
                     <button
@@ -1209,7 +1212,7 @@ const TranscriptionSummary: React.FC = () => {
                   >
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center" 
                       style={{ backgroundColor: 'var(--accent-light)' }}>
-                      <File className="w-5 h-5" style={{ color: 'var(--accent)' }} />
+                      <FileBlank className="h-5 w-5" style={{ color: 'var(--accent)' }} />
                     </div>
                     <div className="flex-grow min-w-0">
                       <p className="text-sm font-medium truncate" style={{ color: 'var(--text)' }}>
@@ -1228,7 +1231,7 @@ const TranscriptionSummary: React.FC = () => {
                       )}
                       {file.status === 'processing' && (
                         <div className="flex items-center gap-1">
-                          <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--accent)' }} />
+                          <Loading className="w-4 h-4 animate-spin" style={{ color: 'var(--accent)' }} />
                           <span className="text-xs" style={{ color: 'var(--accent)' }}>Processing...</span>
                         </div>
                       )}
@@ -1247,7 +1250,7 @@ const TranscriptionSummary: React.FC = () => {
                         className="p-1 rounded hover:bg-opacity-80"
                         style={{ color: 'var(--text-muted)' }}
                       >
-                        <X className="w-4 h-4" />
+                        <CloseMd className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
@@ -1261,7 +1264,7 @@ const TranscriptionSummary: React.FC = () => {
               className={`collapse-container ${promptSectionLayoutExpanded ? 'expanded' : 'collapsed'}`}
             >
               <div className="collapse-content">
-              <div className="mt-4 card rounded-lg p-4">
+              <div className="prompt-controls-shell mt-4 card rounded-lg p-4">
                 <div className="flex w-full min-w-0 flex-col gap-4 md:flex-row md:items-start md:gap-4">
                   <div className="min-w-0 flex-1 basis-0">
                     <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
@@ -1286,7 +1289,7 @@ const TranscriptionSummary: React.FC = () => {
                     <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
                       Select summarization prompt
                     </label>
-                    <div className="flex min-w-0 w-full flex-col gap-4 md:w-max md:max-w-full md:flex-row md:flex-nowrap md:items-center md:gap-3">
+                    <div className="flex min-w-0 w-full flex-col gap-4 md:w-max md:max-w-full md:flex-row md:flex-nowrap md:items-center md:gap-4">
                       <select
                         value={selectedSummaryPromptId ?? ''}
                         onChange={(e) => handleSummaryPromptSelect(e.target.value)}
@@ -1330,12 +1333,12 @@ const TranscriptionSummary: React.FC = () => {
                       >
                         {isSummarizing ? (
                           <>
-                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-                            Summarizing...
+                            <Loading className="h-4 w-4 shrink-0 animate-spin" />
+                            Summarize
                           </>
                         ) : (
                           <>
-                            <Send className="h-4 w-4 shrink-0" />
+                            <PaperPlane className="h-4 w-4 shrink-0" />
                             Summarize
                           </>
                         )}
@@ -1376,11 +1379,11 @@ const TranscriptionSummary: React.FC = () => {
                   <div className="flex flex-1 min-h-0 flex-col px-4 pt-4 md:px-6 md:pt-5">
                     {summaryResult.transcript.length > 0 ? (
                       <div
-                        className="flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"
+                        className="results-header flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"
                         style={{ borderColor: 'var(--border)' }}
                       >
                         <div
-                          className="-mb-px flex min-w-0 gap-1 sm:gap-6"
+                          className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5"
                           role="tablist"
                           aria-label="Summary or transcription"
                         >
@@ -1389,10 +1392,8 @@ const TranscriptionSummary: React.FC = () => {
                             role="tab"
                             aria-selected={resultsTab === 'summary'}
                             onClick={() => setResultsTab('summary')}
-                            className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                            className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                             style={{
-                              borderBottomColor:
-                                resultsTab === 'summary' ? 'var(--accent)' : 'transparent',
                               color: resultsTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                             }}
                           >
@@ -1403,10 +1404,8 @@ const TranscriptionSummary: React.FC = () => {
                             role="tab"
                             aria-selected={resultsTab === 'transcription'}
                             onClick={() => setResultsTab('transcription')}
-                            className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                            className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                             style={{
-                              borderBottomColor:
-                                resultsTab === 'transcription' ? 'var(--accent)' : 'transparent',
                               color:
                                 resultsTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
                             }}
@@ -1415,6 +1414,28 @@ const TranscriptionSummary: React.FC = () => {
                           </button>
                         </div>
                         <div className="flex shrink-0 items-center gap-2 pb-2">
+                          {resultsTab === 'summary' ? (
+                            <button
+                              onClick={() => void handleToggleEditSummary()}
+                              className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                              style={{
+                                backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
+                                color: isEditingSummary ? '#fff' : 'var(--text-secondary)',
+                              }}
+                            >
+                              {isEditingSummary ? (
+                                <>
+                                  <Save className="h-3 w-3" />
+                                  Done
+                                </>
+                              ) : (
+                                <>
+                                  <EditPencilLine01 className="h-3 w-3" />
+                                  Edit
+                                </>
+                              )}
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() =>
@@ -1423,7 +1444,7 @@ const TranscriptionSummary: React.FC = () => {
                                 resultsTab === 'summary' ? 'summary-result' : 'transcription-result'
                               )
                             }
-                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                             style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                             title={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
                             aria-label={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
@@ -1437,37 +1458,15 @@ const TranscriptionSummary: React.FC = () => {
                           </button>
                           <button
                             onClick={() => setShowDiscardModal(true)}
-                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            className="summary-toolbar-btn summary-toolbar-btn-danger flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                             style={{
                               backgroundColor: 'var(--bg-secondary)',
                               color: 'var(--text-muted)',
                             }}
                           >
-                            <X className="h-3 w-3" />
+                            <CloseMd className="h-3 w-3" />
                             Discard
                           </button>
-                          {resultsTab === 'summary' ? (
-                            <button
-                              onClick={() => void handleToggleEditSummary()}
-                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                              style={{
-                                backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
-                                color: isEditingSummary ? '#fff' : 'var(--text-secondary)',
-                              }}
-                            >
-                              {isEditingSummary ? (
-                                <>
-                                  <Save className="h-3 w-3" />
-                                  Done
-                                </>
-                              ) : (
-                                <>
-                                  <Pencil className="h-3 w-3" />
-                                  Edit
-                                </>
-                              )}
-                            </button>
-                          ) : null}
                         </div>
                       </div>
                     ) : (
@@ -1479,7 +1478,7 @@ const TranscriptionSummary: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => void handleCopyText(editedSummary, 'summary-result')}
-                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                             style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                             title="Copy summary"
                             aria-label="Copy summary"
@@ -1489,18 +1488,18 @@ const TranscriptionSummary: React.FC = () => {
                           </button>
                           <button
                             onClick={() => setShowDiscardModal(true)}
-                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            className="summary-toolbar-btn summary-toolbar-btn-danger flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                             style={{
                               backgroundColor: 'var(--bg-secondary)',
                               color: 'var(--text-muted)',
                             }}
                           >
-                            <X className="h-3 w-3" />
+                            <CloseMd className="h-3 w-3" />
                             Discard
                           </button>
                           <button
                             onClick={() => void handleToggleEditSummary()}
-                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                            className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                             style={{
                               backgroundColor: isEditingSummary ? 'var(--accent)' : 'var(--bg-secondary)',
                               color: isEditingSummary ? '#fff' : 'var(--text-secondary)',
@@ -1513,7 +1512,7 @@ const TranscriptionSummary: React.FC = () => {
                               </>
                             ) : (
                               <>
-                                <Pencil className="h-3 w-3" />
+                                <EditPencilLine01 className="h-3 w-3" />
                                 Edit
                               </>
                             )}
@@ -1533,7 +1532,7 @@ const TranscriptionSummary: React.FC = () => {
                             }}
                             className="custom-scrollbar flex-1 min-h-0 w-full resize-none overflow-y-auto rounded-lg border-2 p-4 text-sm leading-relaxed"
                             style={{
-                              backgroundColor: 'var(--bg-secondary)',
+                              backgroundColor: 'transparent',
                               color: 'var(--text)',
                               borderColor: 'var(--accent)',
                             }}
@@ -1541,8 +1540,8 @@ const TranscriptionSummary: React.FC = () => {
                           />
                         ) : (
                           <div
-                            className="prose prose-sm custom-scrollbar flex-1 min-h-0 max-w-none overflow-y-auto rounded-lg p-4 text-sm leading-relaxed"
-                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
+                            className="summary-markdown prose prose-sm custom-scrollbar flex-1 min-h-0 max-w-none overflow-y-auto rounded-lg p-4 text-sm leading-relaxed"
+                            style={{ backgroundColor: 'transparent', color: 'var(--text)' }}
                           >
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedSummary}</ReactMarkdown>
                           </div>
@@ -1584,7 +1583,7 @@ const TranscriptionSummary: React.FC = () => {
                         }}
                         className={resultActionBtnClass}
                       >
-                        <HardDrive className="h-4 w-4 shrink-0" aria-hidden />
+                        <Cloud className="h-4 w-4 shrink-0" aria-hidden />
                         <span className={resultActionBtnLabelClass}>Save to OneDrive</span>
                       </button>
                       <button
@@ -1609,7 +1608,7 @@ const TranscriptionSummary: React.FC = () => {
                       >
                         {isForwarding ? (
                           <>
-                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                            <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                             <span className={resultActionBtnLabelClass}>Sending...</span>
                           </>
                         ) : forwardSuccess ? (
@@ -1644,12 +1643,12 @@ const TranscriptionSummary: React.FC = () => {
                       >
                         {isRegenerating ? (
                           <>
-                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                            <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                             <span className={resultActionBtnLabelClass}>Regenerating…</span>
                           </>
                         ) : (
                           <>
-                            <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                            <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
                             <span className={resultActionBtnLabelClass}>Regenerate Summary</span>
                           </>
                         )}
@@ -1681,13 +1680,12 @@ const TranscriptionSummary: React.FC = () => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="forward-teams-title"
-            className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated"
             onClick={(e) => e.stopPropagation()}
           >
             <div
-              className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5"
-              style={{ borderColor: 'var(--border)' }}
+              className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-5"
+              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
             >
               <h2 id="forward-teams-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
                 Forward to Teams
@@ -1700,7 +1698,7 @@ const TranscriptionSummary: React.FC = () => {
                 style={{ color: 'var(--text-muted)' }}
                 aria-label="Close"
               >
-                <X className="h-5 w-5" aria-hidden />
+                <CloseMd className="h-5 w-5" aria-hidden />
               </button>
             </div>
             <p className="shrink-0 px-4 pt-3 text-sm sm:px-5" style={{ color: 'var(--text-secondary)' }}>
@@ -1728,7 +1726,7 @@ const TranscriptionSummary: React.FC = () => {
                 </div>
               ) : chats.length === 0 ? (
                 <div className="rounded-lg border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
-                  <MessageSquare className="mx-auto mb-4 h-12 w-12" style={{ color: 'var(--text-muted)' }} aria-hidden />
+                  <Chat className="mx-auto mb-4 h-12 w-12" style={{ color: 'var(--text-muted)' }} aria-hidden />
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                     No Teams chats found
                   </p>
@@ -1755,7 +1753,7 @@ const TranscriptionSummary: React.FC = () => {
                             }}
                           >
                             {chat.chatType === 'oneOnOne' ? (
-                              <MessageSquare
+                              <Chat
                                 className="h-5 w-5"
                                 style={{ color: chat.id === selectedChatId ? '#fff' : 'var(--accent)' }}
                                 aria-hidden
@@ -1810,7 +1808,7 @@ const TranscriptionSummary: React.FC = () => {
                                   }}
                                   className="chat-menu-item flex w-full items-center gap-2 px-4 py-2 text-sm transition-all"
                                 >
-                                  <History className="h-4 w-4" aria-hidden />
+                                  <ListOrdered className="h-4 w-4" aria-hidden />
                                   History
                                 </button>
                                 <button
@@ -1822,7 +1820,7 @@ const TranscriptionSummary: React.FC = () => {
                                   }}
                                   className="chat-menu-item flex w-full items-center gap-2 px-4 py-2 text-sm transition-all"
                                 >
-                                  <MessageSquare className="h-4 w-4" aria-hidden />
+                                  <Chat className="h-4 w-4" aria-hidden />
                                   Chat
                                 </button>
                               </div>
@@ -1856,7 +1854,7 @@ const TranscriptionSummary: React.FC = () => {
               >
                 {isForwarding ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    <Loading className="h-4 w-4 animate-spin" aria-hidden />
                     Sending...
                   </>
                 ) : (
@@ -1884,14 +1882,13 @@ const TranscriptionSummary: React.FC = () => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="profile-modal-title"
-            className="flex max-h-[min(92vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            className="flex max-h-[min(92vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <div
-              className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-4"
-              style={{ borderColor: 'var(--border)' }}
+              className="flex shrink-0 items-center justify-between gap-3 px-5 py-4"
+              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
             >
               <div>
                 <h2 id="profile-modal-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
@@ -1909,7 +1906,7 @@ const TranscriptionSummary: React.FC = () => {
                 style={{ color: 'var(--text-muted)' }}
                 aria-label="Close"
               >
-                <X className="h-5 w-5" aria-hidden />
+                <CloseMd className="h-5 w-5" aria-hidden />
               </button>
             </div>
 
@@ -2015,7 +2012,7 @@ const TranscriptionSummary: React.FC = () => {
                               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                             >
                               {profile.saving ? (
-                                <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />Saving…</>
+                                <><Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />Saving…</>
                               ) : (
                                 <><Save className="h-3.5 w-3.5" aria-hidden />Save Profile</>
                               )}
@@ -2082,7 +2079,7 @@ const TranscriptionSummary: React.FC = () => {
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
                     {generatedProfiles.some((p) => p.saving) ? (
-                      <><Loader2 className="h-4 w-4 animate-spin" aria-hidden />Saving…</>
+                      <><Loading className="h-4 w-4 animate-spin" aria-hidden />Saving…</>
                     ) : (
                       'Save All'
                     )}
@@ -2154,7 +2151,7 @@ const TranscriptionSummary: React.FC = () => {
             )}
             {saveAllStatus === 'saving' && (
               <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                <Loading className="h-4 w-4 animate-spin" aria-hidden />
                 Saving profiles...
               </div>
             )}
@@ -2254,4 +2251,3 @@ const TranscriptionSummary: React.FC = () => {
 };
 
 export default TranscriptionSummary;
-

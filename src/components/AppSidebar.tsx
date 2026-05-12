@@ -4,23 +4,23 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Check,
-  FilePlus,
-  FileText,
-  FolderPlus,
-  History,
-  HardDrive,
+  CloseMd,
+  Cloud,
+  EditPencilLine01,
+  FileAdd,
+  FileDocument,
   Folder,
-  LogIn,
+  FolderAdd,
+  ListOrdered,
+  Loading,
   LogOut,
-  Loader2,
-  MoreHorizontal,
   Moon,
-  Pencil,
+  MoreHorizontal,
   Sun,
-  Trash2,
-  X,
-} from 'lucide-react';
+  TrashFull,
+  UserAdd,
+} from 'react-coolicons';
+import { IconButton } from '../ui/wantedCompat';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
@@ -113,9 +113,9 @@ function getNoteTranscriptionText(note: SidebarNote): string {
 }
 
 const navItems = [
-  { to: '/transcription-summary', label: 'Meeting Note', icon: FileText, end: true as const },
-  { to: '/summary-history', label: 'History', icon: History, end: false as const, projects: true as const },
-  { to: '/save-summary', label: 'OneDrive', icon: HardDrive, end: false as const },
+  { to: '/transcription-summary', label: 'Meeting Note', icon: FileDocument, end: true as const },
+  { to: '/summary-history', label: 'History', icon: ListOrdered, end: false as const, projects: true as const },
+  { to: '/save-summary', label: 'OneDrive', icon: Cloud, end: false as const },
 ] as const;
 
 interface AppSidebarProps {
@@ -493,30 +493,31 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     <aside
       className={
         mobileOverlay
-          ? 'fixed left-0 top-0 z-50 flex h-full flex-col border-r shadow-xl transition-transform duration-200 ease-out'
-          : 'flex flex-shrink-0 flex-col border-r transition-[width] duration-200 ease-out'
+          ? 'fixed left-0 top-0 z-50 flex h-full flex-col transition-transform duration-200 ease-out'
+          : 'flex flex-shrink-0 flex-col transition-[width] duration-200 ease-out'
       }
       style={
         mobileOverlay
           ? {
               width: 'min(260px, 88vw)',
-              borderColor: 'var(--border)',
-              backgroundColor: 'var(--card)',
+              borderRight: '1px solid color-mix(in srgb, var(--border) 40%, transparent)',
+              backgroundColor: 'var(--surface)',
               transform: collapsed ? 'translateX(-100%)' : 'translateX(0)',
               pointerEvents: collapsed ? 'none' : 'auto',
+              boxShadow: collapsed ? undefined : 'var(--shadow-lg)',
             }
           : {
               width: collapsed ? 60 : 240,
-              borderColor: 'var(--border)',
-              backgroundColor: 'var(--card)',
+              borderRight: '1px solid color-mix(in srgb, var(--border) 40%, transparent)',
+              backgroundColor: 'var(--surface)',
             }
       }
     >
       <div
-        className={`flex items-center border-b py-2 ${
+        className={`flex items-center py-2 ${
           collapsed ? 'justify-center px-0' : 'justify-between gap-1 px-2'
         }`}
-        style={{ borderColor: 'var(--border)' }}
+        style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
       >
         {!collapsed && (
           <span
@@ -526,11 +527,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             Meeting Note
           </span>
         )}
-        <button
+        <IconButton
           type="button"
+          variant="background"
           onClick={onToggleCollapsed}
-          className="rounded-md p-2 transition-colors hover:opacity-90"
-          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
           title={collapsed ? 'Expand Menu' : 'Collapse Menu'}
           aria-expanded={!collapsed}
           aria-label={collapsed ? 'Expand Menu' : 'Collapse Menu'}
@@ -540,7 +540,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           ) : (
             <ChevronLeft className="h-4 w-4" aria-hidden />
           )}
-        </button>
+        </IconButton>
       </div>
 
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-3" aria-label="Main">
@@ -576,13 +576,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                       className="flex w-full items-center gap-2 rounded-md py-1.5 pl-1 pr-2 text-left text-xs font-medium opacity-90 transition-opacity hover:opacity-100"
                       style={linkStyle(false)}
                     >
-                      <FolderPlus className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
+                      <FolderAdd className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
                       <span className="truncate">New Project</span>
                     </button>
 
                     {projectsLoading ? (
                       <div className="flex items-center gap-2 py-2 pl-1">
-                        <Loader2
+                        <Loading
                           className="h-3.5 w-3.5 flex-shrink-0 animate-spin"
                           style={{ color: 'var(--text-muted)' }}
                           aria-hidden
@@ -663,8 +663,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
                           {openProjectMenuId === p.id ? (
                             <div
-                              className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl border p-2 shadow-lg"
-                              style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+                              className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl p-2 app-surface-elevated"
+                              style={{ backgroundColor: 'var(--surface)' }}
                             >
                               <button
                                 type="button"
@@ -676,7 +676,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                 style={{ color: 'var(--text)' }}
                               >
-                                <FilePlus className="h-4 w-4" aria-hidden />
+                                <FileAdd className="h-4 w-4" aria-hidden />
                                 Add notes
                               </button>
                               <div
@@ -689,7 +689,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                 style={{ color: 'var(--text)' }}
                               >
-                                <Pencil className="h-4 w-4" aria-hidden />
+                                <EditPencilLine01 className="h-4 w-4" aria-hidden />
                                 Rename project
                               </button>
                               <div
@@ -702,7 +702,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                 style={{ color: 'var(--error)' }}
                               >
-                                <Trash2 className="h-4 w-4" aria-hidden />
+                                <TrashFull className="h-4 w-4" aria-hidden />
                                 Delete project
                               </button>
                             </div>
@@ -745,7 +745,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           className={`flex items-center gap-3 rounded-lg py-2 text-sm transition-colors hover:opacity-95 ${
             collapsed ? 'justify-center px-2' : 'px-3'
           }`}
-          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+          style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
           title={collapsed ? (theme === 'light' ? 'Dark Mode' : 'Light Mode') : undefined}
         >
           {theme === 'light' ? (
@@ -788,7 +788,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors hover:opacity-95 ${
                 collapsed ? 'justify-center px-2' : 'px-3'
               }`}
-              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
               title={collapsed ? 'Sign Out' : undefined}
             >
               <LogOut className="h-4 w-4 flex-shrink-0" aria-hidden />
@@ -805,7 +805,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
             title="Sign In"
           >
-            <LogIn className="h-4 w-4 flex-shrink-0" aria-hidden />
+            <UserAdd className="h-4 w-4 flex-shrink-0" aria-hidden />
             {!collapsed && <span>Sign In</span>}
           </NavLink>
         )}
@@ -827,13 +827,12 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             role="dialog"
             aria-modal="true"
             aria-labelledby="new-project-dialog-title"
-            className="flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl sm:max-w-6xl"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            className="flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated sm:max-w-6xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div
-              className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-4 sm:px-6 sm:py-5"
-              style={{ borderColor: 'var(--border)' }}
+              className="flex shrink-0 items-center justify-between gap-3 px-4 py-4 sm:px-6 sm:py-5"
+              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
             >
               <div>
                 <h3 id="new-project-dialog-title" className="text-lg font-semibold sm:text-xl" style={{ color: 'var(--text)' }}>
@@ -843,19 +842,18 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   Name your folder and choose which meeting notes to include.
                 </p>
               </div>
-              <button
+              <IconButton
                 type="button"
+                variant="background"
                 onClick={() => {
                   setIsCreateProjectOpen(false);
                   setCreateModalExpandedNoteId(null);
                 }}
-                className="rounded-md p-2"
-                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                 aria-label="Close modal"
                 disabled={creatingProject}
               >
-                <X className="h-5 w-5" aria-hidden />
-              </button>
+                <CloseMd className="h-5 w-5" aria-hidden />
+              </IconButton>
             </div>
 
             <form onSubmit={handleCreateProject} className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -875,10 +873,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                     onChange={(e) => setNewProjectName(e.target.value)}
                     maxLength={200}
                     placeholder="e.g. Q1 customer calls"
-                    className="w-full rounded-lg border px-3 py-2.5 text-base"
+                    className="input w-full px-3 py-2.5 text-base"
                     style={{
                       backgroundColor: 'var(--bg)',
-                      borderColor: 'var(--border)',
                       color: 'var(--text)',
                     }}
                     disabled={creatingProject}
@@ -898,7 +895,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
                   {notesLoading ? (
                     <div className="flex min-h-[12rem] flex-1 items-center justify-center py-6">
-                      <div className="card rounded-lg p-8 text-center">
+                        <div className="rounded-lg p-8 text-center" style={{ backgroundColor: 'var(--surface-subtle)' }}>
                         <div
                           className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-b-2"
                           style={{ borderColor: 'var(--accent)' }}
@@ -911,7 +908,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                     </div>
                   ) : sortedNotes.length === 0 ? (
                     <div className="flex min-h-[12rem] flex-1 items-center justify-center py-6">
-                      <div className="card rounded-lg p-8 text-center">
+                      <div className="rounded-lg p-8 text-center" style={{ backgroundColor: 'var(--surface-subtle)' }}>
                         <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                           No notes found.
                         </p>
@@ -1053,7 +1050,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   disabled={creatingProject || !newProjectName.trim()}
                 >
-                  {creatingProject ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                  {creatingProject ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                   Create project
                 </button>
               </div>
@@ -1068,8 +1065,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
         >
           <div
-            className="w-full max-w-sm rounded-lg border p-4 sm:p-5"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            className="w-full max-w-sm rounded-lg app-surface-elevated p-4 sm:p-5"
+          style={{ backgroundColor: 'var(--surface)' }}
           >
             <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
               Delete project?
@@ -1087,7 +1084,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 type="button"
                 onClick={() => setIsDeleteProjectOpen(false)}
                 className="rounded-lg px-3 py-2 text-sm"
-                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
                 disabled={deletingProject}
               >
                 Cancel
@@ -1101,7 +1098,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 style={{ backgroundColor: 'var(--error)', color: '#fff' }}
                 disabled={deletingProject}
               >
-                {deletingProject ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {deletingProject ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                 Delete
               </button>
             </div>

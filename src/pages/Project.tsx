@@ -7,19 +7,19 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  CloseMd,
   Copy,
-  FilePlus,
-  FileText,
+  EditPencilLine01,
+  FileAdd,
+  FileDocument,
   Folder,
-  FolderMinus,
-  Loader2,
+  FolderRemove,
+  Loading,
   MoreHorizontal,
-  Pencil,
+  PaperPlane,
   Save,
-  Send,
-  Trash2,
-  X,
-} from 'lucide-react';
+  TrashFull,
+} from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
@@ -832,7 +832,7 @@ const Project: React.FC = () => {
                 )}
                 {chatSending ? (
                   <div className="flex w-full items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+                    <Loading className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
                     Waiting for reply...
                   </div>
                 ) : null}
@@ -864,7 +864,7 @@ const Project: React.FC = () => {
               title="Send message"
               aria-label="Send message"
             >
-              {chatSending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
+              {chatSending ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <PaperPlane className="h-4 w-4" aria-hidden />}
             </button>
           </form>
 
@@ -935,7 +935,7 @@ const Project: React.FC = () => {
                       className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                     >
-                      <FilePlus className="h-4 w-4 shrink-0" aria-hidden />
+                      <FileAdd className="h-4 w-4 shrink-0" aria-hidden />
                       Add notes
                     </button>
                   </div>
@@ -973,7 +973,7 @@ const Project: React.FC = () => {
                                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
                                 style={{ backgroundColor: 'var(--accent-light)' }}
                               >
-                                <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                                <FileDocument className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
                               </div>
                             </div>
                             <div className="min-w-0 pr-1">
@@ -1088,7 +1088,7 @@ const Project: React.FC = () => {
                                       className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                       style={{ color: 'var(--text)' }}
                                     >
-                                      <Pencil className="h-4 w-4" aria-hidden />
+                                      <EditPencilLine01 className="h-4 w-4" aria-hidden />
                                       Rename Note
                                     </button>
                                     <button
@@ -1099,7 +1099,7 @@ const Project: React.FC = () => {
                                       className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                       style={{ color: 'var(--text)' }}
                                     >
-                                      <FolderMinus className="h-4 w-4" aria-hidden />
+                                      <FolderRemove className="h-4 w-4" aria-hidden />
                                       Remove from Project
                                     </button>
                                     <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
@@ -1109,7 +1109,7 @@ const Project: React.FC = () => {
                                       className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                       style={{ color: 'var(--error)' }}
                                     >
-                                      <Trash2 className="h-4 w-4" aria-hidden />
+                                      <TrashFull className="h-4 w-4" aria-hidden />
                                       Delete Note
                                     </button>
                                   </div>
@@ -1185,7 +1185,7 @@ const Project: React.FC = () => {
                                               className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium disabled:opacity-50"
                                               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                                             >
-                                              {savingNoteId === note.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                              {savingNoteId === note.id ? <Loading className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                                               Done
                                             </button>
                                           ) : (
@@ -1195,7 +1195,7 @@ const Project: React.FC = () => {
                                               className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
                                               style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
                                             >
-                                              <Pencil className="h-3 w-3" />
+                                              <EditPencilLine01 className="h-3 w-3" />
                                               Edit
                                             </button>
                                           )}
@@ -1296,7 +1296,7 @@ const Project: React.FC = () => {
                 <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
                   {sessionsLoading ? (
                     <div className="flex h-full items-center justify-center py-10">
-                      <Loader2 className="h-5 w-5 animate-spin" style={{ color: 'var(--text-muted)' }} />
+                      <Loading className="h-5 w-5 animate-spin" style={{ color: 'var(--text-muted)' }} />
                     </div>
                   ) : sessionsError ? (
                     <div className="py-6 text-sm" style={{ color: 'var(--error)' }}>
@@ -1396,7 +1396,7 @@ const Project: React.FC = () => {
                 aria-label="Close modal"
                 disabled={addNotesSaving}
               >
-                <X className="h-5 w-5" aria-hidden />
+                <CloseMd className="h-5 w-5" aria-hidden />
               </button>
             </div>
 
@@ -1581,7 +1581,7 @@ const Project: React.FC = () => {
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                 disabled={addNotesSaving || selectedNoteIdsToAdd.length === 0}
               >
-                {addNotesSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {addNotesSaving ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                 Add to project
               </button>
             </div>
@@ -1625,7 +1625,7 @@ const Project: React.FC = () => {
                 style={{ backgroundColor: 'var(--error)', color: '#fff' }}
                 disabled={deletingNote}
               >
-                {deletingNote ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                 Delete
               </button>
             </div>

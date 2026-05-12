@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
-import { PanelLeft } from 'lucide-react';
+import { WindowSidebar } from 'react-coolicons';
+import { IconButton } from '../ui/wantedCompat';
 import AppSidebar, {
   readMobileSidebarCollapsed,
   readSidebarCollapsed,
@@ -83,26 +84,25 @@ const AppShell: React.FC = () => {
       </div>
 
       {mobileOverlay && collapsed ? (
-        <button
-          type="button"
-          className="fixed z-30 flex h-11 w-11 items-center justify-center rounded-lg border ring-1 ring-black/[0.08] md:hidden dark:ring-white/[0.12]"
+        <div
+          className="fixed z-30 md:hidden"
           style={{
             bottom: 'max(0.75rem, env(safe-area-inset-bottom))',
             left: 'max(0.75rem, env(safe-area-inset-left))',
-            backgroundColor: 'var(--card)',
-            borderColor: 'var(--border)',
-            color: 'var(--text-secondary)',
-            boxShadow:
-              'var(--shadow-lg), 0 3px 10px color-mix(in srgb, var(--text) 14%, transparent)',
-          }}
-          aria-label="Open menu"
-          onClick={() => {
-            setCollapsed(false);
-            persistCollapsed(false);
           }}
         >
-          <PanelLeft className="h-5 w-5 shrink-0" aria-hidden />
-        </button>
+          <IconButton
+            type="button"
+            variant="solid"
+            aria-label="Open menu"
+            onClick={() => {
+              setCollapsed(false);
+              persistCollapsed(false);
+            }}
+          >
+            <WindowSidebar width={22} height={22} aria-hidden />
+          </IconButton>
+        </div>
       ) : null}
 
       {mobileOverlay && !collapsed ? (

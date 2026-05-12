@@ -1,0 +1,56 @@
+---
+description: Montage UI, Coolicons, and skin-only refactor rules for this app
+alwaysApply: true
+---
+
+# App Design System (Montage + Coolicons)
+
+**Source of truth for UI.** When changing or adding screens, follow this file so the app stays visually consistent.
+
+## Uniform look and feel
+
+- Reuse the same **shell** (e.g. `TopNavigation`, sidebar if present) and **page chrome** (background, max-width, outer padding) on every route.
+- Use one set of **tokens** for surfaces, text, borders, and elevation—no one-off palettes per page.
+- **Typography:** Wanted Sans only; align headings and body styles with Montage text components or a single scale.
+- **Patterns:** Same `Card` treatment, button hierarchy (primary / secondary / ghost), form controls, and empty/loading states across pages.
+- **Feedback:** Only Montage `Toast` / `Snackbar` for messages—not ad-hoc banners or browser `alert`.
+
+## Core framework
+
+- **UI library:** Montage (`@wanteddev/wds`)
+- **Theme:** `@wanteddev/wds-theme`
+- **Icons:** [Coolicons](https://coolicons.cool/) only
+- **Typography:** Wanted Sans (Montage default)
+
+## Global styling
+
+1. **Tokens over literals:** Prefer Montage design tokens (`theme.spacing.*`, `theme.colors.*`, elevation, radii) instead of ad-hoc hex or spacing where you are defining **skin** (colors, borders, shadows, backgrounds).
+2. **Components:** Prefer Montage components (`WantedButton`, `TextField`, `Card`, etc.) over raw HTML when building or extending UI.
+3. **Slots:** Use built-in slots (`left`, `right`, `top`, `bottom`) for icons and supplementary content.
+4. **Icons:** Import only from `coolicons`; default size 24px unless specified otherwise.
+5. **Spacing conventions:** Page containers: `theme.spacing.xl` (24); card inner padding: `theme.spacing.m` (16).
+
+## Page layout
+
+- **Navigation:** `TopNavigation` on internal pages.
+- **Surface:** `Card` for grouped information or forms.
+- **Feedback:** `Toast` or `Snackbar` for user notifications.
+
+## Refactor strategy: skinning only
+
+When refactoring existing UI for Montage/theming, **do not change layout structure.**
+
+**Preserve (do not change):**
+
+- `width`, `height`
+- `display` (`flex` / `grid` / etc.)
+- `position`
+- `flex-direction` (and analogous grid placement that defines layout flow)
+
+**Skin upgrade (allowed and preferred):**
+
+- **Colors:** Map existing hex (and similar) to Montage theme tokens (e.g. `theme.colors.gray100`).
+- **Borders:** Use Montage border tokens and radii; **8px** is the standard radius for cards unless the theme specifies otherwise.
+- **Containers:** Use Montage elevation (shadows) and background fills from the theme.
+- **Interactive states:** Align `:hover`, `:active`, and `:focus` with Montage’s interaction scale / tokenized states.
+- **Scrollbars:** Thin track/thumb, neutral gray aligned with the theme (e.g. gray-300-level token), rounded ends for a clean web app look consistent with Montage.
