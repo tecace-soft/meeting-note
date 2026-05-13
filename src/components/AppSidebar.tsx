@@ -530,6 +530,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         <IconButton
           type="button"
           variant="background"
+          className="sidebar-toggle-btn"
           onClick={onToggleCollapsed}
           title={collapsed ? 'Expand Menu' : 'Collapse Menu'}
           aria-expanded={!collapsed}
@@ -554,9 +555,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   end={item.end}
                   title={collapsed ? item.label : undefined}
                   onClick={handleNavPress}
-                  className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity hover:opacity-100 ${
-                    collapsed ? 'justify-center px-2' : 'px-3'
-                  }`}
+                  className={({ isActive }) =>
+                    `sidebar-nav-link flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity ${
+                      isActive || summaryHistorySectionActive ? 'sidebar-nav-link-active' : 'hover:opacity-90'
+                    } ${
+                      collapsed ? 'justify-center px-2' : 'px-3'
+                    }`
+                  }
                   style={({ isActive }) => linkStyle(isActive || summaryHistorySectionActive)}
                 >
                   <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
@@ -573,7 +578,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                     <button
                       type="button"
                       onClick={handleOpenCreateProject}
-                      className="flex w-full items-center gap-2 rounded-md py-1.5 pl-1 pr-2 text-left text-xs font-medium opacity-90 transition-opacity hover:opacity-100"
+                      className="sidebar-footer-action flex w-full items-center gap-2 rounded-md py-1.5 pl-1 pr-2 text-left text-xs font-medium transition-opacity hover:opacity-90"
                       style={linkStyle(false)}
                     >
                       <FolderAdd className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
@@ -632,7 +637,11 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 to={`/project?id=${encodeURIComponent(p.id)}`}
                                 title={p.name}
                                 onClick={handleNavPress}
-                                className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-1 pr-1 text-xs font-medium opacity-90 transition-opacity hover:opacity-100"
+                                className={({ isActive }) =>
+                                  `sidebar-nav-link flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-1 pr-1 text-xs font-medium opacity-90 transition-opacity ${
+                                    isActive && String(activeProjectId) === String(p.id) ? 'sidebar-nav-link-active' : 'hover:opacity-90'
+                                  }`
+                                }
                                 style={({ isActive }) =>
                                   linkStyle(isActive && String(activeProjectId) === String(p.id))
                                 }
@@ -673,20 +682,16 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                   navigate(`/project?id=${encodeURIComponent(p.id)}&addNotes=1`);
                                   if (mobileOverlay) onMobileOverlayNavigate?.();
                                 }}
-                                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                 style={{ color: 'var(--text)' }}
                               >
                                 <FileAdd className="h-4 w-4" aria-hidden />
                                 Add notes
                               </button>
-                              <div
-                                className="my-1 h-px"
-                                style={{ backgroundColor: 'var(--border)' }}
-                              />
                               <button
                                 type="button"
                                 onClick={() => handleOpenRenameProject(p)}
-                                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                 style={{ color: 'var(--text)' }}
                               >
                                 <EditPencilLine01 className="h-4 w-4" aria-hidden />
@@ -699,7 +704,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleOpenDeleteProject(p.id)}
-                                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                className="chat-menu-item chat-menu-item-danger flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                 style={{ color: 'var(--error)' }}
                               >
                                 <TrashFull className="h-4 w-4" aria-hidden />
@@ -723,9 +728,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               end={item.end}
               title={collapsed ? item.label : undefined}
               onClick={handleNavPress}
-              className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity hover:opacity-100 ${
-                collapsed ? 'justify-center px-2' : 'px-3'
-              }`}
+              className={({ isActive }) =>
+                `sidebar-nav-link flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity ${
+                  isActive ? 'sidebar-nav-link-active' : 'hover:opacity-90'
+                } ${
+                  collapsed ? 'justify-center px-2' : 'px-3'
+                }`
+              }
               style={({ isActive }) => linkStyle(isActive)}
             >
               <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
@@ -742,10 +751,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         <button
           type="button"
           onClick={toggleTheme}
-          className={`flex items-center gap-3 rounded-lg py-2 text-sm transition-colors hover:opacity-95 ${
+          className={`sidebar-footer-action flex items-center gap-3 rounded-lg py-2 text-sm transition-opacity hover:opacity-90 ${
             collapsed ? 'justify-center px-2' : 'px-3'
           }`}
-          style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
+          style={{ color: 'var(--text-secondary)' }}
           title={collapsed ? (theme === 'light' ? 'Dark Mode' : 'Light Mode') : undefined}
         >
           {theme === 'light' ? (
@@ -761,7 +770,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             <button
               type="button"
               onClick={handleOpenAccountSettings}
-              className={`flex w-full items-center gap-2 rounded-lg py-1 text-left transition-opacity hover:opacity-90 ${collapsed ? 'justify-center px-0' : 'px-2'}`}
+              className={`sidebar-footer-action flex w-full items-center gap-2 rounded-lg py-1 text-left transition-opacity hover:opacity-90 ${collapsed ? 'justify-center px-0' : 'px-2'}`}
               style={{ color: 'var(--text)' }}
               title={collapsed ? 'Account Settings' : undefined}
               aria-label="Open account settings"
@@ -785,10 +794,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             <button
               type="button"
               onClick={logout}
-              className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors hover:opacity-95 ${
+              className={`sidebar-footer-action flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-opacity hover:opacity-90 ${
                 collapsed ? 'justify-center px-2' : 'px-3'
               }`}
-              style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
+              style={{ color: 'var(--text-secondary)' }}
               title={collapsed ? 'Sign Out' : undefined}
             >
               <LogOut className="h-4 w-4 flex-shrink-0" aria-hidden />

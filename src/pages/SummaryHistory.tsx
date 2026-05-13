@@ -63,7 +63,7 @@ const NOTE_PANEL_SCROLL_CLASS =
 const NOTE_DETAIL_SCROLL_BODY = `${NOTE_PANEL_SCROLL_CLASS} whitespace-pre-wrap p-4 text-base leading-relaxed`;
 
 /** Summary markdown (read): same fixed height + scroll as transcription. */
-const NOTE_SUMMARY_MARKDOWN = `prose prose-sm max-w-none ${NOTE_PANEL_SCROLL_CLASS} p-4 text-sm leading-relaxed`;
+const NOTE_SUMMARY_MARKDOWN = `summary-markdown prose prose-sm max-w-none ${NOTE_PANEL_SCROLL_CLASS} p-4 text-sm leading-relaxed`;
 
 /** Summary edit textarea: same fixed height + scroll. */
 const NOTE_SUMMARY_TEXTAREA = `w-full resize-none ${NOTE_PANEL_SCROLL_CLASS} border-2 p-4 text-sm leading-relaxed`;
@@ -189,7 +189,7 @@ const SummaryHistory: React.FC = () => {
   const [regeneratingNoteId, setRegeneratingNoteId] = useState<string | null>(null);
   const [regenerateNoteError, setRegenerateNoteError] = useState<Record<string, string>>({});
 
-  // Generate Profile state
+  // Sync Profile state
   const [profileModalNoteId, setProfileModalNoteId] = useState<string | null>(null);
   const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
   const [profileGenError, setProfileGenError] = useState<string | null>(null);
@@ -792,8 +792,8 @@ const SummaryHistory: React.FC = () => {
                       </p>
                     ) : null}
                   </div>
-                  <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
-                    <div className="space-y-2">
+                  <div className="custom-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
+                    <div className="summary-note-list">
                       {notes.map((note) => {
                         const noteTags = getNoteTags(note);
                         const isSelected = expandedNoteId === note.id;
@@ -804,26 +804,14 @@ const SummaryHistory: React.FC = () => {
                         return (
                           <div
                             key={note.id}
-                            className="overflow-hidden rounded-lg border transition-colors"
-                            style={{
-                              borderColor: isSelected ? 'var(--accent)' : 'var(--border)',
-                              backgroundColor: isSelected ? 'var(--bg-secondary)' : undefined,
-                            }}
+                            className={`summary-note-row ${isSelected ? 'summary-note-row-active' : ''}`}
                           >
+                            <span className="summary-note-row-rail" aria-hidden />
                             <div
                             onClick={() =>
                               setExpandedNoteId((prev) => (prev === note.id ? null : note.id))
                             }
-                            className={`chat-item flex cursor-pointer flex-col gap-3 rounded-lg px-3 py-3 transition-all sm:grid sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:items-stretch sm:gap-x-3 sm:gap-y-0 sm:px-4 sm:py-3.5 ${isSelected ? '' : 'card'}`}
-                            style={
-                              isSelected
-                                ? {
-                                    backgroundColor: 'transparent',
-                                    borderColor: 'transparent',
-                                    boxShadow: 'none',
-                                  }
-                                : undefined
-                            }
+                            className="summary-note-row-content flex cursor-pointer flex-col gap-3 px-3 py-3 transition-all sm:grid sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:items-stretch sm:gap-x-3 sm:gap-y-0 sm:px-4 sm:py-3.5"
                           >
                             <div className="flex min-w-0 flex-col gap-2.5 sm:hidden">
                               <div className="flex items-start justify-between gap-2">
@@ -927,7 +915,7 @@ const SummaryHistory: React.FC = () => {
                                           }}
                                           title={allTagsTooltip}
                                         >
-                                          ...
+                                          +{noteTags.length}
                                         </span>
                                       ) : null}
                                     </div>
@@ -1028,7 +1016,7 @@ const SummaryHistory: React.FC = () => {
                                             }}
                                             title={allTagsTooltip}
                                           >
-                                            ...
+                                          +{noteTags.length}
                                           </span>
                                         ) : null}
                                       </div>
@@ -1196,7 +1184,7 @@ const SummaryHistory: React.FC = () => {
                                                   onChange={(e) => setNoteEditDraft(e.target.value)}
                                                   className={`min-h-0 flex-1 ${NOTE_SUMMARY_TEXTAREA}`}
                                                   style={{
-                                                    backgroundColor: 'var(--bg-secondary)',
+                                                    backgroundColor: 'transparent',
                                                     color: 'var(--text)',
                                                     borderColor: 'var(--accent)',
                                                   }}
@@ -1204,7 +1192,7 @@ const SummaryHistory: React.FC = () => {
                                               ) : note.summary_edit || note.summary ? (
                                                 <div
                                                   className={NOTE_SUMMARY_MARKDOWN}
-                                                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
+                                                  style={{ backgroundColor: 'transparent', color: 'var(--text)' }}
                                                 >
                                                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                                     {note.summary_edit || note.summary || ''}
@@ -1214,7 +1202,7 @@ const SummaryHistory: React.FC = () => {
                                                 <div
                                                   className={`flex items-center justify-center italic ${NOTE_PANEL_SCROLL_CLASS} border border-dashed p-4 text-sm leading-relaxed`}
                                                   style={{
-                                                    backgroundColor: 'var(--bg-secondary)',
+                                                    backgroundColor: 'transparent',
                                                     color: 'var(--text-muted)',
                                                     borderColor: 'var(--border)',
                                                   }}
@@ -1247,7 +1235,7 @@ const SummaryHistory: React.FC = () => {
                                                       `transcription-${note.id}`
                                                     )
                                                   }
-                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                                  className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                                                   style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
                                                   title="Copy transcription"
                                                   aria-label="Copy transcription"
@@ -1277,7 +1265,7 @@ const SummaryHistory: React.FC = () => {
                                                 <div
                                                   className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
                                                   style={{
-                                                    backgroundColor: 'var(--bg-secondary)',
+                                                    backgroundColor: 'transparent',
                                                     color: 'var(--text-secondary)',
                                                   }}
                                                 >
@@ -1369,7 +1357,7 @@ const SummaryHistory: React.FC = () => {
                   </div>
                   {totalPages > 1 ? (
                     <nav
-                      className="mt-3 flex shrink-0 flex-col items-stretch gap-3 border-t pt-3 sm:flex-row sm:items-center sm:justify-between"
+                      className="mt-3 flex shrink-0 flex-col items-stretch gap-3 pt-3 sm:flex-row sm:items-center sm:justify-between"
                       style={{ borderColor: 'var(--border)' }}
                       aria-label="Meeting notes pages"
                     >
@@ -1550,7 +1538,7 @@ const SummaryHistory: React.FC = () => {
                                     onChange={(e) => setNoteEditDraft(e.target.value)}
                                     className={`min-h-0 flex-1 ${NOTE_SUMMARY_TEXTAREA}`}
                                     style={{
-                                      backgroundColor: 'var(--bg-secondary)',
+                                      backgroundColor: 'transparent',
                                       color: 'var(--text)',
                                       borderColor: 'var(--accent)',
                                     }}
@@ -1558,7 +1546,7 @@ const SummaryHistory: React.FC = () => {
                                 ) : note.summary_edit || note.summary ? (
                                   <div
                                     className={NOTE_SUMMARY_MARKDOWN}
-                                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
+                                    style={{ backgroundColor: 'transparent', color: 'var(--text)' }}
                                   >
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                       {note.summary_edit || note.summary || ''}
@@ -1568,7 +1556,7 @@ const SummaryHistory: React.FC = () => {
                                   <div
                                     className={`flex items-center justify-center italic ${NOTE_PANEL_SCROLL_CLASS} border border-dashed p-4 text-sm leading-relaxed`}
                                     style={{
-                                      backgroundColor: 'var(--bg-secondary)',
+                                      backgroundColor: 'transparent',
                                       color: 'var(--text-muted)',
                                       borderColor: 'var(--border)',
                                     }}
@@ -1601,7 +1589,7 @@ const SummaryHistory: React.FC = () => {
                                         `transcription-${note.id}`
                                       )
                                     }
-                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                    className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                                     style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
                                     title="Copy transcription"
                                     aria-label="Copy transcription"
@@ -1631,7 +1619,7 @@ const SummaryHistory: React.FC = () => {
                                   <div
                                     className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
                                     style={{
-                                      backgroundColor: 'var(--bg-secondary)',
+                                      backgroundColor: 'transparent',
                                       color: 'var(--text-secondary)',
                                     }}
                                   >
@@ -1867,7 +1855,7 @@ const SummaryHistory: React.FC = () => {
         );
       })()}
 
-      {/* Generate Profile modal */}
+      {/* Sync Profile modal */}
       {profileModalNoteId && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
@@ -1886,7 +1874,7 @@ const SummaryHistory: React.FC = () => {
               style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
             >
               <div>
-                <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Generate Profile</h2>
+                <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Sync Profile</h2>
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>AI-generated speaker profiles from the meeting transcript</p>
               </div>
               <button type="button" disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'} onClick={() => setProfileModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><CloseMd className="h-5 w-5" aria-hidden /></button>
@@ -2107,7 +2095,7 @@ const SummaryHistory: React.FC = () => {
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
               <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-              Generate Profile
+              Sync Profile
             </button>
             <button
               type="button"
@@ -2134,7 +2122,7 @@ const SummaryHistory: React.FC = () => {
             <button
               type="button"
               onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); handleOpenDeleteNote(menuNote); }}
-              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--error-light)]"
+              className="chat-menu-item chat-menu-item-danger flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
               style={{ color: 'var(--error)' }}
             >
               <TrashFull className="h-4 w-4 shrink-0" aria-hidden />

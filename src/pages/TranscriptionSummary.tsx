@@ -1035,10 +1035,12 @@ const TranscriptionSummary: React.FC = () => {
           {/* File Upload Section */}
           <section className="flex-1 min-h-0 flex flex-col">
             <div className="shrink-0">
-            <h2 className="text-lg font-medium mb-4" style={{ color: 'var(--text)' }}>
-              Summarize Audio File
+            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
+                  Summarize Audio File
             </h2>
-            
+            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                  Record or upload an audio file to transcribe and summarize
+            </p>
             {/* Record/Upload Options - Hidden when files are uploaded or recording complete */}
             <div className={`collapse-container ${(uploadedFiles.length > 0 || recordedAudioUrl) ? 'collapsed' : 'expanded'}`}>
               <div className="collapse-content">
@@ -1047,12 +1049,7 @@ const TranscriptionSummary: React.FC = () => {
                   <button
                     type="button"
                     onClick={isRecording ? stopRecording : startRecording}
-                    className="record-audio-panel flex-1 card rounded-lg p-4 md:p-6 text-center transition-all"
-                    style={{
-                      border: isRecording
-                        ? '1px solid color-mix(in srgb, var(--error) 42%, var(--border))'
-                        : '1px solid var(--surface)',
-                    }}
+                    className={`audio-option-panel record-audio-panel flex-1 card rounded-lg p-4 md:p-6 text-center transition-all ${isRecording ? 'recording-active' : ''}`}
                   >
                     {!isRecording ? (
                       <>
@@ -1103,7 +1100,7 @@ const TranscriptionSummary: React.FC = () => {
                   {/* Upload Option — label + native input avoids iOS issues with programmatic .click() */}
                   <label
                     htmlFor="meeting-audio-upload"
-                    className={`upload-audio-panel flex-1 drop-zone rounded-lg p-6 text-center cursor-pointer transition-all block min-h-[8rem] ${isDragging ? 'drag-over' : ''}`}
+                    className={`audio-option-panel upload-audio-panel flex-1 drop-zone rounded-lg p-6 text-center cursor-pointer transition-all block min-h-[8rem] ${isDragging ? 'drag-over' : ''}`}
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
                     onDrop={handleDrop}
@@ -1264,7 +1261,7 @@ const TranscriptionSummary: React.FC = () => {
               className={`collapse-container ${promptSectionLayoutExpanded ? 'expanded' : 'collapsed'}`}
             >
               <div className="collapse-content">
-              <div className="prompt-controls-shell mt-4 card rounded-lg p-4">
+              <div className="prompt-controls-shell card rounded-lg mt-2 p-4">
                 <div className="flex w-full min-w-0 flex-col gap-4 md:flex-row md:items-start md:gap-4">
                   <div className="min-w-0 flex-1 basis-0">
                     <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
@@ -1354,7 +1351,7 @@ const TranscriptionSummary: React.FC = () => {
 
             {/* Summary Result */}
             {(isSummarizing || summaryResult || summaryError) && (
-              <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden card rounded-lg max-md:mt-2">
+              <div className="flex flex-1 min-h-0 flex-col overflow-hidden card rounded-lg">
                 {isSummarizing && (
                   <div className="flex flex-1 flex-col items-center justify-center py-8">
                     <div className="relative">
@@ -1866,7 +1863,7 @@ const TranscriptionSummary: React.FC = () => {
         </div>
       )}
 
-      {/* Generate Profile Modal */}
+      {/* Sync Profile Modal */}
       {isProfileModalOpen && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
@@ -1892,7 +1889,7 @@ const TranscriptionSummary: React.FC = () => {
             >
               <div>
                 <h2 id="profile-modal-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                  Generate Profile
+                  Sync Profile
                 </h2>
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
                   AI-generated speaker profiles from the meeting transcript

@@ -316,9 +316,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         style={{ backgroundColor: 'transparent' }}
       >
         {segments.map((seg, idx) => (
-          <div key={idx} className="flex min-h-[75px] items-center gap-3">
+          <div key={idx} className="transcript-segment flex min-h-[75px] items-center gap-3">
             <div
-              className="flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold"
+              className="transcript-speaker-avatar flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold"
               style={{
                 backgroundColor: 'color-mix(in srgb, var(--accent) 22%, var(--bg-secondary))',
                 color: 'var(--text)',
@@ -330,7 +330,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               <button
                 type="button"
                 data-transcript-speaker-trigger
-                className="text-left text-base font-semibold transition-opacity hover:opacity-90"
+                className={`transcript-speaker-trigger text-left text-base font-semibold ${
+                  speakerMenu?.segmentIndex === idx ? 'transcript-speaker-trigger-active' : ''
+                }`}
                 style={{ color: 'var(--accent)' }}
                 onClick={(e) => {
                   e.stopPropagation();
