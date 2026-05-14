@@ -1417,13 +1417,6 @@ const TranscriptionSummary: React.FC = () => {
                           </button>
                         </div>
                         <div className="flex shrink-0 items-center gap-2 pb-2">
-                          {resultsTab === 'transcription' ? (
-                            <TranscriptSpeakerFilterControls
-                              speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
-                              selectedSpeakers={transcriptSpeakerFilters}
-                              onSelectedSpeakersChange={setTranscriptSpeakerFilters}
-                            />
-                          ) : null}
                           {resultsTab === 'summary' ? (
                             <button
                               onClick={() => void handleToggleEditSummary()}
@@ -1566,6 +1559,13 @@ const TranscriptionSummary: React.FC = () => {
 
                     {summaryResult.transcript.length > 0 && resultsTab === 'transcription' ? (
                       <div className="flex flex-1 min-h-0 flex-col pt-4">
+                        <div className="mb-3 shrink-0">
+                          <TranscriptSpeakerFilterControls
+                            speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
+                            selectedSpeakers={transcriptSpeakerFilters}
+                            onSelectedSpeakersChange={setTranscriptSpeakerFilters}
+                          />
+                        </div>
                         <TranscriptDiarizedEditor
                           segments={summaryResult.transcript}
                           onSegmentsChange={(next) =>

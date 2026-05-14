@@ -314,3 +314,4 @@
 [2m1:15:31 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
 [2m1:15:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
 [2m1:15:33 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m1:38:30 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
