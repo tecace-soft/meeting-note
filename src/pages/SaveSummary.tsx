@@ -3,18 +3,18 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabaseConfig';
 import {
-  Folder,
-  File,
-  FolderPlus,
-  Trash2,
-  Edit2,
-  Save,
-  X,
-  Loader2,
-  ChevronRight,
-  Home,
   Check,
-} from 'lucide-react';
+  ChevronRight,
+  CloseMd,
+  EditPencilLine02,
+  FileBlank,
+  Folder,
+  FolderAdd,
+  House01,
+  Loading,
+  Save,
+  TrashFull,
+} from 'react-coolicons';
 import {
   getOneDriveRoot,
   getOneDriveFolderContents,
@@ -341,6 +341,14 @@ const SaveSummary: React.FC = () => {
         {/* File Browser */}
         <div className="flex-grow flex flex-col overflow-hidden p-6">
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
+            <div className="app-page-header">
+              <h1 className="app-page-title">
+                Save Summary
+              </h1>
+              <p className="app-page-subtitle">
+                Choose a OneDrive location for your summary and transcript files
+              </p>
+            </div>
             
             {/* Breadcrumbs & Actions */}
             <div className="flex items-center justify-between mb-4">
@@ -358,7 +366,7 @@ const SaveSummary: React.FC = () => {
                         color: index === breadcrumbs.length - 1 ? 'var(--text)' : 'var(--text-secondary)',
                       }}
                     >
-                      {index === 0 && <Home className="w-4 h-4" />}
+                      {index === 0 && <House01 className="h-4 w-4" />}
                       {crumb.name}
                     </button>
                   </React.Fragment>
@@ -370,7 +378,7 @@ const SaveSummary: React.FC = () => {
                 className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all"
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
               >
-                <FolderPlus className="w-4 h-4" />
+                <FolderAdd className="h-4 w-4" />
                 New Folder
               </button>
             </div>
@@ -394,14 +402,14 @@ const SaveSummary: React.FC = () => {
                   className="px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                 >
-                  {creatingFolderLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Create'}
+                  {creatingFolderLoading ? <Loading className="w-4 h-4 animate-spin" /> : 'Create'}
                 </button>
                 <button
                   onClick={() => { setIsCreatingFolder(false); setNewFolderName(''); }}
                   className="p-2 rounded-lg transition-all"
                   style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
                 >
-                  <X className="w-4 h-4" />
+                  <CloseMd className="h-4 w-4" />
                 </button>
               </div>
             )}
@@ -411,7 +419,7 @@ const SaveSummary: React.FC = () => {
               {loading ? (
                 <div className="flex-grow flex items-center justify-center">
                   <div className="text-center">
-                    <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" style={{ color: 'var(--accent)' }} />
+                    <Loading className="w-8 h-8 animate-spin mx-auto mb-2" style={{ color: 'var(--accent)' }} />
                     <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading...</p>
                   </div>
                 </div>
@@ -471,7 +479,7 @@ const SaveSummary: React.FC = () => {
                                   <Check className="w-4 h-4" />
                                 </button>
                                 <button onClick={() => { setRenamingItemId(null); setRenameValue(''); }} className="p-1 rounded" style={{ color: 'var(--text-muted)' }}>
-                                  <X className="w-4 h-4" />
+                                  <CloseMd className="h-4 w-4" />
                                 </button>
                               </div>
                             ) : (
@@ -479,7 +487,7 @@ const SaveSummary: React.FC = () => {
                                 {item.folder ? (
                                   <Folder className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
                                 ) : (
-                                  <File className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+                                  <FileBlank className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
                                 )}
                                 {item.folder ? (
                                   <button
@@ -509,7 +517,7 @@ const SaveSummary: React.FC = () => {
                                 style={{ color: 'var(--text-muted)' }}
                                 title="Rename"
                               >
-                                <Edit2 className="w-4 h-4" />
+                                <EditPencilLine02 className="h-4 w-4" />
                               </button>
                               <button
                                 onClick={() => handleDelete(item.id)}
@@ -519,9 +527,9 @@ const SaveSummary: React.FC = () => {
                                 title="Delete"
                               >
                                 {deletingItemId === item.id ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  <Loading className="w-4 h-4 animate-spin" />
                                 ) : (
-                                  <Trash2 className="w-4 h-4" />
+                                  <TrashFull className="h-4 w-4" />
                                 )}
                               </button>
                             </div>
@@ -565,7 +573,7 @@ const SaveSummary: React.FC = () => {
                       >
                         {isSaving ? (
                           <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <Loading className="w-4 h-4 animate-spin" />
                             Saving...
                           </>
                         ) : saveSuccess ? (
@@ -617,7 +625,7 @@ const SaveSummary: React.FC = () => {
                       >
                         {isSavingTranscript ? (
                           <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <Loading className="w-4 h-4 animate-spin" />
                             Saving...
                           </>
                         ) : saveTranscriptSuccess ? (
@@ -669,7 +677,7 @@ const SaveSummary: React.FC = () => {
                       >
                         {isSavingAudio ? (
                           <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <Loading className="w-4 h-4 animate-spin" />
                             Saving...
                           </>
                         ) : saveAudioSuccess ? (
@@ -701,4 +709,3 @@ const SaveSummary: React.FC = () => {
 };
 
 export default SaveSummary;
-

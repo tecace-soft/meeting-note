@@ -1,6 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, ChevronDown, Copy, Loader2, Pencil, Plus, Save, Trash2, User, X } from 'lucide-react';
+import {
+  AddPlus,
+  Check,
+  ChevronDown,
+  CloseMd,
+  Copy,
+  EditPencilLine01,
+  Loading,
+  Save,
+  TrashFull,
+  User01,
+} from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
@@ -337,11 +348,11 @@ const AccountSettings: React.FC = () => {
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
         <div className="mx-auto flex min-h-0 w-full max-w-[min(92vw,67.2rem)] flex-1 flex-col gap-4">
-          <div>
-            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
+          <div className="app-page-header">
+            <h1 className="app-page-title">
               Account Settings
-            </h2>
-            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            </h1>
+            <p className="app-page-subtitle">
               Microsoft account details for your meeting notes workspace
             </p>
           </div>
@@ -460,7 +471,7 @@ const AccountSettings: React.FC = () => {
                             style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                           >
                             {speakerProfileSaving ? (
-                              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                              <Loading className="h-4 w-4 animate-spin" aria-hidden />
                             ) : (
                               <Save className="h-4 w-4" aria-hidden />
                             )}
@@ -488,7 +499,7 @@ const AccountSettings: React.FC = () => {
                           className="inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity hover:opacity-90"
                           style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                         >
-                          <Pencil className="h-4 w-4" aria-hidden />
+                          <EditPencilLine01 className="h-4 w-4" aria-hidden />
                           Edit profile
                         </button>
                       )
@@ -497,7 +508,7 @@ const AccountSettings: React.FC = () => {
 
                   {speakersLoad.status === 'loading' || speakersLoad.status === 'idle' ? (
                     <div className="flex flex-1 items-center gap-2 px-5 py-8 text-sm" style={{ color: 'var(--text-muted)' }}>
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                      <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                       Loading speaker data…
                     </div>
                   ) : null}
@@ -574,7 +585,7 @@ const AccountSettings: React.FC = () => {
                             className="flex flex-col items-center justify-center py-12 text-center"
                             style={{ color: 'var(--text-muted)' }}
                           >
-                            <User className="mb-3 h-10 w-10 opacity-40" aria-hidden />
+                            <User01 className="mb-3 h-10 w-10 opacity-40" aria-hidden />
                             <p className="text-sm">No ontology profile stored yet.</p>
                             <p className="mt-2 max-w-sm text-xs leading-relaxed">
                               Use <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>Edit profile</span>{' '}
@@ -612,14 +623,14 @@ const AccountSettings: React.FC = () => {
                       className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                     >
-                      <Plus className="h-4 w-4" aria-hidden />
+                      <AddPlus className="h-4 w-4" aria-hidden />
                       New prompt
                     </button>
                   </div>
 
                   {summaryPromptListLoading ? (
                     <div className="mt-6 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                      <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden />
+                      <Loading className="h-4 w-4 animate-spin shrink-0" aria-hidden />
                       Loading prompts…
                     </div>
                   ) : summaryPromptListError ? (
@@ -732,7 +743,7 @@ const AccountSettings: React.FC = () => {
                                         backgroundColor: 'transparent',
                                       }}
                                     >
-                                      <Trash2 className="h-4 w-4" aria-hidden />
+                                      <TrashFull className="h-4 w-4" aria-hidden />
                                       Delete
                                     </button>
                                   ) : null}
@@ -744,7 +755,7 @@ const AccountSettings: React.FC = () => {
                                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                                   >
                                     {savePromptSaving ? (
-                                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                                      <Loading className="h-4 w-4 animate-spin" aria-hidden />
                                     ) : (
                                       <Save className="h-4 w-4" aria-hidden />
                                     )}
@@ -778,7 +789,7 @@ const AccountSettings: React.FC = () => {
 
                   {speakersLoad.status === 'loading' || speakersLoad.status === 'idle' ? (
                     <div className="mt-6 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                      <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                       Loading speaker profiles…
                     </div>
                   ) : null}
@@ -874,7 +885,7 @@ const AccountSettings: React.FC = () => {
                                       className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity hover:opacity-90"
                                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                                     >
-                                      <Pencil className="h-4 w-4" aria-hidden />
+                                      <EditPencilLine01 className="h-4 w-4" aria-hidden />
                                       Edit profile
                                     </button>
                                   </div>
@@ -953,7 +964,7 @@ const AccountSettings: React.FC = () => {
                                           style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                                         >
                                           {otherSpeakerSaving ? (
-                                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                                            <Loading className="h-4 w-4 animate-spin" aria-hidden />
                                           ) : (
                                             <Save className="h-4 w-4" aria-hidden />
                                           )}
@@ -968,7 +979,7 @@ const AccountSettings: React.FC = () => {
                                       className="flex flex-col items-center justify-center py-10 text-center"
                                       style={{ color: 'var(--text-muted)' }}
                                     >
-                                      <User className="mb-2 h-9 w-9 opacity-40" aria-hidden />
+                                      <User01 className="mb-2 h-9 w-9 opacity-40" aria-hidden />
                                       <p className="text-sm">No profile saved for this speaker.</p>
                                       <p className="mt-2 max-w-sm text-xs leading-relaxed">
                                         Use <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>Edit profile</span>{' '}
@@ -1023,7 +1034,7 @@ const AccountSettings: React.FC = () => {
                 style={{ color: 'var(--text-muted)' }}
                 aria-label="Close"
               >
-                <X className="h-5 w-5" aria-hidden />
+                <CloseMd className="h-5 w-5" aria-hidden />
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
@@ -1100,7 +1111,7 @@ const AccountSettings: React.FC = () => {
                 className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
               >
-                {createSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {createSaving ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                 Create
               </button>
             </div>
@@ -1140,7 +1151,7 @@ const AccountSettings: React.FC = () => {
                 style={{ color: 'var(--text-muted)' }}
                 aria-label="Close"
               >
-                <X className="h-5 w-5" aria-hidden />
+                <CloseMd className="h-5 w-5" aria-hidden />
               </button>
             </div>
             <div className="px-4 py-4 sm:px-5">
@@ -1174,7 +1185,7 @@ const AccountSettings: React.FC = () => {
                 className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                 style={{ borderColor: 'var(--error)', color: 'var(--error)', backgroundColor: 'transparent' }}
               >
-                {deletePromptSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Trash2 className="h-4 w-4" aria-hidden />}
+                {deletePromptSaving ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <TrashFull className="h-4 w-4" aria-hidden />}
                 Delete
               </button>
             </div>

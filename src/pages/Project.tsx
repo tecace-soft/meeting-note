@@ -6,23 +6,25 @@ import {
   Calendar,
   Check,
   ChevronDown,
-  ChevronUp,
+  CloseMd,
   Copy,
-  FilePlus,
-  FileText,
+  EditPencilLine01,
+  FileAdd,
+  FileDocument,
   Folder,
-  FolderMinus,
-  Loader2,
+  FolderRemove,
+  Loading,
   MoreHorizontal,
-  Pencil,
+  PaperPlane,
   Save,
-  Send,
-  Trash2,
-  X,
-} from 'lucide-react';
+  TrashFull,
+} from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
+import TranscriptDiarizedEditor, {
+  getTranscriptSpeakerFilters,
+  TranscriptSpeakerFilterControls,
+} from '../components/TranscriptDiarizedEditor';
 import {
   getNoteDiarizationRaw,
   hasUsableDiarization,
@@ -78,11 +80,11 @@ function formatNoteModalDate(createdAt?: string | null): string {
 
 /** Fixed scroll height for plain transcription (no diarization). */
 const NOTE_DETAIL_SCROLL_BODY =
-  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar rounded-lg p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed';
+  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar rounded-lg p-4 text-sm max-md:text-base leading-relaxed';
 
 /** Summary: fixed height scroll, no border or fill. */
 const NOTE_SUMMARY_SCROLL =
-  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar p-3 max-md:p-4 text-sm max-md:text-base leading-relaxed rounded-lg';
+  'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)] overflow-y-auto custom-scrollbar rounded-lg p-4 text-sm max-md:text-base leading-relaxed';
 
 const NOTE_TRANSCRIPT_SCROLL_CLASS = 'h-72 min-h-0 max-md:min-h-[11rem] max-md:h-[min(52vh,24rem)]';
 
@@ -192,6 +194,7 @@ const Project: React.FC = () => {
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
   const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, 'summary' | 'transcription'>>({});
+  const [noteSpeakerFilters, setNoteSpeakerFilters] = useState<Record<string, string[]>>({});
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
@@ -361,6 +364,15 @@ const Project: React.FC = () => {
     setChatMessages(buildChatMessages(sessionChatsById[sessionId] || []));
     setChatError(null);
     setIsLowerSectionExpanded(false);
+  };
+
+  const handleLowerTabClick = (tab: 'notes' | 'chats') => {
+    if (activeTab === tab) {
+      setIsLowerSectionExpanded((prev) => !prev);
+      return;
+    }
+    setActiveTab(tab);
+    setIsLowerSectionExpanded(true);
   };
 
   const formatDate = (value?: string | null): string => {
@@ -785,13 +797,15 @@ const Project: React.FC = () => {
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       <main className="flex h-full min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
         <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
-          <h1
-            className="flex flex-shrink-0 items-center gap-3 text-3xl font-semibold"
-            style={{ color: 'var(--text)' }}
-          >
-            <Folder className="h-8 w-8 shrink-0" style={{ color: 'var(--accent)' }} aria-hidden />
-            <span className="min-w-0 truncate">{project?.name || 'Project'}</span>
-          </h1>
+          <div className="app-page-header">
+            <h1 className="app-page-title app-page-title-with-icon">
+              <Folder className="app-page-title-icon" aria-hidden />
+              <span className="min-w-0 truncate">{project?.name || 'Project'}</span>
+            </h1>
+            <p className="app-page-subtitle">
+              Review project chats and meeting notes in one workspace
+            </p>
+          </div>
 
           <div
             className={`min-h-0 overflow-hidden transition-all duration-300 ease-out ${
@@ -832,7 +846,7 @@ const Project: React.FC = () => {
                 )}
                 {chatSending ? (
                   <div className="flex w-full items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+                    <Loading className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
                     Waiting for reply...
                   </div>
                 ) : null}
@@ -844,16 +858,21 @@ const Project: React.FC = () => {
             onSubmit={(ev) => {
               void handleSendChat(ev);
             }}
-            className="flex flex-shrink-0 items-center gap-2 rounded-full border-0 py-1.5 pl-4 pr-1.5 shadow-none transition-[background-color] duration-200"
-            style={{ backgroundColor: 'var(--bg-secondary)' }}
+            className="project-chat-input-shell flex flex-shrink-0 items-center gap-2 rounded-full border-0 py-1.5 pl-4 pr-1.5 shadow-none transition-[background-color] duration-200"
+            style={{ backgroundColor: 'var(--surface)' }}
           >
             <input
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder={`New chat in ${project?.name || 'Project'}`}
               disabled={chatSending || !projectId}
-              className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[calc(1rem+2px)] leading-relaxed outline-none ring-0 placeholder:text-[color:var(--text-muted)] placeholder:opacity-90 focus:border-0 focus:ring-0 focus:outline-none disabled:opacity-60"
-              style={{ color: 'var(--text)' }}
+              className="project-chat-input min-w-0 flex-1 bg-transparent py-2.5 text-[calc(1rem+2px)] leading-relaxed placeholder:text-[color:var(--text-muted)] placeholder:opacity-90 disabled:opacity-60"
+              style={{
+                color: 'var(--text)',
+                border: 0,
+                outline: 'none',
+                boxShadow: 'none',
+              }}
               aria-label="Chat message"
             />
             <button
@@ -864,7 +883,7 @@ const Project: React.FC = () => {
               title="Send message"
               aria-label="Send message"
             >
-              {chatSending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
+              {chatSending ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <PaperPlane className="h-4 w-4" aria-hidden />}
             </button>
           </form>
 
@@ -874,12 +893,14 @@ const Project: React.FC = () => {
             </p>
           ) : null}
 
-          <div className="flex flex-shrink-0 items-center justify-between">
+          <div className="flex flex-shrink-0 items-center">
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('chats')}
-                className="rounded-full px-3 py-1.5 text-sm font-medium"
+                onClick={() => handleLowerTabClick('chats')}
+                className={`project-lower-tab rounded-full px-3 py-1.5 text-sm font-medium ${
+                  activeTab === 'chats' ? 'project-lower-tab-active' : 'project-lower-tab-inactive'
+                }`}
                 style={
                   activeTab === 'chats'
                     ? { backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }
@@ -890,8 +911,10 @@ const Project: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('notes')}
-                className="rounded-full px-3 py-1.5 text-sm font-medium"
+                onClick={() => handleLowerTabClick('notes')}
+                className={`project-lower-tab rounded-full px-3 py-1.5 text-sm font-medium ${
+                  activeTab === 'notes' ? 'project-lower-tab-active' : 'project-lower-tab-inactive'
+                }`}
                 style={
                   activeTab === 'notes'
                     ? { backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }
@@ -901,23 +924,13 @@ const Project: React.FC = () => {
                 Project Notes
               </button>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setIsLowerSectionExpanded((prev) => !prev)}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              {isLowerSectionExpanded ? 'Hide Section' : 'Show Section'}
-              {isLowerSectionExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </button>
           </div>
 
           <div
-            className={`flex min-h-0 flex-col overflow-hidden transition-opacity duration-300 ease-out ${
+            className={`project-lower-section flex min-h-0 flex-col overflow-hidden ${
               isLowerSectionExpanded
-                ? 'min-h-0 flex-1 opacity-100'
-                : 'h-0 shrink-0 flex-[0_0_0] opacity-0 pointer-events-none'
+                ? 'project-lower-section-expanded'
+                : 'project-lower-section-collapsed pointer-events-none'
             }`}
           >
             <section
@@ -926,19 +939,7 @@ const Project: React.FC = () => {
               }`}
             >
               {activeTab === 'notes' ? (
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                  <div className="flex shrink-0 justify-start pb-3">
-                    <button
-                      type="button"
-                      onClick={() => void openAddNotesModal()}
-                      disabled={!projectId || !user?.id}
-                      className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                    >
-                      <FilePlus className="h-4 w-4 shrink-0" aria-hidden />
-                      Add notes
-                    </button>
-                  </div>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-6">
                   <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-0">
                   {error ? (
                     <p className="text-sm" style={{ color: 'var(--error)' }}>{error}</p>
@@ -947,33 +948,32 @@ const Project: React.FC = () => {
                       No notes found in this project.
                     </p>
                   ) : (
-                    <div className="space-y-3">
+                    <>
                       {noteActionError ? (
                         <p className="text-xs" style={{ color: 'var(--error)' }}>
                           {noteActionError}
                         </p>
                       ) : null}
+                    <div className="summary-note-list project-note-list">
                       {notes.map((note) => {
                         const noteTags = getNoteTags(note);
+                        const isSelected = expandedNoteId === note.id;
                         const visibleTags = noteTags.slice(0, 3);
                         const hasMoreTags = noteTags.length > 3;
                         const allTagsTooltip = noteTags.join(', ');
                         return (
-                        <div key={note.id} className="chat-item card rounded-lg overflow-visible transition-all">
+                        <div key={note.id} className={`summary-note-row project-note-row ${isSelected ? 'summary-note-row-active' : ''}`}>
+                          <span className="summary-note-row-rail" aria-hidden />
                           <div
-                            onClick={() => setExpandedNoteId(expandedNoteId === note.id ? null : note.id)}
-                            className="grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-stretch gap-x-3 gap-y-0 px-3 py-3 transition-all sm:px-4 sm:py-3.5"
-                            style={{
-                              backgroundColor: expandedNoteId === note.id ? 'var(--bg-secondary)' : undefined,
-                              borderColor: expandedNoteId === note.id ? 'var(--accent)' : undefined,
-                            }}
+                            onClick={() => setExpandedNoteId(isSelected ? null : note.id)}
+                            className="summary-note-row-content grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-stretch gap-x-3 gap-y-0 px-3 py-2.5 transition-all sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:px-4 sm:py-3.5"
                           >
-                            <div className="flex min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch">
+                            <div className="hidden min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch sm:flex">
                               <div
                                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
                                 style={{ backgroundColor: 'var(--accent-light)' }}
                               >
-                                <FileText className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                                <FileDocument className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
                               </div>
                             </div>
                             <div className="min-w-0 pr-1">
@@ -1014,7 +1014,7 @@ const Project: React.FC = () => {
                                     {getNoteDisplayTitle(note)}
                                   </p>
                                   {noteTags.length > 0 ? (
-                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                    <div className="mt-0 flex flex-wrap gap-1.5">
                                       {visibleTags.map((tagLabel, tagIdx) => (
                                         <span
                                           key={`${note.id}-tag-${tagIdx}`}
@@ -1037,7 +1037,7 @@ const Project: React.FC = () => {
                                           }}
                                           title={allTagsTooltip}
                                         >
-                                          ...
+                                          +{noteTags.length - visibleTags.length}
                                         </span>
                                       ) : null}
                                     </div>
@@ -1085,10 +1085,10 @@ const Project: React.FC = () => {
                                     <button
                                       type="button"
                                       onClick={() => handleStartRenameNote(note)}
-                                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                       style={{ color: 'var(--text)' }}
                                     >
-                                      <Pencil className="h-4 w-4" aria-hidden />
+                                      <EditPencilLine01 className="h-4 w-4" aria-hidden />
                                       Rename Note
                                     </button>
                                     <button
@@ -1096,20 +1096,20 @@ const Project: React.FC = () => {
                                       onClick={() => {
                                         void handleRemoveFromProject(note);
                                       }}
-                                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                       style={{ color: 'var(--text)' }}
                                     >
-                                      <FolderMinus className="h-4 w-4" aria-hidden />
+                                      <FolderRemove className="h-4 w-4" aria-hidden />
                                       Remove from Project
                                     </button>
                                     <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
                                     <button
                                       type="button"
                                       onClick={() => handleOpenDeleteNote(note)}
-                                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                      className="chat-menu-item chat-menu-item-danger flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
                                       style={{ color: 'var(--error)' }}
                                     >
-                                      <Trash2 className="h-4 w-4" aria-hidden />
+                                      <TrashFull className="h-4 w-4" aria-hidden />
                                       Delete Note
                                     </button>
                                   </div>
@@ -1118,7 +1118,7 @@ const Project: React.FC = () => {
                             </div>
                           </div>
 
-                          <div className={`collapse-container collapse-container--instant ${expandedNoteId === note.id ? 'expanded' : 'collapsed'}`}>
+                          <div className={`collapse-container collapse-container--instant ${isSelected ? 'expanded' : 'collapsed'}`}>
                             <div className="collapse-content">
                               {(() => {
                                 const diarRaw = getNoteDiarizationRaw(note);
@@ -1128,17 +1128,16 @@ const Project: React.FC = () => {
                                 const activeTab = noteExpandedTab[note.id] ?? 'summary';
 
                                 return (
-                                  <div className="border-t" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-                                    <div className="flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3" style={{ borderColor: 'var(--border)' }}>
-                                      <div className="-mb-px flex gap-1 sm:gap-6" role="tablist">
+                                  <div className="project-note-expanded-detail min-h-0 border-t" style={{ borderColor: 'var(--border)' }}>
+                                    <div className="results-header flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5" style={{ borderColor: 'var(--border)' }}>
+                                      <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
                                         <button
                                           type="button"
                                           role="tab"
                                           aria-selected={activeTab === 'summary'}
                                           onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                          className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                          className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                                           style={{
-                                            borderBottomColor: activeTab === 'summary' ? 'var(--accent)' : 'transparent',
                                             color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                                           }}
                                         >
@@ -1150,9 +1149,8 @@ const Project: React.FC = () => {
                                             role="tab"
                                             aria-selected={activeTab === 'transcription'}
                                             onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
-                                            className="border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-4"
+                                            className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
                                             style={{
-                                              borderBottomColor: activeTab === 'transcription' ? 'var(--accent)' : 'transparent',
                                               color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
                                             }}
                                           >
@@ -1160,61 +1158,90 @@ const Project: React.FC = () => {
                                           </button>
                                         ) : null}
                                       </div>
-                                      {activeTab === 'summary' ? (
-                                        <div className="flex shrink-0 items-center gap-2 pb-2">
-                                          <button
-                                            type="button"
-                                            onClick={() => void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `project-summary-${note.id}`)}
-                                            className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
-                                            style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                            title="Copy summary"
-                                            aria-label="Copy summary"
-                                          >
-                                            {copiedKey === `project-summary-${note.id}` ? (
-                                              <Check className="h-3 w-3" />
+                                      <div className="flex shrink-0 items-center gap-2 pb-2">
+                                        {activeTab === 'summary' ? (
+                                          <>
+                                            {editingNoteId === note.id ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => void handleSaveNoteEdit(note)}
+                                                disabled={savingNoteId === note.id}
+                                                className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
+                                                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                              >
+                                                {savingNoteId === note.id ? <Loading className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                                Done
+                                              </button>
                                             ) : (
-                                              <Copy className="h-3 w-3" />
+                                              <button
+                                                type="button"
+                                                onClick={() => handleStartNoteEdit(note)}
+                                                className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                                style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                              >
+                                                <EditPencilLine01 className="h-3 w-3" />
+                                                Edit
+                                              </button>
                                             )}
-                                            Copy
-                                          </button>
-                                          {editingNoteId === note.id ? (
-                                            <button
-                                              type="button"
-                                              onClick={() => void handleSaveNoteEdit(note)}
-                                              disabled={savingNoteId === note.id}
-                                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium disabled:opacity-50"
-                                              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                            >
-                                              {savingNoteId === note.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                                              Done
-                                            </button>
+                                          </>
+                                        ) : null}
+                                        {activeTab === 'transcription' && showDiarized ? (
+                                          <TranscriptSpeakerFilterControls
+                                            speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
+                                            selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
+                                            onSelectedSpeakersChange={(next) =>
+                                              setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
+                                            }
+                                          />
+                                        ) : null}
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            void handleCopyText(
+                                              activeTab === 'summary'
+                                                ? noteEditDraft || note.summary_edit || note.summary || ''
+                                                : showDiarized
+                                                  ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
+                                                  : plainTx || '',
+                                              activeTab === 'summary'
+                                                ? `project-summary-${note.id}`
+                                                : `project-transcription-${note.id}`
+                                            )
+                                          }
+                                          className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                          style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                          title={activeTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                                          aria-label={activeTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                                        >
+                                          {copiedKey ===
+                                          (activeTab === 'summary'
+                                            ? `project-summary-${note.id}`
+                                            : `project-transcription-${note.id}`) ? (
+                                            <Check className="h-3 w-3" />
                                           ) : (
-                                            <button
-                                              type="button"
-                                              onClick={() => handleStartNoteEdit(note)}
-                                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
-                                              style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                            >
-                                              <Pencil className="h-3 w-3" />
-                                              Edit
-                                            </button>
+                                            <Copy className="h-3 w-3" />
                                           )}
-                                        </div>
-                                      ) : null}
+                                          Copy
+                                        </button>
+                                      </div>
                                     </div>
 
-                                    <div className="p-4 pb-3">
+                                    <div className="min-h-0 px-4 pb-4 pt-4 md:px-5">
                                       {activeTab === 'summary' ? (
                                         <>
                                           {editingNoteId === note.id ? (
                                             <textarea
                                               value={noteEditDraft}
                                               onChange={(e) => setNoteEditDraft(e.target.value)}
-                                              className={`w-full resize-none ${NOTE_SUMMARY_SCROLL}`}
-                                              style={{ color: 'var(--text)' }}
+                                              className={`w-full resize-none border-2 ${NOTE_SUMMARY_SCROLL}`}
+                                              style={{
+                                                backgroundColor: 'transparent',
+                                                color: 'var(--text)',
+                                                borderColor: 'var(--accent)',
+                                              }}
                                             />
                                           ) : note.summary_edit || note.summary ? (
-                                            <div className={`prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text)' }}>
+                                            <div className={`summary-markdown prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ backgroundColor: 'transparent', color: 'var(--text)' }}>
                                               <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary_edit || note.summary || ''}</ReactMarkdown>
                                             </div>
                                           ) : (
@@ -1232,30 +1259,6 @@ const Project: React.FC = () => {
 
                                       {activeTab === 'transcription' && hasTranscription ? (
                                         <>
-                                          <div className="mb-2 flex justify-end">
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                void handleCopyText(
-                                                  showDiarized
-                                                    ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
-                                                    : plainTx || '',
-                                                  `project-transcription-${note.id}`
-                                                )
-                                              }
-                                              className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
-                                              style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                              title="Copy transcription"
-                                              aria-label="Copy transcription"
-                                            >
-                                              {copiedKey === `project-transcription-${note.id}` ? (
-                                                <Check className="h-3 w-3" />
-                                              ) : (
-                                                <Copy className="h-3 w-3" />
-                                              )}
-                                              Copy
-                                            </button>
-                                          </div>
                                           {showDiarized ? (
                                             <TranscriptDiarizedEditor
                                               segments={normalizeTranscript(diarRaw)}
@@ -1266,12 +1269,16 @@ const Project: React.FC = () => {
                                               }
                                               noteId={note.id}
                                               scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
+                                              selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
+                                              onSelectedSpeakerFiltersChange={(next) =>
+                                                setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
+                                              }
                                             />
                                           ) : (
                                             <div
                                               className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`}
                                               style={{
-                                                backgroundColor: 'var(--bg)',
+                                                backgroundColor: 'transparent',
                                                 color: 'var(--text-secondary)',
                                               }}
                                             >
@@ -1289,14 +1296,27 @@ const Project: React.FC = () => {
                         </div>
                       )})}
                     </div>
+                    </>
                   )}
                 </div>
+                  <div className="flex shrink-0 justify-start pt-3">
+                    <button
+                      type="button"
+                      onClick={() => void openAddNotesModal()}
+                      disabled={!projectId || !user?.id}
+                      className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      <FileAdd className="h-4 w-4 shrink-0" aria-hidden />
+                      Add notes
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
                   {sessionsLoading ? (
                     <div className="flex h-full items-center justify-center py-10">
-                      <Loader2 className="h-5 w-5 animate-spin" style={{ color: 'var(--text-muted)' }} />
+                      <Loading className="h-5 w-5 animate-spin" style={{ color: 'var(--text-muted)' }} />
                     </div>
                   ) : sessionsError ? (
                     <div className="py-6 text-sm" style={{ color: 'var(--error)' }}>
@@ -1307,7 +1327,7 @@ const Project: React.FC = () => {
                       No chat sessions yet.
                     </div>
                   ) : (
-                    <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+                    <div className="summary-note-list project-chat-list">
                       {projectSessions.map((session) => {
                         const rows = sessionChatsById[session.id] || [];
                         const firstResponse =
@@ -1316,30 +1336,34 @@ const Project: React.FC = () => {
                         const firstMessage = rows.map((row) => (row.message || '').trim()).find((value) => Boolean(value)) || '';
                         const isSelected = selectedSessionId === session.id;
                         return (
-                          <button
+                          <div
                             key={session.id}
-                            type="button"
-                            onClick={() => handleSelectSession(session.id)}
-                            className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-3 py-4 text-left transition-colors hover:bg-[var(--bg-secondary)]"
-                            style={isSelected ? { backgroundColor: 'var(--bg-secondary)' } : undefined}
+                            className={`summary-note-row project-chat-row ${isSelected ? 'summary-note-row-active' : ''}`}
                           >
-                            <div className="min-w-0">
-                              <p className="truncate text-base font-semibold" style={{ color: 'var(--text)' }}>
-                                {firstResponse}
-                              </p>
-                              {firstMessage ? (
-                                <p className="mt-0.5 truncate text-sm" style={{ color: 'var(--text-secondary)' }}>
-                                  {firstMessage}
+                            <span className="summary-note-row-rail" aria-hidden />
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSession(session.id)}
+                              className="summary-note-row-content grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-3 py-3.5 text-left transition-all sm:px-4"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-base font-semibold" style={{ color: 'var(--text)' }}>
+                                  {firstResponse}
                                 </p>
-                              ) : null}
-                            </div>
-                            <p className="shrink-0 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                              {new Date(session.created_at || Date.now()).toLocaleDateString([], {
-                                month: 'short',
-                                day: 'numeric',
-                              })}
-                            </p>
-                          </button>
+                                {firstMessage ? (
+                                  <p className="mt-1 truncate text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                    {firstMessage}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <p className="shrink-0 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                {new Date(session.created_at || Date.now()).toLocaleDateString([], {
+                                  month: 'short',
+                                  day: 'numeric',
+                                })}
+                              </p>
+                            </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -1367,8 +1391,7 @@ const Project: React.FC = () => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="add-notes-to-project-title"
-            className="flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-xl sm:max-w-6xl"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+            className="project-note-picker-modal flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated sm:max-w-6xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div
@@ -1391,12 +1414,11 @@ const Project: React.FC = () => {
                     setAddModalExpandedNoteId(null);
                   }
                 }}
-                className="rounded-md p-2"
-                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                className="montage-icon-button montage-icon-button--secondary inline-flex h-10 w-10 items-center justify-center rounded-lg"
                 aria-label="Close modal"
                 disabled={addNotesSaving}
               >
-                <X className="h-5 w-5" aria-hidden />
+                <CloseMd className="h-5 w-5" aria-hidden />
               </button>
             </div>
 
@@ -1422,7 +1444,7 @@ const Project: React.FC = () => {
                     </p>
                   </div>
                 ) : (
-                  <ul className="space-y-3">
+                  <ul className="summary-note-list project-note-picker-list">
                     {notesAvailableToAdd.map((note) => {
                       const checked = selectedNoteIdsToAdd.includes(note.id);
                       const expanded = addModalExpandedNoteId === note.id;
@@ -1430,24 +1452,36 @@ const Project: React.FC = () => {
                       const summaryPreview = getNoteSummaryText(note);
                       const transcriptionPreview = getNoteTranscriptionText(note);
                       return (
-                        <li key={note.id} className="chat-item card overflow-visible rounded-lg transition-all">
+                        <li
+                          key={note.id}
+                          className={`summary-note-row project-note-picker-row ${expanded || checked ? 'summary-note-row-active' : ''}`}
+                        >
+                          <span className="summary-note-row-rail" aria-hidden />
                           <div
-                            className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 sm:px-4 sm:py-3.5"
-                            style={{
-                              backgroundColor: expanded || checked ? 'var(--bg-secondary)' : undefined,
-                            }}
+                            onClick={() =>
+                              setAddModalExpandedNoteId((id) => (id === note.id ? null : note.id))
+                            }
+                            className="summary-note-row-content grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 transition-all sm:px-4 sm:py-3.5"
+                            aria-expanded={expanded}
                           >
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">
+                            <label
+                              className="project-note-picker-checkbox-wrap flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                              onClick={(e) => e.stopPropagation()}
+                            >
                               <input
                                 type="checkbox"
                                 checked={checked}
                                 onChange={() => toggleAddNoteSelection(note.id)}
-                                onClick={(e) => e.stopPropagation()}
-                                className="h-4 w-4 shrink-0 rounded border"
-                                style={{ borderColor: 'var(--border)', accentColor: 'var(--accent)' }}
+                                className="sr-only"
                                 aria-label={`Add ${title} to project`}
                               />
-                            </div>
+                              <span
+                                className={`project-note-picker-checkbox ${checked ? 'project-note-picker-checkbox-checked' : ''}`}
+                                aria-hidden
+                              >
+                                {checked ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
+                              </span>
+                            </label>
                             <div className="min-w-0 overflow-hidden pr-1">
                               <p
                                 className="truncate text-sm font-medium leading-snug"
@@ -1465,30 +1499,22 @@ const Project: React.FC = () => {
                               </p>
                             </div>
                             <div className="flex h-10 shrink-0 items-center justify-end">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setAddModalExpandedNoteId((id) => (id === note.id ? null : note.id))
-                                }
-                                className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
+                              <span
+                                className="flex h-9 w-9 items-center justify-center rounded-md"
                                 style={{ color: 'var(--text-muted)' }}
-                                aria-expanded={expanded}
-                                aria-label={expanded ? 'Collapse note details' : 'Expand note details'}
+                                aria-hidden
                               >
                                 <ChevronDown
                                   className={`h-5 w-5 shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}
                                   aria-hidden
                                 />
-                              </button>
+                              </span>
                             </div>
                           </div>
                           {expanded ? (
                             <div
-                              className="border-t p-4"
-                              style={{
-                                borderColor: 'var(--border)',
-                                backgroundColor: 'var(--bg-secondary)',
-                              }}
+                              className="project-note-picker-expanded border-t p-4"
+                              style={{ borderColor: 'var(--border)' }}
                             >
                               <div>
                                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -1498,8 +1524,7 @@ const Project: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => void handleCopyText(summaryPreview, `picker-summary-${note.id}`)}
-                                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium"
-                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    className="summary-toolbar-btn inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium"
                                     title="Copy summary"
                                     aria-label="Copy summary"
                                   >
@@ -1507,7 +1532,7 @@ const Project: React.FC = () => {
                                   </button>
                                 </div>
                                 <div
-                                  className="custom-scrollbar max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
+                                  className="custom-scrollbar project-note-picker-preview max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap p-3 text-sm leading-relaxed max-md:text-base"
                                   style={{ color: 'var(--text)' }}
                                 >
                                   {summaryPreview || 'No summary for this note.'}
@@ -1524,8 +1549,7 @@ const Project: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => void handleCopyText(transcriptionPreview, `picker-transcription-${note.id}`)}
-                                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium"
-                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    className="summary-toolbar-btn inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium"
                                     title="Copy transcription"
                                     aria-label="Copy transcription"
                                   >
@@ -1533,11 +1557,8 @@ const Project: React.FC = () => {
                                   </button>
                                 </div>
                                 <div
-                                  className="custom-scrollbar max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
-                                  style={{
-                                    backgroundColor: 'var(--bg)',
-                                    color: 'var(--text-secondary)',
-                                  }}
+                                  className="custom-scrollbar project-note-picker-preview max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap p-3 text-sm leading-relaxed max-md:text-base"
+                                  style={{ color: 'var(--text-secondary)' }}
                                 >
                                   {transcriptionPreview || 'No transcription for this note.'}
                                 </div>
@@ -1581,7 +1602,7 @@ const Project: React.FC = () => {
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                 disabled={addNotesSaving || selectedNoteIdsToAdd.length === 0}
               >
-                {addNotesSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {addNotesSaving ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                 Add to project
               </button>
             </div>
@@ -1625,7 +1646,7 @@ const Project: React.FC = () => {
                 style={{ backgroundColor: 'var(--error)', color: '#fff' }}
                 disabled={deletingNote}
               >
-                {deletingNote ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
                 Delete
               </button>
             </div>

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { MsalProvider } from '@azure/msal-react';
-import { ThemeProvider } from './theme/ThemeProvider';
+import { ThemeProvider as AppThemeProvider } from './theme/ThemeProvider';
 import { AuthProvider } from './context/AuthContext';
 import { msalConfig } from './config/msalConfig';
 import Login from './pages/Login';
@@ -39,15 +39,16 @@ const App: React.FC = () => {
 
   return (
     <MsalProvider instance={msalInstance}>
-      <ThemeProvider>
+      <AppThemeProvider>
         <AuthProvider>
           <Router>
-            <div className="App">
+            <div className="App app-skin">
               <Routes>
                 <Route path="/" element={<Login />} />
                 <Route element={<AppShell />}>
                   <Route path="/transcription-summary" element={<TranscriptionSummary />} />
-                  <Route path="/summary-history" element={<SummaryHistory />} />
+                  <Route path="/history" element={<SummaryHistory />} />
+                  <Route path="/summary-history" element={<Navigate to="/history" replace />} />
                   <Route path="/save-summary" element={<SaveSummary />} />
                   <Route path="/project" element={<Project />} />
                   <Route path="/account-settings" element={<AccountSettings />} />
@@ -57,10 +58,9 @@ const App: React.FC = () => {
             </div>
           </Router>
         </AuthProvider>
-      </ThemeProvider>
+      </AppThemeProvider>
     </MsalProvider>
   );
 };
 
 export default App;
-

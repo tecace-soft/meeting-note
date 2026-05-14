@@ -1,7 +1,10 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { FileDocument, Moon, Sun } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
+import { AppSpinner } from '../ui/AppSpinner';
+import { Box, Button, IconButton, Typography } from '../ui/wantedCompat';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -21,9 +24,10 @@ const Login: React.FC = () => {
     setLoginError(null);
     try {
       await login();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Login error:', error);
-      setLoginError(error.message || 'Failed to sign in with Microsoft');
+      const message = error instanceof Error ? error.message : 'Failed to sign in with Microsoft';
+      setLoginError(message);
     } finally {
       setIsLoginLoading(false);
     }
@@ -31,136 +35,130 @@ const Login: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
+      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 mx-auto mb-4" style={{ borderColor: 'var(--accent)' }}></div>
-          <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+          <div className="mx-auto mb-4 flex justify-center text-[var(--accent)]">
+            <AppSpinner className="h-8 w-8 animate-spin" aria-label="Loading" />
+          </div>
+          <Typography variant="body2" color="semantic.label.alternative">
+            Loading…
+          </Typography>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="relative min-h-screen flex flex-col" style={{ backgroundColor: 'var(--bg)' }}>
-      <button
-        type="button"
-        onClick={toggleTheme}
-        className="fixed bottom-8 right-4 z-10 rounded-md border px-3 py-2 text-sm shadow-md"
-        style={{
-          backgroundColor: 'var(--card)',
-          borderColor: 'var(--border)',
-          color: 'var(--text)',
-        }}
-        aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-      >
-        {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
-      </button>
+    <div className="relative flex min-h-screen flex-col" style={{ backgroundColor: 'var(--bg)' }}>
+      <div className="fixed bottom-8 right-4 z-10">
+        <IconButton
+          type="button"
+          variant="background"
+          onClick={toggleTheme}
+          aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+        >
+          {theme === 'light' ? <Moon className="h-5 w-5" aria-hidden /> : <Sun className="h-5 w-5" aria-hidden />}
+        </IconButton>
+      </div>
 
       <div className="flex flex-1 items-center justify-center px-4 sm:px-6 lg:px-8">
-        <div className="max-w-md w-full space-y-8">
-          {/* Header */}
+        <div className="w-full max-w-md space-y-8">
           <div className="text-center">
-            <div className="mb-6">
-              <svg className="w-16 h-16 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--accent)' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-              </svg>
+            <div className="mb-6 flex justify-center" style={{ color: 'var(--accent)' }}>
+              <FileDocument width={56} height={56} aria-hidden />
             </div>
-            <h2 className="text-3xl font-light" style={{ color: 'var(--text)' }}>
+            <Typography variant="title2" weight="medium" as="h1">
               Meeting Note
-            </h2>
-            <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            </Typography>
+            <Typography variant="body2" color="semantic.label.alternative" className="mt-2 block">
               Transcribe audio files and access your Teams chats
-            </p>
+            </Typography>
           </div>
 
-          {/* Login Card */}
-          <div className="card py-8 px-6 rounded-lg">
+          <Box className="app-surface-elevated p-6 sm:p-7" sx={{ borderRadius: '12px' }}>
             <div className="space-y-6">
-              <div className="text-center">
-                <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
-                  Sign in with your Microsoft account to access your Teams chats and upload audio files for transcription.
-                </p>
-              </div>
+              <Typography variant="body2" color="semantic.label.alternative" align="center" as="p">
+                Sign in with your Microsoft account to access your Teams chats and upload audio files for
+                transcription.
+              </Typography>
 
-              {/* MS Teams Login Button */}
-              <button
-                onClick={handleMicrosoftLogin}
-                disabled={isLoginLoading}
-                className="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-md text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{
-                  backgroundColor: '#0078d4',
-                  color: '#ffffff',
-                  border: '1px solid #0078d4',
+              <Button
+                type="button"
+                variant="solid"
+                color="primary"
+                fullWidth
+                loading={isLoginLoading}
+                onClick={() => {
+                  void handleMicrosoftLogin();
                 }}
+                leadingContent={
+                  <svg className="h-5 w-5 shrink-0" viewBox="0 0 21 21" fill="none" aria-hidden>
+                    <rect x="1" y="1" width="9" height="9" fill="#f25022" />
+                    <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
+                    <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
+                    <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
+                  </svg>
+                }
               >
-                {isLoginLoading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-                    <span>Signing in...</span>
-                  </>
-                ) : (
-                  <>
-                    {/* Microsoft Logo */}
-                    <svg className="w-5 h-5" viewBox="0 0 21 21" fill="none">
-                      <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
-                      <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
-                      <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
-                      <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
-                    </svg>
-                    <span>Sign in with Microsoft</span>
-                  </>
-                )}
-              </button>
+                Sign in with Microsoft
+              </Button>
 
-              {/* Error Message */}
-              {loginError && (
-                <div className="p-3 rounded-md error">
-                  <p className="text-sm">{loginError}</p>
+              {loginError ? (
+                <div className="error rounded-lg p-3">
+                  <Typography variant="body2" as="p">
+                    {loginError}
+                  </Typography>
                 </div>
-              )}
+              ) : null}
 
-              {/* Info Text */}
-              <div className="text-center pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  We'll request access to your Teams chats and profile information.
-                </p>
+              <div
+                className="border-t pt-4 text-center"
+                style={{ borderColor: 'color-mix(in srgb, var(--border) 45%, transparent)' }}
+              >
+                <Typography variant="caption1" color="semantic.label.alternative" as="p">
+                  We&apos;ll request access to your Teams chats and profile information.
+                </Typography>
               </div>
             </div>
-          </div>
+          </Box>
 
-          {/* Features Preview */}
-          <div className="grid grid-cols-2 gap-4 mt-8">
-            <div className="p-4 rounded-lg text-center" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-              <svg className="w-8 h-8 mx-auto mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--accent)' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-              </svg>
-              <p className="text-xs font-medium" style={{ color: 'var(--text)' }}>Audio Transcription</p>
+          <div className="mt-8 grid grid-cols-2 gap-4">
+            <div
+              className="rounded-lg p-4 text-center"
+              style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '8px' }}
+            >
+              <Typography variant="label2" weight="medium" className="mt-2 block">
+                Audio transcription
+              </Typography>
             </div>
-            <div className="p-4 rounded-lg text-center" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-              <svg className="w-8 h-8 mx-auto mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--accent)' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
-              </svg>
-              <p className="text-xs font-medium" style={{ color: 'var(--text)' }}>Teams Chats</p>
+            <div
+              className="rounded-lg p-4 text-center"
+              style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '8px' }}
+            >
+              <Typography variant="label2" weight="medium" className="mt-2 block">
+                Teams chats
+              </Typography>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Footer */}
-      <footer className="mt-auto py-6 px-4 border-t" style={{ borderColor: 'var(--border)' }}>
-        <div className="max-w-6xl mx-auto text-center">
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+      <footer
+        className="mt-auto border-t px-4 py-6"
+        style={{ borderColor: 'color-mix(in srgb, var(--border) 45%, transparent)' }}
+      >
+        <div className="mx-auto max-w-6xl text-center">
+          <Typography variant="caption2" color="semantic.label.alternative" as="p">
             © {new Date().getFullYear()} TecAce Software, Ltd. All rights reserved. |{' '}
-            <a 
-              href="https://tecace.com" 
-              target="_blank" 
+            <a
+              href="https://tecace.com"
+              target="_blank"
               rel="noopener noreferrer"
-              className="hover:opacity-80 transition-opacity"
-              style={{ color: 'var(--accent)' }}
+              className="link font-medium"
             >
               tecace.com
             </a>
-          </p>
+          </Typography>
         </div>
       </footer>
     </div>
@@ -168,4 +166,3 @@ const Login: React.FC = () => {
 };
 
 export default Login;
-
