@@ -199,3 +199,118 @@
 [2m2:46:44 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
 [2m2:46:48 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
 [2m3:01:55 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m3:13:48 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m3:13:59 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m3:18:21 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m3:57:18 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m3:57:25 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m4:11:35 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m4:11:43 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m4:13:23 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m4:13:49 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m4:16:12 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m4:16:21 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m4:35:11 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m4:47:15 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m4:59:25 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m4:59:33 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m5:05:38 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m5:05:47 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:16:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m10:16:38 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:19:18 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m10:19:26 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m10:20:23 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m10:21:36 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m10:21:44 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m10:23:59 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m10:24:10 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m10:24:17 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:17:26 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/TranscriptDiarizedEditor.tsx, /src/index.css[22m
+[2m11:18:28 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:18:40 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/TranscriptDiarizedEditor.tsx, /src/index.css[22m
+[2m11:20:32 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/TranscriptDiarizedEditor.tsx, /src/index.css[22m
+[2m11:20:32 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh (new export)
+[2m11:20:32 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:20:32 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh (new export)
+[2m11:20:32 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh (new export)
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh (new export)
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh (new export)
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh (new export)
+[2m11:20:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:20:38 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:20:51 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m11:21:01 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m11:21:07 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:21:15 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:21:24 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:21:36 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m11:21:45 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m11:31:31 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/TranscriptDiarizedEditor.tsx, /src/index.css[22m
+[2m11:31:31 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh ("getTranscriptSpeakerFilters" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m11:31:31 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:31:31 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh ("getTranscriptSpeakerFilters" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m11:31:31 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:31:32 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh ("getTranscriptSpeakerFilters" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m11:31:32 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:31:32 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh ("getTranscriptSpeakerFilters" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m11:31:32 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:31:33 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh ("getTranscriptSpeakerFilters" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m11:31:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:31:33 AM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/TranscriptDiarizedEditor.tsx[22m Could not Fast Refresh ("getTranscriptSpeakerFilters" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m11:31:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css, /src/pages/Project.tsx, /src/pages/TranscriptionSummary.tsx[22m
+[2m11:31:44 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:32:59 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:33:05 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:40:33 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:40:43 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m11:44:38 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:44:42 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m11:44:46 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:47:14 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:47:17 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m11:47:22 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m11:50:09 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m11:50:15 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m11:50:19 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m12:50:21 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppSidebar.tsx, /src/index.css[22m
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m12:50:23 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m12:50:52 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m12:51:15 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m1:11:34 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/theme.css[22m
+[2m1:11:41 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m1:11:49 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m1:11:55 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AccountSettings.tsx, /src/index.css[22m
+[2m1:12:11 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Project.tsx, /src/index.css[22m
+[2m1:12:16 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SaveSummary.tsx, /src/index.css[22m
+[2m1:13:27 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/SummaryHistory.tsx, /src/index.css[22m
+[2m1:15:15 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m1:15:30 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppSidebar.tsx, /src/index.css[22m
+[2m1:15:30 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:15:30 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/AppSidebar.tsx[22m Could not Fast Refresh ("readMobileSidebarCollapsed" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:15:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
+[2m1:15:33 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m

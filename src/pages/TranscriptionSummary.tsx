@@ -34,7 +34,10 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
-import TranscriptDiarizedEditor from '../components/TranscriptDiarizedEditor';
+import TranscriptDiarizedEditor, {
+  getTranscriptSpeakerFilters,
+  TranscriptSpeakerFilterControls,
+} from '../components/TranscriptDiarizedEditor';
 import {
   normalizeTranscript,
   persistNoteDiarization,
@@ -121,6 +124,7 @@ const TranscriptionSummary: React.FC = () => {
   const [saveAllStatus, setSaveAllStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [saveAllErrorDetails, setSaveAllErrorDetails] = useState<string[]>([]);
   const [resultsTab, setResultsTab] = useState<'summary' | 'transcription'>('summary');
+  const [transcriptSpeakerFilters, setTranscriptSpeakerFilters] = useState<string[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Recording states
@@ -1035,12 +1039,14 @@ const TranscriptionSummary: React.FC = () => {
           {/* File Upload Section */}
           <section className="flex-1 min-h-0 flex flex-col">
             <div className="shrink-0">
-            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
-                  Summarize Audio File
-            </h2>
-            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                  Record or upload an audio file to transcribe and summarize
-            </p>
+            <div className="app-page-header">
+              <h1 className="app-page-title">
+                    Summarize Audio File
+              </h1>
+              <p className="app-page-subtitle">
+                    Record or upload an audio file to transcribe and summarize
+              </p>
+            </div>
             {/* Record/Upload Options - Hidden when files are uploaded or recording complete */}
             <div className={`collapse-container ${(uploadedFiles.length > 0 || recordedAudioUrl) ? 'collapsed' : 'expanded'}`}>
               <div className="collapse-content">
@@ -1411,6 +1417,13 @@ const TranscriptionSummary: React.FC = () => {
                           </button>
                         </div>
                         <div className="flex shrink-0 items-center gap-2 pb-2">
+                          {resultsTab === 'transcription' ? (
+                            <TranscriptSpeakerFilterControls
+                              speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
+                              selectedSpeakers={transcriptSpeakerFilters}
+                              onSelectedSpeakersChange={setTranscriptSpeakerFilters}
+                            />
+                          ) : null}
                           {resultsTab === 'summary' ? (
                             <button
                               onClick={() => void handleToggleEditSummary()}
@@ -1560,6 +1573,8 @@ const TranscriptionSummary: React.FC = () => {
                           }
                           noteId={currentNoteId}
                           scrollContainerClassName="flex-1 min-h-0"
+                          selectedSpeakerFilters={transcriptSpeakerFilters}
+                          onSelectedSpeakerFiltersChange={setTranscriptSpeakerFilters}
                         />
                       </div>
                     ) : null}
@@ -1801,7 +1816,7 @@ const TranscriptionSummary: React.FC = () => {
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setOpenMenuChatId(null);
-                                    navigate(`/summary-history?chat_id=${encodeURIComponent(chat.id)}`);
+                                    navigate(`/history?chat_id=${encodeURIComponent(chat.id)}`);
                                   }}
                                   className="chat-menu-item flex w-full items-center gap-2 px-4 py-2 text-sm transition-all"
                                 >

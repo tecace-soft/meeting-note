@@ -341,6 +341,14 @@ const SaveSummary: React.FC = () => {
         {/* File Browser */}
         <div className="flex-grow flex flex-col overflow-hidden p-6">
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
+            <div className="app-page-header">
+              <h1 className="app-page-title">
+                Save Summary
+              </h1>
+              <p className="app-page-subtitle">
+                Choose a OneDrive location for your summary and transcript files
+              </p>
+            </div>
             
             {/* Breadcrumbs & Actions */}
             <div className="flex items-center justify-between mb-4">
@@ -701,4 +709,3 @@ const SaveSummary: React.FC = () => {
 };
 
 export default SaveSummary;
-

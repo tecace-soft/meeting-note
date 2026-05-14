@@ -348,11 +348,11 @@ const AccountSettings: React.FC = () => {
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
         <div className="mx-auto flex min-h-0 w-full max-w-[min(92vw,67.2rem)] flex-1 flex-col gap-4">
-          <div>
-            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text)' }}>
+          <div className="app-page-header">
+            <h1 className="app-page-title">
               Account Settings
-            </h2>
-            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            </h1>
+            <p className="app-page-subtitle">
               Microsoft account details for your meeting notes workspace
             </p>
           </div>

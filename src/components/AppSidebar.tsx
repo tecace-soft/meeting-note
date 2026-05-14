@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Check,
   CloseMd,
   Cloud,
   EditPencilLine01,
@@ -114,7 +115,7 @@ function getNoteTranscriptionText(note: SidebarNote): string {
 
 const navItems = [
   { to: '/transcription-summary', label: 'Meeting Note', icon: FileDocument, end: true as const },
-  { to: '/summary-history', label: 'History', icon: ListOrdered, end: false as const, projects: true as const },
+  { to: '/history', label: 'History', icon: ListOrdered, end: false as const, projects: true as const },
   { to: '/save-summary', label: 'OneDrive', icon: Cloud, end: false as const },
 ] as const;
 
@@ -163,9 +164,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const showProjectNav =
     !collapsed &&
     isAuthenticated &&
-    (location.pathname === '/summary-history' || location.pathname === '/project');
+    (location.pathname === '/history' || location.pathname === '/summary-history' || location.pathname === '/project');
 
-  const summaryHistorySectionActive = location.pathname === '/summary-history';
+  const summaryHistorySectionActive = location.pathname === '/history' || location.pathname === '/summary-history';
 
   const activeProjectId =
     location.pathname === '/project'
@@ -212,9 +213,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     const path = location.pathname;
     const prev = prevPathRef.current;
     if (
-      path === '/summary-history' &&
+      (path === '/history' || path === '/summary-history') &&
       collapsed &&
-      (prev === null || prev !== '/summary-history')
+      (prev === null || (prev !== '/history' && prev !== '/summary-history'))
     ) {
       onExpandSidebar();
     }
@@ -460,7 +461,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         }))
       );
       if (String(activeProjectId) === String(deleteProjectId)) {
-        navigate('/summary-history');
+        navigate('/history');
       }
       setIsDeleteProjectOpen(false);
       setDeleteProjectId(null);
@@ -836,7 +837,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             role="dialog"
             aria-modal="true"
             aria-labelledby="new-project-dialog-title"
-            className="flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated sm:max-w-6xl"
+            className="project-note-picker-modal flex max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated sm:max-w-6xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div
@@ -924,7 +925,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                       </div>
                     </div>
                   ) : (
-                    <ul className="space-y-3">
+                    <ul className="summary-note-list project-note-picker-list">
                       {sortedNotes.map((note) => {
                         const checked = selectedNoteIds.includes(note.id);
                         const expanded = createModalExpandedNoteId === note.id;
@@ -932,25 +933,36 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                         const summaryPreview = getNoteSummaryText(note);
                         const transcriptionPreview = getNoteTranscriptionText(note);
                         return (
-                          <li key={note.id} className="chat-item card overflow-visible rounded-lg transition-all">
+                          <li
+                            key={note.id}
+                            className={`summary-note-row project-note-picker-row ${expanded || checked ? 'summary-note-row-active' : ''}`}
+                          >
+                            <span className="summary-note-row-rail" aria-hidden />
                             <div
-                              className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 sm:px-4 sm:py-3.5"
-                              style={{
-                                backgroundColor:
-                                  expanded || checked ? 'var(--bg-secondary)' : undefined,
-                              }}
+                              onClick={() =>
+                                setCreateModalExpandedNoteId((id) => (id === note.id ? null : note.id))
+                              }
+                              className="summary-note-row-content grid cursor-pointer grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-3 transition-all sm:px-4 sm:py-3.5"
+                              aria-expanded={expanded}
                             >
-                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">
+                              <label
+                                className="project-note-picker-checkbox-wrap flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                                onClick={(e) => e.stopPropagation()}
+                              >
                                 <input
                                   type="checkbox"
                                   checked={checked}
                                   onChange={() => toggleNoteSelection(note.id)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="h-4 w-4 shrink-0 rounded border"
-                                  style={{ borderColor: 'var(--border)', accentColor: 'var(--accent)' }}
+                                  className="sr-only"
                                   aria-label={`Include ${title} in project`}
                                 />
-                              </div>
+                                <span
+                                  className={`project-note-picker-checkbox ${checked ? 'project-note-picker-checkbox-checked' : ''}`}
+                                  aria-hidden
+                                >
+                                  {checked ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
+                                </span>
+                              </label>
                               <div className="min-w-0 overflow-hidden pr-1">
                                 <p
                                   className="truncate text-sm font-medium leading-snug"
@@ -968,37 +980,29 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 </p>
                               </div>
                               <div className="flex h-10 shrink-0 items-center justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setCreateModalExpandedNoteId((id) => (id === note.id ? null : note.id))
-                                  }
-                                  className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
+                                <span
+                                  className="flex h-9 w-9 items-center justify-center rounded-md"
                                   style={{ color: 'var(--text-muted)' }}
-                                  aria-expanded={expanded}
-                                  aria-label={expanded ? 'Collapse note details' : 'Expand note details'}
+                                  aria-hidden
                                 >
                                   <ChevronDown
                                     className={`h-5 w-5 shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}
                                     aria-hidden
                                   />
-                                </button>
+                                </span>
                               </div>
                             </div>
                             {expanded ? (
                               <div
-                                className="border-t p-4"
-                                style={{
-                                  borderColor: 'var(--border)',
-                                  backgroundColor: 'var(--bg-secondary)',
-                                }}
+                                className="project-note-picker-expanded border-t p-4"
+                                style={{ borderColor: 'var(--border)' }}
                               >
                                 <div>
                                   <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
                                     Summary
                                   </h4>
                                   <div
-                                    className="custom-scrollbar max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
+                                    className="custom-scrollbar project-note-picker-preview max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap p-3 text-sm leading-relaxed max-md:text-base"
                                     style={{ color: 'var(--text)' }}
                                   >
                                     {summaryPreview || 'No summary for this note.'}
@@ -1012,11 +1016,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                     Transcription
                                   </h4>
                                   <div
-                                    className="custom-scrollbar max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg p-3 text-sm leading-relaxed max-md:text-base"
-                                    style={{
-                                      backgroundColor: 'var(--bg)',
-                                      color: 'var(--text-secondary)',
-                                    }}
+                                    className="custom-scrollbar project-note-picker-preview max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap p-3 text-sm leading-relaxed max-md:text-base"
+                                    style={{ color: 'var(--text-secondary)' }}
                                   >
                                     {transcriptionPreview || 'No transcription for this note.'}
                                   </div>

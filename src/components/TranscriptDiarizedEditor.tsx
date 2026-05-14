@@ -37,13 +37,98 @@ export interface TranscriptDiarizedEditorProps {
   noteId: string | null;
   /** Tailwind height/overflow classes for the segment list (default: max-h-96). */
   scrollContainerClassName?: string;
+  selectedSpeakerFilters?: string[];
+  onSelectedSpeakerFiltersChange?: (next: string[]) => void;
 }
+
+export function getTranscriptSpeakerFilters(segments: TranscriptSegment[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const seg of segments) {
+    const speaker = seg.speaker.trim() || 'Speaker';
+    if (seen.has(speaker)) continue;
+    seen.add(speaker);
+    ordered.push(speaker);
+  }
+  return ordered;
+}
+
+interface TranscriptSpeakerFilterControlsProps {
+  speakers: string[];
+  selectedSpeakers: string[];
+  onSelectedSpeakersChange: (next: string[]) => void;
+}
+
+export const TranscriptSpeakerFilterControls: React.FC<TranscriptSpeakerFilterControlsProps> = ({
+  speakers,
+  selectedSpeakers,
+  onSelectedSpeakersChange,
+}) => {
+  if (speakers.length <= 1) return null;
+
+  const toggleSpeaker = (speaker: string) => {
+    onSelectedSpeakersChange(
+      selectedSpeakers.includes(speaker)
+        ? selectedSpeakers.filter((value) => value !== speaker)
+        : [...selectedSpeakers, speaker]
+    );
+  };
+
+  return (
+    <div className="transcript-speaker-filter-row flex min-w-0 items-center gap-1.5">
+      <label className="sr-only" htmlFor="transcript-speaker-filter-select">
+        Filter transcript by speaker
+      </label>
+      <select
+        id="transcript-speaker-filter-select"
+        className="transcript-speaker-filter-select sm:hidden"
+        value={selectedSpeakers[0] ?? ''}
+        onChange={(e) => onSelectedSpeakersChange(e.target.value ? [e.target.value] : [])}
+        aria-label="Filter transcript by speaker"
+      >
+        <option value="">All speakers</option>
+        {speakers.map((speaker) => (
+          <option key={speaker} value={speaker}>
+            {speaker}
+          </option>
+        ))}
+      </select>
+      <div className="hidden flex-wrap items-center gap-1.5 sm:flex">
+        <button
+          type="button"
+          className={`transcript-speaker-filter-chip ${selectedSpeakers.length === 0 ? 'transcript-speaker-filter-chip-active' : ''}`}
+          aria-pressed={selectedSpeakers.length === 0}
+          onClick={() => onSelectedSpeakersChange([])}
+        >
+          All
+        </button>
+        {speakers.map((speaker) => {
+          const isActive = selectedSpeakers.includes(speaker);
+          return (
+            <button
+              key={speaker}
+              type="button"
+              className={`transcript-speaker-filter-chip ${isActive ? 'transcript-speaker-filter-chip-active' : ''}`}
+              aria-pressed={isActive}
+              title={`Filter by ${speaker}`}
+              onClick={() => toggleSpeaker(speaker)}
+            >
+              <span className="transcript-speaker-filter-chip-label">{speaker}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   segments,
   onSegmentsChange,
   noteId,
   scrollContainerClassName,
+  selectedSpeakerFilters = [],
+  onSelectedSpeakerFiltersChange,
 }) => {
   const scopeGroupId = useId();
   const { user } = useAuth();
@@ -309,34 +394,51 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     return [selfRow, ...filteredSavedSpeakers.filter((s) => s.id !== matchedSelfSpeaker.id)];
   }, [filteredSavedSpeakers, matchedSelfSpeaker]);
 
+  const transcriptSpeakers = useMemo(() => getTranscriptSpeakerFilters(segments), [segments]);
+
+  useEffect(() => {
+    if (!onSelectedSpeakerFiltersChange) return;
+    const next = selectedSpeakerFilters.filter((speaker) => transcriptSpeakers.includes(speaker));
+    if (next.length !== selectedSpeakerFilters.length) onSelectedSpeakerFiltersChange(next);
+  }, [onSelectedSpeakerFiltersChange, selectedSpeakerFilters, transcriptSpeakers]);
+
+  const visibleSegments = useMemo(() => {
+    const selected = new Set(selectedSpeakerFilters);
+    return segments
+      .map((segment, index) => ({ segment, index }))
+      .filter(({ segment }) => selected.size === 0 || selected.has(segment.speaker.trim() || 'Speaker'));
+  }, [segments, selectedSpeakerFilters]);
+
   return (
     <>
       <div
-        className={`rounded-lg p-4 text-base leading-relaxed overflow-y-auto custom-scrollbar space-y-3 ${scrollContainerClassName ?? 'max-h-96'}`}
+        className={`rounded-lg p-4 text-base leading-relaxed overflow-y-auto custom-scrollbar ${scrollContainerClassName ?? 'max-h-96'}`}
         style={{ backgroundColor: 'transparent' }}
       >
-        {segments.map((seg, idx) => (
-          <div key={idx} className="transcript-segment flex min-h-[75px] items-center gap-3">
-            <div
-              className="transcript-speaker-avatar flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold"
-              style={{
-                backgroundColor: 'color-mix(in srgb, var(--accent) 22%, var(--bg-secondary))',
-                color: 'var(--text)',
-              }}
-            >
-              {getTranscriptAvatarLabel(seg.speaker)}
-            </div>
-            <div className="min-w-0 flex-1">
+        <div className="space-y-3">
+          {visibleSegments.map(({ segment: seg, index: segmentIndex }) => {
+            return (
+            <div key={segmentIndex} className="transcript-segment flex min-h-[75px] items-center gap-3">
+              <div
+                className="transcript-speaker-avatar flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold"
+                style={{
+                  backgroundColor: 'color-mix(in srgb, var(--accent) 22%, var(--bg-secondary))',
+                  color: 'var(--text)',
+                }}
+              >
+                {getTranscriptAvatarLabel(seg.speaker)}
+              </div>
+              <div className="min-w-0 flex-1">
               <button
                 type="button"
                 data-transcript-speaker-trigger
                 className={`transcript-speaker-trigger text-left text-base font-semibold ${
-                  speakerMenu?.segmentIndex === idx ? 'transcript-speaker-trigger-active' : ''
+                  speakerMenu?.segmentIndex === segmentIndex ? 'transcript-speaker-trigger-active' : ''
                 }`}
                 style={{ color: 'var(--accent)' }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  openSpeakerMenuFromSegment(idx, e.currentTarget);
+                  openSpeakerMenuFromSegment(segmentIndex, e.currentTarget);
                 }}
               >
                 {seg.speaker.trim() || 'Speaker'}
@@ -349,7 +451,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               </div>
             </div>
           </div>
-        ))}
+            );
+          })}
+        </div>
       </div>
 
       {speakerMenu &&

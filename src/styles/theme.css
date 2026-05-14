@@ -149,6 +149,52 @@ h6 {
   color: var(--text-muted);
 }
 
+.app-page-header {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: var(--tc-space-1);
+  margin-bottom: var(--tc-space-4);
+}
+
+.app-page-title {
+  margin: 0;
+  color: var(--tc-navy);
+  font-family: var(--tc-font-heading);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.app-page-title-with-icon {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--tc-space-3);
+}
+
+.app-page-title-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.app-page-subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--tc-font-body);
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+
+:root[data-theme="dark"] .app-page-title {
+  color: var(--text);
+}
+
 .btn-primary {
   background-color: var(--primary);
   color: #ffffff;
@@ -345,6 +391,15 @@ h6 {
   background-color: var(--accent-light);
   color: var(--accent);
   box-shadow: var(--input-focus-ring);
+}
+
+@media (max-width: 639px) {
+  .summary-result-action-row .result-action-btn {
+    width: 3.75rem;
+    min-height: 2.5rem;
+    padding-left: 0;
+    padding-right: 0;
+  }
 }
 
 /* Expand/Collapse animation */
@@ -834,7 +889,149 @@ select:focus {
 }
 
 .app-skin .project-note-expanded-detail {
+  background-color: var(--surface) !important;
   border-top-color: color-mix(in srgb, var(--border) 52%, transparent) !important;
+}
+
+.app-skin .project-note-picker-modal {
+  background-color: var(--surface) !important;
+  border: 1px solid var(--surface) !important;
+  box-shadow: var(--floating-shadow) !important;
+}
+
+.app-skin .project-note-picker-list {
+  min-height: auto;
+}
+
+.app-skin .project-note-picker-row {
+  overflow: visible;
+}
+
+.app-skin .project-note-picker-list .project-note-picker-row:last-child {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+}
+
+.app-skin .project-note-picker-checkbox-wrap {
+  cursor: pointer;
+}
+
+.app-skin .project-note-picker-checkbox {
+  display: inline-flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, var(--text-muted));
+  border-radius: 0.375rem;
+  background-color: var(--surface);
+  color: #fff;
+  box-shadow: none;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.app-skin .project-note-picker-checkbox-wrap:hover .project-note-picker-checkbox {
+  border-color: color-mix(in srgb, var(--tc-cyan) 55%, var(--border));
+  background-color: color-mix(in srgb, var(--tc-bg-pale) 70%, var(--surface));
+}
+
+.app-skin .project-note-picker-checkbox-wrap:has(input:focus-visible) .project-note-picker-checkbox {
+  box-shadow: var(--input-focus-ring);
+}
+
+.app-skin .project-note-picker-checkbox-checked {
+  border-color: transparent;
+  background: var(--tc-gradient-cyan);
+  color: #fff;
+}
+
+.app-skin .project-note-picker-checkbox-wrap:hover .project-note-picker-checkbox-checked {
+  background: linear-gradient(90deg, var(--tc-cyan), var(--tc-indigo));
+  transform: scale(1.04);
+}
+
+.app-skin .project-note-picker-expanded {
+  background-color: var(--surface) !important;
+  border-top-color: color-mix(in srgb, var(--border) 52%, transparent) !important;
+}
+
+.app-skin .project-note-picker-preview {
+  background-color: transparent !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+}
+
+:root[data-theme="dark"] .app-skin .project-note-picker-list .project-note-picker-row:last-child {
+  border-bottom-color: color-mix(in srgb, var(--border) 54%, transparent);
+}
+
+:root[data-theme="dark"] .app-skin .project-note-picker-checkbox {
+  background-color: var(--surface-subtle);
+  border-color: color-mix(in srgb, var(--border) 82%, var(--text-muted));
+}
+
+:root[data-theme="dark"] .app-skin .project-note-picker-checkbox-wrap:hover .project-note-picker-checkbox {
+  background-color: color-mix(in srgb, var(--tc-lilac) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--tc-cyan) 46%, var(--border));
+}
+
+:root[data-theme="dark"] .app-skin .project-note-picker-checkbox-checked {
+  border-color: transparent;
+  background: var(--tc-gradient-cyan);
+}
+
+@media (max-width: 767px) {
+  .app-skin .summary-history-mobile-note-detail {
+    background-color: var(--surface) !important;
+  }
+}
+
+:root .app-skin .project-lower-section {
+  min-height: 0;
+  transition:
+    flex-grow 220ms ease,
+    flex-shrink 220ms ease,
+    flex-basis 220ms ease,
+    max-height 220ms ease,
+    opacity 180ms ease,
+    transform 220ms ease;
+  transform-origin: top;
+}
+
+.app-skin .project-lower-section-expanded {
+  flex: 1 1 0%;
+  max-height: 48rem;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.app-skin .project-lower-section-collapsed {
+  flex: 0 0 0;
+  max-height: 0;
+  min-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.app-skin .project-lower-tab {
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.app-skin .project-lower-tab-active:hover {
+  background-color: var(--surface-subtle) !important;
+  color: var(--text) !important;
+}
+
+.app-skin .project-lower-tab-inactive:hover {
+  background-color: transparent !important;
+  color: var(--tc-cyan) !important;
+}
+
+:root[data-theme="dark"] .app-skin .project-lower-tab-inactive:hover {
+  color: var(--accent-hover) !important;
 }
 
 :root[data-theme="dark"] .app-skin .project-note-list .project-note-row:last-child,
@@ -982,6 +1179,95 @@ select:focus {
   --tw-ring-offset-width: 0px !important;
   --tw-ring-offset-color: transparent !important;
   box-shadow: var(--input-focus-ring) !important;
+}
+
+.app-skin input.project-chat-input,
+.app-skin input.project-chat-input:hover,
+.app-skin input.project-chat-input:focus,
+.app-skin input.project-chat-input:focus-visible,
+.app-skin input.project-chat-input:active {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+  appearance: none !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-width: 0px !important;
+  --tw-ring-offset-color: transparent !important;
+}
+
+.project-chat-input-shell,
+.project-chat-input-shell:hover,
+.project-chat-input-shell:focus,
+.project-chat-input-shell:focus-within,
+.project-chat-input-shell:focus-visible,
+.project-chat-input-shell:active,
+.project-chat-input,
+.project-chat-input:hover,
+.project-chat-input:focus,
+.project-chat-input:focus-visible,
+.project-chat-input:active {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-width: 0px !important;
+  --tw-ring-offset-color: transparent !important;
+}
+
+.project-chat-input,
+.project-chat-input:hover,
+.project-chat-input:focus,
+.project-chat-input:focus-visible,
+.project-chat-input:active {
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+html body .app-skin form.project-chat-input-shell input.project-chat-input,
+html body .app-skin form.project-chat-input-shell input.project-chat-input:hover,
+html body .app-skin form.project-chat-input-shell input.project-chat-input:focus,
+html body .app-skin form.project-chat-input-shell input.project-chat-input:focus-visible,
+html body .app-skin form.project-chat-input-shell input.project-chat-input:active,
+html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill,
+html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:hover,
+html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:focus {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-color: transparent !important;
+  border-radius: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-width: 0px !important;
+  --tw-ring-offset-color: transparent !important;
+}
+
+html body .app-skin form.project-chat-input-shell,
+html body .app-skin form.project-chat-input-shell:hover,
+html body .app-skin form.project-chat-input-shell:focus,
+html body .app-skin form.project-chat-input-shell:focus-visible,
+html body .app-skin form.project-chat-input-shell:focus-within,
+html body .app-skin form.project-chat-input-shell:active {
+  border: 0 !important;
+  border-color: transparent !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
 }
 
 .app-skin table thead tr,
@@ -1284,6 +1570,92 @@ select:focus {
   transform: none;
 }
 
+.transcript-speaker-filter-row {
+  min-width: 0;
+}
+
+.transcript-speaker-filter-chip {
+  display: inline-flex;
+  min-height: 1.8rem;
+  max-width: 11rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--tc-bg-pale) 54%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.transcript-speaker-filter-chip:hover {
+  background-color: color-mix(in srgb, var(--tc-cyan) 9%, var(--tc-bg-pale));
+  border-color: color-mix(in srgb, var(--tc-cyan) 26%, transparent);
+  color: var(--tc-cyan);
+}
+
+.transcript-speaker-filter-chip-active,
+.transcript-speaker-filter-chip-active:hover {
+  background: var(--tc-gradient-cyan);
+  border-color: transparent;
+  color: #fff;
+}
+
+.transcript-speaker-filter-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-speaker-filter-select {
+  min-height: 2rem;
+  max-width: min(14rem, 58vw);
+  border: 1px solid color-mix(in srgb, var(--tc-cyan) 24%, transparent);
+  border-radius: 999px !important;
+  background-color: color-mix(in srgb, var(--tc-bg-pale) 54%, transparent) !important;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem 2rem 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.transcript-speaker-filter-select:focus,
+.transcript-speaker-filter-select:focus-visible {
+  border-color: color-mix(in srgb, var(--tc-cyan) 36%, transparent) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+:root[data-theme="dark"] .transcript-speaker-filter-chip {
+  background-color: color-mix(in srgb, var(--tc-lilac) 7%, transparent);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .transcript-speaker-filter-chip:hover {
+  background-color: color-mix(in srgb, var(--tc-lilac) 12%, transparent);
+  border-color: color-mix(in srgb, var(--tc-lilac) 18%, transparent);
+  color: var(--accent-hover);
+}
+
+:root[data-theme="dark"] .transcript-speaker-filter-chip-active,
+:root[data-theme="dark"] .transcript-speaker-filter-chip-active:hover {
+  background: var(--tc-gradient-cyan);
+  color: #fff;
+}
+
+:root[data-theme="dark"] .transcript-speaker-filter-select {
+  background-color: color-mix(in srgb, var(--tc-lilac) 7%, transparent) !important;
+  border-color: color-mix(in srgb, var(--tc-lilac) 18%, transparent) !important;
+  color: var(--text-secondary);
+}
+
 button.transcript-speaker-trigger,
 button[data-transcript-speaker-trigger] {
   position: relative;
@@ -1381,4 +1753,31 @@ button[data-transcript-speaker-trigger]:focus-visible::after {
 .app-skin button.transcript-speaker-trigger[style*='--accent']:focus-visible,
 .app-skin button[data-transcript-speaker-trigger][style*='--accent']:focus-visible {
   color: var(--tc-cyan) !important;
+}
+
+.app-skin .project-chat-input-shell,
+.app-skin .project-chat-input-shell:hover,
+.app-skin .project-chat-input-shell:focus-within,
+.app-skin .project-chat-input-shell:active {
+  border-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-width: 0px !important;
+}
+
+.app-skin input.project-chat-input,
+.app-skin input.project-chat-input:hover,
+.app-skin input.project-chat-input:focus,
+.app-skin input.project-chat-input:focus-visible,
+.app-skin input.project-chat-input:active {
+  appearance: none !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-width: 0px !important;
+  --tw-ring-offset-color: transparent !important;
 }

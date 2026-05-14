@@ -47,7 +47,8 @@ const App: React.FC = () => {
                 <Route path="/" element={<Login />} />
                 <Route element={<AppShell />}>
                   <Route path="/transcription-summary" element={<TranscriptionSummary />} />
-                  <Route path="/summary-history" element={<SummaryHistory />} />
+                  <Route path="/history" element={<SummaryHistory />} />
+                  <Route path="/summary-history" element={<Navigate to="/history" replace />} />
                   <Route path="/save-summary" element={<SaveSummary />} />
                   <Route path="/project" element={<Project />} />
                   <Route path="/account-settings" element={<AccountSettings />} />
