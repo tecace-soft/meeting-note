@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { getEnv } from './env.js';
 import { normalizeTranscript, uniqueSpeakersFromSegments } from './transcript.js';
 
@@ -39,6 +40,7 @@ export interface DataContext {
 }
 
 let context: DataContext | null = null;
+const requestUserIdStorage = new AsyncLocalStorage<string | undefined>();
 
 export function getDataContext(): DataContext {
   if (context) return context;
@@ -50,6 +52,14 @@ export function getDataContext(): DataContext {
     userId: env.meetingNoteUserId,
   };
   return context;
+}
+
+export function getScopedUserId(): string | undefined {
+  return requestUserIdStorage.getStore() ?? getDataContext().userId;
+}
+
+export async function runWithScopedUserId<T>(userId: string | undefined, callback: () => Promise<T>): Promise<T> {
+  return requestUserIdStorage.run(userId, callback);
 }
 
 function applyUserScope<T>(query: T, userId: string | undefined): T {
@@ -117,7 +127,8 @@ export function summarizeNote(note: NoteRow) {
 }
 
 export async function fetchNote(noteId: string): Promise<NoteRow | null> {
-  const { supabase, userId } = getDataContext();
+  const { supabase } = getDataContext();
+  const userId = getScopedUserId();
   let query = supabase.from('note').select('*').eq('id', noteId).limit(1);
   query = applyUserScope(query, userId);
   const { data, error } = await query.maybeSingle();
@@ -126,7 +137,8 @@ export async function fetchNote(noteId: string): Promise<NoteRow | null> {
 }
 
 export async function fetchSpeakerByIdOrName(input: { speakerId?: string; speakerName?: string }): Promise<SpeakerRow | null> {
-  const { supabase, userId } = getDataContext();
+  const { supabase } = getDataContext();
+  const userId = getScopedUserId();
   let query = supabase.from('speaker').select('id, user_id, name, profile, created_at').limit(1);
   query = input.speakerId ? query.eq('id', input.speakerId) : query.ilike('name', input.speakerName ?? '');
   query = applyUserScope(query, userId);
@@ -136,7 +148,8 @@ export async function fetchSpeakerByIdOrName(input: { speakerId?: string; speake
 }
 
 export async function fetchProject(projectId: string): Promise<ProjectRow | null> {
-  const { supabase, userId } = getDataContext();
+  const { supabase } = getDataContext();
+  const userId = getScopedUserId();
   let query = supabase.from('project').select('id, user_id, name, notes, created_at').eq('id', projectId).limit(1);
   query = applyUserScope(query, userId);
   const { data, error } = await query.maybeSingle();

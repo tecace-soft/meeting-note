@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
-import { fetchSpeakerByIdOrName, getDataContext, type SpeakerRow } from '../lib/supabase.js';
+import { fetchSpeakerByIdOrName, getDataContext, getScopedUserId, type SpeakerRow } from '../lib/supabase.js';
 
 export function registerSpeakerTools(server: McpServer): void {
   server.registerTool(
@@ -15,7 +15,8 @@ export function registerSpeakerTools(server: McpServer): void {
       },
     },
     async ({ query, limit }) => {
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 25, 100);
       let dbQuery = supabase.from('speaker').select('id, user_id, name, profile, created_at').order('name').limit(resolvedLimit);
       if (userId) dbQuery = dbQuery.eq('user_id', userId);

@@ -7,6 +7,7 @@ import {
   getDataContext,
   getNoteSummary,
   getNoteTranscriptText,
+  getScopedUserId,
   summarizeNote,
   toIdValue,
   type NoteRow,
@@ -49,7 +50,8 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, date, startDate, endDate }) => {
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
@@ -75,7 +77,8 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ query, projectId, limit, date, startDate, endDate }) => {
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       let dbQuery = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(200);
@@ -101,7 +104,8 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, date, startDate, endDate }) => {
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
@@ -128,7 +132,8 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, maxCharactersPerSummary, date, startDate, endDate }) => {
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
@@ -163,7 +168,8 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, format = 'plain', maxCharactersPerTranscript, maxSegmentsPerTranscript, date, startDate, endDate }) => {
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');

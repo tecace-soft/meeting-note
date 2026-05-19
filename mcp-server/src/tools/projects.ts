@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult } from '../lib/formatters.js';
-import { fetchProject, getDataContext, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
+import { fetchProject, getDataContext, getScopedUserId, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
 
 export function registerProjectTools(server: McpServer): void {
   server.registerTool(
@@ -14,7 +14,8 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     async ({ limit }) => {
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 50, 100);
       let query = supabase.from('project').select('id, user_id, name, notes, created_at').order('name').limit(resolvedLimit);
       if (userId) query = query.eq('user_id', userId);
@@ -44,7 +45,8 @@ export function registerProjectTools(server: McpServer): void {
     async ({ projectId, noteLimit }) => {
       const project = await fetchProject(projectId);
       if (!project) return errorResult(`Project not found: ${projectId}`);
-      const { supabase, userId } = getDataContext();
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
       const limit = clampLimit(noteLimit, 20, 50);
       let query = supabase
         .from('note')

@@ -49,6 +49,14 @@ If `MCP_API_KEY` is set, clients must send:
 Authorization: Bearer <MCP_API_KEY>
 ```
 
+Remote HTTP clients may also pass the user scope per request:
+
+```text
+x-meeting-note-user-id: <note/speaker/project user_id>
+```
+
+If this header is absent, the server falls back to `MEETING_NOTE_USER_ID`. For hosted use, prefer the header so one Render deployment can serve different user scopes without redeploying.
+
 ## Tools
 
 - `list_recent_notes`

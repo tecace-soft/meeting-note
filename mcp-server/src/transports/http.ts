@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { getEnv } from '../lib/env.js';
+import { runWithScopedUserId } from '../lib/supabase.js';
 import { createMeetingNoteMcpServer } from '../server.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -11,6 +12,12 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean {
   if (!apiKey) return true;
   return req.headers.authorization === `Bearer ${apiKey}`;
+}
+
+function getHeaderValue(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name.toLowerCase()];
+  if (Array.isArray(value)) return value[0]?.trim() || undefined;
+  return value?.trim() || undefined;
 }
 
 export async function startHttpServer(): Promise<void> {
@@ -35,16 +42,20 @@ export async function startHttpServer(): Promise<void> {
         return;
       }
 
-      const server = createMeetingNoteMcpServer();
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      await server.connect(transport);
-      res.on('finish', () => {
-        void server.close().catch((closeError) => {
-          const closeMessage = closeError instanceof Error ? closeError.message : String(closeError);
-          process.stderr.write(`Failed to close MCP request server: ${closeMessage}\n`);
+      const userId = getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
+
+      await runWithScopedUserId(userId, async () => {
+        const server = createMeetingNoteMcpServer();
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        await server.connect(transport);
+        res.on('finish', () => {
+          void server.close().catch((closeError) => {
+            const closeMessage = closeError instanceof Error ? closeError.message : String(closeError);
+            process.stderr.write(`Failed to close MCP request server: ${closeMessage}\n`);
+          });
         });
+        await transport.handleRequest(req, res);
       });
-      await transport.handleRequest(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown server error';
       const stack = error instanceof Error ? error.stack ?? error.message : String(error);
