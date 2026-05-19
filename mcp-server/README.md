@@ -53,6 +53,9 @@ Authorization: Bearer <MCP_API_KEY>
 
 - `list_recent_notes`
 - `search_notes`
+- `get_notes_by_date`
+- `get_summaries_by_date`
+- `get_transcripts_by_date`
 - `get_note`
 - `get_note_summary`
 - `get_note_transcript`
@@ -61,6 +64,20 @@ Authorization: Bearer <MCP_API_KEY>
 - `get_speaker_profile`
 - `list_projects`
 - `get_project_context`
+
+Date-aware tools accept:
+
+```json
+{ "date": "2026-05-19" }
+```
+
+or:
+
+```json
+{ "startDate": "2026-05-01", "endDate": "2026-05-19" }
+```
+
+`YYYY-MM-DD` values are treated as UTC calendar days. ISO date-times are also accepted for `startDate` and `endDate`.
 
 ## Resources
 

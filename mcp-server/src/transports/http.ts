@@ -15,9 +15,6 @@ function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean
 
 export async function startHttpServer(): Promise<void> {
   const env = getEnv();
-  const server = createMeetingNoteMcpServer();
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  await server.connect(transport);
 
   const httpServer = createServer(async (req, res) => {
     try {
@@ -38,9 +35,20 @@ export async function startHttpServer(): Promise<void> {
         return;
       }
 
+      const server = createMeetingNoteMcpServer();
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      await server.connect(transport);
+      res.on('finish', () => {
+        void server.close().catch((closeError) => {
+          const closeMessage = closeError instanceof Error ? closeError.message : String(closeError);
+          process.stderr.write(`Failed to close MCP request server: ${closeMessage}\n`);
+        });
+      });
       await transport.handleRequest(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown server error';
+      const stack = error instanceof Error ? error.stack ?? error.message : String(error);
+      process.stderr.write(`MCP HTTP request failed: ${stack}\n`);
       if (!res.headersSent) sendJson(res, 500, { error: message });
       else res.end();
     }

@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { applyCreatedAtFilter, describeDateFilter, resolveDateFilter } from '../lib/dateFilters.js';
 import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
 import {
   fetchNote,
@@ -11,6 +12,12 @@ import {
   type NoteRow,
 } from '../lib/supabase.js';
 import { formatTranscript, normalizeTranscript } from '../lib/transcript.js';
+
+const dateFilterSchema = {
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD format.').optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+};
 
 function noteMatchesQuery(note: NoteRow, query: string): boolean {
   const needle = query.toLowerCase();
@@ -38,17 +45,20 @@ export function registerNoteTools(server: McpServer): void {
       inputSchema: {
         limit: z.number().int().min(1).max(50).optional(),
         projectId: z.string().optional(),
+        ...dateFilterSchema,
       },
     },
-    async ({ limit, projectId }) => {
+    async ({ limit, projectId, date, startDate, endDate }) => {
       const { supabase, userId } = getDataContext();
       const resolvedLimit = clampLimit(limit, 10, 50);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
       let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
       if (userId) query = query.eq('user_id', userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyCreatedAtFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      return jsonResult({ notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
+      return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
     },
   );
 
@@ -61,18 +71,126 @@ export function registerNoteTools(server: McpServer): void {
         query: z.string().min(1),
         projectId: z.string().optional(),
         limit: z.number().int().min(1).max(50).optional(),
+        ...dateFilterSchema,
       },
     },
-    async ({ query, projectId, limit }) => {
+    async ({ query, projectId, limit, date, startDate, endDate }) => {
       const { supabase, userId } = getDataContext();
       const resolvedLimit = clampLimit(limit, 10, 50);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
       let dbQuery = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(200);
       if (userId) dbQuery = dbQuery.eq('user_id', userId);
       if (projectId) dbQuery = dbQuery.contains('projects', [toIdValue(projectId)]);
+      dbQuery = applyCreatedAtFilter(dbQuery, dateFilter);
       const { data, error } = await dbQuery;
       if (error) return errorResult(error.message);
       const notes = ((data as NoteRow[]) ?? []).filter((note) => noteMatchesQuery(note, query)).slice(0, resolvedLimit);
-      return jsonResult({ query, notes: notes.map(summarizeNote) });
+      return jsonResult({ query, dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: notes.map(summarizeNote) });
+    },
+  );
+
+  server.registerTool(
+    'get_notes_by_date',
+    {
+      title: 'Get Notes By Date',
+      description: 'Retrieve note metadata for notes created on a single date or within a date range.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).optional(),
+        projectId: z.string().optional(),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ limit, projectId, date, startDate, endDate }) => {
+      const { supabase, userId } = getDataContext();
+      const resolvedLimit = clampLimit(limit, 25, 100);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
+      if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
+      let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
+      if (userId) query = query.eq('user_id', userId);
+      if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyCreatedAtFilter(query, dateFilter);
+      const { data, error } = await query;
+      if (error) return errorResult(error.message);
+      return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
+    },
+  );
+
+  server.registerTool(
+    'get_summaries_by_date',
+    {
+      title: 'Get Summaries By Date',
+      description: 'Retrieve note summaries for notes created on a single date or within a date range.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).optional(),
+        projectId: z.string().optional(),
+        maxCharactersPerSummary: z.number().int().min(100).max(50000).optional(),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ limit, projectId, maxCharactersPerSummary, date, startDate, endDate }) => {
+      const { supabase, userId } = getDataContext();
+      const resolvedLimit = clampLimit(limit, 25, 100);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
+      if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
+      let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
+      if (userId) query = query.eq('user_id', userId);
+      if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyCreatedAtFilter(query, dateFilter);
+      const { data, error } = await query;
+      if (error) return errorResult(error.message);
+      return jsonResult({
+        dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
+        summaries: ((data as NoteRow[]) ?? []).map((note) => ({
+          ...summarizeNote(note),
+          summary: truncateText(getNoteSummary(note) || 'No summary for this note.', maxCharactersPerSummary),
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    'get_transcripts_by_date',
+    {
+      title: 'Get Transcripts By Date',
+      description: 'Retrieve note transcripts for notes created on a single date or within a date range.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).optional(),
+        projectId: z.string().optional(),
+        format: z.enum(['plain', 'diarized']).optional(),
+        maxCharactersPerTranscript: z.number().int().min(100).max(100000).optional(),
+        maxSegmentsPerTranscript: z.number().int().min(1).max(1000).optional(),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ limit, projectId, format = 'plain', maxCharactersPerTranscript, maxSegmentsPerTranscript, date, startDate, endDate }) => {
+      const { supabase, userId } = getDataContext();
+      const resolvedLimit = clampLimit(limit, 25, 100);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
+      if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
+      let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
+      if (userId) query = query.eq('user_id', userId);
+      if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyCreatedAtFilter(query, dateFilter);
+      const { data, error } = await query;
+      if (error) return errorResult(error.message);
+      return jsonResult({
+        dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
+        transcripts: ((data as NoteRow[]) ?? []).map((note) => {
+          const segments = normalizeTranscript(note.diarization);
+          const base = summarizeNote(note);
+          if (format === 'diarized') {
+            return {
+              ...base,
+              segments: maxSegmentsPerTranscript ? segments.slice(0, maxSegmentsPerTranscript) : segments,
+              totalSegments: segments.length,
+            };
+          }
+          return {
+            ...base,
+            transcript: truncateText(getNoteTranscriptText(note) || formatTranscript(segments) || 'No transcript for this note.', maxCharactersPerTranscript),
+          };
+        }),
+      });
     },
   );
 
