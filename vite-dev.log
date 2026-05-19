@@ -315,3 +315,12 @@
 [2m1:15:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/AppShell.tsx, /src/index.css[22m
 [2m1:15:33 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
 [2m1:38:30 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+[2m2:21:32 PM[22m [36m[1m[vite][22m[39m changed tsconfig file detected: C:\Users\Gene Kim\Repositories\meeting-note\mcp-server\tsconfig.json - Clearing cache and forcing full-reload to ensure TypeScript is compiled with updated config values.
+[2m2:50:16 PM[22m [36m[1m[vite][22m[39m [32mmcp-server\.env changed, restarting server...[39m
+[2m2:50:17 PM[22m [36m[1m[vite][22m[39m server restarted.
+[2m2:51:26 PM[22m [36m[1m[vite][22m[39m [32mmcp-server\.env changed, restarting server...[39m
+[2m2:51:26 PM[22m [36m[1m[vite][22m[39m server restarted.
+[2m3:03:01 PM[22m [36m[1m[vite][22m[39m [32mmcp-server\.env changed, restarting server...[39m
+[2m3:03:01 PM[22m [36m[1m[vite][22m[39m server restarted.
+[2m9:11:26 AM[22m [36m[1m[vite][22m[39m [32mmcp-server\.env changed, restarting server...[39m
+[2m9:11:27 AM[22m [36m[1m[vite][22m[39m server restarted.

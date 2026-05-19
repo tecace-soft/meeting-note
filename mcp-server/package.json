@@ -1,0 +1,31 @@
+{
+  "name": "@meeting-note/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "meeting-note-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/http-entry.ts",
+    "build": "tsc",
+    "start": "node build/index.js",
+    "start:http": "node build/http-entry.js",
+    "inspect": "npx @modelcontextprotocol/inspector node build/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@supabase/supabase-js": "^2.106.0",
+    "dotenv": "^17.4.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "tsx": "^4.22.2",
+    "typescript": "^5.9.3"
+  },
+  "files": [
+    "build"
+  ]
+}
