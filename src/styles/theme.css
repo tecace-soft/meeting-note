@@ -867,9 +867,29 @@ select:focus {
 }
 
 .app-skin .recent-recordings-list {
-  max-height: 18.75rem;
+  flex: 0 0 auto;
+  max-height: calc(3.5rem * 5 + 2px);
   min-height: 0;
   overflow-y: auto;
+}
+
+.app-skin .recent-recordings-list .summary-note-row {
+  height: 3.5rem;
+  flex: 0 0 3.5rem;
+}
+
+.app-skin .recent-recordings-list .recent-recording-row-content {
+  display: flex;
+  align-items: center !important;
+  height: 100%;
+  min-height: 0;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.app-skin .recent-recordings-list p {
+  margin: 0;
+  line-height: 1.25;
 }
 
 .app-skin .project-note-list,
@@ -1549,6 +1569,39 @@ html body .app-skin form.project-chat-input-shell:active {
   border-width: 1px !important;
   border-style: solid !important;
   border-color: color-mix(in srgb, var(--error) 42%, var(--border)) !important;
+}
+
+@media (max-width: 767px) {
+  .app-skin .transcription-summary-page {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-skin .transcription-summary-page main {
+    overflow: visible !important;
+    min-height: auto !important;
+  }
+
+  .app-skin .transcription-summary-page main > div,
+  .app-skin .transcription-summary-page section {
+    min-height: auto !important;
+  }
+
+  .app-skin .transcription-summary-page .recording-playback-actions {
+    gap: 0.5rem !important;
+  }
+
+  .app-skin .transcription-summary-page .recording-playback-actions a,
+  .app-skin .transcription-summary-page .recording-playback-actions button {
+    width: 2.5rem !important;
+    height: 2.5rem !important;
+    justify-content: center !important;
+    padding: 0 !important;
+  }
+
+  .app-skin .transcription-summary-page .recording-action-label {
+    display: none !important;
+  }
 }
 
 .transcript-segment {
