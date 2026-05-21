@@ -1019,8 +1019,8 @@ const SummaryHistory: React.FC = () => {
                                   </>
                                 )}
                               </div>
-                              <div className="flex min-h-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
-                                <div className="flex min-h-0 min-w-0 max-w-[13rem] flex-col items-end justify-center text-right">
+                              <div className="flex min-h-0 min-w-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
+                                <div className="flex min-h-0 min-w-0 max-w-[11rem] flex-col items-end justify-center overflow-hidden text-right">
                                   <div
                                     className="flex min-w-0 items-center gap-1 text-sm"
                                     style={{ color: 'var(--text-secondary)' }}
@@ -1030,7 +1030,7 @@ const SummaryHistory: React.FC = () => {
                                     <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
                                   </div>
                                   <p
-                                    className="mt-1 truncate text-sm leading-snug"
+                                    className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-snug"
                                     style={{ color: 'var(--text-secondary)' }}
                                     title={getNoteParticipantsLabel(note)}
                                   >

@@ -89,20 +89,58 @@ const TranscriptionSummary: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadProgressGateRef = useRef<Map<string, { pct: number; at: number }>>(new Map());
   const screenWakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const keepScreenAwakeRef = useRef(false);
+  const wakeLockKeepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const activeUploadsRef = useRef(0);
 
   /** Call from file input / recording handlers (user gesture) so Android Chrome grants wake lock. */
-  const ensureScreenWakeLockFromGesture = () => {
+  const ensureScreenWakeLockFromGesture = async () => {
     if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
     if (screenWakeLockRef.current) return;
-    void navigator.wakeLock
+    await navigator.wakeLock
       .request('screen')
       .then((w) => {
         screenWakeLockRef.current = w;
+        w.addEventListener('release', () => {
+          if (screenWakeLockRef.current === w) {
+            screenWakeLockRef.current = null;
+          }
+        });
       })
       .catch(() => {
         /* denied or unsupported */
       });
+  };
+
+  const startScreenWakeLockKeepAlive = () => {
+    keepScreenAwakeRef.current = true;
+    void ensureScreenWakeLockFromGesture();
+
+    if (wakeLockKeepAliveIntervalRef.current) return;
+    wakeLockKeepAliveIntervalRef.current = setInterval(() => {
+      if (!keepScreenAwakeRef.current) return;
+      void ensureScreenWakeLockFromGesture();
+    }, 15000);
+  };
+
+  const stopScreenWakeLockKeepAlive = () => {
+    keepScreenAwakeRef.current = false;
+    if (wakeLockKeepAliveIntervalRef.current) {
+      clearInterval(wakeLockKeepAliveIntervalRef.current);
+      wakeLockKeepAliveIntervalRef.current = null;
+    }
+  };
+
+  const releaseScreenWakeLock = async () => {
+    stopScreenWakeLockKeepAlive();
+    try {
+      await screenWakeLockRef.current?.release();
+    } catch {
+      /* denied, unsupported, or already released */
+    } finally {
+      screenWakeLockRef.current = null;
+    }
   };
 
   const [chats, setChats] = useState<TeamsChat[]>([]);
@@ -159,6 +197,7 @@ const TranscriptionSummary: React.FC = () => {
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
   );
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const isRecordingRef = useRef(false);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
@@ -181,6 +220,23 @@ const TranscriptionSummary: React.FC = () => {
     return () => mq.removeEventListener('change', sync);
   }, []);
 
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && (isRecording || activeUploadsRef.current > 0)) {
+        startScreenWakeLockKeepAlive();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isRecording]);
+
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
 
@@ -200,6 +256,7 @@ const TranscriptionSummary: React.FC = () => {
 
   const startRecording = async () => {
     try {
+      startScreenWakeLockKeepAlive();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const mediaRecorder = new MediaRecorder(stream);
@@ -236,6 +293,7 @@ const TranscriptionSummary: React.FC = () => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
     } catch (error) {
+      void releaseScreenWakeLock();
       console.error('Error starting recording:', error);
       alert('Could not access microphone. Please ensure you have granted microphone permissions.');
     }
@@ -249,13 +307,14 @@ const TranscriptionSummary: React.FC = () => {
         clearInterval(recordingIntervalRef.current);
         recordingIntervalRef.current = null;
       }
+      void releaseScreenWakeLock();
     }
   };
 
   const useRecording = () => {
     if (!recordedBlob) return;
 
-    ensureScreenWakeLockFromGesture();
+    startScreenWakeLockKeepAlive();
 
     const fileName = recordedFileName;
     const audioFile = new window.File([recordedBlob], fileName, { type: 'audio/webm' });
@@ -475,7 +534,7 @@ const TranscriptionSummary: React.FC = () => {
     e.preventDefault();
     setIsDragging(false);
     const files = Array.from(e.dataTransfer.files);
-    ensureScreenWakeLockFromGesture();
+    startScreenWakeLockKeepAlive();
     handleFiles(files);
   }, []);
 
@@ -633,6 +692,7 @@ const TranscriptionSummary: React.FC = () => {
     );
 
     activeUploadsRef.current += 1;
+    startScreenWakeLockKeepAlive();
     try {
       const ext = file.name.split('.').pop() || 'audio';
       const sanitizedName =
@@ -715,13 +775,8 @@ const TranscriptionSummary: React.FC = () => {
     } finally {
       uploadProgressGateRef.current.delete(fileId);
       activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
-      if (activeUploadsRef.current === 0) {
-        try {
-          await screenWakeLockRef.current?.release();
-        } catch {
-          /* */
-        }
-        screenWakeLockRef.current = null;
+      if (activeUploadsRef.current === 0 && !isRecordingRef.current) {
+        await releaseScreenWakeLock();
       }
     }
   };
@@ -1181,7 +1236,7 @@ const TranscriptionSummary: React.FC = () => {
             {/* Record/Upload Options - Hidden when files are uploaded or recording complete */}
             <div className={`collapse-container ${(uploadedFiles.length > 0 || recordedAudioUrl) ? 'collapsed' : 'expanded'}`}>
               <div className="collapse-content">
-                <div className="flex flex-col md:flex-row items-stretch gap-4">
+                <div className="audio-source-options flex flex-col md:flex-row items-stretch gap-4">
                   {/* Record Option */}
                   <button
                     type="button"
@@ -1228,7 +1283,7 @@ const TranscriptionSummary: React.FC = () => {
                   </button>
 
                   {/* OR Divider */}
-                  <div className="flex md:flex-col items-center justify-center gap-2 py-2 md:py-0 md:px-2">
+                  <div className="audio-source-divider flex md:flex-col items-center justify-center gap-2 py-2 md:py-0 md:px-2">
                     <div className="flex-1 h-px md:h-auto md:w-px md:flex-1" style={{ backgroundColor: 'var(--border)' }} />
                     <span className="text-xs font-medium px-2" style={{ color: 'var(--text-muted)' }}>or</span>
                     <div className="flex-1 h-px md:h-auto md:w-px md:flex-1" style={{ backgroundColor: 'var(--border)' }} />
@@ -1313,7 +1368,7 @@ const TranscriptionSummary: React.FC = () => {
                   </div>
                   
                   {/* Action Buttons */}
-                  <div className="flex items-center justify-end gap-3">
+                  <div className="recording-playback-actions flex items-center justify-end gap-3">
                     {recordedAudioUrl ? (
                       <a
                         href={recordedAudioUrl}
@@ -1324,7 +1379,7 @@ const TranscriptionSummary: React.FC = () => {
                         aria-label={`Download ${recordedFileName}`}
                       >
                         <Download className="w-4 h-4" />
-                        Download
+                        <span className="recording-action-label">Download</span>
                       </a>
                     ) : null}
                     <button
@@ -1333,7 +1388,7 @@ const TranscriptionSummary: React.FC = () => {
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                     >
                       <CloseMd className="w-4 h-4" />
-                      Discard
+                      <span className="recording-action-label">Discard</span>
                     </button>
                     <button
                       onClick={useRecording}
@@ -1341,7 +1396,7 @@ const TranscriptionSummary: React.FC = () => {
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                     >
                       <Check className="w-4 h-4" />
-                      Use Recording
+                      <span className="recording-action-label">Use Recording</span>
                     </button>
                   </div>
                 </div>
@@ -1463,14 +1518,14 @@ const TranscriptionSummary: React.FC = () => {
                       }}
                     >
                       <span className="summary-note-row-rail" aria-hidden />
-                      <div className="summary-note-row-content flex items-center gap-3 px-3 py-2.5">
+                      <div className="summary-note-row-content recent-recording-row-content flex items-center gap-3 px-3">
                         <div
                           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
                           style={{ backgroundColor: 'var(--accent-light)' }}
                         >
                           <VolumeMax className="h-4 w-4" style={{ color: 'var(--accent)' }} aria-hidden />
                         </div>
-                        <div className="min-w-0 flex-1 text-left">
+                        <div className="flex min-w-0 flex-1 flex-col justify-center text-left">
                           <p className="truncate text-sm font-medium" style={{ color: 'var(--text)' }}>
                             {file.name}
                           </p>
