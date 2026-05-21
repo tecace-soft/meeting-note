@@ -30,6 +30,8 @@ import {
   UserCircle,
   UserVoice,
   Users,
+  VolumeMax,
+  Download,
 } from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -67,6 +69,18 @@ interface UploadedFile {
   progress?: number;
   error?: string;
   publicUrl?: string;
+}
+
+interface RecentAudioFile {
+  id: string;
+  name: string;
+  bucket: string;
+  storage_path: string;
+  public_url: string;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  source?: 'upload' | 'recording' | string | null;
+  created_at?: string | null;
 }
 
 const TranscriptionSummary: React.FC = () => {
@@ -132,10 +146,14 @@ const TranscriptionSummary: React.FC = () => {
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedFileName, setRecordedFileName] = useState('Recording.webm');
   const [isPlayingRecording, setIsPlayingRecording] = useState(false);
   const [playbackProgress, setPlaybackProgress] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  const [recentAudioFiles, setRecentAudioFiles] = useState<RecentAudioFile[]>([]);
+  const [recentAudioLoading, setRecentAudioLoading] = useState(false);
+  const [recentAudioError, setRecentAudioError] = useState<string | null>(null);
   /** Tailwind `md` is 768px — used to mirror “mobile” layout behavior. */
   const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
@@ -166,6 +184,12 @@ const TranscriptionSummary: React.FC = () => {
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
 
+  const createRecordingFileName = (): string => {
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+    return `Recording_${timestamp}.webm`;
+  };
+
   const formatRecordingTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -193,6 +217,7 @@ const TranscriptionSummary: React.FC = () => {
         const audioUrl = URL.createObjectURL(audioBlob);
         setRecordedAudioUrl(audioUrl);
         setRecordedBlob(audioBlob);
+        setRecordedFileName(createRecordingFileName());
         
         // Stop all tracks
         stream.getTracks().forEach(track => track.stop());
@@ -232,9 +257,7 @@ const TranscriptionSummary: React.FC = () => {
 
     ensureScreenWakeLockFromGesture();
 
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-    const fileName = `Recording_${timestamp}.webm`;
+    const fileName = recordedFileName;
     const audioFile = new window.File([recordedBlob], fileName, { type: 'audio/webm' });
     
     const newFile: UploadedFile = {
@@ -246,7 +269,7 @@ const TranscriptionSummary: React.FC = () => {
     };
     
     setUploadedFiles([newFile]);
-    uploadToSupabase(newFile.id, audioFile);
+    uploadToSupabase(newFile.id, audioFile, 'recording');
     
     // Clean up playback
     if (audioPlayerRef.current) {
@@ -309,6 +332,7 @@ const TranscriptionSummary: React.FC = () => {
     }
     setRecordedAudioUrl(null);
     setRecordedBlob(null);
+    setRecordedFileName('Recording.webm');
     setRecordingTime(0);
     setIsPlayingRecording(false);
     setPlaybackProgress(0);
@@ -467,6 +491,108 @@ const TranscriptionSummary: React.FC = () => {
     }, 0);
   };
 
+  const loadRecentAudioFiles = useCallback(async () => {
+    if (!user?.id) {
+      setRecentAudioFiles([]);
+      return;
+    }
+
+    setRecentAudioLoading(true);
+    setRecentAudioError(null);
+    try {
+      const { data, error } = await supabase
+        .from('file')
+        .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      setRecentAudioFiles((data ?? []) as RecentAudioFile[]);
+    } catch (error) {
+      console.error('Failed to load recent audio files:', error);
+      setRecentAudioError(error instanceof Error ? error.message : 'Failed to load recent recordings');
+    } finally {
+      setRecentAudioLoading(false);
+    }
+  }, [user?.id]);
+
+  const saveAudioFileRecord = useCallback(
+    async (
+      file: File,
+      storagePath: string,
+      publicUrl: string,
+      source: 'upload' | 'recording'
+    ) => {
+      if (!user?.id) return;
+      const { error } = await supabase.from('file').insert({
+        user_id: user.id,
+        name: file.name,
+        bucket: AUDIO_BUCKET,
+        storage_path: storagePath,
+        public_url: publicUrl,
+        mime_type: file.type || 'application/octet-stream',
+        size_bytes: file.size,
+        source,
+      });
+      if (error) throw error;
+      await loadRecentAudioFiles();
+    },
+    [loadRecentAudioFiles, user?.id]
+  );
+
+  const useRecentAudioFile = (file: RecentAudioFile) => {
+    ensureScreenWakeLockFromGesture();
+    clearRecording();
+    setUploadedFiles([
+      {
+        id: file.id,
+        name: file.name,
+        size: Number(file.size_bytes ?? 0),
+        type: file.mime_type || 'audio/*',
+        status: 'completed',
+        progress: 100,
+        publicUrl: file.public_url,
+      },
+    ]);
+    setSummaryError(null);
+  };
+
+  const deleteRecentAudioFile = async (file: RecentAudioFile) => {
+    if (!user?.id) return;
+
+    setRecentAudioError(null);
+    try {
+      const { error: storageError } = await supabase.storage
+        .from(file.bucket || AUDIO_BUCKET)
+        .remove([file.storage_path]);
+
+      if (storageError) throw storageError;
+
+      const { error: deleteError } = await supabase
+        .from('file')
+        .delete()
+        .eq('id', file.id)
+        .eq('user_id', user.id);
+
+      if (deleteError) throw deleteError;
+
+      setRecentAudioFiles((prev) => prev.filter((item) => item.id !== file.id));
+    } catch (error) {
+      console.error('Failed to delete recent audio file:', error);
+      setRecentAudioError(error instanceof Error ? error.message : 'Failed to delete recent recording');
+    }
+  };
+
+  useEffect(() => {
+    if (!user?.id || !isAuthenticated) {
+      setRecentAudioFiles([]);
+      setRecentAudioLoading(false);
+      setRecentAudioError(null);
+      return;
+    }
+    void loadRecentAudioFiles();
+  }, [isAuthenticated, loadRecentAudioFiles, user?.id]);
+
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB - matches Supabase bucket limit
 
   const handleFiles = (files: File[]) => {
@@ -497,11 +623,11 @@ const TranscriptionSummary: React.FC = () => {
     setUploadedFiles((prev) => [...prev, ...newUploadedFiles]);
 
     newUploadedFiles.forEach((meta, i) => {
-      uploadToSupabase(meta.id, audioFiles[i]);
+      uploadToSupabase(meta.id, audioFiles[i], 'upload');
     });
   };
 
-  const uploadToSupabase = async (fileId: string, file: File) => {
+  const uploadToSupabase = async (fileId: string, file: File, source: 'upload' | 'recording') => {
     setUploadedFiles((prev) =>
       prev.map((f) => (f.id === fileId ? { ...f, status: 'uploading', progress: 0 } : f))
     );
@@ -555,6 +681,11 @@ const TranscriptionSummary: React.FC = () => {
       const { data: urlData } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(filePath);
 
       await ensurePublicStorageUrlReady(urlData.publicUrl);
+      try {
+        await saveAudioFileRecord(file, filePath, urlData.publicUrl, source);
+      } catch (recordError) {
+        console.error('Failed to save audio file metadata:', recordError);
+      }
 
       setUploadedFiles((prev) =>
         prev.map((f) =>
@@ -649,7 +780,7 @@ const TranscriptionSummary: React.FC = () => {
       }
 
       const response = await fetch(
-        'https://n8n.srv1153481.hstgr.cloud/webhook/e616c0f9-df5f-471b-ad68-579919548ed7',
+        'https://n8n.srv1153481.hstgr.cloud/webhook-test/e616c0f9-df5f-471b-ad68-579919548ed7',
         {
           method: 'POST',
           headers: {
@@ -1183,6 +1314,19 @@ const TranscriptionSummary: React.FC = () => {
                   
                   {/* Action Buttons */}
                   <div className="flex items-center justify-end gap-3">
+                    {recordedAudioUrl ? (
+                      <a
+                        href={recordedAudioUrl}
+                        download={recordedFileName}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                        title={`Download ${recordedFileName}`}
+                        aria-label={`Download ${recordedFileName}`}
+                      >
+                        <Download className="w-4 h-4" />
+                        Download
+                      </a>
+                    ) : null}
                     <button
                       onClick={clearRecording}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
@@ -1215,7 +1359,7 @@ const TranscriptionSummary: React.FC = () => {
                   >
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center" 
                       style={{ backgroundColor: 'var(--accent-light)' }}>
-                      <FileBlank className="h-5 w-5" style={{ color: 'var(--accent)' }} />
+                      <VolumeMax className="h-5 w-5" style={{ color: 'var(--accent)' }} />
                     </div>
                     <div className="flex-grow min-w-0">
                       <p className="text-sm font-medium truncate" style={{ color: 'var(--text)' }}>
@@ -1248,6 +1392,18 @@ const TranscriptionSummary: React.FC = () => {
                           Error
                         </span>
                       )}
+                      {file.status === 'completed' && file.publicUrl ? (
+                        <a
+                          href={file.publicUrl}
+                          download={file.name}
+                          className="p-1 rounded hover:bg-opacity-80"
+                          style={{ color: 'var(--text-muted)' }}
+                          title={`Download ${file.name}`}
+                          aria-label={`Download ${file.name}`}
+                        >
+                          <Download className="w-4 h-4" />
+                        </a>
+                      ) : null}
                       <button
                         onClick={() => removeFile(file.id)}
                         className="p-1 rounded hover:bg-opacity-80"
@@ -1262,7 +1418,104 @@ const TranscriptionSummary: React.FC = () => {
               </div>
             </div>
 
-            {/* Summarize Prompt — collapses on narrow viewports during/after summary flow so results can use height */}
+            {/* Recent Recordings */}
+            <div className={`collapse-container ${(isRecording || uploadedFiles.length > 0 || recordedAudioUrl) ? 'collapsed' : 'expanded'}`}>
+              <div className="collapse-content">
+            <div className="card rounded-lg mt-6 p-4">
+              <div className="mb-3">
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                    Recent Recordings
+                  </h3>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Reuse one of your 10 most recent uploaded or recorded audio files
+                  </p>
+                </div>
+              </div>
+
+              {recentAudioLoading ? (
+                <div className="flex items-center gap-2 py-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  <Loading className="h-4 w-4 animate-spin" aria-hidden />
+                  Loading recent recordings...
+                </div>
+              ) : recentAudioError ? (
+                <p className="text-sm" style={{ color: 'var(--error)' }}>
+                  {recentAudioError}
+                </p>
+              ) : recentAudioFiles.length === 0 ? (
+                <p className="py-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                  No recent recordings yet.
+                </p>
+              ) : (
+                <div className="summary-note-list recent-recordings-list">
+                  {recentAudioFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      role="button"
+                      tabIndex={0}
+                      className="summary-note-row cursor-pointer"
+                      onClick={() => useRecentAudioFile(file)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          useRecentAudioFile(file);
+                        }
+                      }}
+                    >
+                      <span className="summary-note-row-rail" aria-hidden />
+                      <div className="summary-note-row-content flex items-center gap-3 px-3 py-2.5">
+                        <div
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                          style={{ backgroundColor: 'var(--accent-light)' }}
+                        >
+                          <VolumeMax className="h-4 w-4" style={{ color: 'var(--accent)' }} aria-hidden />
+                        </div>
+                        <div className="min-w-0 flex-1 text-left">
+                          <p className="truncate text-sm font-medium" style={{ color: 'var(--text)' }}>
+                            {file.name}
+                          </p>
+                          <p className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+                            {file.source === 'recording' ? 'Recorded' : 'Uploaded'}
+                            {file.size_bytes ? ` - ${formatFileSize(Number(file.size_bytes))}` : ''}
+                            {file.created_at ? ` - ${formatDate(file.created_at)}` : ''}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <a
+                            href={file.public_url}
+                            download={file.name}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
+                            style={{ color: 'var(--text-secondary)' }}
+                            onClick={(event) => event.stopPropagation()}
+                            title={`Download ${file.name}`}
+                            aria-label={`Download ${file.name}`}
+                          >
+                            <Download className="h-4 w-4" aria-hidden />
+                          </a>
+                          <button
+                            type="button"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
+                            style={{ color: 'var(--text-secondary)' }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void deleteRecentAudioFile(file);
+                            }}
+                            title={`Delete ${file.name}`}
+                            aria-label={`Delete ${file.name}`}
+                          >
+                            <CloseMd className="h-4 w-4" aria-hidden />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+              </div>
+            </div>
+
+            {/* Summarize Prompt - collapses on narrow viewports during/after summary flow so results can use height */}
             <div
               className={`collapse-container ${promptSectionLayoutExpanded ? 'expanded' : 'collapsed'}`}
             >

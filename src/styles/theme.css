@@ -866,6 +866,12 @@ select:focus {
   background-color: color-mix(in srgb, var(--tc-indigo) 13%, var(--surface));
 }
 
+.app-skin .recent-recordings-list {
+  max-height: 18.75rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .app-skin .project-note-list,
 .app-skin .project-note-row,
 .app-skin .project-chat-list,
