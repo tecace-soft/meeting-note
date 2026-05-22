@@ -9,15 +9,60 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+function sendJsonWithHeaders(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string>
+): void {
+  res.writeHead(status, { 'content-type': 'application/json', ...headers });
+  res.end(JSON.stringify(body));
+}
+
 function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean {
   if (!apiKey) return true;
   return req.headers.authorization === `Bearer ${apiKey}`;
+}
+
+function getBearerToken(req: IncomingMessage): string | undefined {
+  const authorization = getHeaderValue(req, 'authorization');
+  const match = authorization?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || undefined;
 }
 
 function getHeaderValue(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name.toLowerCase()];
   if (Array.isArray(value)) return value[0]?.trim() || undefined;
   return value?.trim() || undefined;
+}
+
+function getRequestBaseUrl(req: IncomingMessage): string {
+  const proto = getHeaderValue(req, 'x-forwarded-proto') ?? 'https';
+  const host = getHeaderValue(req, 'x-forwarded-host') ?? getHeaderValue(req, 'host') ?? 'localhost';
+  return `${proto}://${host}`.replace(/\/$/, '');
+}
+
+function getProtectedResourceMetadata(baseUrl: string) {
+  return {
+    resource: `${baseUrl}/mcp-chatgpt`,
+    authorization_servers: ['https://login.microsoftonline.com/common/v2.0'],
+    scopes_supported: ['https://graph.microsoft.com/User.Read'],
+    bearer_methods_supported: ['header'],
+    resource_name: 'Meeting Note MCP',
+  };
+}
+
+async function getMicrosoftUserIdFromGraph(accessToken: string): Promise<string | undefined> {
+  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) return undefined;
+
+  const data = (await response.json()) as { id?: unknown };
+  return typeof data.id === 'string' && data.id.trim() ? data.id.trim() : undefined;
 }
 
 export async function startHttpServer(): Promise<void> {
@@ -32,17 +77,53 @@ export async function startHttpServer(): Promise<void> {
         return;
       }
 
-      if (url.pathname !== '/mcp') {
+      const requestBaseUrl = env.mcpPublicBaseUrl ?? getRequestBaseUrl(req);
+
+      if (
+        url.pathname === '/.well-known/oauth-protected-resource' ||
+        url.pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt'
+      ) {
+        sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl));
+        return;
+      }
+
+      const isClaudeEndpoint = url.pathname === '/mcp';
+      const isChatGptEndpoint = url.pathname === '/mcp-chatgpt';
+
+      if (!isClaudeEndpoint && !isChatGptEndpoint) {
         sendJson(res, 404, { error: 'Not found' });
         return;
       }
 
-      if (!isAuthorized(req, env.mcpApiKey)) {
+      if (isClaudeEndpoint && !isAuthorized(req, env.mcpApiKey)) {
         sendJson(res, 401, { error: 'Unauthorized' });
         return;
       }
 
-      const userId = getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
+      const bearerToken = getBearerToken(req);
+      const userId = isChatGptEndpoint
+        ? env.mcpUserTokens.get(bearerToken ?? '') ??
+          (bearerToken ? await getMicrosoftUserIdFromGraph(bearerToken) : undefined) ??
+          env.meetingNoteUserId
+        : getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
+
+      if (!userId) {
+        const body = {
+          error: isChatGptEndpoint
+            ? 'A valid Microsoft OAuth bearer token, ChatGPT bearer token, or MEETING_NOTE_USER_ID is required.'
+            : 'Missing meeting note user id.',
+        };
+
+        if (isChatGptEndpoint) {
+          const resourceMetadataUrl = `${requestBaseUrl}/.well-known/oauth-protected-resource/mcp-chatgpt`;
+          sendJsonWithHeaders(res, 401, body, {
+            'WWW-Authenticate': `Bearer resource_metadata="${resourceMetadataUrl}"`,
+          });
+        } else {
+          sendJson(res, 401, body);
+        }
+        return;
+      }
 
       await runWithScopedUserId(userId, async () => {
         const server = createMeetingNoteMcpServer();

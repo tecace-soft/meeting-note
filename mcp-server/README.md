@@ -11,6 +11,8 @@ SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 MEETING_NOTE_USER_ID=... # optional, strongly recommended for single-user scoping
 MCP_API_KEY=...          # required only for HTTP auth
+MCP_USER_TOKENS='{"opaque-user-token":"meeting-note-user-id"}' # optional multi-user token map
+MCP_PUBLIC_BASE_URL=https://meeting-note-mcp.onrender.com # recommended for OAuth metadata
 PORT=3000               # HTTP only
 ```
 
@@ -42,6 +44,10 @@ Endpoints:
 - `GET /health`
 - `POST /mcp`
 - `GET /mcp`
+- `POST /mcp-chatgpt`
+- `GET /mcp-chatgpt`
+- `GET /.well-known/oauth-protected-resource`
+- `GET /.well-known/oauth-protected-resource/mcp-chatgpt`
 
 If `MCP_API_KEY` is set, clients must send:
 
@@ -56,6 +62,69 @@ x-meeting-note-user-id: <note/speaker/project user_id>
 ```
 
 If this header is absent, the server falls back to `MEETING_NOTE_USER_ID`. For hosted use, prefer the header so one Render deployment can serve different user scopes without redeploying.
+
+## ChatGPT web setup
+
+Claude Desktop should continue using `/mcp` with `MCP_API_KEY` and `x-meeting-note-user-id`.
+
+For ChatGPT web Developer Mode, use:
+
+```text
+https://<your-render-service>.onrender.com/mcp-chatgpt
+```
+
+For multi-user use, there are two supported paths.
+
+### Microsoft OAuth
+
+Recommended for ChatGPT web if your Meeting Note `user_id` values are Microsoft user ids.
+
+Configure ChatGPT OAuth with Microsoft identity:
+
+```text
+Authorization URL:
+https://login.microsoftonline.com/common/oauth2/v2.0/authorize
+
+Token URL:
+https://login.microsoftonline.com/common/oauth2/v2.0/token
+
+Scope:
+https://graph.microsoft.com/User.Read offline_access
+```
+
+When ChatGPT calls `/mcp-chatgpt` with a Microsoft OAuth access token, the MCP server calls Microsoft Graph `/me` and uses the returned `id` as the Meeting Note `user_id`.
+
+Set this in Render so OAuth metadata is stable:
+
+```text
+MCP_PUBLIC_BASE_URL=https://meeting-note-mcp.onrender.com
+```
+
+### Opaque token map
+
+For controlled/manual multi-user use, set `MCP_USER_TOKENS` in Render as a JSON object whose keys are opaque bearer tokens and whose values are Meeting Note `user_id` values:
+
+```json
+{
+  "mcp_u_alice_random_32_plus_chars": "alice-meeting-note-user-id",
+  "mcp_u_bob_random_32_plus_chars": "bob-meeting-note-user-id"
+}
+```
+
+Each ChatGPT user should connect with:
+
+```text
+Authorization: Bearer <their opaque token>
+```
+
+The server never trusts a raw `user_id` from ChatGPT. It accepts either:
+
+- a Microsoft OAuth access token resolvable through Microsoft Graph `/me`
+- an opaque token from `MCP_USER_TOKENS`
+
+If neither works, `/mcp-chatgpt` falls back to `MEETING_NOTE_USER_ID` for single-user testing.
+
+For a public app with self-service onboarding, replace `MCP_USER_TOKENS` with real OAuth and derive the Meeting Note user id from the authenticated account.
 
 ## Tools
 

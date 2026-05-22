@@ -7,6 +7,8 @@ export interface MeetingNoteEnv {
   supabaseServiceRoleKey: string;
   meetingNoteUserId?: string;
   mcpApiKey?: string;
+  mcpUserTokens: Map<string, string>;
+  mcpPublicBaseUrl?: string;
   port: number;
 }
 
@@ -22,6 +24,30 @@ function requireEnv(name: string): string {
   return value;
 }
 
+function parseUserTokenMap(raw: string | undefined): Map<string, string> {
+  const tokenMap = new Map<string, string>();
+  const value = raw?.trim();
+  if (!value) return tokenMap;
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Expected a JSON object');
+    }
+
+    Object.entries(parsed as Record<string, unknown>).forEach(([token, userId]) => {
+      if (typeof userId === 'string' && token.trim() && userId.trim()) {
+        tokenMap.set(token.trim(), userId.trim());
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid MCP_USER_TOKENS JSON: ${message}`);
+  }
+
+  return tokenMap;
+}
+
 export function getEnv(): MeetingNoteEnv {
   const rawPort = process.env.PORT?.trim();
   const port = rawPort ? Number(rawPort) : 3000;
@@ -34,6 +60,8 @@ export function getEnv(): MeetingNoteEnv {
     supabaseServiceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
     meetingNoteUserId: process.env.MEETING_NOTE_USER_ID?.trim() || undefined,
     mcpApiKey: process.env.MCP_API_KEY?.trim() || undefined,
+    mcpUserTokens: parseUserTokenMap(process.env.MCP_USER_TOKENS),
+    mcpPublicBaseUrl: process.env.MCP_PUBLIC_BASE_URL?.trim().replace(/\/$/, '') || undefined,
     port,
   };
 }
