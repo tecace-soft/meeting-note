@@ -83,6 +83,19 @@ interface RecentAudioFile {
   created_at?: string | null;
 }
 
+interface RecordingFormat {
+  mimeType: string;
+  extension: string;
+}
+
+const RECORDING_FORMATS: RecordingFormat[] = [
+  { mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'm4a' },
+  { mimeType: 'audio/mp4', extension: 'm4a' },
+  { mimeType: 'audio/aac', extension: 'm4a' },
+  { mimeType: 'audio/webm;codecs=opus', extension: 'webm' },
+  { mimeType: 'audio/webm', extension: 'webm' },
+];
+
 const TranscriptionSummary: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
@@ -184,7 +197,8 @@ const TranscriptionSummary: React.FC = () => {
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-  const [recordedFileName, setRecordedFileName] = useState('Recording.webm');
+  const [recordedFileName, setRecordedFileName] = useState('Recording.m4a');
+  const [recordedMimeType, setRecordedMimeType] = useState('audio/mp4');
   const [isPlayingRecording, setIsPlayingRecording] = useState(false);
   const [playbackProgress, setPlaybackProgress] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -197,6 +211,7 @@ const TranscriptionSummary: React.FC = () => {
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
   );
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingFormatRef = useRef<RecordingFormat>({ mimeType: 'audio/mp4', extension: 'm4a' });
   const isRecordingRef = useRef(false);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -240,10 +255,21 @@ const TranscriptionSummary: React.FC = () => {
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
 
-  const createRecordingFileName = (): string => {
+  const getPreferredRecordingFormat = (): RecordingFormat => {
+    if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+      return { mimeType: 'audio/webm', extension: 'webm' };
+    }
+
+    return (
+      RECORDING_FORMATS.find((format) => MediaRecorder.isTypeSupported(format.mimeType)) ??
+      { mimeType: 'audio/webm', extension: 'webm' }
+    );
+  };
+
+  const createRecordingFileName = (extension: string): string => {
     const now = new Date();
     const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-    return `Recording_${timestamp}.webm`;
+    return `Recording_${timestamp}.${extension}`;
   };
 
   const formatRecordingTime = (seconds: number): string => {
@@ -259,7 +285,9 @@ const TranscriptionSummary: React.FC = () => {
       startScreenWakeLockKeepAlive();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      const mediaRecorder = new MediaRecorder(stream);
+      const recordingFormat = getPreferredRecordingFormat();
+      recordingFormatRef.current = recordingFormat;
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -270,11 +298,13 @@ const TranscriptionSummary: React.FC = () => {
       };
 
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const mimeType = mediaRecorder.mimeType || recordingFormat.mimeType;
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         const audioUrl = URL.createObjectURL(audioBlob);
         setRecordedAudioUrl(audioUrl);
         setRecordedBlob(audioBlob);
-        setRecordedFileName(createRecordingFileName());
+        setRecordedMimeType(mimeType);
+        setRecordedFileName(createRecordingFileName(recordingFormat.extension));
         
         // Stop all tracks
         stream.getTracks().forEach(track => track.stop());
@@ -285,6 +315,7 @@ const TranscriptionSummary: React.FC = () => {
       setRecordingTime(0);
       setRecordedAudioUrl(null);
       setRecordedBlob(null);
+      setRecordedMimeType(recordingFormat.mimeType);
       setPlaybackProgress(0);
       setPlaybackCurrentTime(0);
       
@@ -317,13 +348,13 @@ const TranscriptionSummary: React.FC = () => {
     startScreenWakeLockKeepAlive();
 
     const fileName = recordedFileName;
-    const audioFile = new window.File([recordedBlob], fileName, { type: 'audio/webm' });
+    const audioFile = new window.File([recordedBlob], fileName, { type: recordedMimeType });
     
     const newFile: UploadedFile = {
       id: crypto.randomUUID(),
       name: fileName,
       size: recordedBlob.size,
-      type: 'audio/webm',
+      type: recordedMimeType,
       status: 'pending',
     };
     
@@ -391,7 +422,8 @@ const TranscriptionSummary: React.FC = () => {
     }
     setRecordedAudioUrl(null);
     setRecordedBlob(null);
-    setRecordedFileName('Recording.webm');
+    setRecordedFileName('Recording.m4a');
+    setRecordedMimeType('audio/mp4');
     setRecordingTime(0);
     setIsPlayingRecording(false);
     setPlaybackProgress(0);

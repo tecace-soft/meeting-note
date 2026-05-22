@@ -849,6 +849,22 @@ select:focus {
   transform: scaleY(1);
 }
 
+.app-skin .account-settings-list {
+  min-height: 0;
+  overflow: visible;
+}
+
+.app-skin .account-settings-row {
+  overflow: visible;
+}
+
+.app-skin .account-settings-expanded {
+  position: relative;
+  z-index: 1;
+  background-color: transparent;
+  border-top-color: color-mix(in srgb, var(--border) 52%, transparent) !important;
+}
+
 :root[data-theme="dark"] .app-skin .summary-note-list {
   border-color: color-mix(in srgb, var(--border) 54%, transparent);
 }

@@ -26,7 +26,7 @@ type SettingsTab = 'account' | 'summary' | 'speaker';
 
 type SummaryPromptRow = { id: string; name: string; prompt: string };
 
-type SpeakerRow = { id: string; name: string; profile: string | null };
+type SpeakerRow = { id: string; name: string; profile: string | null; email?: string | null; microsoft_id?: string | null };
 
 type SpeakersLoadState =
   | { status: 'idle' | 'loading' }
@@ -138,7 +138,7 @@ const AccountSettings: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('speaker')
-          .select('id, name, profile')
+          .select('id, name, profile, email, microsoft_id')
           .eq('user_id', user.id)
           .order('name', { ascending: true });
         if (cancelled) return;
@@ -643,15 +643,15 @@ const AccountSettings: React.FC = () => {
                       a default prompt is created automatically on first visit.
                     </p>
                   ) : (
-                    <div className="mt-6 space-y-2">
+                    <div className="summary-note-list account-settings-list mt-6">
                       {summaryPrompts.map((row) => {
                         const isExpanded = expandedSummaryPromptId === row.id;
                         return (
                           <div
                             key={row.id}
-                            className="overflow-hidden rounded-xl border"
-                            style={{ borderColor: 'var(--border)' }}
+                            className={`summary-note-row account-settings-row ${isExpanded ? 'summary-note-row-active' : ''}`}
                           >
+                            <span className="summary-note-row-rail" aria-hidden />
                             <button
                               type="button"
                               aria-expanded={isExpanded}
@@ -666,10 +666,7 @@ const AccountSettings: React.FC = () => {
                                   return row.id;
                                 });
                               }}
-                              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:opacity-95"
-                              style={{
-                                backgroundColor: isExpanded ? 'var(--bg-secondary)' : 'transparent',
-                              }}
+                              className="summary-note-row-content flex w-full items-center gap-3 px-4 py-3 text-left transition-all"
                             >
                               <span className="min-w-0 flex-1 truncate font-medium" style={{ color: 'var(--text)' }}>
                                 {row.name}
@@ -688,7 +685,7 @@ const AccountSettings: React.FC = () => {
                                 id={`summary-prompt-panel-${row.id}`}
                                 role="region"
                                 aria-labelledby={`summary-prompt-trigger-${row.id}`}
-                                className="border-t px-4 pb-4 pt-3"
+                                className="account-settings-expanded border-t px-4 pb-4 pt-3"
                                 style={{ borderColor: 'var(--border)' }}
                               >
                                 <div className="mb-2 flex justify-end">
@@ -809,16 +806,16 @@ const AccountSettings: React.FC = () => {
                   ) : null}
 
                   {speakersLoad.status === 'ready' && otherSpeakers.length > 0 ? (
-                    <div className="mt-6 space-y-2">
+                    <div className="summary-note-list account-settings-list mt-6">
                       {otherSpeakers.map((sp) => {
                         const isExpanded = expandedOtherSpeakerId === sp.id;
                         const isEditing = otherSpeakerEditingId === sp.id;
                         return (
                           <div
                             key={sp.id}
-                            className="overflow-hidden rounded-xl border"
-                            style={{ borderColor: 'var(--border)' }}
+                            className={`summary-note-row account-settings-row ${isExpanded ? 'summary-note-row-active' : ''}`}
                           >
+                            <span className="summary-note-row-rail" aria-hidden />
                             <button
                               type="button"
                               aria-expanded={isExpanded}
@@ -829,10 +826,7 @@ const AccountSettings: React.FC = () => {
                                 setOtherSpeakerSaveError(null);
                                 setExpandedOtherSpeakerId((prev) => (prev === sp.id ? null : sp.id));
                               }}
-                              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:opacity-95"
-                              style={{
-                                backgroundColor: isExpanded ? 'var(--bg-secondary)' : 'transparent',
-                              }}
+                              className="summary-note-row-content flex w-full items-center gap-3 px-4 py-3 text-left transition-all"
                             >
                               <div
                                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
@@ -843,8 +837,15 @@ const AccountSettings: React.FC = () => {
                               >
                                 {(sp.name || '?').slice(0, 2).toUpperCase()}
                               </div>
-                              <span className="min-w-0 flex-1 truncate font-medium" style={{ color: 'var(--text)' }}>
-                                {sp.name}
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-medium" style={{ color: 'var(--text)' }}>
+                                  {sp.name}
+                                </span>
+                                {sp.microsoft_id && sp.email ? (
+                                  <span className="block truncate text-xs font-normal" style={{ color: 'var(--text-muted)' }}>
+                                    {sp.email}
+                                  </span>
+                                ) : null}
                               </span>
                               <ChevronDown
                                 className={`h-4 w-4 shrink-0 transition-transform duration-200 ${
@@ -860,7 +861,7 @@ const AccountSettings: React.FC = () => {
                                 id={`other-speaker-panel-${sp.id}`}
                                 role="region"
                                 aria-labelledby={`other-speaker-trigger-${sp.id}`}
-                                className="border-t px-4 pb-4 pt-3"
+                                className="account-settings-expanded border-t px-4 pb-4 pt-3"
                                 style={{ borderColor: 'var(--border)' }}
                               >
                                 {!isEditing ? (
@@ -997,6 +998,7 @@ const AccountSettings: React.FC = () => {
                   ) : null}
                 </section>
               ) : null}
+
             </div>
           </div>
         </div>
