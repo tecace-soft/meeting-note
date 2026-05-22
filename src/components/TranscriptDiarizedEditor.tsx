@@ -6,6 +6,7 @@ import { canonicalOntologyProfileString, isOntologyProfile, type SpeakerOntology
 import { SpeakerOntologyView } from './SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
+import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
 import {
   applySpeakerReplacements,
   getTranscriptAvatarLabel,
@@ -14,7 +15,7 @@ import {
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 
-type DbSpeaker = { id: string; name: string; profile?: string | null };
+type DbSpeaker = { id: string; name: string; profile?: string | null; email?: string | null; microsoft_id?: string | null };
 
 type SpeakerMenuState = {
   segmentIndex: number;
@@ -131,9 +132,12 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   onSelectedSpeakerFiltersChange,
 }) => {
   const scopeGroupId = useId();
-  const { user } = useAuth();
+  const { user, getAccessToken } = useAuth();
   const [speakerMenu, setSpeakerMenu] = useState<SpeakerMenuState | null>(null);
   const [savedSpeakers, setSavedSpeakers] = useState<DbSpeaker[]>([]);
+  const [microsoftContacts, setMicrosoftContacts] = useState<MicrosoftContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsFetchError, setContactsFetchError] = useState<string | null>(null);
   const [speakersLoading, setSpeakersLoading] = useState(false);
   const [speakersFetchError, setSpeakersFetchError] = useState<string | null>(null);
   const [speakerNameInput, setSpeakerNameInput] = useState('');
@@ -158,6 +162,8 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setReplacementScope('single');
     setSpeakerMenuError(null);
     setSpeakersFetchError(null);
+    setContactsFetchError(null);
+    setMicrosoftContacts([]);
     setSpeakerDeleteConfirm(null);
     setSpeakerDeleteConfirmError(null);
     setSpeakerProfileView(null);
@@ -177,7 +183,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     try {
       const { data, error } = await supabase
         .from('speaker')
-        .select('id, name, profile')
+        .select('id, name, profile, email, microsoft_id')
         .eq('user_id', user.id)
         .order('name', { ascending: true });
       if (error) throw error;
@@ -190,6 +196,23 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       setSpeakersLoading(false);
     }
   }, [user?.id]);
+
+  const loadMicrosoftContactsForMenu = useCallback(async () => {
+    setContactsLoading(true);
+    setContactsFetchError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not get Microsoft Graph access. Please sign in again.');
+      const contacts = await fetchTecAceContacts(token);
+      setMicrosoftContacts(contacts);
+    } catch (err: unknown) {
+      console.error('Failed to load Microsoft contacts:', err);
+      setContactsFetchError(err instanceof Error ? err.message : 'Failed to load Microsoft contacts');
+      setMicrosoftContacts([]);
+    } finally {
+      setContactsLoading(false);
+    }
+  }, [getAccessToken]);
 
   useEffect(() => {
     if (!speakerMenu) return;
@@ -246,7 +269,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setReplacementScope('single');
     setSpeakerMenuError(null);
     setSpeakersFetchError(null);
+    setContactsFetchError(null);
     void loadSpeakersForMenu();
+    void loadMicrosoftContactsForMenu();
   };
 
   const openSpeakerProfileView = (row: DbSpeaker) => {
@@ -378,9 +403,101 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     }
   };
 
+  const handleSelectMicrosoftContact = async (contact: MicrosoftContact) => {
+    if (!speakerMenu || !user?.id) return;
+    setSpeakerMenuError(null);
+    setSpeakerChangeSaving(true);
+    try {
+      const contactEmail = contact.email.trim().toLowerCase();
+      const existing =
+        savedSpeakers.find((s) => s.microsoft_id && s.microsoft_id === contact.id) ??
+        savedSpeakers.find((s) => (s.email ?? '').trim().toLowerCase() === contactEmail);
+
+      let speakerRow = existing ?? null;
+      if (!speakerRow) {
+        const { data, error } = await supabase
+          .from('speaker')
+          .insert({
+            user_id: user.id,
+            name: contact.displayName,
+            email: contact.email,
+            microsoft_id: contact.id,
+          })
+          .select('id, name, profile, email, microsoft_id')
+          .single();
+
+        if (error) {
+          const msg = error.message?.toLowerCase() ?? '';
+          if (!msg.includes('duplicate') && !msg.includes('unique')) throw error;
+
+          const { data: microsoftRows, error: microsoftLookupError } = await supabase
+            .from('speaker')
+            .select('id, name, profile, email, microsoft_id')
+            .eq('user_id', user.id)
+            .eq('microsoft_id', contact.id);
+          if (microsoftLookupError) throw microsoftLookupError;
+
+          speakerRow = ((microsoftRows ?? []) as DbSpeaker[])[0] ?? null;
+          if (!speakerRow) {
+            const { data: emailRows, error: emailLookupError } = await supabase
+              .from('speaker')
+              .select('id, name, profile, email, microsoft_id')
+              .eq('user_id', user.id)
+              .eq('email', contact.email);
+            if (emailLookupError) throw emailLookupError;
+            speakerRow = ((emailRows ?? []) as DbSpeaker[])[0] ?? null;
+          }
+        } else {
+          speakerRow = data as DbSpeaker;
+        }
+      }
+
+      if (!speakerRow) throw new Error(`Could not create or find speaker for ${contact.displayName}.`);
+
+      setSavedSpeakers((prev) => {
+        const withoutDuplicate = prev.filter((s) => s.id !== speakerRow!.id);
+        const next = [...withoutDuplicate, speakerRow!];
+        next.sort((a, b) => a.name.localeCompare(b.name));
+        return next;
+      });
+
+      const nextTranscript = applySpeakerReplacements(
+        segments,
+        speakerMenu.segmentIndex,
+        speakerMenu.originalSpeaker,
+        speakerRow.name,
+        replacementScope
+      );
+
+      if (noteId) {
+        await persistNoteDiarization(noteId, nextTranscript);
+      }
+
+      startTransition(() => {
+        onSegmentsChange(nextTranscript);
+      });
+      closeSpeakerMenu();
+    } catch (err: unknown) {
+      console.error('Microsoft contact speaker change failed:', err);
+      setSpeakerMenuError(err instanceof Error ? err.message : 'Could not apply Microsoft contact');
+    } finally {
+      setSpeakerChangeSaving(false);
+    }
+  };
+
   const filteredSavedSpeakers = savedSpeakers.filter((s) =>
     s.name.toLowerCase().includes(speakerNameInput.trim().toLowerCase())
   );
+
+  const filteredMicrosoftContacts = microsoftContacts.filter((contact) => {
+    const query = speakerNameInput.trim().toLowerCase();
+    if (!query) return true;
+    return (
+      contact.displayName.toLowerCase().includes(query) ||
+      contact.email.toLowerCase().includes(query) ||
+      contact.userPrincipalName.toLowerCase().includes(query)
+    );
+  });
 
   const matchedSelfSpeaker = useMemo(
     () => findBestSpeakerRowForMsAccount(savedSpeakers, user?.displayName ?? ''),
@@ -504,22 +621,37 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                 className="mt-3 min-h-0 flex-1 overflow-hidden rounded-lg"
                 style={{ backgroundColor: 'var(--surface-subtle)' }}
               >
-                {speakersLoading ? (
+                {speakersLoading || contactsLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <Loading className="h-6 w-6 animate-spin" style={{ color: 'var(--accent)' }} />
                   </div>
-                ) : speakersFetchError ? (
-                  <p className="p-3 text-xs" style={{ color: 'var(--error)' }}>
-                    {speakersFetchError}
-                  </p>
-                ) : filteredSavedSpeakers.length === 0 ? (
+                ) : speakersFetchError || contactsFetchError ? (
+                  <div className="space-y-2 p-3">
+                    {speakersFetchError ? (
+                      <p className="text-xs" style={{ color: 'var(--error)' }}>
+                        {speakersFetchError}
+                      </p>
+                    ) : null}
+                    {contactsFetchError ? (
+                      <p className="text-xs" style={{ color: 'var(--error)' }}>
+                        {contactsFetchError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : filteredSavedSpeakers.length === 0 && filteredMicrosoftContacts.length === 0 ? (
                   <p className="p-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {savedSpeakers.length === 0
-                      ? 'No saved speakers yet. Type a name below and apply to save it.'
-                      : 'No matches. Type a new name to add one.'}
+                    No matches. Type a new name to add one.
                   </p>
                 ) : (
                   <ul className="max-h-[13.5rem] overflow-y-auto custom-scrollbar" style={{ maxHeight: '13.5rem' }}>
+                    {displayOrderedSpeakers.length > 0 ? (
+                      <li
+                        className="border-b px-3 py-1.5 text-[0.68rem] font-semibold uppercase tracking-wide"
+                        style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+                      >
+                        Saved speakers
+                      </li>
+                    ) : null}
                     {displayOrderedSpeakers.map((row, i) => {
                       const isMe = matchedSelfSpeaker?.id === row.id;
                       const labelText = isMe ? `${row.name} (me)` : row.name;
@@ -551,12 +683,19 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                           >
                             {getTranscriptAvatarLabel(row.name)}
                           </span>
-                          <span className="min-w-0 flex-1 truncate font-medium">
-                            {row.name}
-                            {isMe ? (
-                              <span className="font-normal" style={{ color: 'var(--text-muted)' }}>
-                                {' '}
-                                (me)
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">
+                              {row.name}
+                              {isMe ? (
+                                <span className="font-normal" style={{ color: 'var(--text-muted)' }}>
+                                  {' '}
+                                  (me)
+                                </span>
+                              ) : null}
+                            </span>
+                            {row.microsoft_id && row.email ? (
+                              <span className="block truncate text-xs font-normal" style={{ color: 'var(--text-muted)' }}>
+                                {row.email}
                               </span>
                             ) : null}
                           </span>
@@ -588,6 +727,52 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                         </button>
                       </li>
                     );
+                    })}
+                    {filteredMicrosoftContacts.length > 0 ? (
+                      <li
+                        className="border-b px-3 py-1.5 text-[0.68rem] font-semibold uppercase tracking-wide"
+                        style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+                      >
+                        TecAce contacts
+                      </li>
+                    ) : null}
+                    {filteredMicrosoftContacts.map((contact, i) => {
+                      const existing =
+                        savedSpeakers.find((s) => s.microsoft_id && s.microsoft_id === contact.id) ??
+                        savedSpeakers.find((s) => (s.email ?? '').trim().toLowerCase() === contact.email.toLowerCase());
+                      return (
+                        <li
+                          key={contact.id}
+                          className="flex items-center border-b last:border-b-0"
+                          style={{ borderColor: 'var(--border)' }}
+                        >
+                          <button
+                            type="button"
+                            disabled={speakerChangeSaving}
+                            onClick={() => void handleSelectMicrosoftContact(contact)}
+                            className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-50"
+                            style={{ color: 'var(--text)' }}
+                          >
+                            <span
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+                              style={{
+                                backgroundColor: SPEAKER_LIST_AVATAR_BACKGROUNDS[
+                                  (displayOrderedSpeakers.length + i) % SPEAKER_LIST_AVATAR_BACKGROUNDS.length
+                                ],
+                                color: 'var(--text)',
+                              }}
+                            >
+                              {getTranscriptAvatarLabel(contact.displayName)}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">{contact.displayName}</span>
+                              <span className="block truncate text-xs font-normal" style={{ color: 'var(--text-muted)' }}>
+                                {existing ? 'Saved speaker' : contact.email}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      );
                     })}
                   </ul>
                 )}
