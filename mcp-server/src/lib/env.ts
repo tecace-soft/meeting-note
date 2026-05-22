@@ -9,6 +9,8 @@ export interface MeetingNoteEnv {
   mcpApiKey?: string;
   mcpUserTokens: Map<string, string>;
   mcpPublicBaseUrl?: string;
+  mcpOAuthResource?: string;
+  mcpOAuthScope?: string;
   port: number;
 }
 
@@ -62,6 +64,8 @@ export function getEnv(): MeetingNoteEnv {
     mcpApiKey: process.env.MCP_API_KEY?.trim() || undefined,
     mcpUserTokens: parseUserTokenMap(process.env.MCP_USER_TOKENS),
     mcpPublicBaseUrl: process.env.MCP_PUBLIC_BASE_URL?.trim().replace(/\/$/, '') || undefined,
+    mcpOAuthResource: process.env.MCP_OAUTH_RESOURCE?.trim() || undefined,
+    mcpOAuthScope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
     port,
   };
 }
