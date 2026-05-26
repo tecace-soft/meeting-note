@@ -289,7 +289,7 @@ const Project: React.FC = () => {
     };
 
     void load();
-  }, [projectId]);
+  }, [projectId, projectIdFilterValue]);
 
   useEffect(() => {
     setChatMessages([]);

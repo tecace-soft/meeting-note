@@ -51,9 +51,6 @@ export async function getTeamsChats(accessToken: string): Promise<TeamsChat[]> {
       .top(50)
       .get();
 
-    console.log('First chat lastMessagePreview:', response.value[0]?.lastMessagePreview);
-    console.log('Total chats from API:', response.value.length);
-
     const chats = response.value
       .map((chat: any) => {
         // Use lastMessagePreview.createdDateTime if available, otherwise fall back
@@ -79,18 +76,7 @@ export async function getTeamsChats(accessToken: string): Promise<TeamsChat[]> {
         // Only include chats that have had at least one message
         const hasMessage = chat.lastMessageDateTime !== null;
         
-        if (!hasMessage) {
-          // Log filtered chats without any messages
-          if (chat.chatType === 'meeting') {
-            console.log('Filtering out empty meeting chat:', {
-              topic: chat.topic,
-              chatType: chat.chatType,
-              lastMessageDateTime: chat.lastMessageDateTime,
-              lastUpdatedDateTime: chat.lastUpdatedDateTime
-            });
-          }
-          return false;
-        }
+        if (!hasMessage) return false;
         
         // For meeting chats, also filter out old ones with only system messages
         if (chat.chatType === 'meeting') {
@@ -99,28 +85,11 @@ export async function getTeamsChats(accessToken: string): Promise<TeamsChat[]> {
           thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
           
           // Filter out meeting chats older than 30 days
-          if (lastMessageDate < thirtyDaysAgo) {
-            console.log('Filtering out old meeting chat:', {
-              topic: chat.topic,
-              chatType: chat.chatType,
-              lastMessageDateTime: chat.lastMessageDateTime,
-              daysOld: Math.floor((new Date().getTime() - lastMessageDate.getTime()) / (1000 * 60 * 60 * 24))
-            });
-            return false;
-          }
-          
-          console.log('Including recent meeting chat:', {
-            topic: chat.topic,
-            chatType: chat.chatType,
-            lastMessageDateTime: chat.lastMessageDateTime,
-            createdDateTime: chat.createdDateTime
-          });
+          if (lastMessageDate < thirtyDaysAgo) return false;
         }
         
         return true;
       });
-    
-    console.log('Chats after filtering:', chats.length);
 
     // Sort by lastMessageDateTime (all chats now have this)
     return chats.sort((a: TeamsChat, b: TeamsChat) => {
@@ -328,4 +297,3 @@ export async function uploadTextFile(
     throw error;
   }
 }
-
