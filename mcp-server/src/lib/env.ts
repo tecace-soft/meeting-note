@@ -11,6 +11,7 @@ export interface MeetingNoteEnv {
   mcpPublicBaseUrl?: string;
   mcpOAuthResource?: string;
   mcpOAuthScope?: string;
+  mcpAzureTenantId?: string;
   port: number;
 }
 
@@ -66,6 +67,7 @@ export function getEnv(): MeetingNoteEnv {
     mcpPublicBaseUrl: process.env.MCP_PUBLIC_BASE_URL?.trim().replace(/\/$/, '') || undefined,
     mcpOAuthResource: process.env.MCP_OAUTH_RESOURCE?.trim() || undefined,
     mcpOAuthScope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
+    mcpAzureTenantId: process.env.MCP_AZURE_TENANT_ID?.trim() || undefined,
     port,
   };
 }

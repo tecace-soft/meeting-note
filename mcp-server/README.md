@@ -15,6 +15,7 @@ MCP_USER_TOKENS='{"opaque-user-token":"meeting-note-user-id"}' # optional multi-
 MCP_PUBLIC_BASE_URL=https://meeting-note-mcp.onrender.com # recommended for OAuth metadata
 MCP_OAUTH_RESOURCE=api://<AZURE_APPLICATION_CLIENT_ID>
 MCP_OAUTH_SCOPE=api://<AZURE_APPLICATION_CLIENT_ID>/access_as_user
+MCP_AZURE_TENANT_ID=<AZURE_TENANT_ID> # validates ChatGPT OAuth JWTs and reads oid as user_id
 PORT=3000               # HTTP only
 ```
 
@@ -99,11 +100,12 @@ In Azure, expose an API scope named `access_as_user`. The protected resource met
 ```text
 MCP_OAUTH_RESOURCE=api://<AZURE_APPLICATION_CLIENT_ID>
 MCP_OAUTH_SCOPE=api://<AZURE_APPLICATION_CLIENT_ID>/access_as_user
+MCP_AZURE_TENANT_ID=<AZURE_TENANT_ID>
 ```
 
 This avoids Azure `AADSTS9010010` resource/scope mismatch errors.
 
-When ChatGPT calls `/mcp-chatgpt` with a Microsoft OAuth access token, the MCP server resolves the signed-in user and scopes queries to the Meeting Note `user_id`.
+When ChatGPT calls `/mcp-chatgpt` with a Microsoft OAuth access token, the MCP server validates the Azure JWT, reads the `oid` claim, and scopes queries to that Meeting Note `user_id`.
 
 Set this in Render so OAuth metadata is stable:
 

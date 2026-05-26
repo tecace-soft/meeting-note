@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { getMeetingNoteUserIdFromAzureToken } from '../lib/azureToken.js';
 import { getEnv } from '../lib/env.js';
 import { runWithScopedUserId } from '../lib/supabase.js';
 import { createMeetingNoteMcpServer } from '../server.js';
@@ -67,6 +68,42 @@ async function getMicrosoftUserIdFromGraph(accessToken: string): Promise<string 
   return typeof data.id === 'string' && data.id.trim() ? data.id.trim() : undefined;
 }
 
+async function resolveChatGptUserId(bearerToken: string | undefined, env: ReturnType<typeof getEnv>): Promise<string | undefined> {
+  if (!bearerToken) return env.meetingNoteUserId;
+
+  const mappedUserId = env.mcpUserTokens.get(bearerToken);
+  if (mappedUserId) {
+    process.stderr.write('MCP ChatGPT auth resolved through MCP_USER_TOKENS\n');
+    return mappedUserId;
+  }
+
+  if (env.mcpOAuthResource && env.mcpAzureTenantId) {
+    try {
+      const scopeName = env.mcpOAuthScope?.split('/').pop();
+      const azureUserId = await getMeetingNoteUserIdFromAzureToken(bearerToken, {
+        audience: env.mcpOAuthResource,
+        scope: scopeName,
+        tenantId: env.mcpAzureTenantId,
+      });
+      if (azureUserId) {
+        process.stderr.write('MCP ChatGPT auth resolved through Azure JWT oid\n');
+        return azureUserId;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`MCP ChatGPT Azure JWT validation failed: ${message}\n`);
+    }
+  }
+
+  const graphUserId = await getMicrosoftUserIdFromGraph(bearerToken);
+  if (graphUserId) {
+    process.stderr.write('MCP ChatGPT auth resolved through Microsoft Graph /me fallback\n');
+    return graphUserId;
+  }
+
+  return env.meetingNoteUserId;
+}
+
 export async function startHttpServer(): Promise<void> {
   const env = getEnv();
 
@@ -104,9 +141,7 @@ export async function startHttpServer(): Promise<void> {
 
       const bearerToken = getBearerToken(req);
       const userId = isChatGptEndpoint
-        ? env.mcpUserTokens.get(bearerToken ?? '') ??
-          (bearerToken ? await getMicrosoftUserIdFromGraph(bearerToken) : undefined) ??
-          env.meetingNoteUserId
+        ? await resolveChatGptUserId(bearerToken, env)
         : getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
 
       if (!userId) {
