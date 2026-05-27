@@ -635,7 +635,7 @@ const SummaryHistory: React.FC = () => {
             throw new Error(`Edge function error for "${speakerName}": ${detail}`);
           }
           if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
-          let draft = canonicalOntologyProfileString(data?.profile ?? '');
+          const draft = canonicalOntologyProfileString(data?.profile ?? '');
           return { speakerId: record?.id ?? null, speakerName, draft, isNew: !existingProfile, saving: false, saved: false, saveError: null };
         })
       );

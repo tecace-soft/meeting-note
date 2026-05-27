@@ -18,7 +18,6 @@ import {
   CloudUpload,
   Copy,
   EditPencilLine01,
-  FileBlank,
   ListOrdered,
   Loading,
   MoreVertical,
@@ -107,7 +106,7 @@ const TranscriptionSummary: React.FC = () => {
   const activeUploadsRef = useRef(0);
 
   /** Call from file input / recording handlers (user gesture) so Android Chrome grants wake lock. */
-  const ensureScreenWakeLockFromGesture = async () => {
+  const ensureScreenWakeLockFromGesture = useCallback(async () => {
     if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
     if (screenWakeLockRef.current) return;
@@ -124,9 +123,9 @@ const TranscriptionSummary: React.FC = () => {
       .catch(() => {
         /* denied or unsupported */
       });
-  };
+  }, []);
 
-  const startScreenWakeLockKeepAlive = () => {
+  const startScreenWakeLockKeepAlive = useCallback(() => {
     keepScreenAwakeRef.current = true;
     void ensureScreenWakeLockFromGesture();
 
@@ -135,7 +134,7 @@ const TranscriptionSummary: React.FC = () => {
       if (!keepScreenAwakeRef.current) return;
       void ensureScreenWakeLockFromGesture();
     }, 15000);
-  };
+  }, [ensureScreenWakeLockFromGesture]);
 
   const stopScreenWakeLockKeepAlive = () => {
     keepScreenAwakeRef.current = false;
@@ -201,7 +200,6 @@ const TranscriptionSummary: React.FC = () => {
   const [recordedMimeType, setRecordedMimeType] = useState('audio/mp4');
   const [isPlayingRecording, setIsPlayingRecording] = useState(false);
   const [playbackProgress, setPlaybackProgress] = useState(0);
-  const [playbackDuration, setPlaybackDuration] = useState(0);
   const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
   const [recentAudioFiles, setRecentAudioFiles] = useState<RecentAudioFile[]>([]);
   const [recentAudioLoading, setRecentAudioLoading] = useState(false);
@@ -250,7 +248,7 @@ const TranscriptionSummary: React.FC = () => {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isRecording]);
+  }, [isRecording, startScreenWakeLockKeepAlive]);
 
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
@@ -379,9 +377,6 @@ const TranscriptionSummary: React.FC = () => {
         setPlaybackProgress(0);
         setPlaybackCurrentTime(0);
       };
-      audioPlayerRef.current.onloadedmetadata = () => {
-        setPlaybackDuration(audioPlayerRef.current?.duration || 0);
-      };
       audioPlayerRef.current.ontimeupdate = () => {
         if (audioPlayerRef.current) {
           const current = audioPlayerRef.current.currentTime;
@@ -428,7 +423,6 @@ const TranscriptionSummary: React.FC = () => {
     setIsPlayingRecording(false);
     setPlaybackProgress(0);
     setPlaybackCurrentTime(0);
-    setPlaybackDuration(0);
   };
 
   // Cleanup on unmount
@@ -437,11 +431,16 @@ const TranscriptionSummary: React.FC = () => {
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
       if (recordedAudioUrl) {
         URL.revokeObjectURL(recordedAudioUrl);
       }
     };
-  }, []);
+  }, [recordedAudioUrl]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -562,13 +561,13 @@ const TranscriptionSummary: React.FC = () => {
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     const files = Array.from(e.dataTransfer.files);
     startScreenWakeLockKeepAlive();
     handleFiles(files);
-  }, []);
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
@@ -631,7 +630,7 @@ const TranscriptionSummary: React.FC = () => {
     [loadRecentAudioFiles, user?.id]
   );
 
-  const useRecentAudioFile = (file: RecentAudioFile) => {
+  const selectRecentAudioFile = (file: RecentAudioFile) => {
     ensureScreenWakeLockFromGesture();
     clearRecording();
     setUploadedFiles([
@@ -728,8 +727,9 @@ const TranscriptionSummary: React.FC = () => {
     try {
       const ext = file.name.split('.').pop() || 'audio';
       const sanitizedName =
-        file.name
-          .replace(/[^\x00-\x7F]/g, '')
+        Array.from(file.name)
+          .filter((char) => char.charCodeAt(0) <= 0x7f)
+          .join('')
           .replace(/\s+/g, '_')
           .replace(/[^a-zA-Z0-9._-]/g, '') || `audio_${Date.now()}`;
       const filePath = `${fileId}-${sanitizedName.includes('.') ? sanitizedName : `${sanitizedName}.${ext}`}`;
@@ -1082,7 +1082,7 @@ const TranscriptionSummary: React.FC = () => {
           }
           if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
 
-          let draft = canonicalOntologyProfileString(data?.profile ?? '');
+          const draft = canonicalOntologyProfileString(data?.profile ?? '');
 
           return {
             speakerId: record?.id ?? null,
@@ -1541,11 +1541,11 @@ const TranscriptionSummary: React.FC = () => {
                       role="button"
                       tabIndex={0}
                       className="summary-note-row cursor-pointer"
-                      onClick={() => useRecentAudioFile(file)}
+                      onClick={() => selectRecentAudioFile(file)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();
-                          useRecentAudioFile(file);
+                          selectRecentAudioFile(file);
                         }
                       }}
                     >

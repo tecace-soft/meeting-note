@@ -324,6 +324,7 @@
 [2m3:03:01 PM[22m [36m[1m[vite][22m[39m server restarted.
 [2m9:11:26 AM[22m [36m[1m[vite][22m[39m [32mmcp-server\.env changed, restarting server...[39m
 [2m9:11:27 AM[22m [36m[1m[vite][22m[39m server restarted.
+<<<<<<< HEAD
 [2m3:43:53 PM[22m [36m[1m[vite][22m[39m [32mmcp-server\.env changed, restarting server...[39m
 [2m3:43:53 PM[22m [36m[1m[vite][22m[39m [32mmcp-server\.env changed, restarting server...[39m
 [2m3:43:53 PM[22m [36m[1m[vite][22m[39m server restarted.
@@ -340,3 +341,5 @@
 [2m4:52:30 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
 [2m4:55:11 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
 [2m4:55:39 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TranscriptionSummary.tsx, /src/index.css[22m
+=======
+>>>>>>> mcp-server

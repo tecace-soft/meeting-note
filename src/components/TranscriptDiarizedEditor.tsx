@@ -2,7 +2,7 @@ import React, { useId, useState, useEffect, useRef, useCallback, useMemo, startT
 import { createPortal } from 'react-dom';
 import { CloseMd, EditPencilLine01, Loading, Save, TrashFull, User01 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
-import { canonicalOntologyProfileString, isOntologyProfile, type SpeakerOntology } from '../lib/speakerOntology';
+import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';

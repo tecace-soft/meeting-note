@@ -39,10 +39,7 @@ export const msalConfig: Configuration = {
             console.warn(message);
             break;
           case LogLevel.Info:
-            console.info(message);
-            break;
           case LogLevel.Verbose:
-            console.debug(message);
             break;
         }
       },
