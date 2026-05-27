@@ -12,6 +12,7 @@ export interface MeetingNoteEnv {
   mcpOAuthResource?: string;
   mcpOAuthScope?: string;
   mcpAzureTenantId?: string;
+  mcpTokenPepper?: string;
   port: number;
 }
 
@@ -68,6 +69,7 @@ export function getEnv(): MeetingNoteEnv {
     mcpOAuthResource: process.env.MCP_OAUTH_RESOURCE?.trim() || undefined,
     mcpOAuthScope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
     mcpAzureTenantId: process.env.MCP_AZURE_TENANT_ID?.trim() || undefined,
+    mcpTokenPepper: process.env.MCP_TOKEN_PEPPER?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,
     port,
   };
 }

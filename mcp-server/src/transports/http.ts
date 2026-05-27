@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createHash } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { getMeetingNoteUserIdFromAzureToken } from '../lib/azureToken.js';
 import { getEnv } from '../lib/env.js';
-import { runWithScopedUserId } from '../lib/supabase.js';
+import { getDataContext, runWithScopedUserId } from '../lib/supabase.js';
 import { createMeetingNoteMcpServer } from '../server.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -23,6 +24,40 @@ function sendJsonWithHeaders(
 function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean {
   if (!apiKey) return true;
   return req.headers.authorization === `Bearer ${apiKey}`;
+}
+
+function hashMcpToken(token: string, pepper: string): string {
+  return createHash('sha256').update(`${pepper}:${token}`).digest('hex');
+}
+
+async function resolveUserIdFromPersonalMcpToken(
+  bearerToken: string | undefined,
+  env: ReturnType<typeof getEnv>
+): Promise<string | undefined> {
+  if (!bearerToken || !env.mcpTokenPepper) return undefined;
+
+  const tokenHash = hashMcpToken(bearerToken, env.mcpTokenPepper);
+  const { supabase } = getDataContext();
+  const { data, error } = await supabase
+    .from('mcp_token')
+    .select('id, user_id')
+    .eq('token_hash', tokenHash)
+    .is('revoked_at', null)
+    .maybeSingle();
+
+  if (error) throw error;
+  const row = data as { id?: string; user_id?: string } | null;
+  if (!row?.id || !row.user_id) return undefined;
+
+  void supabase
+    .from('mcp_token')
+    .update({ last_used_at: new Date().toISOString() })
+    .eq('id', row.id)
+    .then(({ error: updateError }) => {
+      if (updateError) process.stderr.write(`Failed to update MCP token last_used_at: ${updateError.message}\n`);
+    });
+
+  return row.user_id;
 }
 
 function getBearerToken(req: IncomingMessage): string | undefined {
@@ -146,15 +181,17 @@ export async function startHttpServer(): Promise<void> {
         return;
       }
 
-      if (isClaudeEndpoint && !isAuthorized(req, env.mcpApiKey)) {
+      const bearerToken = getBearerToken(req);
+      const personalTokenUserId = await resolveUserIdFromPersonalMcpToken(bearerToken, env);
+
+      if (isClaudeEndpoint && !personalTokenUserId && !isAuthorized(req, env.mcpApiKey)) {
         sendJson(res, 401, { error: 'Unauthorized' });
         return;
       }
 
-      const bearerToken = getBearerToken(req);
       const userId = isChatGptEndpoint
-        ? await resolveChatGptUserId(bearerToken, env)
-        : getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
+        ? personalTokenUserId ?? (await resolveChatGptUserId(bearerToken, env))
+        : personalTokenUserId ?? getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
 
       if (!userId) {
         const body = {
