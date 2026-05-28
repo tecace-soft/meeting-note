@@ -37,6 +37,25 @@ function noteMatchesQuery(note: NoteRow, query: string): boolean {
   return haystack.includes(needle);
 }
 
+function normalizeOwnerName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^\p{L}\p{N}\s'-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function ownerNameMatches(noteOwnerName: string | null | undefined, ownerName: string): boolean {
+  const haystack = normalizeOwnerName(noteOwnerName ?? '');
+  const needle = normalizeOwnerName(ownerName);
+  if (!haystack || !needle) return false;
+  if (haystack.includes(needle)) return true;
+  const ownerTokens = needle.split(' ').filter(Boolean);
+  const noteTokens = new Set(haystack.split(' ').filter(Boolean));
+  return ownerTokens.length > 0 && ownerTokens.every((token) => noteTokens.has(token));
+}
+
 export function registerNoteTools(server: McpServer): void {
   server.registerTool(
     'list_recent_notes',
@@ -61,6 +80,118 @@ export function registerNoteTools(server: McpServer): void {
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
+    },
+  );
+
+  server.registerTool(
+    'list_personal_notes',
+    {
+      title: 'List Personal Notes',
+      description: 'List notes owned by the current user only, excluding notes shared by others.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(50).optional(),
+        projectId: z.string().optional(),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ limit, projectId, date, startDate, endDate }) => {
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('A scoped user id is required to list personal notes.');
+      const resolvedLimit = clampLimit(limit, 10, 50);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
+      let query = supabase.from('note').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(resolvedLimit);
+      if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyCreatedAtFilter(query, dateFilter);
+      const { data, error } = await query;
+      if (error) return errorResult(error.message);
+      return jsonResult({
+        dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
+        notes: ((data as NoteRow[]) ?? []).map(summarizeNote),
+      });
+    },
+  );
+
+  server.registerTool(
+    'list_shared_notes',
+    {
+      title: 'List Shared Notes',
+      description: 'List notes shared with the current user by other note owners.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(50).optional(),
+        projectId: z.string().optional(),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ limit, projectId, date, startDate, endDate }) => {
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('A scoped user id is required to list shared notes.');
+      const resolvedLimit = clampLimit(limit, 10, 50);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
+      let query = supabase
+        .from('note')
+        .select('*')
+        .contains('shared_users', [userId])
+        .neq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(resolvedLimit);
+      if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyCreatedAtFilter(query, dateFilter);
+      const { data, error } = await query;
+      if (error) return errorResult(error.message);
+      return jsonResult({
+        dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
+        notes: ((data as NoteRow[]) ?? []).map((note) => ({
+          ...summarizeNote(note),
+          sharedBy: note.user_name?.trim() || 'Unknown user',
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    'get_shared_notes_by_owner',
+    {
+      title: 'Get Shared Notes By Owner',
+      description: 'Find notes shared with the current user where the owner name matches a passed name, such as "Gene" matching "Gene Kim (김진)".',
+      inputSchema: {
+        ownerName: z.string().min(1),
+        limit: z.number().int().min(1).max(50).optional(),
+        projectId: z.string().optional(),
+        maxCharactersPerSummary: z.number().int().min(100).max(50000).optional(),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ ownerName, limit, projectId, maxCharactersPerSummary, date, startDate, endDate }) => {
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('A scoped user id is required to list shared notes by owner.');
+      const resolvedLimit = clampLimit(limit, 10, 50);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
+      let query = supabase
+        .from('note')
+        .select('*')
+        .contains('shared_users', [userId])
+        .neq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyCreatedAtFilter(query, dateFilter);
+      const { data, error } = await query;
+      if (error) return errorResult(error.message);
+      const notes = ((data as NoteRow[]) ?? [])
+        .filter((note) => ownerNameMatches(note.user_name, ownerName))
+        .slice(0, resolvedLimit);
+      return jsonResult({
+        ownerName,
+        dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
+        notes: notes.map((note) => ({
+          ...summarizeNote(note),
+          sharedBy: note.user_name?.trim() || 'Unknown user',
+          summary: truncateText(getNoteSummary(note) || 'No summary for this note.', maxCharactersPerSummary),
+        })),
+      });
     },
   );
 
