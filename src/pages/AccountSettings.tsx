@@ -26,6 +26,7 @@ const MCP_CLAUDE_URL = 'https://meeting-note-mcp.onrender.com/mcp';
 
 type SettingsTab = 'account' | 'summary' | 'speaker' | 'mcp';
 type McpSetupView = 'chatgpt' | 'claude';
+type ClientOs = 'windows' | 'macos' | 'linux' | 'unknown';
 
 type SummaryPromptRow = { id: string; name: string; prompt: string };
 
@@ -43,6 +44,18 @@ type SpeakersLoadState =
   | { status: 'idle' | 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; rows: SpeakerRow[] };
+
+function detectClientOs(): ClientOs {
+  if (typeof navigator === 'undefined') return 'unknown';
+  const navWithUserAgentData = navigator as Navigator & {
+    userAgentData?: { platform?: string };
+  };
+  const platform = (navWithUserAgentData.userAgentData?.platform || navigator.platform || navigator.userAgent || '').toLowerCase();
+  if (platform.includes('win')) return 'windows';
+  if (platform.includes('mac')) return 'macos';
+  if (platform.includes('linux')) return 'linux';
+  return 'unknown';
+}
 
 async function callMcpTokenFunction<T>(msAccessToken: string, body: Record<string, unknown>): Promise<T> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -132,8 +145,37 @@ const AccountSettings: React.FC = () => {
   const [otherSpeakerSaving, setOtherSpeakerSaving] = useState(false);
   const [otherSpeakerSaveError, setOtherSpeakerSaveError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const clientOs = useMemo(() => detectClientOs(), []);
   const claudeAuthHeader = newMcpToken ? `Bearer ${newMcpToken}` : 'Generate a key above to fill this value';
-  const claudeDesktopConfig = useMemo(
+  const claudeDesktopConfigMac = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          mcpServers: {
+            'meeting-note': {
+              command: 'npx',
+              args: [
+                '-y',
+                'mcp-remote',
+                MCP_CLAUDE_URL,
+                '--header',
+                'Authorization:${AUTH_HEADER}',
+                '--header',
+                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
+              ],
+              env: {
+                AUTH_HEADER: claudeAuthHeader,
+                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
+              },
+            },
+          },
+        },
+        null,
+        2
+      ),
+    [claudeAuthHeader, user?.id]
+  );
+  const claudeDesktopConfigWindows = useMemo(
     () =>
       JSON.stringify(
         {
@@ -161,6 +203,15 @@ const AccountSettings: React.FC = () => {
       ),
     [claudeAuthHeader, user?.id]
   );
+  const claudeDesktopConfig = clientOs === 'windows' ? claudeDesktopConfigWindows : claudeDesktopConfigMac;
+  const claudeDesktopConfigLabel =
+    clientOs === 'windows'
+      ? 'Claude Desktop config - Windows'
+      : clientOs === 'macos'
+        ? 'Claude Desktop config - macOS'
+        : clientOs === 'linux'
+          ? 'Claude Desktop config - Linux'
+          : 'Claude Desktop config';
 
   const matchedSelf = useMemo((): SpeakerRow | null => {
     if (speakersLoad.status !== 'ready') return null;
@@ -1397,7 +1448,7 @@ const AccountSettings: React.FC = () => {
                         <div className="mt-4 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                           <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
                             <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                              Claude Desktop config
+                              {claudeDesktopConfigLabel}
                             </span>
                             <button
                               type="button"
