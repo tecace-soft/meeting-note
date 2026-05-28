@@ -11,6 +11,7 @@ import SummaryHistory from './pages/SummaryHistory';
 import SaveSummary from './pages/SaveSummary';
 import Project from './pages/Project';
 import AccountSettings from './pages/AccountSettings';
+import AdminAnalytics from './pages/AdminAnalytics';
 import AppShell from './components/AppShell';
 
 const msalInstance = new PublicClientApplication(msalConfig);
@@ -52,6 +53,7 @@ const App: React.FC = () => {
                   <Route path="/save-summary" element={<SaveSummary />} />
                   <Route path="/project" element={<Project />} />
                   <Route path="/account-settings" element={<AccountSettings />} />
+                  <Route path="/admin-analytics" element={<AdminAnalytics />} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

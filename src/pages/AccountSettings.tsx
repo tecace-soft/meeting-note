@@ -132,25 +132,26 @@ const AccountSettings: React.FC = () => {
   const [otherSpeakerSaving, setOtherSpeakerSaving] = useState(false);
   const [otherSpeakerSaveError, setOtherSpeakerSaveError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const claudeAuthHeader = newMcpToken ? `Bearer ${newMcpToken}` : 'Generate a key above to fill this value';
   const claudeDesktopConfig = useMemo(
     () =>
       JSON.stringify(
         {
           mcpServers: {
             'meeting-note': {
-              command: 'cmd',
+              command: 'npx.cmd',
               args: [
-                '/C',
-                'npx.cmd',
                 '-y',
                 'mcp-remote',
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
                 '--header',
+                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
-                AUTH_HEADER: `Bearer ${newMcpToken ?? 'YOUR_PERSONAL_MCP_KEY'}`,
+                AUTH_HEADER: claudeAuthHeader,
+                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -158,7 +159,7 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [newMcpToken]
+    [claudeAuthHeader, user?.id]
   );
 
   const matchedSelf = useMemo((): SpeakerRow | null => {
@@ -1388,8 +1389,8 @@ const AccountSettings: React.FC = () => {
                         <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
                           <li><span className="font-medium" style={{ color: 'var(--text)' }}>1.</span> Open Claude Desktop settings and locate the developer MCP configuration file.</li>
                           <li><span className="font-medium" style={{ color: 'var(--text)' }}>2.</span> Add the <span className="font-medium">mcpServers</span> block below to the existing JSON. If the file already has preferences, keep them and add <span className="font-medium">mcpServers</span> as a sibling property.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Generate a personal MCP key above and copy it immediately.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Replace <span className="font-medium">YOUR_PERSONAL_MCP_KEY</span> in the config with your generated key.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Generate a personal MCP key above. The config below will place the last generated key under <span className="font-medium">env.AUTH_HEADER</span>.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Copy the config after generating the key so Claude receives the correct auth header and your Meeting Note user ID.</li>
                           <li><span className="font-medium" style={{ color: 'var(--text)' }}>5.</span> Restart Claude Desktop and look for the Meeting Note MCP tools.</li>
                         </ol>
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
+  ChartBarVertical01,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -26,6 +27,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { normalizeTranscript } from '../lib/transcriptSegments';
+import { isAdminMicrosoftUser } from '../lib/adminAccess';
 
 const STORAGE_KEY = 'meeting_note_sidebar_collapsed';
 const MOBILE_STORAGE_KEY = 'meeting_note_sidebar_mobile_collapsed';
@@ -167,6 +169,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     (location.pathname === '/history' || location.pathname === '/summary-history' || location.pathname === '/project');
 
   const summaryHistorySectionActive = location.pathname === '/history' || location.pathname === '/summary-history';
+  const visibleNavItems = isAdminMicrosoftUser(user?.id)
+    ? [...navItems, { to: '/admin-analytics', label: 'Admin Analytics', icon: ChartBarVertical01, end: false as const }]
+    : [...navItems];
 
   const activeProjectId =
     location.pathname === '/project'
@@ -546,7 +551,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       </div>
 
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-3" aria-label="Main">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon;
           if ('projects' in item && item.projects) {
             return (
