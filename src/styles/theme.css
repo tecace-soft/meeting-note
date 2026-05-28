@@ -865,6 +865,49 @@ select:focus {
   border-top-color: color-mix(in srgb, var(--border) 52%, transparent) !important;
 }
 
+.app-skin .mcp-setup-row,
+.app-skin .mcp-setup-row:hover {
+  background-color: transparent;
+}
+
+.app-skin .mcp-setup-list {
+  border-top: 0;
+}
+
+.app-skin .mcp-setup-row .summary-note-row-rail,
+.app-skin .mcp-setup-row:hover .summary-note-row-rail {
+  opacity: 0;
+  transform: scaleY(0.55);
+}
+
+.app-skin .mcp-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  min-height: 1.875rem;
+  padding: 0.25rem 0.625rem;
+  border: 0;
+  border-radius: 0.375rem;
+  background-color: color-mix(in srgb, var(--accent-light) 54%, transparent);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.app-skin .mcp-copy-btn:hover {
+  background-color: color-mix(in srgb, var(--accent-light) 76%, transparent);
+  color: var(--accent);
+}
+
+.app-skin .mcp-copy-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+
 :root[data-theme="dark"] .app-skin .summary-note-list {
   border-color: color-mix(in srgb, var(--border) 54%, transparent);
 }
@@ -939,6 +982,34 @@ select:focus {
   background-color: var(--surface) !important;
   border: 1px solid var(--surface) !important;
   box-shadow: var(--floating-shadow) !important;
+}
+
+.app-skin .share-note-modal {
+  box-shadow: var(--floating-shadow) !important;
+}
+
+.app-skin .share-note-contact-list {
+  display: flex;
+  flex: none;
+  max-height: 22rem;
+  min-height: auto;
+  overflow-y: auto !important;
+}
+
+.app-skin .share-note-contact-row {
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+  min-height: 4rem;
+}
+
+.app-skin .share-note-contact-row:last-child {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+}
+
+.app-skin .share-note-contact-row .project-note-picker-checkbox {
+  flex-shrink: 0;
 }
 
 .app-skin .project-note-picker-list {

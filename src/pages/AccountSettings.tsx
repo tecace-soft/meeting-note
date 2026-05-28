@@ -14,30 +14,90 @@ import {
 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
-import { supabase } from '../config/supabaseConfig';
+import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 
 /** Supabase table name (exact identifier in your project). */
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
+const MCP_CHATGPT_URL = 'https://meeting-note-mcp.onrender.com/mcp-chatgpt';
+const MCP_CLAUDE_URL = 'https://meeting-note-mcp.onrender.com/mcp';
 
-type SettingsTab = 'account' | 'summary' | 'speaker';
+type SettingsTab = 'account' | 'summary' | 'speaker' | 'mcp';
+type McpSetupView = 'chatgpt' | 'claude';
 
 type SummaryPromptRow = { id: string; name: string; prompt: string };
 
 type SpeakerRow = { id: string; name: string; profile: string | null; email?: string | null; microsoft_id?: string | null };
+type McpTokenRow = {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
 
 type SpeakersLoadState =
   | { status: 'idle' | 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; rows: SpeakerRow[] };
 
+async function callMcpTokenFunction<T>(msAccessToken: string, body: Record<string, unknown>): Promise<T> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error('Supabase URL or anon key is not configured.');
+  }
+
+  const url = `${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/mcp-token`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'x-ms-access-token': msAccessToken,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not reach MCP token Edge Function at ${url}. ${message}`);
+  }
+
+  const text = await response.text();
+  let parsed: unknown = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text) as unknown;
+    } catch {
+      parsed = { error: text };
+    }
+  }
+
+  if (!response.ok) {
+    const edgeError = typeof (parsed as { error?: unknown } | null)?.error === 'string'
+      ? (parsed as { error: string }).error
+      : response.statusText;
+    throw new Error(`Edge Function error (${response.status}): ${edgeError}`);
+  }
+
+  return parsed as T;
+}
+
 const AccountSettings: React.FC = () => {
   const navigate = useNavigate();
-  const { user, isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('account');
+  const [mcpSetupView, setMcpSetupView] = useState<McpSetupView>('chatgpt');
+  const [mcpTokens, setMcpTokens] = useState<McpTokenRow[]>([]);
+  const [mcpTokensLoading, setMcpTokensLoading] = useState(false);
+  const [mcpTokenActionLoading, setMcpTokenActionLoading] = useState(false);
+  const [mcpTokenError, setMcpTokenError] = useState<string | null>(null);
+  const [newMcpToken, setNewMcpToken] = useState<string | null>(null);
 
   const [summaryPrompts, setSummaryPrompts] = useState<SummaryPromptRow[]>([]);
   const [summaryPromptListLoading, setSummaryPromptListLoading] = useState(false);
@@ -72,6 +132,34 @@ const AccountSettings: React.FC = () => {
   const [otherSpeakerSaving, setOtherSpeakerSaving] = useState(false);
   const [otherSpeakerSaveError, setOtherSpeakerSaveError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const claudeDesktopConfig = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          mcpServers: {
+            'meeting-note': {
+              command: 'cmd',
+              args: [
+                '/C',
+                'npx.cmd',
+                '-y',
+                'mcp-remote',
+                MCP_CLAUDE_URL,
+                '--header',
+                'Authorization:${AUTH_HEADER}',
+                '--header',
+              ],
+              env: {
+                AUTH_HEADER: `Bearer ${newMcpToken ?? 'YOUR_PERSONAL_MCP_KEY'}`,
+              },
+            },
+          },
+        },
+        null,
+        2
+      ),
+    [newMcpToken]
+  );
 
   const matchedSelf = useMemo((): SpeakerRow | null => {
     if (speakersLoad.status !== 'ready') return null;
@@ -173,6 +261,72 @@ const AccountSettings: React.FC = () => {
       setOtherSpeakerSaveError(null);
     }
   }, [activeTab]);
+
+  const loadMcpTokens = useCallback(async () => {
+    if (!user?.id) return;
+    setMcpTokensLoading(true);
+    setMcpTokenError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('Microsoft access token is unavailable. Please sign in again.');
+      const data = await callMcpTokenFunction<{ tokens?: McpTokenRow[]; error?: string }>(token, { action: 'list' });
+      if (data?.error) throw new Error(data.error);
+      setMcpTokens(data?.tokens ?? []);
+    } catch (err) {
+      setMcpTokenError(err instanceof Error ? err.message : 'Failed to load MCP keys');
+    } finally {
+      setMcpTokensLoading(false);
+    }
+  }, [user?.id, getAccessToken]);
+
+  useEffect(() => {
+    if (activeTab === 'mcp' && mcpSetupView === 'claude') {
+      void loadMcpTokens();
+    }
+  }, [activeTab, mcpSetupView, loadMcpTokens]);
+
+  const handleGenerateMcpToken = useCallback(async () => {
+    if (!user?.id) return;
+    setMcpTokenActionLoading(true);
+    setMcpTokenError(null);
+    setNewMcpToken(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('Microsoft access token is unavailable. Please sign in again.');
+      const data = await callMcpTokenFunction<{
+        token?: string;
+        tokenRecord?: McpTokenRow;
+        error?: string;
+      }>(token, { action: 'create', name: 'Claude Desktop' });
+      if (data?.error) throw new Error(data.error);
+      if (!data?.token || !data.tokenRecord) throw new Error('MCP key was not returned.');
+      setNewMcpToken(data.token);
+      setMcpTokens((prev) => [data.tokenRecord as McpTokenRow, ...prev]);
+    } catch (err) {
+      setMcpTokenError(err instanceof Error ? err.message : 'Failed to generate MCP key');
+    } finally {
+      setMcpTokenActionLoading(false);
+    }
+  }, [user?.id, getAccessToken]);
+
+  const handleRevokeMcpToken = useCallback(async (tokenId: string) => {
+    if (!user?.id) return;
+    setMcpTokenActionLoading(true);
+    setMcpTokenError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('Microsoft access token is unavailable. Please sign in again.');
+      const data = await callMcpTokenFunction<{ ok?: boolean; error?: string }>(token, { action: 'revoke', tokenId });
+      if (data?.error) throw new Error(data.error);
+      setMcpTokens((prev) =>
+        prev.map((token) => (token.id === tokenId ? { ...token, revokedAt: new Date().toISOString() } : token))
+      );
+    } catch (err) {
+      setMcpTokenError(err instanceof Error ? err.message : 'Failed to revoke MCP key');
+    } finally {
+      setMcpTokenActionLoading(false);
+    }
+  }, [user?.id, getAccessToken]);
 
   const handleSaveSpeakerProfile = useCallback(async () => {
     if (!user?.id || !matchedSelf) return;
@@ -406,6 +560,22 @@ const AccountSettings: React.FC = () => {
                 }
               >
                 Speaker Profiles
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'mcp'}
+                id="settings-tab-mcp"
+                aria-controls="settings-panel-mcp"
+                onClick={() => setActiveTab('mcp')}
+                className="rounded-full px-3 py-1.5 text-sm font-medium"
+                style={
+                  activeTab === 'mcp'
+                    ? { backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }
+                    : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
+                }
+              >
+                MCP Setup
               </button>
             </div>
 
@@ -996,6 +1166,290 @@ const AccountSettings: React.FC = () => {
                       })}
                     </div>
                   ) : null}
+                </section>
+              ) : null}
+
+              {activeTab === 'mcp' ? (
+                <section
+                  id="settings-panel-mcp"
+                  role="tabpanel"
+                  aria-labelledby="settings-tab-mcp"
+                  className="card rounded-lg p-5"
+                >
+                  <div>
+                    <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+                      Meeting Note MCP setup
+                    </h3>
+                    <p className="mt-1 max-w-3xl text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                      Connect Meeting Note to ChatGPT or Claude so the assistant can search your notes, summaries,
+                      transcripts, projects, and speaker profiles. The MCP is read-only for note data.
+                    </p>
+                  </div>
+
+                  <div className="results-tabs mt-5 flex min-w-0 gap-5 border-b" role="tablist" aria-label="MCP setup options" style={{ borderColor: 'var(--border)' }}>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={mcpSetupView === 'chatgpt'}
+                      className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors"
+                      onClick={() => setMcpSetupView('chatgpt')}
+                    >
+                      ChatGPT
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={mcpSetupView === 'claude'}
+                      className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors"
+                      onClick={() => setMcpSetupView('claude')}
+                    >
+                      Claude
+                    </button>
+                  </div>
+
+                  <div className="summary-note-list account-settings-list mcp-setup-list mt-0">
+                    {mcpSetupView === 'claude' ? (
+                    <div className="summary-note-row account-settings-row mcp-setup-row">
+                      <span className="summary-note-row-rail" aria-hidden />
+                      <div className="summary-note-row-content px-4 py-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                              Personal MCP key
+                            </h4>
+                            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                              Generate a personal key for Claude Desktop. The full key is shown once; after you leave
+                              this page only the shortened key label remains.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleGenerateMcpToken()}
+                            disabled={!user?.id || mcpTokenActionLoading}
+                            className="mcp-copy-btn disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {mcpTokenActionLoading ? <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+                            Generate Key
+                          </button>
+                        </div>
+
+                        {mcpTokenError ? (
+                          <p className="mt-3 text-sm" style={{ color: 'var(--error)' }}>
+                            {mcpTokenError}
+                          </p>
+                        ) : null}
+
+                        {newMcpToken ? (
+                          <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                            <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
+                              <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                                New MCP key - copy now
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyText(newMcpToken, 'new-mcp-token')}
+                                className="mcp-copy-btn"
+                              >
+                                {copiedKey === 'new-mcp-token' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                                {copiedKey === 'new-mcp-token' ? 'Copied' : 'Copy'}
+                              </button>
+                            </div>
+                            <code className="block overflow-x-auto px-3 py-2 text-xs" style={{ color: 'var(--text)' }}>
+                              {newMcpToken}
+                            </code>
+                          </div>
+                        ) : null}
+
+                        <div className="mt-4">
+                          <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                            Existing keys
+                          </h5>
+                          {mcpTokensLoading ? (
+                            <div className="mt-3 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                              <Loading className="h-4 w-4 animate-spin" aria-hidden />
+                              Loading keys...
+                            </div>
+                          ) : mcpTokens.length === 0 ? (
+                            <p className="mt-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                              No MCP keys have been generated yet.
+                            </p>
+                          ) : (
+                            <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                              {mcpTokens.map((token) => {
+                                const revoked = Boolean(token.revokedAt);
+                                return (
+                                  <div
+                                    key={token.id}
+                                    className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-3 last:border-b-0"
+                                    style={{ borderColor: 'var(--border)' }}
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-medium" style={{ color: revoked ? 'var(--text-muted)' : 'var(--text)' }}>
+                                        {token.name}
+                                      </p>
+                                      <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+                                        {token.tokenPrefix} · Created {new Date(token.createdAt).toLocaleDateString()}
+                                        {token.lastUsedAt ? ` · Last used ${new Date(token.lastUsedAt).toLocaleDateString()}` : ''}
+                                        {revoked ? ' · Revoked' : ''}
+                                      </p>
+                                    </div>
+                                    {!revoked ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleRevokeMcpToken(token.id)}
+                                        disabled={mcpTokenActionLoading}
+                                        className="rounded-md px-3 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-50"
+                                        style={{
+                                          backgroundColor: 'color-mix(in srgb, var(--error) 10%, transparent)',
+                                          color: 'var(--error)',
+                                        }}
+                                      >
+                                        Revoke
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    ) : null}
+
+                    {mcpSetupView === 'chatgpt' ? (
+                      <div className="summary-note-row account-settings-row mcp-setup-row">
+                      <span className="summary-note-row-rail" aria-hidden />
+                      <div className="summary-note-row-content px-4 py-4">
+                        <div>
+                          <div>
+                            <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                              ChatGPT setup
+                            </h4>
+                            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                              Use this option for ChatGPT web. ChatGPT connects through OAuth, so users sign in with
+                              their Microsoft account instead of pasting an API key.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                          <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
+                            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                              ChatGPT MCP URL
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyText(MCP_CHATGPT_URL, 'mcp-chatgpt-url')}
+                              className="mcp-copy-btn"
+                            >
+                              {copiedKey === 'mcp-chatgpt-url' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                              {copiedKey === 'mcp-chatgpt-url' ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                          <code className="block overflow-x-auto px-3 py-2 text-xs" style={{ color: 'var(--text)' }}>
+                            {MCP_CHATGPT_URL}
+                          </code>
+                        </div>
+
+                        <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>1.</span> Open ChatGPT settings.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>2.</span> Go to Connectors. If needed, enable Developer mode under the advanced connector settings.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Add a remote MCP server and paste the ChatGPT MCP URL above.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Complete the Microsoft sign-in and consent screen.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>5.</span> Start a chat and choose Meeting Note from the connector/tools menu when you want ChatGPT to use your meeting data.</li>
+                        </ol>
+
+                        <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                          If ChatGPT reports an account connection error after a server update, disconnect the connector
+                          and reconnect it so ChatGPT refreshes the OAuth permission grant.
+                        </p>
+                      </div>
+                    </div>
+                    ) : null}
+
+                    {mcpSetupView === 'claude' ? (
+                      <>
+                    <div className="summary-note-row account-settings-row mcp-setup-row">
+                      <span className="summary-note-row-rail" aria-hidden />
+                      <div className="summary-note-row-content px-4 py-4">
+                        <div>
+                          <div>
+                            <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                              Claude Desktop setup
+                            </h4>
+                            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                              Claude Desktop uses a local bridge called <span className="font-medium">mcp-remote</span>.
+                              You will use the personal MCP key generated above.
+                            </p>
+                          </div>
+                        </div>
+
+                        <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>1.</span> Open Claude Desktop settings and locate the developer MCP configuration file.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>2.</span> Add the <span className="font-medium">mcpServers</span> block below to the existing JSON. If the file already has preferences, keep them and add <span className="font-medium">mcpServers</span> as a sibling property.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Generate a personal MCP key above and copy it immediately.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Replace <span className="font-medium">YOUR_PERSONAL_MCP_KEY</span> in the config with your generated key.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>5.</span> Restart Claude Desktop and look for the Meeting Note MCP tools.</li>
+                        </ol>
+
+                        <div className="mt-4 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                          <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
+                            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                              Claude Desktop config
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyText(claudeDesktopConfig, 'mcp-claude-config')}
+                              className="mcp-copy-btn"
+                            >
+                              {copiedKey === 'mcp-claude-config' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                              {copiedKey === 'mcp-claude-config' ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                          <pre className="custom-scrollbar max-h-80 overflow-auto p-3 text-xs leading-relaxed" style={{ color: 'var(--text)' }}>
+                            <code>{claudeDesktopConfig}</code>
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="summary-note-row account-settings-row mcp-setup-row">
+                      <span className="summary-note-row-rail" aria-hidden />
+                      <div className="summary-note-row-content px-4 py-4">
+                        <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                          Key safety
+                        </h4>
+                        <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          Personal MCP keys are scoped to your Meeting Note account. Store the key in Claude Desktop
+                          only, and revoke it here if it is no longer needed or may have been exposed.
+                        </p>
+                        <div className="mt-3 rounded-md px-3 py-2 text-xs" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+                          The full key is only shown once. Existing keys show a shortened label for identification.
+                        </div>
+                      </div>
+                    </div>
+                    </>
+                    ) : null}
+
+                    <div className="summary-note-row account-settings-row mcp-setup-row">
+                      <span className="summary-note-row-rail" aria-hidden />
+                      <div className="summary-note-row-content px-4 py-4">
+                        <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                          Quick test prompts
+                        </h4>
+                        <ul className="mt-3 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          <li>List my recent meeting notes.</li>
+                          <li>Find notes from yesterday and summarize the action items.</li>
+                          <li>Search my transcripts for a discussion about project risks.</li>
+                          <li>Show the profile context for a saved speaker.</li>
+                        </ul>
+                        <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                          The MCP can read meeting note data, but it should not edit or delete notes.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </section>
               ) : null}
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabaseConfig';
@@ -18,7 +18,6 @@ import {
 import {
   getOneDriveRoot,
   getOneDriveFolderContents,
-  getOneDriveItem,
   createOneDriveFolder,
   deleteOneDriveItem,
   renameOneDriveItem,
@@ -125,7 +124,7 @@ const SaveSummary: React.FC = () => {
   }, [audioName]);
 
   // Fetch OneDrive contents
-  const fetchContents = async (folderId: string | null = null) => {
+  const fetchContents = useCallback(async (folderId: string | null = null) => {
     try {
       setLoading(true);
       setError(null);
@@ -150,13 +149,13 @@ const SaveSummary: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [getAccessToken]);
 
   useEffect(() => {
     if (isAuthenticated && !authLoading) {
       fetchContents(currentFolderId);
     }
-  }, [isAuthenticated, authLoading, currentFolderId]);
+  }, [isAuthenticated, authLoading, currentFolderId, fetchContents]);
 
   const navigateToFolder = async (folderId: string, folderName: string) => {
     setCurrentFolderId(folderId);

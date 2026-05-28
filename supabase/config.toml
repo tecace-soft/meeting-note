@@ -1,0 +1,2 @@
+[functions.mcp-token]
+verify_jwt = false

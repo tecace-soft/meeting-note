@@ -56,7 +56,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let cancelled = false;
     void (async () => {
       try {
-        await ensureSelfSpeakerRowForUser(user.id, msName);
+        await ensureSelfSpeakerRowForUser(user.id, msName, user.id, user.email);
       } catch (e) {
         if (!cancelled) console.error('ensureSelfSpeakerRowForUser:', e);
       }
@@ -65,7 +65,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       cancelled = true;
     };
-  }, [inProgress, isAuthenticated, user?.id, user?.microsoftAccountName]);
+  }, [inProgress, isAuthenticated, user?.email, user?.id, user?.microsoftAccountName]);
 
   const login = useCallback(async () => {
     if (shouldUseRedirectInteraction()) {
