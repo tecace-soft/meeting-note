@@ -1226,11 +1226,10 @@ const AccountSettings: React.FC = () => {
                             type="button"
                             onClick={() => void handleGenerateMcpToken()}
                             disabled={!user?.id || mcpTokenActionLoading}
-                            className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                            className="mcp-copy-btn disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {mcpTokenActionLoading ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                            Generate key
+                            {mcpTokenActionLoading ? <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+                            Generate Key
                           </button>
                         </div>
 

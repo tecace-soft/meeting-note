@@ -984,6 +984,34 @@ select:focus {
   box-shadow: var(--floating-shadow) !important;
 }
 
+.app-skin .share-note-modal {
+  box-shadow: var(--floating-shadow) !important;
+}
+
+.app-skin .share-note-contact-list {
+  display: flex;
+  flex: none;
+  max-height: 22rem;
+  min-height: auto;
+  overflow-y: auto !important;
+}
+
+.app-skin .share-note-contact-row {
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+  min-height: 4rem;
+}
+
+.app-skin .share-note-contact-row:last-child {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+}
+
+.app-skin .share-note-contact-row .project-note-picker-checkbox {
+  flex-shrink: 0;
+}
+
 .app-skin .project-note-picker-list {
   min-height: auto;
 }
