@@ -1537,7 +1537,7 @@ const TranscriptionSummary: React.FC = () => {
                   No recent recordings yet.
                 </p>
               ) : (
-                <div className="summary-note-list recent-recordings-list">
+                <div className="summary-note-list recent-recordings-list custom-scrollbar">
                   {recentAudioFiles.map((file) => (
                     <div
                       key={file.id}

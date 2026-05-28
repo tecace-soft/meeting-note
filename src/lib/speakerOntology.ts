@@ -45,12 +45,6 @@ export interface SpeakerOntology {
     related_projects: string[];
     confidence: number;
   }[];
-  evidence: {
-    source: string;
-    quote_or_paraphrase: string;
-    supports: string[];
-    confidence: number;
-  }[];
   last_updated_at: string;
 }
 
@@ -110,15 +104,6 @@ function mapOpenThread(o: Record<string, unknown>): SpeakerOntology['open_thread
   };
 }
 
-function mapEvidence(o: Record<string, unknown>): SpeakerOntology['evidence'][number] {
-  return {
-    source: typeof o.source === 'string' ? o.source : '',
-    quote_or_paraphrase: typeof o.quote_or_paraphrase === 'string' ? o.quote_or_paraphrase : '',
-    supports: Array.isArray(o.supports) ? o.supports.filter((x): x is string => typeof x === 'string') : [],
-    confidence: clampConfidence01(o.confidence),
-  };
-}
-
 function mapObjectArray<T>(arr: unknown, fn: (o: Record<string, unknown>) => T): T[] {
   if (!Array.isArray(arr)) return [];
   const out: T[] = [];
@@ -151,7 +136,6 @@ export function normalizeOntologyLoose(parsed: unknown): SpeakerOntology | null 
     relationships: mapObjectArray(p.relationships, mapRelationship),
     responsibilities: mapObjectArray(p.responsibilities, mapResponsibility),
     open_threads: mapObjectArray(p.open_threads, mapOpenThread),
-    evidence: mapObjectArray(p.evidence, mapEvidence),
     last_updated_at: typeof p.last_updated_at === 'string' ? p.last_updated_at : new Date().toISOString(),
   };
 }

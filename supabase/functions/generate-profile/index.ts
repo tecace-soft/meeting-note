@@ -136,12 +136,6 @@ interface SpeakerOntology {
     related_projects: string[];
     confidence: number;
   }[];
-  evidence: {
-    source: string;
-    quote_or_paraphrase: string;
-    supports: string[];
-    confidence: number;
-  }[];
   last_updated_at: string;
 }
 
@@ -206,15 +200,6 @@ function mapOpenThread(o: Record<string, unknown>): SpeakerOntology['open_thread
   };
 }
 
-function mapEvidence(o: Record<string, unknown>): SpeakerOntology['evidence'][number] {
-  return {
-    source: typeof o.source === 'string' ? o.source : '',
-    quote_or_paraphrase: typeof o.quote_or_paraphrase === 'string' ? o.quote_or_paraphrase : '',
-    supports: Array.isArray(o.supports) ? o.supports.filter((x): x is string => typeof x === 'string') : [],
-    confidence: clampConfidence01(o.confidence),
-  };
-}
-
 function mapObjectArray<T>(arr: unknown, fn: (o: Record<string, unknown>) => T): T[] {
   if (!Array.isArray(arr)) return [];
   const out: T[] = [];
@@ -238,7 +223,6 @@ function fallbackOntology(speakerName: string, speakerId: string): SpeakerOntolo
     relationships: [],
     responsibilities: [],
     open_threads: [],
-    evidence: [],
     last_updated_at: new Date().toISOString(),
   };
 }
@@ -250,21 +234,8 @@ function isMarkdownProfile(raw: string): boolean {
 }
 
 /** Wrap a legacy markdown profile into a minimal ontology. */
-function wrapMarkdownProfile(raw: string, speakerName: string, speakerId: string): SpeakerOntology {
-  const summary = raw.trim();
-  return {
-    ...fallbackOntology(speakerName, speakerId),
-    evidence: summary
-      ? [
-          {
-            source: 'transcript',
-            quote_or_paraphrase: summary,
-            supports: ['legacy_profile_migration'],
-            confidence: 0,
-          },
-        ]
-      : [],
-  };
+function wrapMarkdownProfile(speakerName: string, speakerId: string): SpeakerOntology {
+  return fallbackOntology(speakerName, speakerId);
 }
 
 /** Strip deprecated keys and normalize before passing existing profile into the update prompt. */
@@ -298,7 +269,6 @@ function ontologyFromLooseParsed(parsed: Record<string, unknown>, speakerName: s
     relationships: mapObjectArray(parsed.relationships, mapRelationship),
     responsibilities: mapObjectArray(parsed.responsibilities, mapResponsibility),
     open_threads: mapObjectArray(parsed.open_threads, mapOpenThread),
-    evidence: mapObjectArray(parsed.evidence, mapEvidence),
     last_updated_at: typeof parsed.last_updated_at === 'string' ? parsed.last_updated_at : new Date().toISOString(),
   };
 }
@@ -317,7 +287,7 @@ function parseOntologyResponse(raw: string, speakerName: string, speakerId: stri
 const CONFIDENCE_RULES = `Confidence scores (0.0–1.0):
 - Every object value must include a numeric field "confidence" in that object (not at the root except identity_confidence).
 - professional_context.confidence reflects confidence in company/role/domains as a whole.
-- Each item in active_projects, relationships, responsibilities, open_threads, and evidence must have its own "confidence" for that item's inferred content.
+- Each item in active_projects, relationships, responsibilities, and open_threads must have its own "confidence" for that item's inferred content.
 - 1.0 = stated explicitly in the transcript; ~0.5–0.8 = strongly implied; lower for weak inference; 0.0 when the block is empty or has no transcript support.`;
 
 const NEW_PROFILE_SYSTEM = `You are a speaker ontology extraction engine for a meeting note application.
@@ -390,14 +360,6 @@ function requiredOntologyJsonSchema(speakerId: string, displayName: string, last
       "confidence": 0.0
     }
   ],
-  "evidence": [
-    {
-      "source": "transcript",
-      "quote_or_paraphrase": "",
-      "supports": [],
-      "confidence": 0.0
-    }
-  ],
   "last_updated_at": "${lastUpdated}"
 }`;
 }
@@ -450,7 +412,6 @@ Merge behavior:
 - If a responsibility is repeated, keep one clear version.
 - If an open thread is resolved, change its status to "resolved".
 - If a new unresolved topic appears, add it to open_threads.
-- Add short evidence entries only for important new or changed facts.
 - Update last_updated_at to "${currentDate}".
 
 Required JSON structure (same shape as new profiles; fill arrays/objects according to merged content):
@@ -498,7 +459,7 @@ serve(async (req) => {
     let existingOntologyJson: string | null = null;
     if (existingProfile && existingProfile.trim()) {
       if (isMarkdownProfile(existingProfile)) {
-        const wrapped = wrapMarkdownProfile(existingProfile, speakerName, resolvedSpeakerId);
+        const wrapped = wrapMarkdownProfile(speakerName, resolvedSpeakerId);
         existingOntologyJson = JSON.stringify(wrapped, null, 2);
       } else {
         existingOntologyJson = sanitizeExistingOntologyForUpdate(existingProfile.trim(), speakerName, resolvedSpeakerId);

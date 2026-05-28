@@ -902,11 +902,6 @@ const SummaryHistory: React.FC = () => {
                                       >
                                         {getNoteDisplayTitle(note)}
                                       </p>
-                                      {isSharedNote ? (
-                                        <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
-                                          Shared By: {getSharedByLabel(note)}
-                                        </p>
-                                      ) : null}
                                     </div>
                                   )}
                                   <div
@@ -968,14 +963,14 @@ const SummaryHistory: React.FC = () => {
                                 ) : null}
                               </div>
                               <div
-                                className="flex items-center gap-1.5 text-sm"
+                                className="flex items-center gap-1.5 text-xs"
                                 style={{ color: 'var(--text-secondary)' }}
                               >
                                 <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden />
                                 <span className="min-w-0 break-words">{formatDate(note.created_at)}</span>
                               </div>
                               <div
-                                className="flex min-w-0 items-center gap-1.5 text-sm"
+                                className="flex min-w-0 items-center gap-1.5 text-xs"
                                 style={{ color: 'var(--text-secondary)' }}
                                 title={getNoteParticipantsLabel(note)}
                               >
@@ -984,6 +979,11 @@ const SummaryHistory: React.FC = () => {
                                   {getNoteParticipantsLabel(note)}
                                 </span>
                               </div>
+                              {isSharedNote ? (
+                                <p className="truncate text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                                  Shared By: {getSharedByLabel(note)}
+                                </p>
+                              ) : null}
                             </div>
 
                             <div className="hidden sm:contents">
@@ -1032,11 +1032,6 @@ const SummaryHistory: React.FC = () => {
                                     >
                                       {getNoteDisplayTitle(note)}
                                     </p>
-                                    {isSharedNote ? (
-                                      <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
-                                        Shared By: {getSharedByLabel(note)}
-                                      </p>
-                                    ) : null}
                                     {noteTags.length > 0 ? (
                                       <div
                                         className={
@@ -1078,7 +1073,7 @@ const SummaryHistory: React.FC = () => {
                               <div className="flex min-h-0 min-w-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
                                 <div className="flex min-h-0 min-w-0 max-w-[11rem] flex-col items-end justify-center overflow-hidden text-right">
                                   <div
-                                    className="flex min-w-0 items-center gap-1 text-sm"
+                                    className="flex min-w-0 items-center gap-1 text-xs"
                                     style={{ color: 'var(--text-secondary)' }}
                                     title={formatDate(note.created_at)}
                                   >
@@ -1086,12 +1081,21 @@ const SummaryHistory: React.FC = () => {
                                     <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
                                   </div>
                                   <p
-                                    className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-snug"
+                                    className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-snug"
                                     style={{ color: 'var(--text-secondary)' }}
                                     title={getNoteParticipantsLabel(note)}
                                   >
                                     {getNoteParticipantsLabel(note)}
                                   </p>
+                                  {isSharedNote ? (
+                                    <p
+                                      className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-snug"
+                                      style={{ color: 'var(--text-muted)' }}
+                                      title={`Shared By: ${getSharedByLabel(note)}`}
+                                    >
+                                      Shared By: {getSharedByLabel(note)}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div
                                   className="flex h-10 w-10 shrink-0 items-center justify-center"
