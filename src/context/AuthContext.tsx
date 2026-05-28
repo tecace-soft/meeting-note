@@ -4,6 +4,7 @@ import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
 import { loginRequest } from '../config/msalConfig';
 import { shouldUseRedirectInteraction } from '../lib/msalRedirect';
 import { ensureSelfSpeakerRowForUser } from '../lib/ensureSelfSpeakerRow';
+import { registerAppUser } from '../lib/registerAppUser';
 
 interface User {
   id: string;
@@ -51,21 +52,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (inProgress !== InteractionStatus.None || !isAuthenticated || !user?.id) return;
     const msName = user.microsoftAccountName?.trim();
-    if (!msName) return;
 
     let cancelled = false;
     void (async () => {
       try {
-        await ensureSelfSpeakerRowForUser(user.id, msName, user.id, user.email);
+        try {
+          await registerAppUser({
+            id: user.id,
+            displayName: user.displayName,
+            email: user.email,
+          });
+        } catch (registerError) {
+          if (!cancelled) console.error('registerAppUser:', registerError);
+        }
+        if (msName) {
+          await ensureSelfSpeakerRowForUser(user.id, msName, user.id, user.email);
+        }
       } catch (e) {
-        if (!cancelled) console.error('ensureSelfSpeakerRowForUser:', e);
+        if (!cancelled) console.error('Auth user bootstrap:', e);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [inProgress, isAuthenticated, user?.email, user?.id, user?.microsoftAccountName]);
+  }, [inProgress, isAuthenticated, user?.displayName, user?.email, user?.id, user?.microsoftAccountName]);
 
   const login = useCallback(async () => {
     if (shouldUseRedirectInteraction()) {

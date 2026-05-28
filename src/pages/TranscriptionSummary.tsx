@@ -25,6 +25,7 @@ import {
   Pause,
   Play,
   Save,
+  ShareAndroid,
   Stop,
   UserCircle,
   UserVoice,
@@ -46,6 +47,7 @@ import {
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
+import ShareNoteModal from '../components/ShareNoteModal';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 
@@ -178,6 +180,7 @@ const TranscriptionSummary: React.FC = () => {
   const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [isForwardTeamsModalOpen, setIsForwardTeamsModalOpen] = useState(false);
+  const [isShareNoteModalOpen, setIsShareNoteModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
@@ -1534,7 +1537,7 @@ const TranscriptionSummary: React.FC = () => {
                   No recent recordings yet.
                 </p>
               ) : (
-                <div className="summary-note-list recent-recordings-list">
+                <div className="summary-note-list recent-recordings-list custom-scrollbar">
                   {recentAudioFiles.map((file) => (
                     <div
                       key={file.id}
@@ -1920,7 +1923,7 @@ const TranscriptionSummary: React.FC = () => {
                     ) : null}
 
                     <div
-                      className="grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-4 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
+                      className="summary-result-action-row grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-5 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
                       style={{ borderColor: 'var(--border)' }}
                     >
                       <button
@@ -1936,7 +1939,7 @@ const TranscriptionSummary: React.FC = () => {
                         className={resultActionBtnClass}
                       >
                         <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-                        <span className={resultActionBtnLabelClass}>Save to OneDrive</span>
+                        <span className={resultActionBtnLabelClass}>Save</span>
                       </button>
                       <button
                         type="button"
@@ -1971,9 +1974,20 @@ const TranscriptionSummary: React.FC = () => {
                         ) : (
                           <>
                             <Users className="h-4 w-4 shrink-0" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Forward to Teams</span>
+                            <span className={resultActionBtnLabelClass}>Forward</span>
                           </>
                         )}
+                      </button>
+                      <button
+                        type="button"
+                        title="Share"
+                        aria-label="Share"
+                        onClick={() => setIsShareNoteModalOpen(true)}
+                        disabled={!currentNoteId}
+                        className={resultActionBtnClass}
+                      >
+                        <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
+                        <span className={resultActionBtnLabelClass}>Share</span>
                       </button>
                       <button
                         type="button"
@@ -2001,7 +2015,7 @@ const TranscriptionSummary: React.FC = () => {
                         ) : (
                           <>
                             <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Regenerate Summary</span>
+                            <span className={resultActionBtnLabelClass}>Regenerate</span>
                           </>
                         )}
                       </button>
@@ -2217,6 +2231,14 @@ const TranscriptionSummary: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ShareNoteModal
+        isOpen={isShareNoteModalOpen}
+        noteId={currentNoteId}
+        noteTitle="Current summary"
+        existingSharedUserIds={[]}
+        onClose={() => setIsShareNoteModalOpen(false)}
+      />
 
       {/* Sync Profile Modal */}
       {isProfileModalOpen && (

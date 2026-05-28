@@ -18,6 +18,7 @@ import {
   Loading,
   MoreHorizontal,
   Save,
+  ShareAndroid,
   TrashFull,
   UserCircle,
   Users,
@@ -33,6 +34,7 @@ import TranscriptDiarizedEditor, {
 import { getNoteDiarizationRaw, hasUsableDiarization, normalizeTranscript, type TranscriptSegment } from '../lib/transcriptSegments';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { getTeamsChats, sendChatMessage, type TeamsChat } from '../services/graphService';
+import ShareNoteModal from '../components/ShareNoteModal';
 
 interface Note {
   id: string;
@@ -45,6 +47,7 @@ interface Note {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+  shared_users?: unknown;
   /** String array or json/jsonb; Supabase may return a JSON string. */
   tag?: unknown;
   tags?: unknown;
@@ -188,6 +191,7 @@ const SummaryHistory: React.FC = () => {
   const [isForwarding, setIsForwarding] = useState(false);
   const [forwardError, setForwardError] = useState<string | null>(null);
   const [forwardSuccess, setForwardSuccess] = useState(false);
+  const [shareModalNoteId, setShareModalNoteId] = useState<string | null>(null);
 
   // Regenerate summary state
   const [regeneratingNoteId, setRegeneratingNoteId] = useState<string | null>(null);
@@ -288,19 +292,21 @@ const SummaryHistory: React.FC = () => {
           setExpandedNoteId(null);
         }
 
+        if (!user?.id) {
+          if (!cancelled) {
+            setNotes([]);
+            setNotesTotalCount(0);
+          }
+          return;
+        }
+
         let query = supabase.from('note').select('*', { count: 'exact' });
+        const ownershipFilter = `user_id.eq.${user.id},shared_users.cs.{${user.id}}`;
 
         if (chatId) {
-          query = query.eq('chat_id', chatId);
+          query = query.eq('chat_id', chatId).or(ownershipFilter);
         } else {
-          if (!user?.id) {
-            if (!cancelled) {
-              setNotes([]);
-              setNotesTotalCount(0);
-            }
-            return;
-          }
-          query = query.eq('user_id', user.id);
+          query = query.or(ownershipFilter);
         }
 
         const from = (effectivePage - 1) * NOTES_PAGE_SIZE;
@@ -382,6 +388,31 @@ const SummaryHistory: React.FC = () => {
     );
   if (participants.length === 0) return 'None';
   return participants.join(', ');
+  };
+
+  const getNoteSharedUserIds = (note: Note): string[] => {
+    const raw = note.shared_users;
+    if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      if (!trimmed) return [];
+      try {
+        return getNoteSharedUserIds({ ...note, shared_users: JSON.parse(trimmed) as unknown });
+      } catch {
+        return trimmed.split(',').map((id) => id.trim()).filter(Boolean);
+      }
+    }
+    return [];
+  };
+
+  const isSharedWithCurrentUser = (note: Note): boolean => {
+    if (!user?.id) return false;
+    return note.user_id !== user.id && getNoteSharedUserIds(note).includes(user.id);
+  };
+
+  const getSharedByLabel = (note: Note): string => {
+    const name = note.user_name?.trim();
+    return name || 'Unknown user';
   };
 
   const totalPages = useMemo(
@@ -545,6 +576,18 @@ const SummaryHistory: React.FC = () => {
     } finally {
       setIsForwarding(false);
     }
+  };
+
+  const handleOpenShareModal = (note: Note) => {
+    setOpenNoteMenuId(null);
+    setNoteMenuPos(null);
+    setShareModalNoteId(note.id);
+  };
+
+  const handleNoteShared = (noteId: string, sharedUserIds: string[]) => {
+    setNotes((prev) =>
+      prev.map((note) => (note.id === noteId ? { ...note, shared_users: sharedUserIds } : note))
+    );
   };
 
   const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook/532f465d-d198-4f59-ba75-20c39d41a079';
@@ -807,6 +850,7 @@ const SummaryHistory: React.FC = () => {
                         const mobileVisibleTags = noteTags.slice(0, 3);
                         const mobileRemainingTagCount = Math.max(0, noteTags.length - mobileVisibleTags.length);
                         const allTagsTooltip = noteTags.join(', ');
+                        const isSharedNote = isSharedWithCurrentUser(note);
                         return (
                           <div
                             key={note.id}
@@ -850,13 +894,15 @@ const SummaryHistory: React.FC = () => {
                                       }}
                                     />
                                   ) : (
-                                    <p
-                                      className="min-w-0 flex-1 truncate text-base font-semibold leading-snug"
-                                      style={{ color: 'var(--text)' }}
-                                      title={getNoteDisplayTitle(note)}
-                                    >
-                                      {getNoteDisplayTitle(note)}
-                                    </p>
+                                    <div className="min-w-0 flex-1">
+                                      <p
+                                        className="min-w-0 truncate text-base font-semibold leading-snug"
+                                        style={{ color: 'var(--text)' }}
+                                        title={getNoteDisplayTitle(note)}
+                                      >
+                                        {getNoteDisplayTitle(note)}
+                                      </p>
+                                    </div>
                                   )}
                                   <div
                                     className="flex h-10 w-10 shrink-0 items-center justify-center"
@@ -917,14 +963,14 @@ const SummaryHistory: React.FC = () => {
                                 ) : null}
                               </div>
                               <div
-                                className="flex items-center gap-1.5 text-sm"
+                                className="flex items-center gap-1.5 text-xs"
                                 style={{ color: 'var(--text-secondary)' }}
                               >
                                 <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden />
                                 <span className="min-w-0 break-words">{formatDate(note.created_at)}</span>
                               </div>
                               <div
-                                className="flex min-w-0 items-center gap-1.5 text-sm"
+                                className="flex min-w-0 items-center gap-1.5 text-xs"
                                 style={{ color: 'var(--text-secondary)' }}
                                 title={getNoteParticipantsLabel(note)}
                               >
@@ -933,6 +979,11 @@ const SummaryHistory: React.FC = () => {
                                   {getNoteParticipantsLabel(note)}
                                 </span>
                               </div>
+                              {isSharedNote ? (
+                                <p className="truncate text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                                  Shared By: {getSharedByLabel(note)}
+                                </p>
+                              ) : null}
                             </div>
 
                             <div className="hidden sm:contents">
@@ -1022,7 +1073,7 @@ const SummaryHistory: React.FC = () => {
                               <div className="flex min-h-0 min-w-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
                                 <div className="flex min-h-0 min-w-0 max-w-[11rem] flex-col items-end justify-center overflow-hidden text-right">
                                   <div
-                                    className="flex min-w-0 items-center gap-1 text-sm"
+                                    className="flex min-w-0 items-center gap-1 text-xs"
                                     style={{ color: 'var(--text-secondary)' }}
                                     title={formatDate(note.created_at)}
                                   >
@@ -1030,12 +1081,21 @@ const SummaryHistory: React.FC = () => {
                                     <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
                                   </div>
                                   <p
-                                    className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-snug"
+                                    className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-snug"
                                     style={{ color: 'var(--text-secondary)' }}
                                     title={getNoteParticipantsLabel(note)}
                                   >
                                     {getNoteParticipantsLabel(note)}
                                   </p>
+                                  {isSharedNote ? (
+                                    <p
+                                      className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-snug"
+                                      style={{ color: 'var(--text-muted)' }}
+                                      title={`Shared By: ${getSharedByLabel(note)}`}
+                                    >
+                                      Shared By: {getSharedByLabel(note)}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div
                                   className="flex h-10 w-10 shrink-0 items-center justify-center"
@@ -1286,7 +1346,7 @@ const SummaryHistory: React.FC = () => {
                                           )}
                                         </div>
                                         <div
-                                          className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-4 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
+                                          className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
                                           style={{ borderColor: 'var(--border)' }}
                                         >
                                           <button
@@ -1299,7 +1359,7 @@ const SummaryHistory: React.FC = () => {
                                             aria-label="Save to OneDrive"
                                           >
                                             <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save to OneDrive</span>
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
                                           </button>
                                           <button
                                             type="button"
@@ -1309,7 +1369,17 @@ const SummaryHistory: React.FC = () => {
                                             aria-label="Forward to Teams"
                                           >
                                             <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward to Teams</span>
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenShareModal(note)}
+                                            className={RESULT_ACTION_BTN_CLASS}
+                                            title="Share"
+                                            aria-label="Share"
+                                          >
+                                            <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Share</span>
                                           </button>
                                           <button
                                             type="button"
@@ -1347,7 +1417,7 @@ const SummaryHistory: React.FC = () => {
                                             ) : (
                                               <>
                                                 <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
-                                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate Summary</span>
+                                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate</span>
                                               </>
                                             )}
                                           </button>
@@ -1655,7 +1725,7 @@ const SummaryHistory: React.FC = () => {
                             )}
                           </div>
                           <div
-                            className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-4 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5"
+                            className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5"
                             style={{ borderColor: 'var(--border)' }}
                           >
                             <button
@@ -1668,7 +1738,7 @@ const SummaryHistory: React.FC = () => {
                               aria-label="Save to OneDrive"
                             >
                               <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save to OneDrive</span>
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
                             </button>
                             <button
                               type="button"
@@ -1678,7 +1748,17 @@ const SummaryHistory: React.FC = () => {
                               aria-label="Forward to Teams"
                             >
                               <Users className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward to Teams</span>
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenShareModal(note)}
+                              className={RESULT_ACTION_BTN_CLASS}
+                              title="Share"
+                              aria-label="Share"
+                            >
+                              <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Share</span>
                             </button>
                             <button
                               type="button"
@@ -1716,7 +1796,7 @@ const SummaryHistory: React.FC = () => {
                               ) : (
                                 <>
                                   <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
-                                  <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate Summary</span>
+                                  <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate</span>
                                 </>
                               )}
                             </button>
@@ -1877,6 +1957,20 @@ const SummaryHistory: React.FC = () => {
               </div>
             </div>
           </div>
+        );
+      })()}
+
+      {shareModalNoteId && (() => {
+        const note = notes.find((n) => n.id === shareModalNoteId);
+        return (
+          <ShareNoteModal
+            isOpen={Boolean(note)}
+            noteId={note?.id ?? null}
+            noteTitle={note?.name}
+            existingSharedUserIds={note ? getNoteSharedUserIds(note) : []}
+            onClose={() => setShareModalNoteId(null)}
+            onShared={handleNoteShared}
+          />
         );
       })()}
 
@@ -2113,6 +2207,14 @@ const SummaryHistory: React.FC = () => {
             >
               <Users className="h-4 w-4 shrink-0" aria-hidden />
               Forward to Teams
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); handleOpenShareModal(menuNote); }}
+              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+            >
+              <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
+              Share
             </button>
             <button
               type="button"

@@ -26,6 +26,7 @@ const MCP_CLAUDE_URL = 'https://meeting-note-mcp.onrender.com/mcp';
 
 type SettingsTab = 'account' | 'summary' | 'speaker' | 'mcp';
 type McpSetupView = 'chatgpt' | 'claude';
+type ClientOs = 'windows' | 'macos' | 'linux' | 'unknown';
 
 type SummaryPromptRow = { id: string; name: string; prompt: string };
 
@@ -43,6 +44,18 @@ type SpeakersLoadState =
   | { status: 'idle' | 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; rows: SpeakerRow[] };
+
+function detectClientOs(): ClientOs {
+  if (typeof navigator === 'undefined') return 'unknown';
+  const navWithUserAgentData = navigator as Navigator & {
+    userAgentData?: { platform?: string };
+  };
+  const platform = (navWithUserAgentData.userAgentData?.platform || navigator.platform || navigator.userAgent || '').toLowerCase();
+  if (platform.includes('win')) return 'windows';
+  if (platform.includes('mac')) return 'macos';
+  if (platform.includes('linux')) return 'linux';
+  return 'unknown';
+}
 
 async function callMcpTokenFunction<T>(msAccessToken: string, body: Record<string, unknown>): Promise<T> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -132,25 +145,27 @@ const AccountSettings: React.FC = () => {
   const [otherSpeakerSaving, setOtherSpeakerSaving] = useState(false);
   const [otherSpeakerSaveError, setOtherSpeakerSaveError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const claudeDesktopConfig = useMemo(
+  const clientOs = useMemo(() => detectClientOs(), []);
+  const claudeAuthHeader = newMcpToken ? `Bearer ${newMcpToken}` : 'Generate a key above to fill this value';
+  const claudeDesktopConfigMac = useMemo(
     () =>
       JSON.stringify(
         {
           mcpServers: {
             'meeting-note': {
-              command: 'cmd',
+              command: 'npx',
               args: [
-                '/C',
-                'npx.cmd',
                 '-y',
                 'mcp-remote',
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
                 '--header',
+                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
-                AUTH_HEADER: `Bearer ${newMcpToken ?? 'YOUR_PERSONAL_MCP_KEY'}`,
+                AUTH_HEADER: claudeAuthHeader,
+                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -158,8 +173,45 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [newMcpToken]
+    [claudeAuthHeader, user?.id]
   );
+  const claudeDesktopConfigWindows = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          mcpServers: {
+            'meeting-note': {
+              command: 'npx.cmd',
+              args: [
+                '-y',
+                'mcp-remote',
+                MCP_CLAUDE_URL,
+                '--header',
+                'Authorization:${AUTH_HEADER}',
+                '--header',
+                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
+              ],
+              env: {
+                AUTH_HEADER: claudeAuthHeader,
+                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
+              },
+            },
+          },
+        },
+        null,
+        2
+      ),
+    [claudeAuthHeader, user?.id]
+  );
+  const claudeDesktopConfig = clientOs === 'windows' ? claudeDesktopConfigWindows : claudeDesktopConfigMac;
+  const claudeDesktopConfigLabel =
+    clientOs === 'windows'
+      ? 'Claude Desktop config - Windows'
+      : clientOs === 'macos'
+        ? 'Claude Desktop config - macOS'
+        : clientOs === 'linux'
+          ? 'Claude Desktop config - Linux'
+          : 'Claude Desktop config';
 
   const matchedSelf = useMemo((): SpeakerRow | null => {
     if (speakersLoad.status !== 'ready') return null;
@@ -1226,11 +1278,10 @@ const AccountSettings: React.FC = () => {
                             type="button"
                             onClick={() => void handleGenerateMcpToken()}
                             disabled={!user?.id || mcpTokenActionLoading}
-                            className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                            className="mcp-copy-btn disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {mcpTokenActionLoading ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                            Generate key
+                            {mcpTokenActionLoading ? <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+                            Generate Key
                           </button>
                         </div>
 
@@ -1389,15 +1440,15 @@ const AccountSettings: React.FC = () => {
                         <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
                           <li><span className="font-medium" style={{ color: 'var(--text)' }}>1.</span> Open Claude Desktop settings and locate the developer MCP configuration file.</li>
                           <li><span className="font-medium" style={{ color: 'var(--text)' }}>2.</span> Add the <span className="font-medium">mcpServers</span> block below to the existing JSON. If the file already has preferences, keep them and add <span className="font-medium">mcpServers</span> as a sibling property.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Generate a personal MCP key above and copy it immediately.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Replace <span className="font-medium">YOUR_PERSONAL_MCP_KEY</span> in the config with your generated key.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Generate a personal MCP key above. The config below will place the last generated key under <span className="font-medium">env.AUTH_HEADER</span>.</li>
+                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Copy the config after generating the key so Claude receives the correct auth header and your Meeting Note user ID.</li>
                           <li><span className="font-medium" style={{ color: 'var(--text)' }}>5.</span> Restart Claude Desktop and look for the Meeting Note MCP tools.</li>
                         </ol>
 
                         <div className="mt-4 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                           <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
                             <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                              Claude Desktop config
+                              {claudeDesktopConfigLabel}
                             </span>
                             <button
                               type="button"
