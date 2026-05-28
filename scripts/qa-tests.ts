@@ -124,7 +124,6 @@ test('speaker ontology parsing canonicalizes JSON and builds summary context', (
     responsibilities: [{ description: 'Owns meeting notes', scope: 'Product', related_projects: ['Meeting Note'], status: 'active', confidence: 0.9 }],
     relationships: [],
     open_threads: [{ topic: 'MCP rollout', status: 'open', priority: 'high', summary: 'Ship connector', related_projects: ['Meeting Note'], confidence: 0.7 }],
-    evidence: [],
     deprecated_field: 'remove me',
   });
 

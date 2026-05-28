@@ -347,6 +347,33 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     }
   };
 
+  const shareCurrentNoteWithMicrosoftUser = async (microsoftUserId: string | null | undefined) => {
+    const targetUserId = microsoftUserId?.trim();
+    if (!noteId || !targetUserId) return;
+
+    const { data, error: fetchError } = await supabase
+      .from('note')
+      .select('user_id, shared_users')
+      .eq('id', noteId)
+      .single();
+    if (fetchError) throw fetchError;
+
+    const noteRow = data as { user_id?: string | null; shared_users?: unknown } | null;
+    if (!noteRow || noteRow.user_id === targetUserId) return;
+
+    const rawSharedUsers = noteRow.shared_users;
+    const sharedUsers = Array.isArray(rawSharedUsers)
+      ? rawSharedUsers.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      : [];
+    if (sharedUsers.includes(targetUserId)) return;
+
+    const { error: updateError } = await supabase
+      .from('note')
+      .update({ shared_users: [...sharedUsers, targetUserId] })
+      .eq('id', noteId);
+    if (updateError) throw updateError;
+  };
+
   const handleApplySpeakerChange = async () => {
     if (!speakerMenu || !user?.id) return;
     const chosenName = speakerNameInput.trim();
@@ -390,6 +417,12 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       if (noteId) {
         await persistNoteDiarization(noteId, nextTranscript);
       }
+
+      const selectedSpeaker =
+        (pickedSpeakerId ? savedSpeakers.find((s) => s.id === pickedSpeakerId) : null) ??
+        savedSpeakers.find((s) => s.name.toLowerCase() === chosenName.toLowerCase()) ??
+        null;
+      await shareCurrentNoteWithMicrosoftUser(selectedSpeaker?.microsoft_id);
 
       startTransition(() => {
         onSegmentsChange(nextTranscript);
@@ -472,6 +505,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       if (noteId) {
         await persistNoteDiarization(noteId, nextTranscript);
       }
+      await shareCurrentNoteWithMicrosoftUser(speakerRow.microsoft_id);
 
       startTransition(() => {
         onSegmentsChange(nextTranscript);
