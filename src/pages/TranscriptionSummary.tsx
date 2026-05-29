@@ -8,7 +8,7 @@ import {
   shouldUseResumableUpload,
   uploadWithTus,
 } from '../services/supabaseResumableUpload';
-import { ensurePublicStorageUrlReady } from '../lib/storagePublicReady';
+import { ensureStorageObjectReady } from '../lib/storagePublicReady';
 import {
   ArrowsReload01,
   Chat,
@@ -775,7 +775,7 @@ const TranscriptionSummary: React.FC = () => {
 
       const { data: urlData } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(filePath);
 
-      await ensurePublicStorageUrlReady(urlData.publicUrl);
+      await ensureStorageObjectReady(AUDIO_BUCKET, filePath, urlData.publicUrl);
       try {
         await saveAudioFileRecord(file, filePath, urlData.publicUrl, source);
       } catch (recordError) {
