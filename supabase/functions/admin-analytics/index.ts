@@ -16,6 +16,14 @@ type RangeKey = 'all' | '7d' | '30d' | '90d';
 
 interface RequestBody {
   range?: RangeKey;
+  chartStartDate?: string;
+  chartEndDate?: string;
+}
+
+interface UsageDay {
+  date: string;
+  notes: number;
+  total: number;
 }
 
 interface AppUserRow {
@@ -110,6 +118,75 @@ function sinceForRange(range: RangeKey): string | null {
   return d.toISOString();
 }
 
+function isDateKey(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function addUtcDays(dateKey: string, days: number): string {
+  const date = new Date(`${dateKey}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function getChartWindow(chartStartDate: unknown, chartEndDate: unknown): {
+  startDate: string;
+  endDate: string;
+  startIso: string;
+  endExclusiveIso: string;
+  days: string[];
+} {
+  const endDate = isDateKey(chartEndDate) ? chartEndDate : new Date().toISOString().slice(0, 10);
+  let startDate = isDateKey(chartStartDate) ? chartStartDate : addUtcDays(endDate, -6);
+  if (startDate > endDate) {
+    startDate = addUtcDays(endDate, -6);
+  }
+
+  const days: string[] = [];
+  let cursor = startDate;
+  while (cursor <= endDate && days.length < 90) {
+    days.push(cursor);
+    cursor = addUtcDays(cursor, 1);
+  }
+
+  const endExclusiveDate = addUtcDays(endDate, 1);
+  return {
+    startDate,
+    endDate,
+    startIso: `${startDate}T00:00:00.000Z`,
+    endExclusiveIso: `${endExclusiveDate}T00:00:00.000Z`,
+    days,
+  };
+}
+
+function dateKeyFromTimestamp(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function createUsageDays(days: string[]): Map<string, UsageDay> {
+  return new Map(
+    days.map((date) => [
+      date,
+      {
+        date,
+        notes: 0,
+        total: 0,
+      },
+    ])
+  );
+}
+
+function addNoteUsageRows(rows: Array<{ created_at: string | null }>, usageByDate: Map<string, UsageDay>): void {
+  for (const row of rows) {
+    const dateKey = dateKeyFromTimestamp(row.created_at);
+    const day = dateKey ? usageByDate.get(dateKey) : undefined;
+    if (!day) continue;
+    day.notes += 1;
+    day.total += 1;
+  }
+}
+
 function normalizeSharedUsers(raw: unknown): string[] {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
@@ -183,6 +260,7 @@ serve(async (req) => {
   const body = (await req.json().catch(() => ({}))) as RequestBody;
   const range: RangeKey = body.range === '7d' || body.range === '30d' || body.range === '90d' ? body.range : 'all';
   const since = sinceForRange(range);
+  const chartWindow = getChartWindow(body.chartStartDate, body.chartEndDate);
   const adminClient = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
@@ -227,7 +305,15 @@ serve(async (req) => {
       ).order('created_at', { ascending: false }),
     ]);
 
-    for (const result of [appUsersResult, notesResult, filesResult, projectsResult, speakersResult, promptsResult, tokensResult]) {
+    for (const result of [
+      appUsersResult,
+      notesResult,
+      filesResult,
+      projectsResult,
+      speakersResult,
+      promptsResult,
+      tokensResult,
+    ]) {
       if (result.error) throw result.error;
     }
 
@@ -238,6 +324,8 @@ serve(async (req) => {
     const speakers = (speakersResult.data ?? []) as SpeakerRow[];
     const prompts = (promptsResult.data ?? []) as PromptRow[];
     const tokens = (tokensResult.data ?? []) as TokenRow[];
+    const usageByDate = createUsageDays(chartWindow.days);
+    addNoteUsageRows(notes, usageByDate);
 
     const notesByUser = countByUser(notes);
     const filesByUser = countByUser(files);
@@ -339,6 +427,11 @@ serve(async (req) => {
         summaryPrompts: prompts.length,
         mcpTokens: tokens.length,
         activeMcpTokens: tokens.filter((token) => !token.revoked_at).length,
+      },
+      usageChart: {
+        startDate: chartWindow.startDate,
+        endDate: chartWindow.endDate,
+        days: chartWindow.days.map((date) => usageByDate.get(date)!),
       },
       users: userUsage,
       speakerProfiles,
