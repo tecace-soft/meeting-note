@@ -573,6 +573,8 @@ const TranscriptionSummary: React.FC = () => {
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
     const input = e.target;
     const list = input.files;
     if (!list?.length) return;
