@@ -82,13 +82,6 @@ interface AdminAnalyticsResponse {
   speakerProfiles: AdminSpeakerProfile[];
 }
 
-const RANGE_OPTIONS: Array<{ key: RangeKey; label: string }> = [
-  { key: 'all', label: 'All time' },
-  { key: '7d', label: '7 days' },
-  { key: '30d', label: '30 days' },
-  { key: '90d', label: '90 days' },
-];
-
 function formatDate(value: string | null | undefined): string {
   if (!value) return 'Never';
   try {
@@ -180,139 +173,8 @@ function emptyUsageDays(startDate: string, endDate: string): UsageDay[] {
       });
 }
 
-function escapeXml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function slug(value: string): string {
-  return value
-    .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 80) || 'item';
-}
-
-function stringArray(raw: unknown): string[] {
-  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : [];
-}
-
-function objectArray(raw: unknown): Record<string, unknown>[] {
-  return Array.isArray(raw)
-    ? raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    : [];
-}
-
-function literal(subject: string, predicate: string, value: unknown): string {
-  if (value == null || String(value).trim() === '') return '';
-  return `    <mn:${predicate}>${escapeXml(value)}</mn:${predicate}>\n`;
-}
-
-function objectRef(subject: string, predicate: string, objectId: string): string {
-  if (!objectId) return '';
-  return `    <mn:${predicate} rdf:resource="${escapeXml(objectId)}" />\n`;
-}
-
-function buildOwlRdf(speakers: AdminSpeakerProfile[]): string {
-  const base = 'https://meeting-note.app/ontology#';
-  const ontologySpeakers = speakers.filter((speaker) => speaker.hasOntology && speaker.ontology);
-  const projectIds = new Set<string>();
-  const domainIds = new Set<string>();
-  const personIds = new Set<string>();
-
-  for (const speaker of ontologySpeakers) {
-    const ontology = speaker.ontology!;
-    const pc = ontology.professional_context as Record<string, unknown> | undefined;
-    stringArray(pc?.domains).forEach((domain) => domainIds.add(`${base}Domain_${slug(domain)}`));
-    objectArray(ontology.active_projects).forEach((project) => {
-      const name = typeof project.name === 'string' ? project.name : '';
-      if (name) projectIds.add(`${base}Project_${slug(name)}`);
-    });
-    objectArray(ontology.relationships).forEach((relationship) => {
-      const person = typeof relationship.person_or_group === 'string' ? relationship.person_or_group : '';
-      if (person) personIds.add(`${base}Person_${slug(person)}`);
-    });
-  }
-
-  const lines: string[] = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<rdf:RDF',
-    '  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"',
-    '  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"',
-    '  xmlns:owl="http://www.w3.org/2002/07/owl#"',
-    '  xmlns:mn="https://meeting-note.app/ontology#">',
-    `  <owl:Ontology rdf:about="${base}">`,
-    '    <rdfs:label>Meeting Note Speaker Ontology</rdfs:label>',
-    `    <mn:generatedAt>${escapeXml(new Date().toISOString())}</mn:generatedAt>`,
-    '  </owl:Ontology>',
-    '  <owl:Class rdf:about="https://meeting-note.app/ontology#Speaker" />',
-    '  <owl:Class rdf:about="https://meeting-note.app/ontology#Project" />',
-    '  <owl:Class rdf:about="https://meeting-note.app/ontology#Domain" />',
-    '  <owl:Class rdf:about="https://meeting-note.app/ontology#PersonOrGroup" />',
-  ];
-
-  for (const id of projectIds) {
-    lines.push(`  <mn:Project rdf:about="${escapeXml(id)}">`);
-    lines.push(`    <rdfs:label>${escapeXml(id.replace(`${base}Project_`, '').replace(/_/g, ' '))}</rdfs:label>`);
-    lines.push('  </mn:Project>');
-  }
-  for (const id of domainIds) {
-    lines.push(`  <mn:Domain rdf:about="${escapeXml(id)}">`);
-    lines.push(`    <rdfs:label>${escapeXml(id.replace(`${base}Domain_`, '').replace(/_/g, ' '))}</rdfs:label>`);
-    lines.push('  </mn:Domain>');
-  }
-  for (const id of personIds) {
-    lines.push(`  <mn:PersonOrGroup rdf:about="${escapeXml(id)}">`);
-    lines.push(`    <rdfs:label>${escapeXml(id.replace(`${base}Person_`, '').replace(/_/g, ' '))}</rdfs:label>`);
-    lines.push('  </mn:PersonOrGroup>');
-  }
-
-  for (const speaker of ontologySpeakers) {
-    const ontology = speaker.ontology!;
-    const pc = (ontology.professional_context as Record<string, unknown> | undefined) ?? {};
-    const speakerId = `${base}Speaker_${slug(speaker.microsoftId || speaker.id)}`;
-    let block = `  <mn:Speaker rdf:about="${escapeXml(speakerId)}">\n`;
-    block += `    <rdfs:label>${escapeXml(speaker.name)}</rdfs:label>\n`;
-    block += literal(speakerId, 'ownerUserId', speaker.userId);
-    block += literal(speakerId, 'ownerName', speaker.ownerName);
-    block += literal(speakerId, 'email', speaker.email);
-    block += literal(speakerId, 'microsoftId', speaker.microsoftId);
-    block += literal(speakerId, 'displayName', ontology.display_name || speaker.name);
-    block += literal(speakerId, 'role', pc.role);
-    block += literal(speakerId, 'company', pc.company);
-    for (const alias of stringArray(ontology.aliases)) block += literal(speakerId, 'alias', alias);
-    for (const domain of stringArray(pc.domains)) block += objectRef(speakerId, 'hasDomain', `${base}Domain_${slug(domain)}`);
-    for (const project of objectArray(ontology.active_projects)) {
-      const name = typeof project.name === 'string' ? project.name : '';
-      if (name) block += objectRef(speakerId, 'activeOnProject', `${base}Project_${slug(name)}`);
-      block += literal(speakerId, 'projectRole', project.role_in_project);
-    }
-    for (const responsibility of objectArray(ontology.responsibilities)) {
-      block += literal(speakerId, 'responsibility', responsibility.description);
-    }
-    for (const thread of objectArray(ontology.open_threads)) {
-      block += literal(speakerId, 'openThread', thread.topic);
-    }
-    for (const relationship of objectArray(ontology.relationships)) {
-      const person = typeof relationship.person_or_group === 'string' ? relationship.person_or_group : '';
-      if (person) block += objectRef(speakerId, 'relatedTo', `${base}Person_${slug(person)}`);
-      block += literal(speakerId, 'relationshipType', relationship.relationship_type);
-    }
-    block += '  </mn:Speaker>';
-    lines.push(block);
-  }
-
-  lines.push('</rdf:RDF>');
-  return `${lines.join('\n')}\n`;
-}
-
 async function callAdminAnalytics(
   msAccessToken: string,
-  range: RangeKey,
   chartStartDate: string,
   chartEndDate: string
 ): Promise<AdminAnalyticsResponse> {
@@ -329,7 +191,7 @@ async function callAdminAnalytics(
       'Content-Type': 'application/json',
       'x-ms-access-token': msAccessToken,
     },
-    body: JSON.stringify({ range, chartStartDate, chartEndDate }),
+    body: JSON.stringify({ chartStartDate, chartEndDate }),
   });
 
   const text = await response.text();
@@ -343,7 +205,6 @@ async function callAdminAnalytics(
 const AdminAnalytics: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
-  const [range, setRange] = useState<RangeKey>('all');
   const [chartEndDate, setChartEndDate] = useState(() => toDateInputValue(new Date()));
   const [chartStartDate, setChartStartDate] = useState(() => defaultChartStartDate(toDateInputValue(new Date())));
   const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null);
@@ -366,7 +227,7 @@ const AdminAnalytics: React.FC = () => {
       try {
         const token = await getAccessToken();
         if (!token) throw new Error('Could not acquire Microsoft access token.');
-        const data = await callAdminAnalytics(token, range, chartStartDate, chartEndDate);
+        const data = await callAdminAnalytics(token, chartStartDate, chartEndDate);
         if (!cancelled) setAnalytics(data);
       } catch (err) {
         if (!cancelled) {
@@ -382,7 +243,7 @@ const AdminAnalytics: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [chartEndDate, chartStartDate, getAccessToken, isAdmin, isAuthenticated, range, user?.id]);
+  }, [chartEndDate, chartStartDate, getAccessToken, isAdmin, isAuthenticated, user?.id]);
 
   const speakerProfilesByUser = useMemo(() => {
     const map = new Map<string, AdminSpeakerProfile[]>();
@@ -392,20 +253,6 @@ const AdminAnalytics: React.FC = () => {
     }
     return map;
   }, [analytics?.speakerProfiles]);
-
-  const handleExportOwl = () => {
-    if (!analytics) return;
-    const owl = buildOwlRdf(analytics.speakerProfiles);
-    const blob = new Blob([owl], { type: 'application/rdf+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `meeting-note-speaker-ontology-${new Date().toISOString().slice(0, 10)}.owl`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
 
   if (!isLoading && isAuthenticated && !isAdmin) {
     return (
@@ -432,7 +279,7 @@ const AdminAnalytics: React.FC = () => {
   const chartAverage = usageDays.length > 0 ? chartTotal / usageDays.length : 0;
   const metricCards = totals
     ? [
-        { label: 'Signed-up users', value: totals.signedUpUsers, detail: `${totals.activeUsers} active in range`, icon: Users },
+        { label: 'Signed-up users', value: totals.signedUpUsers, detail: `${totals.activeUsers} active users`, icon: Users },
         { label: 'Notes', value: totals.notes, detail: `${totals.sharedNotes} shared notes`, icon: FileDocument },
         { label: 'Summaries', value: totals.summariesGenerated, detail: `${totals.transcriptionsGenerated} transcriptions`, icon: Check },
         { label: 'Audio files', value: totals.files, detail: `${totals.recordedFiles} recorded, ${totals.uploadedFiles} uploaded`, icon: Download },
@@ -460,36 +307,8 @@ const AdminAnalytics: React.FC = () => {
               Analytics
             </h1>
             <p className="mt-0.5 max-w-2xl text-sm" style={{ color: 'var(--text-secondary)' }}>
-              App-wide usage, user activity, speaker profile coverage, and ontology export.
+              App-wide usage, user activity, and speaker profile coverage.
             </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-            <div className="inline-flex rounded-lg p-1" style={{ backgroundColor: 'var(--surface-subtle)' }}>
-              {RANGE_OPTIONS.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  onClick={() => setRange(option.key)}
-                  className="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
-                  style={{
-                    backgroundColor: range === option.key ? 'var(--accent)' : 'transparent',
-                    color: range === option.key ? '#fff' : 'var(--text-secondary)',
-                  }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={handleExportOwl}
-              disabled={!analytics || analytics.speakerProfiles.filter((speaker) => speaker.hasOntology).length === 0}
-              className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-            >
-              <Download className="h-4 w-4" aria-hidden />
-              Export OWL
-            </button>
           </div>
         </div>
       </div>
@@ -642,7 +461,7 @@ const AdminAnalytics: React.FC = () => {
                     Ontology coverage
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Speaker profiles available for OWL export.
+                    Speaker profiles with structured ontology data.
                   </p>
                 </div>
                 <div className="space-y-4 px-4 pb-4">
@@ -758,7 +577,7 @@ const AdminAnalytics: React.FC = () => {
                     Speaker profiles
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Metadata only. Ontology fields are used for the OWL export.
+                    Metadata only. Ontology fields indicate structured speaker context.
                   </p>
                 </div>
                 <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}>
@@ -813,7 +632,7 @@ const AdminAnalytics: React.FC = () => {
                         </div>
                       ) : (
                         <p className="mt-3 rounded-lg border px-3 py-2 text-sm" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg)', color: 'var(--text-muted)' }}>
-                          No speaker profiles in this range.
+                          No speaker profiles found.
                         </p>
                       )}
                     </div>
