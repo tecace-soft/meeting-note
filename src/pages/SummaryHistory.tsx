@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { supabase, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
+import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import {
   ArrowsReload01,
   Calendar,
@@ -87,6 +87,34 @@ interface GeneratedHistoryProfile {
   saving: boolean;
   saved: boolean;
   saveError: string | null;
+}
+
+async function invokeGenerateProfile(body: {
+  speakerName: string;
+  speakerId: string;
+  transcriptText: string;
+  existingProfile: string | null;
+}): Promise<{ profile?: string; error?: string }> {
+  const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/generate-profile`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const raw = await response.text();
+  let parsed: { profile?: string; error?: string };
+  try {
+    parsed = raw ? JSON.parse(raw) as { profile?: string; error?: string } : {};
+  } catch {
+    parsed = { error: raw || `HTTP ${response.status}` };
+  }
+  if (!response.ok) {
+    throw new Error(parsed.error || raw || `HTTP ${response.status}`);
+  }
+  return parsed;
 }
 
 const NOTES_PAGE_SIZE = 10;
@@ -665,15 +693,15 @@ const SummaryHistory: React.FC = () => {
         uniqueSpeakers.map(async (speakerName): Promise<GeneratedHistoryProfile> => {
           const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
           const existingProfile = record?.profile?.trim() || null;
-          const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
-            'generate-profile',
-            { body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile }, headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
-          );
-          if (error) {
-            console.error(`generate-profile failed for "${speakerName}"`, { data, error });
-            const detail = (data as { error?: string } | null)?.error ?? error.message;
-            throw new Error(`Edge function error for "${speakerName}": ${detail}`);
-          }
+          const data = await invokeGenerateProfile({
+            speakerName,
+            speakerId: record?.id ?? '',
+            transcriptText,
+            existingProfile,
+          }).catch((error: unknown) => {
+            console.error(`generate-profile failed for "${speakerName}"`, error);
+            throw new Error(`Edge function error for "${speakerName}": ${error instanceof Error ? error.message : String(error)}`);
+          });
           if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
           const draft = canonicalOntologyProfileString(data?.profile ?? '');
           return { speakerId: record?.id ?? null, speakerName, draft, isNew: !existingProfile, saving: false, saved: false, saveError: null };

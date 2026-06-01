@@ -30,6 +30,7 @@ const env = {
   assemblyAiApiKey: process.env.ASSEMBLYAI_API_KEY ?? '',
   summaryModel: process.env.GEMINI_SUMMARY_MODEL ?? 'gemini-2.5-flash-lite',
   assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL ?? 'universal-3-pro',
+  assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD ?? '0.21'),
   frontendOrigin: process.env.APP_FRONTEND_ORIGIN ?? '*',
   port: Number(process.env.PORT ?? '8787'),
   fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS ?? '1200000'),
@@ -292,7 +293,12 @@ async function recordAssemblyUsage(input: {
   model: string;
   latencyMs: number;
   transcriptId: string;
+  audioDurationSeconds: number;
 }): Promise<void> {
+  const durationHours = Math.max(0, input.audioDurationSeconds) / 3600;
+  const estimatedCostUsd = Number.isFinite(env.assemblyAiPricePerHourUsd)
+    ? durationHours * env.assemblyAiPricePerHourUsd
+    : 0;
   const { error } = await supabase.from('workflow_usage').insert({
     note_id: input.noteId,
     user_id: input.userId,
@@ -301,7 +307,12 @@ async function recordAssemblyUsage(input: {
     model: input.model,
     input_type: 'audio',
     latency_ms: input.latencyMs,
-    usage_metadata: { transcriptId: input.transcriptId },
+    estimated_cost_usd: Number(estimatedCostUsd.toFixed(6)),
+    usage_metadata: {
+      transcriptId: input.transcriptId,
+      audioDurationSeconds: input.audioDurationSeconds,
+      pricePerHourUsd: env.assemblyAiPricePerHourUsd,
+    },
   });
   if (error) {
     console.warn(`Could not record AssemblyAI usage for transcription: ${error.message}`);
@@ -383,6 +394,11 @@ async function transcribeWithAssembly(input: {
   }
 
   const utterances = Array.isArray(transcript.utterances) ? transcript.utterances : [];
+  const audioDurationSeconds = typeof transcript.audio_duration === 'number'
+    ? transcript.audio_duration
+    : typeof transcript.audio_duration_seconds === 'number'
+      ? transcript.audio_duration_seconds
+      : 0;
   const segments = utterances.length > 0
     ? utterances.map((utterance) => {
         const record = utterance && typeof utterance === 'object' && !Array.isArray(utterance)
@@ -410,6 +426,7 @@ async function transcribeWithAssembly(input: {
     model: env.assemblyAiSpeechModel,
     latencyMs,
     transcriptId: created.id.trim(),
+    audioDurationSeconds,
   });
   return { segments, latencyMs };
 }

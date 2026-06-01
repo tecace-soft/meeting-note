@@ -10,6 +10,7 @@ Dedicated backend for app-owned transcription and summarization workflows.
 - `GEMINI_SUMMARY_MODEL` defaults to `gemini-2.5-flash-lite`
 - `ASSEMBLYAI_API_KEY`
 - `ASSEMBLYAI_SPEECH_MODEL` optional, defaults to `universal-3-pro`
+- `ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD` optional, defaults to `0.21`
 - `GEMINI_INPUT_PRICE_PER_1M_TOKENS` optional global input price override
 - `GEMINI_TEXT_INPUT_PRICE_PER_1M_TOKENS` optional text input price override
 - `GEMINI_AUDIO_INPUT_PRICE_PER_1M_TOKENS` optional audio input price override
@@ -19,7 +20,7 @@ Dedicated backend for app-owned transcription and summarization workflows.
 - `WORKFLOW_FETCH_BODY_TIMEOUT_MS` optional, defaults to `1200000` (20 minutes)
 - `PORT` optional, defaults to `8787`
 
-AssemblyAI transcription latency and Gemini summary token counts are recorded in `public.workflow_usage`.
+AssemblyAI transcription latency/cost and Gemini summary token counts/cost are recorded in `public.workflow_usage`.
 Estimated Gemini summary cost defaults cover the common Flash models used here and can be overridden with the price env vars above.
 
 ## Endpoint

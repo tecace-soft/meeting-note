@@ -79,10 +79,16 @@ interface AdminAnalyticsResponse {
     mcpTokens: number;
     activeMcpTokens: number;
     aiCalls?: number;
+    transcriptionCalls?: number;
+    assemblyTranscriptionCalls?: number;
+    summaryCalls?: number;
+    geminiSummaryCalls?: number;
     aiPromptTokens?: number;
     aiCandidateTokens?: number;
     aiTokens?: number;
     aiEstimatedCostUsd?: number;
+    assemblyTranscriptionCostUsd?: number;
+    geminiSummaryCostUsd?: number;
     averageTranscriptionLatencyMs?: number;
     averageSummaryLatencyMs?: number;
   };
@@ -398,27 +404,27 @@ const AdminAnalytics: React.FC = () => {
         { label: 'Projects', value: totals.projects, detail: `${totals.summaryPrompts} prompts`, icon: ChartBarVertical01 },
         { label: 'Speaker profiles', value: totals.speakerProfiles, detail: `${totals.ontologyProfiles} ontology, ${totals.emptySpeakerProfiles} empty`, icon: User01 },
         {
-          label: 'AI tokens',
+          label: 'Summary tokens',
           value: totals.aiTokens ?? 0,
-          detail: `${formatNumber(totals.aiCalls ?? 0)} Gemini calls`,
+          detail: `${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini summary calls`,
           icon: ChartBarVertical01,
         },
         {
-          label: 'AI cost',
+          label: 'Workflow cost',
           valueText: formatCurrency(totals.aiEstimatedCostUsd ?? 0),
-          detail: `${formatNumber(totals.aiPromptTokens ?? 0)} in, ${formatNumber(totals.aiCandidateTokens ?? 0)} out`,
+          detail: `${formatCurrency(totals.assemblyTranscriptionCostUsd ?? 0)} AssemblyAI, ${formatCurrency(totals.geminiSummaryCostUsd ?? 0)} Gemini`,
           icon: Check,
         },
         {
           label: 'Transcription latency',
           valueText: formatDurationMs(totals.averageTranscriptionLatencyMs ?? 0),
-          detail: 'Average Gemini transcription',
+          detail: `${formatNumber(totals.assemblyTranscriptionCalls ?? totals.transcriptionCalls ?? 0)} AssemblyAI calls`,
           icon: ChartBarVertical01,
         },
         {
           label: 'Summary latency',
           valueText: formatDurationMs(totals.averageSummaryLatencyMs ?? 0),
-          detail: 'Average Gemini summarization',
+          detail: `${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini calls`,
           icon: Check,
         },
       ]

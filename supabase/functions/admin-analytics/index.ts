@@ -94,6 +94,7 @@ interface SpeakerRow {
 interface WorkflowUsageRow {
   user_id: string | null;
   stage: string | null;
+  provider: string | null;
   prompt_tokens: number | null;
   candidates_tokens: number | null;
   total_tokens: number | null;
@@ -221,15 +222,17 @@ function addWorkflowUsageRows(rows: WorkflowUsageRow[], usageByDate: Map<string,
     const day = dateKey ? usageByDate.get(dateKey) : undefined;
     if (!day) continue;
 
-    day.aiTokens += asFiniteNumber(row.total_tokens);
+    if (row.stage === 'summarization' && row.provider === 'google-gemini') {
+      day.aiTokens += asFiniteNumber(row.total_tokens);
+    }
     day.aiEstimatedCostUsd += asFiniteNumber(row.estimated_cost_usd);
 
     const latencyMs = asFiniteNumber(row.latency_ms);
     if (latencyMs <= 0) continue;
-    if (row.stage === 'transcription') {
+    if (row.stage === 'transcription' && row.provider === 'assemblyai') {
       day.transcriptionLatencyMs += latencyMs;
       day.transcriptionLatencySamples += 1;
-    } else if (row.stage === 'summarization') {
+    } else if (row.stage === 'summarization' && row.provider === 'google-gemini') {
       day.summaryLatencyMs += latencyMs;
       day.summaryLatencySamples += 1;
     }
@@ -376,8 +379,8 @@ serve(async (req) => {
         : adminClient.from('mcp_token').select('id, user_id, last_used_at, revoked_at, created_at')
       ).order('created_at', { ascending: false }),
       (since
-        ? adminClient.from('workflow_usage').select('user_id, stage, prompt_tokens, candidates_tokens, total_tokens, latency_ms, estimated_cost_usd, created_at').gte('created_at', since)
-        : adminClient.from('workflow_usage').select('user_id, stage, prompt_tokens, candidates_tokens, total_tokens, latency_ms, estimated_cost_usd, created_at')
+        ? adminClient.from('workflow_usage').select('user_id, stage, provider, prompt_tokens, candidates_tokens, total_tokens, latency_ms, estimated_cost_usd, created_at').gte('created_at', since)
+        : adminClient.from('workflow_usage').select('user_id, stage, provider, prompt_tokens, candidates_tokens, total_tokens, latency_ms, estimated_cost_usd, created_at')
       ).order('created_at', { ascending: false }),
     ]);
 
@@ -482,12 +485,18 @@ serve(async (req) => {
     });
 
     const totalFileBytes = files.reduce((sum, file) => sum + (typeof file.size_bytes === 'number' ? file.size_bytes : 0), 0);
-    const totalAiPromptTokens = workflowUsage.reduce((sum, row) => sum + (typeof row.prompt_tokens === 'number' ? row.prompt_tokens : 0), 0);
-    const totalAiCandidateTokens = workflowUsage.reduce((sum, row) => sum + (typeof row.candidates_tokens === 'number' ? row.candidates_tokens : 0), 0);
-    const totalAiTokens = workflowUsage.reduce((sum, row) => sum + (typeof row.total_tokens === 'number' ? row.total_tokens : 0), 0);
+    const transcriptionUsageRows = workflowUsage.filter((row) => row.stage === 'transcription');
+    const summaryUsageRows = workflowUsage.filter((row) => row.stage === 'summarization');
+    const assemblyTranscriptionRows = transcriptionUsageRows.filter((row) => row.provider === 'assemblyai');
+    const geminiSummaryRows = summaryUsageRows.filter((row) => row.provider === 'google-gemini');
+    const totalAiPromptTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.prompt_tokens), 0);
+    const totalAiCandidateTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.candidates_tokens), 0);
+    const totalAiTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.total_tokens), 0);
     const totalAiEstimatedCostUsd = workflowUsage.reduce((sum, row) => sum + asFiniteNumber(row.estimated_cost_usd), 0);
-    const transcriptionLatencyRows = workflowUsage.filter((row) => row.stage === 'transcription' && asFiniteNumber(row.latency_ms) > 0);
-    const summaryLatencyRows = workflowUsage.filter((row) => row.stage === 'summarization' && asFiniteNumber(row.latency_ms) > 0);
+    const assemblyTranscriptionCostUsd = assemblyTranscriptionRows.reduce((sum, row) => sum + asFiniteNumber(row.estimated_cost_usd), 0);
+    const geminiSummaryCostUsd = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.estimated_cost_usd), 0);
+    const transcriptionLatencyRows = assemblyTranscriptionRows.filter((row) => asFiniteNumber(row.latency_ms) > 0);
+    const summaryLatencyRows = geminiSummaryRows.filter((row) => asFiniteNumber(row.latency_ms) > 0);
     const averageTranscriptionLatencyMs = transcriptionLatencyRows.length > 0
       ? Math.round(transcriptionLatencyRows.reduce((sum, row) => sum + asFiniteNumber(row.latency_ms), 0) / transcriptionLatencyRows.length)
       : 0;
@@ -525,10 +534,16 @@ serve(async (req) => {
         mcpTokens: tokens.length,
         activeMcpTokens: tokens.filter((token) => !token.revoked_at).length,
         aiCalls: workflowUsage.length,
+        transcriptionCalls: transcriptionUsageRows.length,
+        assemblyTranscriptionCalls: assemblyTranscriptionRows.length,
+        summaryCalls: summaryUsageRows.length,
+        geminiSummaryCalls: geminiSummaryRows.length,
         aiPromptTokens: totalAiPromptTokens,
         aiCandidateTokens: totalAiCandidateTokens,
         aiTokens: totalAiTokens,
         aiEstimatedCostUsd: Number(totalAiEstimatedCostUsd.toFixed(6)),
+        assemblyTranscriptionCostUsd: Number(assemblyTranscriptionCostUsd.toFixed(6)),
+        geminiSummaryCostUsd: Number(geminiSummaryCostUsd.toFixed(6)),
         averageTranscriptionLatencyMs,
         averageSummaryLatencyMs,
       },

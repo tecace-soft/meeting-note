@@ -103,6 +103,34 @@ interface WorkflowJobStatus {
   error?: string | null;
 }
 
+async function invokeGenerateProfile(body: {
+  speakerName: string;
+  speakerId: string;
+  transcriptText: string;
+  existingProfile: string | null;
+}): Promise<{ profile?: string; error?: string }> {
+  const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/generate-profile`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const raw = await response.text();
+  let parsed: { profile?: string; error?: string };
+  try {
+    parsed = raw ? JSON.parse(raw) as { profile?: string; error?: string } : {};
+  } catch {
+    parsed = { error: raw || `HTTP ${response.status}` };
+  }
+  if (!response.ok) {
+    throw new Error(parsed.error || raw || `HTTP ${response.status}`);
+  }
+  return parsed;
+}
+
 const RECORDING_FORMATS: RecordingFormat[] = [
   { mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'm4a' },
   { mimeType: 'audio/mp4', extension: 'm4a' },
@@ -1106,19 +1134,15 @@ const TranscriptionSummary: React.FC = () => {
           const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
           const existingProfile = record?.profile?.trim() || null;
 
-          const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
-            'generate-profile',
-            {
-              body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile },
-              headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-            }
-          );
-
-          if (error) {
-            console.error(`generate-profile failed for "${speakerName}"`, { data, error });
-            const detail = (data as { error?: string } | null)?.error ?? error.message;
-            throw new Error(`Edge function error for "${speakerName}": ${detail}`);
-          }
+          const data = await invokeGenerateProfile({
+            speakerName,
+            speakerId: record?.id ?? '',
+            transcriptText,
+            existingProfile,
+          }).catch((error: unknown) => {
+            console.error(`generate-profile failed for "${speakerName}"`, error);
+            throw new Error(`Edge function error for "${speakerName}": ${error instanceof Error ? error.message : String(error)}`);
+          });
           if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
 
           const draft = canonicalOntologyProfileString(data?.profile ?? '');
