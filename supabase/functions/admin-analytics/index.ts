@@ -206,6 +206,19 @@ function asFiniteNumber(value: number | string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizeUsageProvider(provider: string | null | undefined): string {
+  return provider?.trim().toLowerCase() ?? '';
+}
+
+function isAssemblyTranscriptionUsage(row: WorkflowUsageRow): boolean {
+  return row.stage === 'transcription' && normalizeUsageProvider(row.provider) === 'assemblyai';
+}
+
+function isGeminiSummaryUsage(row: WorkflowUsageRow): boolean {
+  const provider = normalizeUsageProvider(row.provider);
+  return row.stage === 'summarization' && (!provider || provider === 'google-gemini' || provider === 'gemini');
+}
+
 function addNoteUsageRows(rows: Array<{ created_at: string | null }>, usageByDate: Map<string, UsageDay>): void {
   for (const row of rows) {
     const dateKey = dateKeyFromTimestamp(row.created_at);
@@ -222,17 +235,17 @@ function addWorkflowUsageRows(rows: WorkflowUsageRow[], usageByDate: Map<string,
     const day = dateKey ? usageByDate.get(dateKey) : undefined;
     if (!day) continue;
 
-    if (row.stage === 'summarization' && row.provider === 'google-gemini') {
+    if (isGeminiSummaryUsage(row)) {
       day.aiTokens += asFiniteNumber(row.total_tokens);
     }
     day.aiEstimatedCostUsd += asFiniteNumber(row.estimated_cost_usd);
 
     const latencyMs = asFiniteNumber(row.latency_ms);
     if (latencyMs <= 0) continue;
-    if (row.stage === 'transcription' && row.provider === 'assemblyai') {
+    if (isAssemblyTranscriptionUsage(row)) {
       day.transcriptionLatencyMs += latencyMs;
       day.transcriptionLatencySamples += 1;
-    } else if (row.stage === 'summarization' && row.provider === 'google-gemini') {
+    } else if (isGeminiSummaryUsage(row)) {
       day.summaryLatencyMs += latencyMs;
       day.summaryLatencySamples += 1;
     }
@@ -487,8 +500,8 @@ serve(async (req) => {
     const totalFileBytes = files.reduce((sum, file) => sum + (typeof file.size_bytes === 'number' ? file.size_bytes : 0), 0);
     const transcriptionUsageRows = workflowUsage.filter((row) => row.stage === 'transcription');
     const summaryUsageRows = workflowUsage.filter((row) => row.stage === 'summarization');
-    const assemblyTranscriptionRows = transcriptionUsageRows.filter((row) => row.provider === 'assemblyai');
-    const geminiSummaryRows = summaryUsageRows.filter((row) => row.provider === 'google-gemini');
+    const assemblyTranscriptionRows = transcriptionUsageRows.filter(isAssemblyTranscriptionUsage);
+    const geminiSummaryRows = summaryUsageRows.filter(isGeminiSummaryUsage);
     const totalAiPromptTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.prompt_tokens), 0);
     const totalAiCandidateTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.candidates_tokens), 0);
     const totalAiTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.total_tokens), 0);

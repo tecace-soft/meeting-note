@@ -394,11 +394,19 @@ async function transcribeWithAssembly(input: {
   }
 
   const utterances = Array.isArray(transcript.utterances) ? transcript.utterances : [];
+  const utteranceDurationSeconds = utterances.reduce((maxEnd, utterance) => {
+    const record = utterance && typeof utterance === 'object' && !Array.isArray(utterance)
+      ? utterance as Record<string, unknown>
+      : {};
+    return typeof record.end === 'number' && Number.isFinite(record.end)
+      ? Math.max(maxEnd, record.end / 1000)
+      : maxEnd;
+  }, 0);
   const audioDurationSeconds = typeof transcript.audio_duration === 'number'
     ? transcript.audio_duration
     : typeof transcript.audio_duration_seconds === 'number'
       ? transcript.audio_duration_seconds
-      : 0;
+      : utteranceDurationSeconds;
   const segments = utterances.length > 0
     ? utterances.map((utterance) => {
         const record = utterance && typeof utterance === 'object' && !Array.isArray(utterance)
