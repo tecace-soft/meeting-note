@@ -47,6 +47,12 @@ interface AdminSpeakerProfile {
 interface UsageDay {
   date: string;
   notes: number;
+  aiTokens: number;
+  aiEstimatedCostUsd: number;
+  transcriptionLatencyMs: number;
+  transcriptionLatencySamples: number;
+  summaryLatencyMs: number;
+  summaryLatencySamples: number;
   total: number;
 }
 
@@ -72,6 +78,13 @@ interface AdminAnalyticsResponse {
     summaryPrompts: number;
     mcpTokens: number;
     activeMcpTokens: number;
+    aiCalls?: number;
+    aiPromptTokens?: number;
+    aiCandidateTokens?: number;
+    aiTokens?: number;
+    aiEstimatedCostUsd?: number;
+    averageTranscriptionLatencyMs?: number;
+    averageSummaryLatencyMs?: number;
   };
   usageChart?: {
     startDate?: string;
@@ -111,6 +124,25 @@ function formatBytes(value: number): string {
     unit += 1;
   }
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+}
+
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat([], {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value >= 1 ? 2 : 4,
+    maximumFractionDigits: value >= 1 ? 2 : 4,
+  }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatDurationMs(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0s';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  const seconds = value / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
 }
 
 function toDateInputValue(date: Date): string {
@@ -157,6 +189,12 @@ function emptyUsageDays(startDate: string, endDate: string): UsageDay[] {
     days.push({
       date,
       notes: 0,
+      aiTokens: 0,
+      aiEstimatedCostUsd: 0,
+      transcriptionLatencyMs: 0,
+      transcriptionLatencySamples: 0,
+      summaryLatencyMs: 0,
+      summaryLatencySamples: 0,
       total: 0,
     });
     cursor = addLocalDays(cursor, 1);
@@ -168,9 +206,40 @@ function emptyUsageDays(startDate: string, endDate: string): UsageDay[] {
         return {
           date,
           notes: 0,
+          aiTokens: 0,
+          aiEstimatedCostUsd: 0,
+          transcriptionLatencyMs: 0,
+          transcriptionLatencySamples: 0,
+          summaryLatencyMs: 0,
+          summaryLatencySamples: 0,
           total: 0,
         };
       });
+}
+
+function linePoints(values: number[], maxValue: number, width: number, height: number, padding: number): string {
+  if (values.length === 0) return '';
+  const span = Math.max(1, values.length - 1);
+  return values
+    .map((value, index) => {
+      const x = padding + (index / span) * (width - padding * 2);
+      const y = height - padding - (Math.max(0, value) / Math.max(1, maxValue)) * (height - padding * 2);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(' ');
+}
+
+function areaPoints(values: number[], maxValue: number, width: number, height: number, padding: number): string {
+  const topPoints = linePoints(values, maxValue, width, height, padding);
+  return `${padding},${height - padding} ${topPoints} ${width - padding},${height - padding}`;
+}
+
+function linePoint(value: number, index: number, count: number, maxValue: number, width: number, height: number, padding: number): { x: number; y: number } {
+  const span = Math.max(1, count - 1);
+  return {
+    x: padding + (index / span) * (width - padding * 2),
+    y: height - padding - (Math.max(0, value) / Math.max(1, maxValue)) * (height - padding * 2),
+  };
 }
 
 async function callAdminAnalytics(
@@ -208,6 +277,7 @@ const AdminAnalytics: React.FC = () => {
   const [chartEndDate, setChartEndDate] = useState(() => toDateInputValue(new Date()));
   const [chartStartDate, setChartStartDate] = useState(() => defaultChartStartDate(toDateInputValue(new Date())));
   const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null);
+  const [workflowMetric, setWorkflowMetric] = useState<'tokens' | 'cost' | 'transcription-latency' | 'summary-latency'>('tokens');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -277,14 +347,80 @@ const AdminAnalytics: React.FC = () => {
   const usageMax = Math.max(1, ...usageDays.map((day) => day.total));
   const chartTotal = usageDays.reduce((sum, day) => sum + day.notes, 0);
   const chartAverage = usageDays.length > 0 ? chartTotal / usageDays.length : 0;
+  const workflowSeries = [
+    {
+      key: 'tokens',
+      label: 'Tokens',
+      color: '#2563eb',
+      values: usageDays.map((day) => day.aiTokens),
+      format: (value: number) => formatNumber(Math.round(value)),
+      total: usageDays.reduce((sum, day) => sum + day.aiTokens, 0),
+    },
+    {
+      key: 'cost',
+      label: 'Cost',
+      color: '#16a34a',
+      values: usageDays.map((day) => day.aiEstimatedCostUsd),
+      format: (value: number) => formatCurrency(value),
+      total: usageDays.reduce((sum, day) => sum + day.aiEstimatedCostUsd, 0),
+    },
+    {
+      key: 'transcription-latency',
+      label: 'Transcription',
+      color: '#f97316',
+      values: usageDays.map((day) => day.transcriptionLatencyMs),
+      format: formatDurationMs,
+      total: totals?.averageTranscriptionLatencyMs ?? 0,
+    },
+    {
+      key: 'summary-latency',
+      label: 'Summary',
+      color: '#7c3aed',
+      values: usageDays.map((day) => day.summaryLatencyMs),
+      format: formatDurationMs,
+      total: totals?.averageSummaryLatencyMs ?? 0,
+    },
+  ];
+  const selectedWorkflowSeries = workflowSeries.find((series) => series.key === workflowMetric) ?? workflowSeries[0];
+  const lineChartWidth = 760;
+  const lineChartHeight = 260;
+  const lineChartPadding = 42;
+  const selectedWorkflowMax = Math.max(1, ...selectedWorkflowSeries.values);
+  const selectedWorkflowLatest = selectedWorkflowSeries.values[selectedWorkflowSeries.values.length - 1] ?? 0;
+  const selectedWorkflowAverage = selectedWorkflowSeries.values.length > 0
+    ? selectedWorkflowSeries.values.reduce((sum, value) => sum + value, 0) / selectedWorkflowSeries.values.length
+    : 0;
+  const chartTicks = [1, 0.75, 0.5, 0.25, 0];
   const metricCards = totals
     ? [
         { label: 'Signed-up users', value: totals.signedUpUsers, detail: `${totals.activeUsers} active users`, icon: Users },
         { label: 'Notes', value: totals.notes, detail: `${totals.sharedNotes} shared notes`, icon: FileDocument },
-        { label: 'Summaries', value: totals.summariesGenerated, detail: `${totals.transcriptionsGenerated} transcriptions`, icon: Check },
-        { label: 'Audio files', value: totals.files, detail: `${totals.recordedFiles} recorded, ${totals.uploadedFiles} uploaded`, icon: Download },
         { label: 'Projects', value: totals.projects, detail: `${totals.summaryPrompts} prompts`, icon: ChartBarVertical01 },
         { label: 'Speaker profiles', value: totals.speakerProfiles, detail: `${totals.ontologyProfiles} ontology, ${totals.emptySpeakerProfiles} empty`, icon: User01 },
+        {
+          label: 'AI tokens',
+          value: totals.aiTokens ?? 0,
+          detail: `${formatNumber(totals.aiCalls ?? 0)} Gemini calls`,
+          icon: ChartBarVertical01,
+        },
+        {
+          label: 'AI cost',
+          valueText: formatCurrency(totals.aiEstimatedCostUsd ?? 0),
+          detail: `${formatNumber(totals.aiPromptTokens ?? 0)} in, ${formatNumber(totals.aiCandidateTokens ?? 0)} out`,
+          icon: Check,
+        },
+        {
+          label: 'Transcription latency',
+          valueText: formatDurationMs(totals.averageTranscriptionLatencyMs ?? 0),
+          detail: 'Average Gemini transcription',
+          icon: ChartBarVertical01,
+        },
+        {
+          label: 'Summary latency',
+          valueText: formatDurationMs(totals.averageSummaryLatencyMs ?? 0),
+          detail: 'Average Gemini summarization',
+          icon: Check,
+        },
       ]
     : [];
 
@@ -332,7 +468,7 @@ const AdminAnalytics: React.FC = () => {
         {analytics ? (
           <div className="mx-auto w-full max-w-[96rem] space-y-4">
             <div
-              className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+              className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
             >
               {metricCards.map((card) => {
                 const Icon = card.icon;
@@ -353,7 +489,7 @@ const AdminAnalytics: React.FC = () => {
                       </p>
                     </div>
                     <p className="mt-3 text-xl font-semibold" style={{ color: 'var(--text)' }}>
-                      {formatNumber(card.value)}
+                      {'valueText' in card ? card.valueText : formatNumber(card.value)}
                     </p>
                     <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
                       {card.detail}
@@ -451,6 +587,121 @@ const AdminAnalytics: React.FC = () => {
                       </div>
                     );
                   })}
+                </div>
+                <div className="mt-6 overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                  <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium uppercase" style={{ color: 'var(--text-muted)' }}>
+                        Workflow trends
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-end gap-x-3 gap-y-1">
+                        <h3 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
+                          {selectedWorkflowSeries.format(selectedWorkflowLatest)}
+                        </h3>
+                        <span className="pb-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                          Latest {selectedWorkflowSeries.label.toLowerCase()}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Average {selectedWorkflowSeries.format(selectedWorkflowAverage)} across selected dates.
+                      </p>
+                    </div>
+                    <div className="inline-flex w-fit flex-wrap gap-1 rounded-lg p-1" style={{ backgroundColor: 'var(--surface)' }}>
+                      {workflowSeries.map((series) => (
+                        <button
+                          key={series.key}
+                          type="button"
+                          onClick={() => setWorkflowMetric(series.key as typeof workflowMetric)}
+                          className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                          style={{
+                            backgroundColor: workflowMetric === series.key ? 'var(--accent-light)' : 'transparent',
+                            color: workflowMetric === series.key ? 'var(--accent)' : 'var(--text-secondary)',
+                          }}
+                        >
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: series.color }} />
+                          {series.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="custom-scrollbar overflow-x-auto px-3 pb-4">
+                    <svg
+                      role="img"
+                      aria-label={`Daily workflow ${selectedWorkflowSeries.label}`}
+                      viewBox={`0 0 ${lineChartWidth} ${lineChartHeight}`}
+                      className="h-72 min-w-[44rem] w-full"
+                    >
+                      <defs>
+                        <linearGradient id={`workflow-area-${selectedWorkflowSeries.key}`} x1="0" x2="0" y1="0" y2="1">
+                          <stop offset="0%" stopColor={selectedWorkflowSeries.color} stopOpacity="0.22" />
+                          <stop offset="100%" stopColor={selectedWorkflowSeries.color} stopOpacity="0.02" />
+                        </linearGradient>
+                      </defs>
+                      {chartTicks.map((tick) => {
+                        const y = lineChartPadding + (1 - tick) * (lineChartHeight - lineChartPadding * 2);
+                        return (
+                          <g key={tick}>
+                            <text
+                              x={lineChartPadding - 10}
+                              y={y + 4}
+                              textAnchor="end"
+                              fontSize="10"
+                              fill="var(--text-muted)"
+                            >
+                              {selectedWorkflowSeries.format(selectedWorkflowMax * tick)}
+                            </text>
+                            <line
+                              x1={lineChartPadding}
+                              x2={lineChartWidth - lineChartPadding}
+                              y1={y}
+                              y2={y}
+                              stroke="var(--border)"
+                              strokeOpacity="0.7"
+                              strokeWidth="1"
+                            />
+                          </g>
+                        );
+                      })}
+                      <polygon
+                        points={areaPoints(selectedWorkflowSeries.values, selectedWorkflowMax, lineChartWidth, lineChartHeight, lineChartPadding)}
+                        fill={`url(#workflow-area-${selectedWorkflowSeries.key})`}
+                      />
+                      <polyline
+                        fill="none"
+                        points={linePoints(selectedWorkflowSeries.values, selectedWorkflowMax, lineChartWidth, lineChartHeight, lineChartPadding)}
+                        stroke={selectedWorkflowSeries.color}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="3"
+                      />
+                      {selectedWorkflowSeries.values.map((value, index) => {
+                        const point = linePoint(value, index, selectedWorkflowSeries.values.length, selectedWorkflowMax, lineChartWidth, lineChartHeight, lineChartPadding);
+                        return (
+                          <g key={`${selectedWorkflowSeries.key}-${usageDays[index]?.date ?? index}`}>
+                            <circle cx={point.x} cy={point.y} r="5.2" fill="var(--bg-secondary)" stroke={selectedWorkflowSeries.color} strokeWidth="2" />
+                            <circle cx={point.x} cy={point.y} r="2.4" fill={selectedWorkflowSeries.color}>
+                              <title>{`${formatChartDate(usageDays[index]?.date ?? '')} ${selectedWorkflowSeries.label}: ${selectedWorkflowSeries.format(value)}`}</title>
+                            </circle>
+                          </g>
+                        );
+                      })}
+                      {usageDays.map((day, index) => {
+                        const point = linePoint(0, index, usageDays.length, 1, lineChartWidth, lineChartHeight, lineChartPadding);
+                        return (
+                          <text
+                            key={day.date}
+                            x={point.x}
+                            y={lineChartHeight - 10}
+                            textAnchor="middle"
+                            fontSize="11"
+                            fill="var(--text-muted)"
+                          >
+                            {usageDays.length <= 14 || index % Math.ceil(usageDays.length / 7) === 0 ? formatChartDate(day.date) : ''}
+                          </text>
+                        );
+                      })}
+                    </svg>
+                  </div>
                 </div>
               </div>
             </section>

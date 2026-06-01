@@ -1,0 +1,596 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createClient } from '@supabase/supabase-js';
+import { config as loadDotenv } from 'dotenv';
+import { Agent, setGlobalDispatcher } from 'undici';
+import { calculateGeminiUsageCost } from './costs.js';
+import { callGemini, type GeminiUsageMetadata } from './gemini.js';
+import { parseSummary, formatTranscriptText, type TranscriptSegment } from './parsers.js';
+import { buildSummaryPrompt } from './prompts.js';
+
+const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
+loadDotenv({ path: join(workflowDir, '.env') });
+
+interface SummarizeAudioRequest {
+  downloadUrl?: unknown;
+  fileName?: unknown;
+  instructions?: unknown;
+  promptId?: unknown;
+  userId?: unknown;
+  userName?: unknown;
+  noteId?: unknown;
+  speakerContext?: unknown;
+}
+
+const env = {
+  supabaseUrl: process.env.SUPABASE_URL ?? '',
+  serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+  geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
+  assemblyAiApiKey: process.env.ASSEMBLYAI_API_KEY ?? '',
+  summaryModel: process.env.GEMINI_SUMMARY_MODEL ?? 'gemini-2.5-flash-lite',
+  assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL ?? 'universal-3-pro',
+  frontendOrigin: process.env.APP_FRONTEND_ORIGIN ?? '*',
+  port: Number(process.env.PORT ?? '8787'),
+  fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS ?? '1200000'),
+  fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS ?? '1200000'),
+};
+
+setGlobalDispatcher(new Agent({
+  headersTimeout: env.fetchHeadersTimeoutMs,
+  bodyTimeout: env.fetchBodyTimeoutMs,
+}));
+
+const supabase = createClient(env.supabaseUrl || 'https://placeholder.supabase.co', env.serviceRoleKey || 'missing-service-role-key', {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+
+function corsHeaders(): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': env.frontendOrigin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Content-Type': 'application/json',
+  };
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, corsHeaders());
+  res.end(JSON.stringify(body));
+}
+
+function sendNoContent(res: ServerResponse): void {
+  res.writeHead(204, corsHeaders());
+  res.end();
+}
+
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+      if (Buffer.concat(chunks).byteLength > 2_000_000) {
+        reject(new Error('Request body is too large.'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw.trim()) return resolve({});
+      try {
+        resolve(JSON.parse(raw) as unknown);
+      } catch {
+        reject(new Error('Request body must be valid JSON.'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function requiredString(body: SummarizeAudioRequest, key: keyof SummarizeAudioRequest): string {
+  const value = body[key];
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'bigint') {
+    return String(value);
+  }
+  if (typeof value === 'boolean') {
+    return String(value);
+  }
+  if (value == null || (typeof value === 'string' && !value.trim())) {
+    throw new Error(`${String(key)} is required. Received fields: ${Object.keys(body).sort().join(', ') || 'none'}.`);
+  }
+  throw new Error(`${String(key)} must be a string or number. Received ${typeof value}.`);
+}
+
+function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
+  return {
+    downloadUrl: requiredString(body, 'downloadUrl'),
+    fileName: requiredString(body, 'fileName'),
+    promptId: requiredString(body, 'promptId'),
+    userId: requiredString(body, 'userId'),
+    userName: typeof body.userName === 'string' ? body.userName.trim() : '',
+    noteId: requiredString(body, 'noteId'),
+    instructions: typeof body.instructions === 'string' ? body.instructions : '',
+    speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
+  };
+}
+
+function getBearerToken(req: IncomingMessage): string {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) throw new Error('Missing bearer token.');
+  return header.slice('Bearer '.length).trim();
+}
+
+async function getMicrosoftUserId(accessToken: string): Promise<string> {
+  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Microsoft Graph /me rejected the token (${response.status}).`);
+  }
+  const data = (await response.json()) as { id?: unknown };
+  if (typeof data.id !== 'string' || !data.id.trim()) {
+    throw new Error('Microsoft Graph /me did not return a user id.');
+  }
+  return data.id.trim();
+}
+
+function fetchErrorMessage(stage: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error && 'cause' in error ? (error as Error & { cause?: unknown }).cause : null;
+  const causeMessage = cause instanceof Error ? ` Cause: ${cause.message}` : cause ? ` Cause: ${String(cause)}` : '';
+  return `${stage} failed: ${message}.${causeMessage}`;
+}
+
+interface GeminiWorkflowCallResult {
+  text: string;
+  model: string;
+  usageMetadata: GeminiUsageMetadata;
+  latencyMs: number;
+}
+
+interface SummarizeAudioInput {
+  downloadUrl: string;
+  fileName: string;
+  instructions: string;
+  promptId: string;
+  userId: string;
+  userName: string;
+  noteId: string;
+  speakerContext: string;
+}
+
+interface SummarizeAudioResult {
+  transcript: TranscriptSegment[];
+  summary: string;
+}
+
+interface WorkflowJobRow {
+  id: string;
+  user_id: string;
+  note_id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  stage: string | null;
+  progress: number | null;
+  result: unknown;
+  error: string | null;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callGeminiWithFallback(input: {
+  stage: string;
+  model: string;
+  fallbackModels: string[];
+  parts: Parameters<typeof callGemini>[0]['parts'];
+  responseMimeType?: 'application/json' | 'text/plain';
+  maxOutputTokens?: number;
+}): Promise<GeminiWorkflowCallResult> {
+  const models = [input.model, ...input.fallbackModels].filter((model, index, all) => model && all.indexOf(model) === index);
+  let lastError: unknown = null;
+  for (const model of models) {
+    try {
+      console.log(`${input.stage}: calling Gemini model ${model}`);
+      const startedAt = performance.now();
+      const result = await callGemini({
+        apiKey: env.geminiApiKey,
+        model,
+        parts: input.parts,
+        responseMimeType: input.responseMimeType,
+        maxOutputTokens: input.maxOutputTokens,
+      });
+      return {
+        text: result.text,
+        model,
+        usageMetadata: result.usageMetadata,
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const isMissingModel = message.includes('404') || message.includes('not found') || message.includes('not supported');
+      if (!isMissingModel) {
+        throw new Error(`${input.stage}: ${message}`);
+      }
+      console.warn(`${input.stage}: Gemini model ${model} unavailable, trying fallback if configured. ${message}`);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Gemini request failed.'));
+}
+
+async function loadSummaryPrompt(promptId: string, userId: string): Promise<string> {
+  const { data, error } = await supabase
+    .from('summary_prompt')
+    .select('prompt')
+    .eq('id', promptId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  const prompt = (data as { prompt?: unknown } | null)?.prompt;
+  if (typeof prompt !== 'string' || !prompt.trim()) {
+    throw new Error('Selected summary prompt was not found for this user.');
+  }
+  return prompt.trim();
+}
+
+async function recordGeminiUsage(input: {
+  noteId: string;
+  userId: string;
+  stage: string;
+  model: string;
+  inputType: 'audio' | 'text';
+  usageMetadata: GeminiUsageMetadata;
+  latencyMs: number;
+}): Promise<void> {
+  const usage = calculateGeminiUsageCost({
+    model: input.model,
+    inputType: input.inputType,
+    usageMetadata: input.usageMetadata,
+  });
+  const { error } = await supabase.from('workflow_usage').insert({
+    note_id: input.noteId,
+    user_id: input.userId,
+    stage: input.stage,
+    provider: 'google-gemini',
+    model: input.model,
+    input_type: input.inputType,
+    prompt_tokens: usage.promptTokens,
+    candidates_tokens: usage.candidatesTokens,
+    total_tokens: usage.totalTokens,
+    cached_content_tokens: usage.cachedContentTokens,
+    thoughts_tokens: usage.thoughtsTokens,
+    latency_ms: input.latencyMs,
+    estimated_cost_usd: usage.estimatedCostUsd,
+    usage_metadata: input.usageMetadata,
+  });
+  if (error) {
+    console.warn(`Could not record Gemini usage for ${input.stage}: ${error.message}`);
+  }
+}
+
+async function recordAssemblyUsage(input: {
+  noteId: string;
+  userId: string;
+  model: string;
+  latencyMs: number;
+  transcriptId: string;
+}): Promise<void> {
+  const { error } = await supabase.from('workflow_usage').insert({
+    note_id: input.noteId,
+    user_id: input.userId,
+    stage: 'transcription',
+    provider: 'assemblyai',
+    model: input.model,
+    input_type: 'audio',
+    latency_ms: input.latencyMs,
+    usage_metadata: { transcriptId: input.transcriptId },
+  });
+  if (error) {
+    console.warn(`Could not record AssemblyAI usage for transcription: ${error.message}`);
+  }
+}
+
+async function insertNote(input: {
+  noteId: string;
+  userId: string;
+  userName: string;
+  downloadUrl: string;
+  transcriptText: string;
+  summary: string;
+  title: string;
+  tags: string[];
+  segments: TranscriptSegment[];
+}): Promise<void> {
+  const { error } = await supabase.from('note').insert({
+    transcription: input.transcriptText,
+    summary: input.summary,
+    user_id: input.userId,
+    user_name: input.userName,
+    id: input.noteId,
+    audio_file: input.downloadUrl,
+    name: input.title,
+    tags: input.tags,
+    diarization: input.segments,
+  });
+  if (error) throw error;
+}
+
+async function transcribeWithAssembly(input: {
+  downloadUrl: string;
+  noteId: string;
+  userId: string;
+}): Promise<{ segments: TranscriptSegment[]; latencyMs: number }> {
+  if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
+  const startedAt = performance.now();
+  const createResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
+    method: 'POST',
+    headers: {
+      Authorization: env.assemblyAiApiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      audio_url: input.downloadUrl,
+      speaker_labels: true,
+      speech_models: [env.assemblyAiSpeechModel],
+    }),
+  });
+  const createRaw = await createResponse.text();
+  if (!createResponse.ok) {
+    throw new Error(`AssemblyAI transcript submit failed (${createResponse.status}): ${createRaw.slice(0, 800)}`);
+  }
+  const created = JSON.parse(createRaw) as { id?: unknown };
+  if (typeof created.id !== 'string' || !created.id.trim()) {
+    throw new Error('AssemblyAI did not return a transcript id.');
+  }
+
+  let transcript: Record<string, unknown> | null = null;
+  const timeoutMs = 30 * 60 * 1000;
+  while (performance.now() - startedAt < timeoutMs) {
+    await delay(3000);
+    const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(created.id)}`, {
+      headers: { Authorization: env.assemblyAiApiKey },
+    });
+    const pollRaw = await pollResponse.text();
+    if (!pollResponse.ok) {
+      throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+    }
+    transcript = JSON.parse(pollRaw) as Record<string, unknown>;
+    if (transcript.status === 'completed') break;
+    if (transcript.status === 'error') {
+      throw new Error(typeof transcript.error === 'string' ? transcript.error : 'AssemblyAI transcription failed.');
+    }
+  }
+  if (!transcript || transcript.status !== 'completed') {
+    throw new Error('AssemblyAI transcription timed out.');
+  }
+
+  const utterances = Array.isArray(transcript.utterances) ? transcript.utterances : [];
+  const segments = utterances.length > 0
+    ? utterances.map((utterance) => {
+        const record = utterance && typeof utterance === 'object' && !Array.isArray(utterance)
+          ? utterance as Record<string, unknown>
+          : {};
+        const label = typeof record.speaker === 'string' || typeof record.speaker === 'number'
+          ? String(record.speaker)
+          : '?';
+        return {
+          speaker: `Speaker ${label}`,
+          text: typeof record.text === 'string' ? record.text.trim() : '',
+          start: typeof record.start === 'number' ? record.start / 1000 : undefined,
+          end: typeof record.end === 'number' ? record.end / 1000 : undefined,
+        };
+      }).filter((segment) => segment.text)
+    : [{
+        speaker: 'Unknown Speaker',
+        text: typeof transcript.text === 'string' ? transcript.text.trim() : '',
+      }].filter((segment) => segment.text);
+
+  const latencyMs = Math.round(performance.now() - startedAt);
+  await recordAssemblyUsage({
+    noteId: input.noteId,
+    userId: input.userId,
+    model: env.assemblyAiSpeechModel,
+    latencyMs,
+    transcriptId: created.id.trim(),
+  });
+  return { segments, latencyMs };
+}
+
+async function updateWorkflowJob(jobId: string | null, patch: {
+  status?: WorkflowJobRow['status'];
+  stage?: string;
+  progress?: number;
+  result?: unknown;
+  error?: string | null;
+}): Promise<void> {
+  if (!jobId) return;
+  const { error } = await supabase.from('workflow_job').update({
+    ...patch,
+    updated_at: new Date().toISOString(),
+  }).eq('id', jobId);
+  if (error) console.warn(`Could not update workflow job ${jobId}: ${error.message}`);
+}
+
+async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | null = null): Promise<SummarizeAudioResult> {
+  if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('Supabase service configuration is missing.');
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+  if (!env.assemblyAiApiKey) throw new Error('AssemblyAI API key is missing.');
+
+  await updateWorkflowJob(jobId, { status: 'processing', stage: 'loading inputs', progress: 10 });
+  const summaryRules = await loadSummaryPrompt(input.promptId, input.userId);
+  console.log(`Processing audio ${input.fileName} with AssemblyAI model ${env.assemblyAiSpeechModel}`);
+
+  await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
+  const { segments } = await transcribeWithAssembly({
+    downloadUrl: input.downloadUrl,
+    noteId: input.noteId,
+    userId: input.userId,
+  });
+  if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
+  const transcriptText = formatTranscriptText(segments);
+
+  await updateWorkflowJob(jobId, { stage: 'generating summary', progress: 75 });
+  const summaryRaw = await callGeminiWithFallback({
+    stage: 'Summarization',
+    model: env.summaryModel,
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    responseMimeType: 'application/json',
+    maxOutputTokens: 16384,
+    parts: [
+      {
+        text: buildSummaryPrompt({
+          now: new Date().toISOString(),
+          instructions: input.instructions,
+          summaryRules,
+          fileName: input.fileName,
+          transcript: transcriptText,
+          speakerContext: input.speakerContext,
+        }),
+      },
+    ],
+  });
+  await recordGeminiUsage({
+    noteId: input.noteId,
+    userId: input.userId,
+    stage: 'summarization',
+    model: summaryRaw.model,
+    inputType: 'text',
+    usageMetadata: summaryRaw.usageMetadata,
+    latencyMs: summaryRaw.latencyMs,
+  });
+  const parsedSummary = parseSummary(summaryRaw.text);
+
+  await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
+  await insertNote({
+    noteId: input.noteId,
+    userId: input.userId,
+    userName: input.userName,
+    downloadUrl: input.downloadUrl,
+    transcriptText,
+    summary: parsedSummary.summary,
+    title: parsedSummary.title,
+    tags: parsedSummary.tags,
+    segments,
+  });
+
+  return { transcript: segments, summary: parsedSummary.summary };
+}
+
+async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const input = parseSummarizeInput((await readBody(req)) as SummarizeAudioRequest);
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
+
+  const result = await runSummarizeAudio(input);
+  sendJson(res, 200, result);
+}
+
+async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const input = parseSummarizeInput((await readBody(req)) as SummarizeAudioRequest);
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
+
+  const { data, error } = await supabase.from('workflow_job').insert({
+    user_id: input.userId,
+    note_id: input.noteId,
+    type: 'summarize_audio',
+    status: 'queued',
+    stage: 'queued',
+    progress: 0,
+    request: input,
+  }).select('id').single();
+  if (error) throw error;
+  const jobId = (data as { id?: unknown }).id;
+  if (typeof jobId !== 'string' || !jobId.trim()) throw new Error('Could not create workflow job.');
+
+  void processSummarizeJob(jobId.trim(), input);
+  sendJson(res, 202, { jobId, status: 'queued', stage: 'queued', progress: 0 });
+}
+
+async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): Promise<void> {
+  try {
+    const result = await runSummarizeAudio(input, jobId);
+    await updateWorkflowJob(jobId, {
+      status: 'completed',
+      stage: 'completed',
+      progress: 100,
+      result,
+      error: null,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Workflow job ${jobId} failed:`, error);
+    await updateWorkflowJob(jobId, {
+      status: 'failed',
+      stage: 'failed',
+      progress: 100,
+      error: message,
+    });
+  }
+}
+
+async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId: string): Promise<void> {
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  const { data, error } = await supabase
+    .from('workflow_job')
+    .select('id, user_id, note_id, status, stage, progress, result, error')
+    .eq('id', jobId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    sendJson(res, 404, { error: 'Workflow job not found.' });
+    return;
+  }
+  const row = data as WorkflowJobRow;
+  if (row.user_id !== tokenUserId) throw new Error('Authenticated user does not match workflow job userId.');
+
+  sendJson(res, 200, {
+    jobId: row.id,
+    noteId: row.note_id,
+    status: row.status,
+    stage: row.stage ?? row.status,
+    progress: row.progress ?? 0,
+    result: row.status === 'completed' ? row.result : null,
+    error: row.error,
+  });
+}
+
+const server = createServer((req, res) => {
+  void (async () => {
+    if (req.method === 'OPTIONS') {
+      sendNoContent(res);
+      return;
+    }
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    if (req.method === 'POST' && req.url === '/summarize-audio') {
+      await summarizeAudio(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {
+      await createSummarizeJob(req, res);
+      return;
+    }
+    const jobMatch = url.pathname.match(/^\/summarize-audio\/jobs\/([^/]+)$/);
+    if (req.method === 'GET' && jobMatch?.[1]) {
+      await getSummarizeJob(req, res, decodeURIComponent(jobMatch[1]));
+      return;
+    }
+    sendJson(res, 404, { error: 'Not found' });
+  })().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Workflow request failed:', error);
+    sendJson(res, message.includes('required') || message.includes('token') || message.includes('userId') ? 400 : 500, { error: message });
+  });
+});
+
+server.listen(env.port, () => {
+  console.log(`Meeting Note workflow server listening on :${env.port}`);
+  console.log(`Workflow env: transcription=assemblyai:${env.assemblyAiSpeechModel}, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
+});

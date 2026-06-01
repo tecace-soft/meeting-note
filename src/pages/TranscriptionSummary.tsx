@@ -50,6 +50,7 @@ import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constant
 import ShareNoteModal from '../components/ShareNoteModal';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
+const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
 
 interface GeneratedProfile {
   speakerId: string | null;
@@ -87,6 +88,19 @@ interface RecentAudioFile {
 interface RecordingFormat {
   mimeType: string;
   extension: string;
+}
+
+interface WorkflowJobStatus {
+  jobId: string;
+  noteId?: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  stage?: string;
+  progress?: number;
+  result?: {
+    transcript?: unknown;
+    summary?: unknown;
+  } | null;
+  error?: string | null;
 }
 
 const RECORDING_FORMATS: RecordingFormat[] = [
@@ -168,6 +182,7 @@ const TranscriptionSummary: React.FC = () => {
   /** Optional free-text instructions; separate from the saved summarization template (`promptId`). */
   const [optionalInstructions, setOptionalInstructions] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summaryProgress, setSummaryProgress] = useState<{ stage: string; progress: number } | null>(null);
   const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string } | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
@@ -523,9 +538,14 @@ const TranscriptionSummary: React.FC = () => {
 
   const handleSummaryPromptSelect = useCallback(
     (promptId: string) => {
-      setSelectedSummaryPromptId(promptId);
+      const nextPromptId = promptId || null;
+      setSelectedSummaryPromptId(nextPromptId);
       if (user?.id && typeof localStorage !== 'undefined') {
-        localStorage.setItem(`mn.selectedSummaryPrompt.${user.id}`, promptId);
+        if (nextPromptId) {
+          localStorage.setItem(`mn.selectedSummaryPrompt.${user.id}`, nextPromptId);
+        } else {
+          localStorage.removeItem(`mn.selectedSummaryPrompt.${user.id}`);
+        }
       }
     },
     [user?.id]
@@ -831,9 +851,36 @@ const TranscriptionSummary: React.FC = () => {
     showPromptSection &&
     (!isNarrowViewport || !summaryFlowActive);
 
+  const waitForWorkflowJob = async (jobId: string, token: string): Promise<WorkflowJobStatus> => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 60 * 60 * 1000) {
+      const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs/${encodeURIComponent(jobId)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(detail?.error || `Workflow status request failed: ${response.status}`);
+      }
+
+      const status = (await response.json()) as WorkflowJobStatus;
+      setSummaryProgress({
+        stage: status.stage || status.status,
+        progress: typeof status.progress === 'number' ? status.progress : 0,
+      });
+
+      if (status.status === 'completed') return status;
+      if (status.status === 'failed') throw new Error(status.error || 'Workflow job failed.');
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+    throw new Error('Workflow job timed out.');
+  };
+
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
-    if (!selectedSummaryPromptId) {
+    const selectedPrompt = summaryPromptRows.find((row) => row.id === selectedSummaryPromptId) ?? summaryPromptRows[0] ?? null;
+    if (!selectedPrompt?.id) {
       setSummaryError('Select a summarization prompt.');
       return;
     }
@@ -842,6 +889,7 @@ const TranscriptionSummary: React.FC = () => {
     if (completedFiles.length === 0) return;
 
     setIsSummarizing(true);
+    setSummaryProgress({ stage: 'starting', progress: 0 });
     setSummaryResult(null);
     setSummaryError(null);
     
@@ -871,31 +919,41 @@ const TranscriptionSummary: React.FC = () => {
         }
       }
 
-      const response = await fetch(
-        'https://n8n.srv1153481.hstgr.cloud/webhook/e616c0f9-df5f-471b-ad68-579919548ed7',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            downloadUrl: file.publicUrl,
-            fileName: file.name,
-            instructions: optionalInstructions,
-            promptId: selectedSummaryPromptId,
-            userId: user?.id || '',
-            userName: user?.displayName || '',
-            noteId: noteId,
-            ...(speakerContext ? { speakerContext } : {}),
-          }),
-        }
-      );
+      if (!WORKFLOW_API_URL) {
+        throw new Error('Workflow API URL is not configured.');
+      }
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not acquire Microsoft access token.');
+
+      const requestBody = {
+        downloadUrl: file.publicUrl,
+        fileName: file.name,
+        instructions: optionalInstructions,
+        promptId: String(selectedPrompt.id),
+        userId: user?.id || '',
+        userName: user?.displayName || '',
+        noteId,
+        ...(speakerContext ? { speakerContext } : {}),
+      };
+
+      const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(requestBody),
+      });
 
       if (!response.ok) {
-        throw new Error(`Request failed: ${response.status}`);
+        const detail = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(detail?.error || `Request failed: ${response.status}`);
       }
 
-      const result = await response.json();
+      const createdJob = (await response.json()) as { jobId?: string };
+      if (!createdJob.jobId) throw new Error('Workflow did not return a job id.');
+      const completedJob = await waitForWorkflowJob(createdJob.jobId, token);
+      const result = completedJob.result ?? {};
       const summaryText =
         typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
       const transcript = normalizeTranscript(result.transcript);
@@ -919,6 +977,7 @@ const TranscriptionSummary: React.FC = () => {
       setSummaryError(error.message || 'Failed to generate summary');
     } finally {
       setIsSummarizing(false);
+      setSummaryProgress(null);
     }
   };
 
@@ -1710,8 +1769,17 @@ const TranscriptionSummary: React.FC = () => {
                         style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
                     </div>
                     <p className="mt-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                      Analyzing audio and generating summary...
+                      {summaryProgress?.stage || 'Analyzing audio and generating summary...'}
                     </p>
+                    <div className="mt-4 h-2 w-56 overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${Math.max(4, Math.min(100, summaryProgress?.progress ?? 8))}%`,
+                          backgroundColor: 'var(--accent)',
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
 

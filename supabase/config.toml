@@ -1,2 +1,5 @@
 [functions.mcp-token]
 verify_jwt = false
+
+[functions.admin-analytics]
+verify_jwt = false
