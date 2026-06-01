@@ -14,8 +14,8 @@ interface RequestBody {
   apiKey?: string;
 }
 
-/** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.0-flash` or `gemini-2.5-flash`. */
-const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+/** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
 
 interface GeminiGenerateContentResponse {
   candidates?: {

@@ -1106,19 +1106,16 @@ const TranscriptionSummary: React.FC = () => {
           const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
           const existingProfile = record?.profile?.trim() || null;
 
-          const geminiKey =
-            (import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ??
-            (import.meta.env.VITE_GOOGLE_API_KEY as string | undefined) ??
-            '';
           const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
             'generate-profile',
             {
-              body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: geminiKey },
+              body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile },
               headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
             }
           );
 
           if (error) {
+            console.error(`generate-profile failed for "${speakerName}"`, { data, error });
             const detail = (data as { error?: string } | null)?.error ?? error.message;
             throw new Error(`Edge function error for "${speakerName}": ${detail}`);
           }
