@@ -45,11 +45,22 @@ const supabase = createClient(env.supabaseUrl || 'https://placeholder.supabase.c
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
+function normalizeOrigin(origin: string): string {
+  return origin.trim().replace(/\/+$/, '');
+}
+
 function corsHeaders(): Record<string, string> {
+  const allowedOrigin = env.frontendOrigin === '*'
+    ? '*'
+    : env.frontendOrigin
+        .split(',')
+        .map(normalizeOrigin)
+        .filter(Boolean)[0] ?? '*';
   return {
-    'Access-Control-Allow-Origin': env.frontendOrigin,
+    'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Vary': 'Origin',
     'Content-Type': 'application/json',
   };
 }
@@ -569,6 +580,16 @@ const server = createServer((req, res) => {
       return;
     }
     const url = new URL(req.url ?? '/', 'http://localhost');
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
+      sendJson(res, 200, {
+        ok: true,
+        service: 'meeting-note-workflow-server',
+        transcriptionProvider: 'assemblyai',
+        transcriptionModel: env.assemblyAiSpeechModel,
+        summaryModel: env.summaryModel,
+      });
+      return;
+    }
     if (req.method === 'POST' && req.url === '/summarize-audio') {
       await summarizeAudio(req, res);
       return;
