@@ -898,27 +898,6 @@ const TranscriptionSummary: React.FC = () => {
       const noteId = generateNoteId();
       setCurrentNoteId(noteId);
 
-      // Fetch saved speaker profiles to enrich the summary prompt with ontology context
-      let speakerContext = '';
-      if (user?.id) {
-        try {
-          const { data: speakerRows } = await supabase
-            .from('speaker')
-            .select('name, profile')
-            .eq('user_id', user.id);
-          if (speakerRows && speakerRows.length > 0) {
-            const contexts = (speakerRows as { name: string; profile: string | null }[])
-              .map((s) => buildSpeakerContextForSummary(s.name, s.profile))
-              .filter(Boolean);
-            if (contexts.length > 0) {
-              speakerContext = contexts.join('\n\n');
-            }
-          }
-        } catch {
-          // Non-fatal: proceed without speaker context
-        }
-      }
-
       if (!WORKFLOW_API_URL) {
         throw new Error('Workflow API URL is not configured.');
       }
@@ -933,7 +912,6 @@ const TranscriptionSummary: React.FC = () => {
         userId: user?.id || '',
         userName: user?.displayName || '',
         noteId,
-        ...(speakerContext ? { speakerContext } : {}),
       };
 
       const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs`, {

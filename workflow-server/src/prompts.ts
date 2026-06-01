@@ -133,6 +133,12 @@ Your response must contain three fields: title, summary, and tags. Title should 
 SUMMARIZATION RULES
 ${input.summaryRules}
 ${speakerContext}
+GROUNDING RULES
+- Base the summary only on the File Transcript.
+- Do not introduce participant names, organizations, decisions, or topics that are not explicitly present in the File Transcript.
+- If the transcript uses generic labels like "Speaker A" or "Speaker 1", keep those labels unless a real name is explicitly stated in the transcript.
+- Speaker context, when present, is background only. Never use it to rename transcript speakers or add people who are not mentioned in the transcript.
+
 FILE
 '''
 File Name: ${input.fileName}
