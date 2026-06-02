@@ -45,10 +45,14 @@ export function uploadWithTus(
   file: File,
   projectUrl: string,
   anonKey: string,
+  accessToken: string,
   onProgress?: (bytesUploaded: number, bytesTotal: number) => void
 ): Promise<void> {
   if (!projectUrl || !anonKey) {
     return Promise.reject(new Error('Supabase URL or key not configured'));
+  }
+  if (!accessToken) {
+    return Promise.reject(new Error('Supabase auth token is required for private storage upload'));
   }
 
   const endpoint = getResumableEndpoint(projectUrl);
@@ -58,7 +62,7 @@ export function uploadWithTus(
       endpoint,
       retryDelays: [0, 2000, 5000, 10000, 20000, 30000, 45000],
       headers: {
-        authorization: `Bearer ${anonKey}`,
+        authorization: `Bearer ${accessToken}`,
         apikey: anonKey,
       },
       uploadDataDuringCreation: true,

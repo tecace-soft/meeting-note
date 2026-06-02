@@ -6,3 +6,6 @@ verify_jwt = false
 
 [functions.generate-profile]
 verify_jwt = false
+
+[functions.supabase-token]
+verify_jwt = false

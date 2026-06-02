@@ -48,6 +48,7 @@ interface NoteRow {
   tag?: unknown;
   tags?: unknown;
   created_at?: string | null;
+  meeting_at?: string | null;
   projects?: Array<string | number> | null;
 }
 
@@ -1053,8 +1054,18 @@ const Project: React.FC = () => {
                                   title={formatDate(note.created_at)}
                                 >
                                   <Calendar className="h-3 w-3 shrink-0" aria-hidden />
-                                  <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
+                                  <span className="min-w-0 truncate">Created {formatDate(note.created_at)}</span>
                                 </div>
+                                {note.meeting_at ? (
+                                  <div
+                                    className="mt-1 flex min-w-0 items-center gap-1 text-sm"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                    title={formatDate(note.meeting_at)}
+                                  >
+                                    <Calendar className="h-3 w-3 shrink-0" aria-hidden />
+                                    <span className="min-w-0 truncate">Meeting {formatDate(note.meeting_at)}</span>
+                                  </div>
+                                ) : null}
                                 <p
                                   className="mt-1 truncate text-sm leading-snug"
                                   style={{ color: 'var(--text-secondary)' }}
@@ -1493,9 +1504,10 @@ const Project: React.FC = () => {
                               <p
                                 className="mt-0.5 truncate text-xs leading-snug"
                                 style={{ color: 'var(--text-muted)' }}
-                                title={formatNoteModalDate(note.created_at)}
+                                title={`Created ${formatNoteModalDate(note.created_at)}${note.meeting_at ? `, Meeting ${formatNoteModalDate(note.meeting_at)}` : ''}`}
                               >
-                                {formatNoteModalDate(note.created_at)}
+                                Created {formatNoteModalDate(note.created_at)}
+                                {note.meeting_at ? ` - Meeting ${formatNoteModalDate(note.meeting_at)}` : ''}
                               </p>
                             </div>
                             <div className="flex h-10 shrink-0 items-center justify-end">

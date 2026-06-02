@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatTranscriptText, parseDiarizedSegments, parseSummary } from './parsers.js';
+import { buildNoteName, formatTranscriptText, parseDiarizedSegments, parseSummary } from './parsers.js';
 
 test('parseDiarizedSegments parses valid JSON', () => {
   assert.deepEqual(parseDiarizedSegments('{"segments":[{"speaker":"Speaker 1","text":"Hello"}]}'), [
@@ -48,4 +48,40 @@ test('parseSummary parses and normalizes tags', () => {
 
 test('parseSummary rejects missing summary', () => {
   assert.throws(() => parseSummary('{"title":"Nope","tags":[]}'), /summary/);
+});
+
+test('buildNoteName uses YYMMDD and up to five capitalized title words', () => {
+  assert.equal(
+    buildNoteName({
+      title: 'Quarterly Revenue Planning',
+      tags: ['sales'],
+      summary: 'Team discussed regional goals.',
+      createdAt: new Date('2026-06-02T12:00:00.000Z'),
+    }),
+    '260602_Quarterly_Revenue_Planning',
+  );
+});
+
+test('buildNoteName limits note names to five words', () => {
+  assert.equal(
+    buildNoteName({
+      title: 'Quarterly Revenue Planning Follow Up Review',
+      tags: ['sales'],
+      summary: 'Team discussed regional goals.',
+      createdAt: new Date('2026-01-03T12:00:00.000Z'),
+    }),
+    '260103_Quarterly_Revenue_Planning_Follow_Up',
+  );
+});
+
+test('buildNoteName falls back when title is empty', () => {
+  assert.equal(
+    buildNoteName({
+      title: '',
+      tags: [],
+      summary: '',
+      createdAt: new Date('2026-01-03T12:00:00.000Z'),
+    }),
+    '260103_Untitled_Meeting',
+  );
 });

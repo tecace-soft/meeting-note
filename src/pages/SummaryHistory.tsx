@@ -53,6 +53,7 @@ interface Note {
   tags?: unknown;
   /** Legacy column name; still read so diarized UI works until fully migrated. */
   created_at?: string;
+  meeting_at?: string | null;
 }
 
 interface ChatInfo {

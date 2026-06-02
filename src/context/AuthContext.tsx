@@ -5,6 +5,7 @@ import { loginRequest } from '../config/msalConfig';
 import { shouldUseRedirectInteraction } from '../lib/msalRedirect';
 import { ensureSelfSpeakerRowForUser } from '../lib/ensureSelfSpeakerRow';
 import { registerAppUser } from '../lib/registerAppUser';
+import { setSupabaseAccessTokenProvider, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 
 interface User {
   id: string;
@@ -31,6 +32,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isAuthenticated = useIsAuthenticated();
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const supabaseTokenRef = React.useRef<{ token: string; expiresAt: number } | null>(null);
 
   useEffect(() => {
     if (inProgress === InteractionStatus.None) {
@@ -48,35 +50,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(false);
     }
   }, [accounts, inProgress]);
-
-  useEffect(() => {
-    if (inProgress !== InteractionStatus.None || !isAuthenticated || !user?.id) return;
-    const msName = user.microsoftAccountName?.trim();
-
-    let cancelled = false;
-    void (async () => {
-      try {
-        try {
-          await registerAppUser({
-            id: user.id,
-            displayName: user.displayName,
-            email: user.email,
-          });
-        } catch (registerError) {
-          if (!cancelled) console.error('registerAppUser:', registerError);
-        }
-        if (msName) {
-          await ensureSelfSpeakerRowForUser(user.id, msName, user.id, user.email);
-        }
-      } catch (e) {
-        if (!cancelled) console.error('Auth user bootstrap:', e);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [inProgress, isAuthenticated, user?.displayName, user?.email, user?.id, user?.microsoftAccountName]);
 
   const login = useCallback(async () => {
     if (shouldUseRedirectInteraction()) {
@@ -137,6 +110,77 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
   }, [instance]);
+
+  const getSupabaseAccessToken = useCallback(async (): Promise<string | null> => {
+    const cached = supabaseTokenRef.current;
+    if (cached && cached.expiresAt - Date.now() > 60_000) return cached.token;
+    const microsoftToken = await getAccessToken();
+    if (!microsoftToken || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+
+    const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/supabase-token`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+        'x-ms-access-token': microsoftToken,
+      },
+      body: '{}',
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      access_token?: unknown;
+      expires_at?: unknown;
+      error?: unknown;
+    };
+    if (!response.ok || typeof data.access_token !== 'string') {
+      console.error('supabase-token exchange failed:', {
+        status: response.status,
+        error: data.error,
+      });
+      throw new Error(typeof data.error === 'string' ? data.error : 'Could not get Supabase access token.');
+    }
+    const expiresAt = typeof data.expires_at === 'number' ? data.expires_at * 1000 : Date.now() + 55 * 60 * 1000;
+    supabaseTokenRef.current = { token: data.access_token, expiresAt };
+    return data.access_token;
+  }, [getAccessToken]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.id) {
+      supabaseTokenRef.current = null;
+      setSupabaseAccessTokenProvider(null);
+      return;
+    }
+    setSupabaseAccessTokenProvider(getSupabaseAccessToken);
+    return () => setSupabaseAccessTokenProvider(null);
+  }, [getSupabaseAccessToken, isAuthenticated, user?.id]);
+
+  useEffect(() => {
+    if (inProgress !== InteractionStatus.None || !isAuthenticated || !user?.id) return;
+    const msName = user.microsoftAccountName?.trim();
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        try {
+          await registerAppUser({
+            id: user.id,
+            displayName: user.displayName,
+            email: user.email,
+          });
+        } catch (registerError) {
+          if (!cancelled) console.error('registerAppUser:', registerError);
+        }
+        if (msName) {
+          await ensureSelfSpeakerRowForUser(user.id, msName, user.id, user.email);
+        }
+      } catch (e) {
+        if (!cancelled) console.error('Auth user bootstrap:', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [inProgress, isAuthenticated, user?.displayName, user?.email, user?.id, user?.microsoftAccountName]);
 
   const value: AuthContextType = {
     user,

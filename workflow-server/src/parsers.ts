@@ -65,3 +65,34 @@ export function parseSummary(raw: string): ParsedSummary {
 
   return { title, summary, tags };
 }
+
+function toDatePrefix(date: Date): string {
+  const year = String(date.getFullYear()).slice(-2);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
+function capitalizeDescriptor(value: string): string {
+  const lower = value.toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+export function buildNoteName(input: {
+  title?: string | null;
+  tags?: string[];
+  summary?: string | null;
+  createdAt?: Date;
+}): string {
+  const source = typeof input.title === 'string' && input.title.trim()
+    ? input.title
+    : [
+        ...(input.tags ?? []),
+        input.summary,
+      ].filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).join(' ');
+  const words = source.match(/[A-Za-z0-9]+/g)?.slice(0, 5) ?? [];
+  const descriptor = words.length > 0
+    ? words.map(capitalizeDescriptor).join('_')
+    : 'Untitled_Meeting';
+  return `${toDatePrefix(input.createdAt ?? new Date())}_${descriptor}`;
+}

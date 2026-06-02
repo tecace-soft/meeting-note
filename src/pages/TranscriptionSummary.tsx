@@ -2,7 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, startTransition } from
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
-import { supabase, AUDIO_BUCKET, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
+import {
+  supabase,
+  AUDIO_BUCKET,
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  getSupabaseAccessTokenForRequest,
+} from '../config/supabaseConfig';
 import {
   isSupabaseResumableConfigured,
   shouldUseResumableUpload,
@@ -71,6 +77,9 @@ interface UploadedFile {
   progress?: number;
   error?: string;
   publicUrl?: string;
+  bucket?: string;
+  storagePath?: string;
+  recordedAt?: string | null;
 }
 
 interface RecentAudioFile {
@@ -82,8 +91,11 @@ interface RecentAudioFile {
   mime_type?: string | null;
   size_bytes?: number | null;
   source?: 'upload' | 'recording' | string | null;
+  recorded_at?: string | null;
   created_at?: string | null;
 }
+
+const AUDIO_SIGNED_URL_SECONDS = 60 * 60 * 6;
 
 interface RecordingFormat {
   mimeType: string;
@@ -643,12 +655,26 @@ const TranscriptionSummary: React.FC = () => {
     setRecentAudioLoading(true);
     setRecentAudioError(null);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('file')
-        .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, created_at')
+        .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, recorded_at, created_at')
         .eq('user_id', user.id)
+        .order('recorded_at', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(10);
+      let { data, error }: { data: unknown[] | null; error: { message: string } | null } = await query;
+
+      if (error && /recorded_at/i.test(error.message)) {
+        const fallback = await supabase
+          .from('file')
+          .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        data = fallback.data;
+        error = fallback.error;
+      }
+
       if (error) throw error;
       setRecentAudioFiles((data ?? []) as RecentAudioFile[]);
     } catch (error) {
@@ -663,7 +689,6 @@ const TranscriptionSummary: React.FC = () => {
     async (
       file: File,
       storagePath: string,
-      publicUrl: string,
       source: 'upload' | 'recording'
     ) => {
       if (!user?.id) return;
@@ -672,10 +697,11 @@ const TranscriptionSummary: React.FC = () => {
         name: file.name,
         bucket: AUDIO_BUCKET,
         storage_path: storagePath,
-        public_url: publicUrl,
+        public_url: '',
         mime_type: file.type || 'application/octet-stream',
         size_bytes: file.size,
         source,
+        recorded_at: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
       });
       if (error) throw error;
       await loadRecentAudioFiles();
@@ -683,21 +709,41 @@ const TranscriptionSummary: React.FC = () => {
     [loadRecentAudioFiles, user?.id]
   );
 
-  const selectRecentAudioFile = (file: RecentAudioFile) => {
+  const createAudioSignedUrl = useCallback(async (storagePath: string, bucket = AUDIO_BUCKET): Promise<string> => {
+    const { data, error } = await supabase.storage
+      .from(bucket || AUDIO_BUCKET)
+      .createSignedUrl(storagePath, AUDIO_SIGNED_URL_SECONDS);
+    if (error || !data?.signedUrl) {
+      throw error ?? new Error('Could not create a signed audio URL.');
+    }
+    return data.signedUrl;
+  }, []);
+
+  const selectRecentAudioFile = async (file: RecentAudioFile) => {
     ensureScreenWakeLockFromGesture();
-    clearRecording();
-    setUploadedFiles([
-      {
-        id: file.id,
-        name: file.name,
-        size: Number(file.size_bytes ?? 0),
-        type: file.mime_type || 'audio/*',
-        status: 'completed',
-        progress: 100,
-        publicUrl: file.public_url,
-      },
-    ]);
-    setSummaryError(null);
+    setRecentAudioError(null);
+    try {
+      const signedUrl = await createAudioSignedUrl(file.storage_path, file.bucket || AUDIO_BUCKET);
+      clearRecording();
+      setUploadedFiles([
+        {
+          id: file.id,
+          name: file.name,
+          size: Number(file.size_bytes ?? 0),
+          type: file.mime_type || 'audio/*',
+          status: 'completed',
+          progress: 100,
+          publicUrl: signedUrl,
+          bucket: file.bucket || AUDIO_BUCKET,
+          storagePath: file.storage_path,
+          recordedAt: file.recorded_at ?? null,
+        },
+      ]);
+      setSummaryError(null);
+    } catch (error) {
+      console.error('Failed to create signed URL for recent audio file:', error);
+      setRecentAudioError(error instanceof Error ? error.message : 'Failed to load recent recording');
+    }
   };
 
   const deleteRecentAudioFile = async (file: RecentAudioFile) => {
@@ -761,6 +807,7 @@ const TranscriptionSummary: React.FC = () => {
       size: file.size,
       type: file.type,
       status: 'pending' as const,
+      recordedAt: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
     }));
 
     setUploadedFiles((prev) => [...prev, ...newUploadedFiles]);
@@ -791,11 +838,14 @@ const TranscriptionSummary: React.FC = () => {
         isSupabaseResumableConfigured(SUPABASE_URL) && shouldUseResumableUpload(file.size);
 
       if (useTus) {
+        const uploadAccessToken = await getSupabaseAccessTokenForRequest();
+        if (!uploadAccessToken) throw new Error('Could not get Supabase auth token for upload.');
         await uploadWithTus(
           filePath,
           file,
           SUPABASE_URL,
           SUPABASE_ANON_KEY,
+          uploadAccessToken,
           (uploaded, total) => {
             const pct = total > 0 ? Math.min(100, Math.round((uploaded / total) * 100)) : 0;
             const now = Date.now();
@@ -823,11 +873,11 @@ const TranscriptionSummary: React.FC = () => {
         if (error) throw error;
       }
 
-      const { data: urlData } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(filePath);
+      await ensureStorageObjectReady(AUDIO_BUCKET, filePath);
+      const signedUrl = await createAudioSignedUrl(filePath, AUDIO_BUCKET);
 
-      await ensureStorageObjectReady(AUDIO_BUCKET, filePath, urlData.publicUrl);
       try {
-        await saveAudioFileRecord(file, filePath, urlData.publicUrl, source);
+        await saveAudioFileRecord(file, filePath, source);
       } catch (recordError) {
         console.error('Failed to save audio file metadata:', recordError);
       }
@@ -839,7 +889,10 @@ const TranscriptionSummary: React.FC = () => {
                 ...f,
                 status: 'completed',
                 progress: 100,
-                publicUrl: urlData.publicUrl,
+                publicUrl: signedUrl,
+                bucket: AUDIO_BUCKET,
+                storagePath: filePath,
+                recordedAt: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
               }
             : f
         )
@@ -905,6 +958,28 @@ const TranscriptionSummary: React.FC = () => {
     throw new Error('Workflow job timed out.');
   };
 
+  const downloadStorageAudioFile = async (
+    storagePath: string | undefined,
+    fileName: string,
+    bucket = AUDIO_BUCKET,
+    fallbackUrl?: string
+  ) => {
+    try {
+      const url = storagePath ? await createAudioSignedUrl(storagePath, bucket) : fallbackUrl;
+      if (!url) throw new Error('Could not create a signed download URL.');
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.rel = 'noopener noreferrer';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } catch (error) {
+      console.error('Failed to download audio file:', error);
+      setSummaryError(error instanceof Error ? error.message : 'Failed to download audio file');
+    }
+  };
+
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
     const selectedPrompt = summaryPromptRows.find((row) => row.id === selectedSummaryPromptId) ?? summaryPromptRows[0] ?? null;
@@ -913,7 +988,7 @@ const TranscriptionSummary: React.FC = () => {
       return;
     }
 
-    const completedFiles = uploadedFiles.filter(f => f.status === 'completed' && f.publicUrl);
+    const completedFiles = uploadedFiles.filter(f => f.status === 'completed' && (f.publicUrl || f.storagePath));
     if (completedFiles.length === 0) return;
 
     setIsSummarizing(true);
@@ -931,10 +1006,15 @@ const TranscriptionSummary: React.FC = () => {
       }
       const token = await getAccessToken();
       if (!token) throw new Error('Could not acquire Microsoft access token.');
+      const downloadUrl = file.storagePath
+        ? await createAudioSignedUrl(file.storagePath, file.bucket || AUDIO_BUCKET)
+        : file.publicUrl;
+      if (!downloadUrl) throw new Error('Could not create a signed audio URL.');
 
       const requestBody = {
-        downloadUrl: file.publicUrl,
+        downloadUrl,
         fileName: file.name,
+        meetingAt: file.recordedAt ?? null,
         instructions: optionalInstructions,
         promptId: String(selectedPrompt.id),
         userId: user?.id || '',
@@ -1010,6 +1090,18 @@ const TranscriptionSummary: React.FC = () => {
     } else {
       return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
     }
+  };
+
+  const formatExactDateTime = (dateString: string): string => {
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return dateString;
+    return date.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   };
 
   const getChatDisplayName = (chat: TeamsChat): string => {
@@ -1542,17 +1634,17 @@ const TranscriptionSummary: React.FC = () => {
                           Error
                         </span>
                       )}
-                      {file.status === 'completed' && file.publicUrl ? (
-                        <a
-                          href={file.publicUrl}
-                          download={file.name}
+                      {file.status === 'completed' && (file.publicUrl || file.storagePath) ? (
+                        <button
+                          type="button"
+                          onClick={() => void downloadStorageAudioFile(file.storagePath, file.name, file.bucket, file.publicUrl)}
                           className="p-1 rounded hover:bg-opacity-80"
                           style={{ color: 'var(--text-muted)' }}
                           title={`Download ${file.name}`}
                           aria-label={`Download ${file.name}`}
                         >
                           <Download className="w-4 h-4" />
-                        </a>
+                        </button>
                       ) : null}
                       <button
                         onClick={() => removeFile(file.id)}
@@ -1604,11 +1696,11 @@ const TranscriptionSummary: React.FC = () => {
                       role="button"
                       tabIndex={0}
                       className="summary-note-row cursor-pointer"
-                      onClick={() => selectRecentAudioFile(file)}
+                      onClick={() => void selectRecentAudioFile(file)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();
-                          selectRecentAudioFile(file);
+                          void selectRecentAudioFile(file);
                         }
                       }}
                     >
@@ -1625,23 +1717,27 @@ const TranscriptionSummary: React.FC = () => {
                             {file.name}
                           </p>
                           <p className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>
-                            {file.source === 'recording' ? 'Recorded' : 'Uploaded'}
-                            {file.size_bytes ? ` - ${formatFileSize(Number(file.size_bytes))}` : ''}
-                            {file.created_at ? ` - ${formatDate(file.created_at)}` : ''}
+                            {[
+                              file.size_bytes ? formatFileSize(Number(file.size_bytes)) : null,
+                              file.created_at ? `Uploaded ${formatDate(file.created_at)}` : null,
+                              file.recorded_at ? `Meeting Date: ${formatExactDateTime(file.recorded_at)}` : null,
+                            ].filter(Boolean).join(' - ')}
                           </p>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          <a
-                            href={file.public_url}
-                            download={file.name}
+                          <button
+                            type="button"
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
                             style={{ color: 'var(--text-secondary)' }}
-                            onClick={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void downloadStorageAudioFile(file.storage_path, file.name, file.bucket || AUDIO_BUCKET, file.public_url);
+                            }}
                             title={`Download ${file.name}`}
                             aria-label={`Download ${file.name}`}
                           >
                             <Download className="h-4 w-4" aria-hidden />
-                          </a>
+                          </button>
                           <button
                             type="button"
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
@@ -1999,12 +2095,15 @@ const TranscriptionSummary: React.FC = () => {
                         type="button"
                         title="Save to OneDrive"
                         aria-label="Save to OneDrive"
-                        onClick={() => {
-                          const completedFile = uploadedFiles.find((f) => f.status === 'completed' && f.publicUrl);
-                          const audioUrl = completedFile?.publicUrl ? encodeURIComponent(completedFile.publicUrl) : '';
+                        onClick={() => void (async () => {
+                          const completedFile = uploadedFiles.find((f) => f.status === 'completed' && (f.storagePath || f.publicUrl));
+                          const signedUrl = completedFile?.storagePath
+                            ? await createAudioSignedUrl(completedFile.storagePath, completedFile.bucket || AUDIO_BUCKET)
+                            : completedFile?.publicUrl;
+                          const audioUrl = signedUrl ? encodeURIComponent(signedUrl) : '';
                           const audioName = completedFile?.name ? encodeURIComponent(completedFile.name) : '';
                           navigate(`/save-summary?note_id=${currentNoteId}&audio_url=${audioUrl}&audio_name=${audioName}`);
-                        }}
+                        })()}
                         className={resultActionBtnClass}
                       >
                         <Cloud className="h-4 w-4 shrink-0" aria-hidden />

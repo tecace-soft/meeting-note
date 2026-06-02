@@ -6,7 +6,7 @@ import { config as loadDotenv } from 'dotenv';
 import { Agent, setGlobalDispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, type GeminiUsageMetadata } from './gemini.js';
-import { parseSummary, formatTranscriptText, type TranscriptSegment } from './parsers.js';
+import { buildNoteName, parseSummary, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildSummaryPrompt } from './prompts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,6 +20,7 @@ interface SummarizeAudioRequest {
   userId?: unknown;
   userName?: unknown;
   noteId?: unknown;
+  meetingAt?: unknown;
   speakerContext?: unknown;
 }
 
@@ -120,6 +121,9 @@ function requiredString(body: SummarizeAudioRequest, key: keyof SummarizeAudioRe
 }
 
 function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
+  const meetingAt = typeof body.meetingAt === 'string' && body.meetingAt.trim()
+    ? new Date(body.meetingAt)
+    : null;
   return {
     downloadUrl: requiredString(body, 'downloadUrl'),
     fileName: requiredString(body, 'fileName'),
@@ -127,6 +131,7 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
     userId: requiredString(body, 'userId'),
     userName: typeof body.userName === 'string' ? body.userName.trim() : '',
     noteId: requiredString(body, 'noteId'),
+    meetingAt: meetingAt && !Number.isNaN(meetingAt.getTime()) ? meetingAt.toISOString() : null,
     instructions: typeof body.instructions === 'string' ? body.instructions : '',
     speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
   };
@@ -174,6 +179,7 @@ interface SummarizeAudioInput {
   userId: string;
   userName: string;
   noteId: string;
+  meetingAt: string | null;
   speakerContext: string;
 }
 
@@ -329,6 +335,7 @@ async function insertNote(input: {
   title: string;
   tags: string[];
   segments: TranscriptSegment[];
+  meetingAt: string | null;
 }): Promise<void> {
   const { error } = await supabase.from('note').insert({
     transcription: input.transcriptText,
@@ -340,6 +347,7 @@ async function insertNote(input: {
     name: input.title,
     tags: input.tags,
     diarization: input.segments,
+    meeting_at: input.meetingAt,
   });
   if (error) throw error;
 }
@@ -504,6 +512,12 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   const parsedSummary = parseSummary(summaryRaw.text);
 
   await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
+  const noteName = buildNoteName({
+    title: parsedSummary.title,
+    tags: parsedSummary.tags,
+    summary: parsedSummary.summary,
+    createdAt: input.meetingAt ? new Date(input.meetingAt) : undefined,
+  });
   await insertNote({
     noteId: input.noteId,
     userId: input.userId,
@@ -511,9 +525,10 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     downloadUrl: input.downloadUrl,
     transcriptText,
     summary: parsedSummary.summary,
-    title: parsedSummary.title,
+    title: noteName,
     tags: parsedSummary.tags,
     segments,
+    meetingAt: input.meetingAt,
   });
 
   return { transcript: segments, summary: parsedSummary.summary };

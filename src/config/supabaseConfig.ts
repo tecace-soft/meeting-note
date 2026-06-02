@@ -8,6 +8,7 @@ const nodeEnv =
     : {};
 const supabaseUrl = viteEnv.VITE_SUPABASE_URL ?? nodeEnv.VITE_SUPABASE_URL;
 const supabaseAnonKey = viteEnv.VITE_SUPABASE_ANON_KEY ?? nodeEnv.VITE_SUPABASE_ANON_KEY;
+const debugSupabaseAuth = viteEnv.VITE_DEBUG_SUPABASE_AUTH === 'true';
 
 if (hasViteEnv && (!supabaseUrl || !supabaseAnonKey)) {
   console.warn('Supabase credentials not configured');
@@ -16,9 +17,56 @@ if (hasViteEnv && (!supabaseUrl || !supabaseAnonKey)) {
 export const SUPABASE_URL = supabaseUrl || '';
 export const SUPABASE_ANON_KEY = supabaseAnonKey || '';
 
+let supabaseAccessTokenProvider: (() => Promise<string | null>) | null = null;
+const providerWaiters = new Set<() => void>();
+
+export function setSupabaseAccessTokenProvider(provider: (() => Promise<string | null>) | null): void {
+  supabaseAccessTokenProvider = provider;
+  if (debugSupabaseAuth) {
+    console.info(`Supabase access token provider ${provider ? 'registered' : 'cleared'}.`);
+  }
+  providerWaiters.forEach((resolve) => resolve());
+  providerWaiters.clear();
+}
+
+async function waitForSupabaseAccessTokenProvider(): Promise<(() => Promise<string | null>) | null> {
+  if (supabaseAccessTokenProvider) return supabaseAccessTokenProvider;
+  if (debugSupabaseAuth) {
+    console.info('Waiting for Supabase access token provider...');
+  }
+  await new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(() => {
+      providerWaiters.delete(resolve);
+      if (debugSupabaseAuth) {
+        console.warn('Timed out waiting for Supabase access token provider; request will use anon key.');
+      }
+      resolve();
+    }, 5000);
+    providerWaiters.add(() => {
+      window.clearTimeout(timeout);
+      resolve();
+    });
+  });
+  return supabaseAccessTokenProvider;
+}
+
+export async function getSupabaseAccessTokenForRequest(): Promise<string | null> {
+  const provider = await waitForSupabaseAccessTokenProvider();
+  return provider?.() ?? null;
+}
+
 export const supabase = createClient(
   SUPABASE_URL || 'https://placeholder.supabase.co',
-  SUPABASE_ANON_KEY || 'missing-anon-key'
+  SUPABASE_ANON_KEY || 'missing-anon-key',
+  {
+    accessToken: async () => {
+      const token = await getSupabaseAccessTokenForRequest();
+      if (debugSupabaseAuth) {
+        console.info(`Supabase access token ${token ? 'resolved' : 'missing'} for request.`);
+      }
+      return token;
+    },
+  }
 );
 
 export const AUDIO_BUCKET = 'meeting-recordings';
