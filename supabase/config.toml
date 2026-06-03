@@ -4,6 +4,9 @@ verify_jwt = false
 [functions.admin-analytics]
 verify_jwt = false
 
+[functions.admin-controls]
+verify_jwt = false
+
 [functions.generate-profile]
 verify_jwt = false
 

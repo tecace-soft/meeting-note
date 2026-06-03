@@ -15,6 +15,7 @@ import {
   Copy,
   EditPencilLine01,
   FileDocument,
+  Files,
   Loading,
   MoreHorizontal,
   Save,
@@ -347,7 +348,7 @@ const SummaryHistory: React.FC = () => {
 
         if (cancelled) return;
         if (error) throw error;
-        setNotes((data as Note[]) || []);
+        setNotes(((data as Note[]) || []));
         setNotesTotalCount(typeof count === 'number' ? count : 0);
       } catch (error) {
         console.error('Error fetching notes:', error);
@@ -473,7 +474,6 @@ const SummaryHistory: React.FC = () => {
         .update({ summary_edit: noteEditDraft })
         .eq('id', note.id)
         .eq('user_id', user.id);
-
       if (error) throw error;
 
       setNotes((prev) =>
@@ -792,10 +792,12 @@ const SummaryHistory: React.FC = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+      <main className={`flex min-h-0 flex-1 flex-col overflow-hidden ${
+        selectedNote ? 'p-4 md:p-6' : 'px-3 py-4 md:px-4 md:py-6'
+      }`}>
         <div
           className={`mx-auto flex h-full min-h-0 w-full min-w-0 flex-col gap-4 transition-[max-width] duration-300 ease-out ${
-            selectedNote ? 'max-w-[90rem]' : 'max-w-[56rem]'
+            selectedNote ? 'max-w-[90rem]' : 'max-w-[66rem]'
           }`}
         >
           {/* Chat / scope header — same column width as notes (single max-width parent) */}
@@ -1006,7 +1008,7 @@ const SummaryHistory: React.FC = () => {
                                 </span>
                               </div>
                               {isSharedNote ? (
-                                <p className="truncate text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                                <p className="truncate text-xs font-medium leading-snug" style={{ color: 'var(--tc-magenta)' }}>
                                   Shared By: {getSharedByLabel(note)}
                                 </p>
                               ) : null}
@@ -1016,9 +1018,17 @@ const SummaryHistory: React.FC = () => {
                               <div className="flex min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch">
                                 <div
                                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                                  style={{ backgroundColor: 'var(--accent-light)' }}
+                                  style={{
+                                    backgroundColor: isSharedNote
+                                      ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--surface))'
+                                      : 'var(--accent-light)',
+                                  }}
                                 >
-                                  <FileDocument className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} />
+                                  {isSharedNote ? (
+                                    <Files className="h-5 w-5 shrink-0" style={{ color: 'var(--tc-cyan)' }} aria-hidden />
+                                  ) : (
+                                    <FileDocument className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} aria-hidden />
+                                  )}
                                 </div>
                               </div>
                               <div className="min-w-0 pr-1">
@@ -1115,8 +1125,8 @@ const SummaryHistory: React.FC = () => {
                                   </p>
                                   {isSharedNote ? (
                                     <p
-                                      className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-snug"
-                                      style={{ color: 'var(--text-muted)' }}
+                                      className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs font-medium leading-snug"
+                                      style={{ color: 'var(--tc-magenta)' }}
                                       title={`Shared By: ${getSharedByLabel(note)}`}
                                     >
                                       Shared By: {getSharedByLabel(note)}

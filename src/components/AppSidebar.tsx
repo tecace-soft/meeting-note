@@ -18,6 +18,7 @@ import {
   LogOut,
   Moon,
   MoreHorizontal,
+  Settings,
   Sun,
   TrashFull,
   UserAdd,
@@ -170,7 +171,11 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const summaryHistorySectionActive = location.pathname === '/history' || location.pathname === '/summary-history';
   const visibleNavItems = isAdminMicrosoftUser(user?.id)
-    ? [...navItems, { to: '/admin-analytics', label: 'Admin Analytics', icon: ChartBarVertical01, end: false as const }]
+    ? [
+        ...navItems,
+        { to: '/admin-controls', label: 'Admin Controls', icon: Settings, end: false as const },
+        { to: '/admin-analytics', label: 'Admin Analytics', icon: ChartBarVertical01, end: false as const },
+      ]
     : [...navItems];
 
   const activeProjectId =

@@ -48,7 +48,6 @@ import TranscriptDiarizedEditor, {
 } from '../components/TranscriptDiarizedEditor';
 import {
   normalizeTranscript,
-  persistNoteDiarization,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
@@ -111,6 +110,8 @@ interface WorkflowJobStatus {
   result?: {
     transcript?: unknown;
     summary?: unknown;
+    title?: unknown;
+    tags?: unknown;
   } | null;
   error?: string | null;
 }
@@ -1049,14 +1050,6 @@ const TranscriptionSummary: React.FC = () => {
       });
       setEditedSummary(summaryText);
       setResultsTab('summary');
-
-      if (transcript.length > 0) {
-        try {
-          await persistNoteDiarization(noteId, transcript);
-        } catch (dErr: unknown) {
-          console.error('Failed to persist transcript diarization on note:', dErr);
-        }
-      }
       
     } catch (error: any) {
       console.error('Error summarizing:', error);
@@ -1126,12 +1119,10 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-
       const { error } = await supabase
         .from('note')
         .update({ summary_edit: summaryText })
         .eq('id', currentNoteId);
-
       if (error) throw error;
       return true;
     } catch (err: unknown) {
