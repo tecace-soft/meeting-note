@@ -8,6 +8,7 @@ import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, parseSummary, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildSummaryPrompt } from './prompts.js';
+import { sendWorkflowAlert } from './alerts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -22,6 +23,18 @@ interface SummarizeAudioRequest {
   noteId?: unknown;
   meetingAt?: unknown;
   speakerContext?: unknown;
+}
+
+interface CustomSpellingRule {
+  from: string[];
+  to: string;
+}
+
+interface TranscriptionSettings {
+  speechModel: string;
+  keytermsPrompt: string[];
+  customSpelling: CustomSpellingRule[];
+  summaryContext: string;
 }
 
 const env = {
@@ -186,6 +199,8 @@ interface SummarizeAudioInput {
 interface SummarizeAudioResult {
   transcript: TranscriptSegment[];
   summary: string;
+  title: string;
+  tags: string[];
 }
 
 interface WorkflowJobRow {
@@ -256,6 +271,71 @@ async function loadSummaryPrompt(promptId: string, userId: string): Promise<stri
     throw new Error('Selected summary prompt was not found for this user.');
   }
   return prompt.trim();
+}
+
+function normalizeKeytermsPrompt(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const term = item.trim();
+    if (!term || seen.has(term.toLowerCase())) continue;
+    seen.add(term.toLowerCase());
+    terms.push(term);
+  }
+  return terms.slice(0, 250);
+}
+
+function normalizeCustomSpelling(value: unknown): CustomSpellingRule[] {
+  if (!Array.isArray(value)) return [];
+  const rules: CustomSpellingRule[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const to = typeof record.to === 'string' ? record.to.trim() : '';
+    const from = Array.isArray(record.from)
+      ? record.from.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+      : [];
+    const uniqueFrom = [...new Set(from)];
+    if (!to || uniqueFrom.length === 0) continue;
+    rules.push({ from: uniqueFrom.slice(0, 25), to });
+  }
+  return rules.slice(0, 100);
+}
+
+async function loadTranscriptionSettings(): Promise<TranscriptionSettings> {
+  const fallback: TranscriptionSettings = {
+    speechModel: env.assemblyAiSpeechModel,
+    keytermsPrompt: [],
+    customSpelling: [],
+    summaryContext: '',
+  };
+  const { data, error } = await supabase
+    .from('workflow_transcription_settings')
+    .select('speech_model, keyterms_prompt, custom_spelling, summary_context')
+    .eq('id', 'global')
+    .maybeSingle();
+  if (error) {
+    console.warn(`Could not load transcription settings: ${error.message}`);
+    return fallback;
+  }
+  if (!data) return fallback;
+  const row = data as {
+    speech_model?: unknown;
+    keyterms_prompt?: unknown;
+    custom_spelling?: unknown;
+    summary_context?: unknown;
+  };
+  const speechModel = typeof row.speech_model === 'string' && row.speech_model.trim()
+    ? row.speech_model.trim()
+    : fallback.speechModel;
+  return {
+    speechModel,
+    keytermsPrompt: normalizeKeytermsPrompt(row.keyterms_prompt),
+    customSpelling: normalizeCustomSpelling(row.custom_spelling),
+    summaryContext: typeof row.summary_context === 'string' ? row.summary_context.trim() : '',
+  };
 }
 
 async function recordGeminiUsage(input: {
@@ -356,20 +436,28 @@ async function transcribeWithAssembly(input: {
   downloadUrl: string;
   noteId: string;
   userId: string;
+  settings: TranscriptionSettings;
 }): Promise<{ segments: TranscriptSegment[]; latencyMs: number }> {
   if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
   const startedAt = performance.now();
+  const submitBody: Record<string, unknown> = {
+    audio_url: input.downloadUrl,
+    speaker_labels: true,
+    speech_models: [input.settings.speechModel],
+  };
+  if (input.settings.keytermsPrompt.length > 0) {
+    submitBody.keyterms_prompt = input.settings.keytermsPrompt;
+  }
+  if (input.settings.customSpelling.length > 0) {
+    submitBody.custom_spelling = input.settings.customSpelling;
+  }
   const createResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: {
       Authorization: env.assemblyAiApiKey,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      audio_url: input.downloadUrl,
-      speaker_labels: true,
-      speech_models: [env.assemblyAiSpeechModel],
-    }),
+    body: JSON.stringify(submitBody),
   });
   const createRaw = await createResponse.text();
   if (!createResponse.ok) {
@@ -439,7 +527,7 @@ async function transcribeWithAssembly(input: {
   await recordAssemblyUsage({
     noteId: input.noteId,
     userId: input.userId,
-    model: env.assemblyAiSpeechModel,
+    model: input.settings.speechModel,
     latencyMs,
     transcriptId: created.id.trim(),
     audioDurationSeconds,
@@ -469,13 +557,15 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
 
   await updateWorkflowJob(jobId, { status: 'processing', stage: 'loading inputs', progress: 10 });
   const summaryRules = await loadSummaryPrompt(input.promptId, input.userId);
-  console.log(`Processing audio ${input.fileName} with AssemblyAI model ${env.assemblyAiSpeechModel}`);
+  const transcriptionSettings = await loadTranscriptionSettings();
+  console.log(`Processing audio ${input.fileName} with AssemblyAI model ${transcriptionSettings.speechModel}`);
 
   await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
   const { segments } = await transcribeWithAssembly({
     downloadUrl: input.downloadUrl,
     noteId: input.noteId,
     userId: input.userId,
+    settings: transcriptionSettings,
   });
   if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
   const transcriptText = formatTranscriptText(segments);
@@ -491,11 +581,13 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
       {
         text: buildSummaryPrompt({
           now: new Date().toISOString(),
+          meetingDate: input.meetingAt,
           instructions: input.instructions,
           summaryRules,
           fileName: input.fileName,
           transcript: transcriptText,
           speakerContext: input.speakerContext,
+          globalSummaryContext: transcriptionSettings.summaryContext,
         }),
       },
     ],
@@ -531,7 +623,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     meetingAt: input.meetingAt,
   });
 
-  return { transcript: segments, summary: parsedSummary.summary };
+  return { transcript: segments, summary: parsedSummary.summary, title: noteName, tags: parsedSummary.tags };
 }
 
 async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -575,9 +667,22 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
       result,
       error: null,
     });
+    completedJobResults.set(jobId, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Workflow job ${jobId} failed:`, error);
+    void sendWorkflowAlert({
+      title: 'Summarize audio job failed',
+      error,
+      context: {
+        jobId,
+        noteId: input.noteId,
+        userId: input.userId,
+        fileName: input.fileName,
+        promptId: input.promptId,
+        meetingAt: input.meetingAt,
+      },
+    });
     await updateWorkflowJob(jobId, {
       status: 'failed',
       stage: 'failed',
@@ -586,6 +691,8 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
     });
   }
 }
+
+const completedJobResults = new Map<string, SummarizeAudioResult>();
 
 async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId: string): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
@@ -608,9 +715,10 @@ async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId:
     status: row.status,
     stage: row.stage ?? row.status,
     progress: row.progress ?? 0,
-    result: row.status === 'completed' ? row.result : null,
+    result: row.status === 'completed' ? completedJobResults.get(jobId) ?? row.result : null,
     error: row.error,
   });
+  if (row.status === 'completed') completedJobResults.delete(jobId);
 }
 
 const server = createServer((req, res) => {
@@ -647,7 +755,34 @@ const server = createServer((req, res) => {
   })().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error('Workflow request failed:', error);
+    void sendWorkflowAlert({
+      title: 'Workflow request failed',
+      error,
+      context: {
+        method: req.method,
+        url: req.url,
+        status: message.includes('required') || message.includes('token') || message.includes('userId') ? 400 : 500,
+      },
+    });
     sendJson(res, message.includes('required') || message.includes('token') || message.includes('userId') ? 400 : 500, { error: message });
+  });
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled workflow rejection:', error);
+  void sendWorkflowAlert({
+    title: 'Unhandled workflow rejection',
+    error,
+    context: { source: 'process.unhandledRejection' },
+  });
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught workflow exception:', error);
+  void sendWorkflowAlert({
+    title: 'Uncaught workflow exception',
+    error,
+    context: { source: 'process.uncaughtException' },
   });
 });
 

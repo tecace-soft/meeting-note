@@ -97,17 +97,27 @@ Output the JSON now.`;
 
 export function buildSummaryPrompt(input: {
   now: string;
+  meetingDate?: string | null;
   instructions?: string;
   summaryRules: string;
   fileName: string;
   transcript: string;
   speakerContext?: string;
+  globalSummaryContext?: string;
 }): string {
   const speakerContext = input.speakerContext?.trim()
     ? `\nSPEAKER CONTEXT\n'''\n${input.speakerContext.trim()}\n'''\n`
     : '';
+  const globalSummaryContext = input.globalSummaryContext?.trim()
+    ? `\nGLOBAL SUMMARY CONTEXT\n'''\n${input.globalSummaryContext.trim()}\n'''\n`
+    : '';
+
+  const meetingDateLine = input.meetingDate
+    ? `Meeting date is ${input.meetingDate}`
+    : 'Meeting date is unknown; do not assume it is today unless the transcript says so.';
 
   return `Today's date is ${input.now}
+${meetingDateLine}
 
 <important>
 USER INPUT NON-NEGOTIABLE INSTRUCTIONS
@@ -132,9 +142,13 @@ Your response must contain three fields: title, summary, and tags. Title should 
 
 SUMMARIZATION RULES
 ${input.summaryRules}
+${globalSummaryContext}
 ${speakerContext}
 GROUNDING RULES
 - Base the summary only on the File Transcript.
+- Global summary context may guide terminology, preferred style, company background, and recurring project/product names, but it must not add facts that are absent from the File Transcript.
+- If the summary needs to mention or reason about the meeting date, use the Meeting date above, not Today's date.
+- Today's date is only the date this summary is being generated.
 - Do not introduce participant names, organizations, decisions, or topics that are not explicitly present in the File Transcript.
 - If the transcript uses generic labels like "Speaker A" or "Speaker 1", keep those labels unless a real name is explicitly stated in the transcript.
 - Speaker context, when present, is background only. Never use it to rename transcript speakers or add people who are not mentioned in the transcript.
@@ -142,7 +156,8 @@ GROUNDING RULES
 FILE
 '''
 File Name: ${input.fileName}
-  File Transcript: ${input.transcript}
+Meeting Date: ${input.meetingDate ?? 'Unknown'}
+File Transcript: ${input.transcript}
 '''`;
 }
 
