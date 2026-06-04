@@ -21,6 +21,24 @@ function sendJsonWithHeaders(
   res.end(JSON.stringify(body));
 }
 
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.stack ?? error.message;
+  try {
+    return JSON.stringify(error, null, 2);
+  } catch {
+    return String(error);
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return 'Unknown server error';
+}
+
 function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean {
   if (!apiKey) return true;
   return req.headers.authorization === `Bearer ${apiKey}`;
@@ -227,9 +245,8 @@ export async function startHttpServer(): Promise<void> {
         await transport.handleRequest(req, res);
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown server error';
-      const stack = error instanceof Error ? error.stack ?? error.message : String(error);
-      process.stderr.write(`MCP HTTP request failed: ${stack}\n`);
+      const message = getErrorMessage(error);
+      process.stderr.write(`MCP HTTP request failed: ${describeError(error)}\n`);
       if (!res.headersSent) sendJson(res, 500, { error: message });
       else res.end();
     }
