@@ -63,7 +63,10 @@ async function resolveUserIdFromPersonalMcpToken(
     .is('revoked_at', null)
     .maybeSingle();
 
-  if (error) throw error;
+  if (error) {
+    process.stderr.write(`Failed to resolve personal MCP token: ${describeError(error)}\n`);
+    return undefined;
+  }
   const row = data as { id?: string; user_id?: string } | null;
   if (!row?.id || !row.user_id) return undefined;
 
