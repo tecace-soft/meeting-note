@@ -182,9 +182,12 @@ export async function startHttpServer(): Promise<void> {
       }
 
       const bearerToken = getBearerToken(req);
-      const personalTokenUserId = await resolveUserIdFromPersonalMcpToken(bearerToken, env);
+      const staticKeyAuthorized = isClaudeEndpoint && isAuthorized(req, env.mcpApiKey);
+      const personalTokenUserId = staticKeyAuthorized
+        ? undefined
+        : await resolveUserIdFromPersonalMcpToken(bearerToken, env);
 
-      if (isClaudeEndpoint && !personalTokenUserId && !isAuthorized(req, env.mcpApiKey)) {
+      if (isClaudeEndpoint && !personalTokenUserId && !staticKeyAuthorized) {
         sendJson(res, 401, { error: 'Unauthorized' });
         return;
       }
