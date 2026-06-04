@@ -120,6 +120,13 @@ async function invokeGenerateProfile(body: {
 }
 
 const NOTES_PAGE_SIZE = 10;
+type HistoryViewMode = 'list' | 'calendar';
+
+interface CalendarDay {
+  date: Date;
+  key: string;
+  inMonth: boolean;
+}
 
 /** When totalPages > 5, compress middle with ellipses; otherwise list every page. */
 function normalizeTagList(raw: unknown): string[] {
@@ -174,6 +181,62 @@ function getPaginationItems(totalPages: number, currentPage: number): (number | 
   return out;
 }
 
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addLocalDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function getLocalDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getMonthStart(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function getCalendarWindow(monthDate: Date): { start: Date; endExclusive: Date; days: CalendarDay[] } {
+  const monthStart = getMonthStart(monthDate);
+  const monthEndExclusive = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+  const start = addLocalDays(monthStart, -monthStart.getDay());
+  const lastMonthDay = addLocalDays(monthEndExclusive, -1);
+  const endExclusive = addLocalDays(lastMonthDay, 6 - lastMonthDay.getDay() + 1);
+  const days: CalendarDay[] = [];
+  for (let cursor = startOfLocalDay(start); cursor < endExclusive; cursor = addLocalDays(cursor, 1)) {
+    days.push({
+      date: new Date(cursor),
+      key: getLocalDateKey(cursor),
+      inMonth: cursor.getMonth() === monthStart.getMonth(),
+    });
+  }
+  return { start, endExclusive, days };
+}
+
+function getWeekDays(date: Date): CalendarDay[] {
+  const weekStart = addLocalDays(startOfLocalDay(date), -date.getDay());
+  return Array.from({ length: 7 }, (_, index) => {
+    const day = addLocalDays(weekStart, index);
+    return {
+      date: day,
+      key: getLocalDateKey(day),
+      inMonth: true,
+    };
+  });
+}
+
+function getNoteMeetingDate(note: Note): Date {
+  const value = note.meeting_at || note.created_at;
+  const parsed = value ? new Date(value) : new Date();
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
 const SummaryHistory: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -188,6 +251,9 @@ const SummaryHistory: React.FC = () => {
   const [notesPage, setNotesPage] = useState(1);
   const [notesLoading, setNotesLoading] = useState(true);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
+  const [historyViewMode, setHistoryViewMode] = useState<HistoryViewMode>('list');
+  const [calendarMonth, setCalendarMonth] = useState(() => getMonthStart(new Date()));
+  const [calendarExpandedDayKey, setCalendarExpandedDayKey] = useState<string | null>(null);
 
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
@@ -300,7 +366,8 @@ const SummaryHistory: React.FC = () => {
     fetchChatInfo();
   }, [chatId, isAuthenticated, getAccessToken]);
 
-  const notesScopeKey = `${chatId ?? ''}|${user?.id ?? ''}`;
+  const calendarWindow = useMemo(() => getCalendarWindow(calendarMonth), [calendarMonth]);
+  const notesScopeKey = `${chatId ?? ''}|${user?.id ?? ''}|${historyViewMode}`;
   const prevNotesScopeRef = useRef(notesScopeKey);
 
   useEffect(() => {
@@ -339,12 +406,24 @@ const SummaryHistory: React.FC = () => {
           query = query.or(ownershipFilter);
         }
 
+        if (historyViewMode === 'calendar') {
+          const startIso = calendarWindow.start.toISOString();
+          const endIso = calendarWindow.endExclusive.toISOString();
+          query = query.or(
+            `and(meeting_at.gte.${startIso},meeting_at.lt.${endIso}),and(meeting_at.is.null,created_at.gte.${startIso},created_at.lt.${endIso})`
+          );
+        }
+
+        const orderedQuery = historyViewMode === 'calendar'
+          ? query.order('meeting_at', { ascending: true, nullsFirst: false }).order('created_at', { ascending: true })
+          : query.order('created_at', { ascending: false });
+
         const from = (effectivePage - 1) * NOTES_PAGE_SIZE;
         const to = from + NOTES_PAGE_SIZE - 1;
 
-        const { data, error, count } = await query
-          .order('created_at', { ascending: false })
-          .range(from, to);
+        const { data, error, count } = historyViewMode === 'calendar'
+          ? await orderedQuery
+          : await orderedQuery.range(from, to);
 
         if (cancelled) return;
         if (error) throw error;
@@ -365,7 +444,7 @@ const SummaryHistory: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [notesScopeKey, notesPage, chatId, user?.id]);
+  }, [notesScopeKey, notesPage, chatId, user?.id, historyViewMode, calendarWindow.start, calendarWindow.endExclusive]);
 
   const getChatDisplayName = (): string => {
     if (!chatInfo) return 'Loading...';
@@ -458,6 +537,34 @@ const SummaryHistory: React.FC = () => {
   const notesRangeStart = notesTotalCount === 0 ? 0 : (notesPage - 1) * NOTES_PAGE_SIZE + 1;
   const notesRangeEnd = Math.min(notesPage * NOTES_PAGE_SIZE, notesTotalCount);
   const selectedNote = notes.find((n) => n.id === expandedNoteId) ?? null;
+  const calendarNotesByDay = useMemo(() => {
+    const grouped = new Map<string, Note[]>();
+    for (const note of notes) {
+      const key = getLocalDateKey(getNoteMeetingDate(note));
+      const group = grouped.get(key) ?? [];
+      group.push(note);
+      grouped.set(key, group);
+    }
+    grouped.forEach((group) => {
+      group.sort((a, b) => getNoteMeetingDate(a).getTime() - getNoteMeetingDate(b).getTime());
+    });
+    return grouped;
+  }, [notes]);
+  const selectedCalendarDate = selectedNote ? getNoteMeetingDate(selectedNote) : null;
+  const expandedCalendarDate = calendarExpandedDayKey ? new Date(`${calendarExpandedDayKey}T00:00:00`) : null;
+  const focusedCalendarDate = selectedCalendarDate ?? expandedCalendarDate;
+  const visibleCalendarDays = focusedCalendarDate ? getWeekDays(focusedCalendarDate) : calendarWindow.days;
+  const calendarMonthLabel = calendarMonth.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  const activeCalendarDayKey = calendarExpandedDayKey;
+  const activeCalendarDayNotes = activeCalendarDayKey ? calendarNotesByDay.get(activeCalendarDayKey) ?? [] : [];
+  const activeCalendarDayLabel = activeCalendarDayKey
+    ? new Date(`${activeCalendarDayKey}T00:00:00`).toLocaleDateString([], {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+      })
+    : '';
+  const todayKey = getLocalDateKey(new Date());
   const handleStartNoteEdit = (note: Note) => {
     setEditingNoteId(note.id);
     setNoteEditDraft(note.summary_edit || note.summary || '');
@@ -792,12 +899,12 @@ const SummaryHistory: React.FC = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
-      <main className={`flex min-h-0 flex-1 flex-col overflow-hidden ${
-        selectedNote ? 'p-4 md:p-6' : 'px-3 py-4 md:px-4 md:py-6'
+      <main className={`flex min-h-0 flex-1 flex-col ${historyViewMode === 'calendar' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'} ${
+        selectedNote || historyViewMode === 'calendar' ? 'p-4 md:p-6' : 'px-3 py-4 md:px-4 md:py-6'
       }`}>
         <div
           className={`mx-auto flex h-full min-h-0 w-full min-w-0 flex-col gap-4 transition-[max-width] duration-300 ease-out ${
-            selectedNote ? 'max-w-[90rem]' : 'max-w-[66rem]'
+            selectedNote || historyViewMode === 'calendar' ? 'max-w-[90rem]' : 'max-w-[66rem]'
           }`}
         >
           {/* Chat / scope header — same column width as notes (single max-width parent) */}
@@ -809,18 +916,80 @@ const SummaryHistory: React.FC = () => {
                   <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading chat info...</span>
                 </div>
               ) : (
-                <h1 className="app-page-title">
-                  {getChatDisplayName()}
-                </h1>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <h1 className="app-page-title">
+                    {getChatDisplayName()}
+                  </h1>
+                  <div
+                    className="results-tabs flex min-w-0 gap-5 border-b"
+                    style={{ borderColor: 'var(--border)' }}
+                    role="tablist"
+                    aria-label="History view"
+                  >
+                    {(['list', 'calendar'] as HistoryViewMode[]).map((mode) => {
+                      const active = historyViewMode === mode;
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() => {
+                            setHistoryViewMode(mode);
+                            setExpandedNoteId(null);
+                            setCalendarExpandedDayKey(null);
+                            setNotesPage(1);
+                          }}
+                          className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium capitalize transition-colors"
+                          style={{ color: active ? 'var(--text)' : 'var(--text-secondary)' }}
+                        >
+                          {mode}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )
             ) : (
               <>
-                <h1 className="app-page-title">
-                  History
-                </h1>
-                <p className="app-page-subtitle">
-                  Meeting notes you created across all chats
-                </p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h1 className="app-page-title">
+                      History
+                    </h1>
+                    <p className="app-page-subtitle">
+                      Meeting notes you created across all chats
+                    </p>
+                  </div>
+                  <div
+                    className="results-tabs flex min-w-0 gap-5 border-b"
+                    style={{ borderColor: 'var(--border)' }}
+                    role="tablist"
+                    aria-label="History view"
+                  >
+                    {(['list', 'calendar'] as HistoryViewMode[]).map((mode) => {
+                      const active = historyViewMode === mode;
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() => {
+                            setHistoryViewMode(mode);
+                            setExpandedNoteId(null);
+                            setCalendarExpandedDayKey(null);
+                            setNotesPage(1);
+                          }}
+                          className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium capitalize transition-colors"
+                          style={{ color: active ? 'var(--text)' : 'var(--text-secondary)' }}
+                        >
+                          {mode}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -835,6 +1004,453 @@ const SummaryHistory: React.FC = () => {
                     Loading notes...
                   </p>
                 </div>
+              </div>
+            ) : historyViewMode === 'calendar' ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-4 pb-1">
+                <section className="card flex shrink-0 flex-col rounded-lg p-3 sm:p-4">
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em]" style={{ color: 'var(--text-muted)' }}>
+                        Calendar
+                      </p>
+                      <h2 className="mt-1 text-xl font-semibold" style={{ color: 'var(--text)' }}>
+                        {calendarMonthLabel}
+                      </h2>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {focusedCalendarDate ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExpandedNoteId(null);
+                            setCalendarExpandedDayKey(null);
+                          }}
+                          className="rounded-lg px-3 py-2 text-sm font-medium transition-opacity hover:opacity-80"
+                          style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                        >
+                          Expand month
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpandedNoteId(null);
+                          setCalendarExpandedDayKey(null);
+                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+                        }}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-opacity hover:opacity-80"
+                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                        aria-label="Previous month"
+                      >
+                        <ChevronLeft className="h-4 w-4" aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpandedNoteId(null);
+                          setCalendarExpandedDayKey(null);
+                          setCalendarMonth(getMonthStart(new Date()));
+                        }}
+                        className="rounded-lg px-3 py-2 text-sm font-medium transition-opacity hover:opacity-80"
+                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                      >
+                        Today
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpandedNoteId(null);
+                          setCalendarExpandedDayKey(null);
+                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+                        }}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-opacity hover:opacity-80"
+                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                        aria-label="Next month"
+                      >
+                        <ChevronRight className="h-4 w-4" aria-hidden />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--border)' }}>
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                      <div
+                        key={day}
+                        className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.08em]"
+                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
+                      >
+                        {day}
+                      </div>
+                    ))}
+                    {visibleCalendarDays.map((day) => {
+                      const dayNotes = calendarNotesByDay.get(day.key) ?? [];
+                      const isToday = day.key === todayKey;
+                      const isSelectedDay = selectedCalendarDate
+                        ? day.key === getLocalDateKey(selectedCalendarDate)
+                        : false;
+                      const isExpandedDay = calendarExpandedDayKey === day.key;
+                      return (
+                        <div
+                          key={day.key}
+                          className={`min-h-[7.5rem] min-w-0 p-2 transition-colors ${selectedNote ? 'sm:min-h-[8.5rem]' : 'sm:min-h-[9.5rem]'}`}
+                          style={{
+                            backgroundColor: isSelectedDay || isExpandedDay
+                              ? 'color-mix(in srgb, var(--accent-light) 72%, var(--card))'
+                              : 'var(--card)',
+                          }}
+                        >
+                          <div className="mb-2 flex items-center justify-between gap-1">
+                            <span
+                              className="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-semibold"
+                              style={{
+                                backgroundColor: isToday ? 'var(--accent)' : 'transparent',
+                                color: isToday ? '#fff' : day.inMonth ? 'var(--text)' : 'var(--text-muted)',
+                              }}
+                            >
+                              {day.date.getDate()}
+                            </span>
+                            {dayNotes.length > 0 ? (
+                              <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                                {dayNotes.length}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="space-y-1.5">
+                            {dayNotes.slice(0, 3).map((note) => {
+                              const isSharedNote = isSharedWithCurrentUser(note);
+                              const isSelected = expandedNoteId === note.id;
+                              return (
+                                <button
+                                  key={note.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setExpandedNoteId((prev) => (prev === note.id ? null : note.id));
+                                    setCalendarExpandedDayKey(null);
+                                  }}
+                                  className="group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-all"
+                                  style={{
+                                    backgroundColor: isSelected
+                                      ? 'var(--accent)'
+                                      : isSharedNote
+                                        ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--bg-secondary))'
+                                        : 'var(--bg-secondary)',
+                                    color: isSelected ? '#fff' : 'var(--text)',
+                                  }}
+                                  title={getNoteDisplayTitle(note)}
+                                >
+                                  {isSharedNote ? (
+                                    <Files className="h-3.5 w-3.5 shrink-0" style={{ color: isSelected ? '#fff' : 'var(--tc-cyan)' }} aria-hidden />
+                                  ) : (
+                                    <FileDocument className="h-3.5 w-3.5 shrink-0" style={{ color: isSelected ? '#fff' : 'var(--accent)' }} aria-hidden />
+                                  )}
+                                  <span className="min-w-0 truncate text-xs font-medium">
+                                    {getNoteDisplayTitle(note)}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                            {dayNotes.length > 3 ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpandedNoteId(null);
+                                  setCalendarExpandedDayKey((prev) => (prev === day.key ? null : day.key));
+                                }}
+                                className="px-2 text-left text-[11px] font-medium transition-opacity hover:opacity-80"
+                                style={{ color: 'var(--text-muted)' }}
+                              >
+                                +{dayNotes.length - 3} more
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {activeCalendarDayKey && activeCalendarDayNotes.length > 0 ? (
+                    <div
+                      className="mt-4 rounded-lg p-3"
+                      style={{ backgroundColor: 'var(--bg-secondary)' }}
+                    >
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.12em]" style={{ color: 'var(--text-muted)' }}>
+                            {activeCalendarDayLabel}
+                          </p>
+                          <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                            {activeCalendarDayNotes.length} {activeCalendarDayNotes.length === 1 ? 'note' : 'notes'}
+                          </p>
+                        </div>
+                        {!selectedNote ? (
+                          <button
+                            type="button"
+                            onClick={() => setCalendarExpandedDayKey(null)}
+                            className="rounded-md px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-80"
+                            style={{ backgroundColor: 'var(--card)', color: 'var(--text-secondary)' }}
+                          >
+                            Close
+                          </button>
+                        ) : null}
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {activeCalendarDayNotes.map((note) => {
+                          const isSharedNote = isSharedWithCurrentUser(note);
+                          const isSelected = expandedNoteId === note.id;
+                          return (
+                            <button
+                              key={`day-list-${note.id}`}
+                              type="button"
+                              onClick={() => {
+                                setExpandedNoteId((prev) => (prev === note.id ? null : note.id));
+                                setCalendarExpandedDayKey(null);
+                              }}
+                              className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-2 text-left transition-all"
+                              style={{
+                                backgroundColor: isSelected ? 'var(--accent)' : 'var(--card)',
+                                color: isSelected ? '#fff' : 'var(--text)',
+                              }}
+                              title={getNoteDisplayTitle(note)}
+                            >
+                              <span
+                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                                style={{
+                                  backgroundColor: isSelected
+                                    ? 'color-mix(in srgb, #fff 18%, transparent)'
+                                    : isSharedNote
+                                      ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--surface))'
+                                      : 'var(--accent-light)',
+                                }}
+                              >
+                                {isSharedNote ? (
+                                  <Files className="h-4 w-4" style={{ color: isSelected ? '#fff' : 'var(--tc-cyan)' }} aria-hidden />
+                                ) : (
+                                  <FileDocument className="h-4 w-4" style={{ color: isSelected ? '#fff' : 'var(--accent)' }} aria-hidden />
+                                )}
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-semibold">
+                                  {getNoteDisplayTitle(note)}
+                                </span>
+                                <span
+                                  className="mt-0.5 block truncate text-xs"
+                                  style={{ color: isSelected ? 'rgba(255,255,255,0.78)' : 'var(--text-secondary)' }}
+                                >
+                                  {formatDate(note.meeting_at || note.created_at)}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </section>
+
+                {selectedNote ? (
+                  <section className="card flex min-h-[34rem] min-w-0 flex-col rounded-lg">
+                    {(() => {
+                      const note = selectedNote;
+                      const diarRaw = getNoteDiarizationRaw(note);
+                      const showDiarized = hasUsableDiarization(diarRaw);
+                      const plainTx = note.transcription?.trim();
+                      const hasTranscription = showDiarized || Boolean(plainTx);
+                      const activeTab = noteExpandedTab[note.id] ?? 'summary';
+                      return (
+                        <div
+                          className="flex min-h-0 flex-1 flex-col"
+                          onClick={(e) => e.stopPropagation()}
+                          role="region"
+                          aria-label="Note detail"
+                        >
+                          <div
+                            className="results-header flex flex-col gap-5 border-b px-4 pt-4 md:px-5"
+                            style={{ borderColor: 'var(--border)' }}
+                          >
+                            <div className="min-w-0">
+                              <h3 className="truncate text-lg font-semibold leading-tight" style={{ color: 'var(--text)' }}>
+                                {getNoteDisplayTitle(note)}
+                              </h3>
+                              <p className="mt-1.5 text-xs font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--text-muted)' }}>
+                                Meeting {formatDate(note.meeting_at || note.created_at)}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-end justify-between gap-3">
+                              <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
+                                <button
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={activeTab === 'summary'}
+                                  onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
+                                  className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+                                  style={{ color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)' }}
+                                >
+                                  Summary
+                                </button>
+                                {hasTranscription && (
+                                  <button
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activeTab === 'transcription'}
+                                    onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
+                                    className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+                                    style={{ color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)' }}
+                                  >
+                                    Transcription
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 items-center justify-end gap-2 pb-2.5">
+                                {activeTab === 'summary' ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)}
+                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                    >
+                                      {copiedKey === `summary-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                      Copy
+                                    </button>
+                                    {editingNoteId === note.id ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleSaveNoteEdit(note)}
+                                        disabled={savingNoteId === note.id}
+                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
+                                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                      >
+                                        {savingNoteId === note.id ? <Loading className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                        Done
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartNoteEdit(note)}
+                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                        style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                      >
+                                        <EditPencilLine01 className="h-3 w-3" />
+                                        Edit
+                                      </button>
+                                    )}
+                                  </>
+                                ) : hasTranscription ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleCopyText(
+                                        showDiarized
+                                          ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
+                                          : plainTx || '',
+                                        `transcription-${note.id}`
+                                      )
+                                    }
+                                    className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                  >
+                                    {copiedKey === `transcription-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                    Copy
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="min-h-0 flex flex-1 flex-col overflow-hidden px-4 pb-4 pt-4 md:px-5">
+                            {activeTab === 'summary' && (
+                              <>
+                                {editingNoteId === note.id ? (
+                                  <textarea
+                                    value={noteEditDraft}
+                                    onChange={(e) => setNoteEditDraft(e.target.value)}
+                                    className={`min-h-0 flex-1 ${NOTE_SUMMARY_TEXTAREA}`}
+                                    style={{ backgroundColor: 'transparent', color: 'var(--text)', borderColor: 'var(--accent)' }}
+                                  />
+                                ) : note.summary_edit || note.summary ? (
+                                  <div className={NOTE_SUMMARY_MARKDOWN} style={{ backgroundColor: 'transparent', color: 'var(--text)' }}>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                      {note.summary_edit || note.summary || ''}
+                                    </ReactMarkdown>
+                                  </div>
+                                ) : (
+                                  <div className={`flex items-center justify-center italic ${NOTE_PANEL_SCROLL_CLASS} border border-dashed p-4 text-sm leading-relaxed`} style={{ backgroundColor: 'transparent', color: 'var(--text-muted)', borderColor: 'var(--border)' }}>
+                                    No summary available
+                                  </div>
+                                )}
+                              </>
+                            )}
+                            {activeTab === 'transcription' && hasTranscription && (
+                              <div className="min-h-0 flex flex-1 flex-col">
+                                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                  {showDiarized ? (
+                                    <TranscriptSpeakerFilterControls
+                                      speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
+                                      selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
+                                      onSelectedSpeakersChange={(next) => setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))}
+                                    />
+                                  ) : <span />}
+                                </div>
+                                {showDiarized ? (
+                                  <div className="min-h-0 flex-1">
+                                    <TranscriptDiarizedEditor
+                                      segments={normalizeTranscript(diarRaw)}
+                                      onSegmentsChange={(next) => setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n)))}
+                                      noteId={note.id}
+                                      scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
+                                      selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
+                                      onSelectedSpeakerFiltersChange={(next) => setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))}
+                                    />
+                                  </div>
+                                ) : (
+                                  <div className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`} style={{ backgroundColor: 'transparent', color: 'var(--text-secondary)' }}>
+                                    {plainTx}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5" style={{ borderColor: 'var(--border)' }}>
+                            <button type="button" onClick={() => navigate(`/save-summary?note_id=${note.id}`)} className={RESULT_ACTION_BTN_CLASS} title="Save to OneDrive" aria-label="Save to OneDrive">
+                              <Cloud className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
+                            </button>
+                            <button type="button" onClick={() => void handleOpenForwardModal(note)} className={RESULT_ACTION_BTN_CLASS} title="Forward to Teams" aria-label="Forward to Teams">
+                              <Users className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
+                            </button>
+                            <button type="button" onClick={() => handleOpenShareModal(note)} className={RESULT_ACTION_BTN_CLASS} title="Share" aria-label="Share">
+                              <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Share</span>
+                            </button>
+                            <button type="button" onClick={() => void handleOpenProfileModal(note)} className={RESULT_ACTION_BTN_CLASS} title="Sync Profile" aria-label="Sync Profile">
+                              <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Sync Profile</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={regeneratingNoteId === note.id || !hasUsableDiarization(diarRaw)}
+                              onClick={() => void handleRegenerateNoteSummary(note)}
+                              className={RESULT_ACTION_BTN_CLASS}
+                              title={!hasUsableDiarization(diarRaw) ? 'Requires diarized transcription' : 'Regenerate Summary'}
+                              aria-label="Regenerate Summary"
+                            >
+                              {regeneratingNoteId === note.id ? (
+                                <>
+                                  <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                  <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerating...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
+                                  <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Regenerate</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </section>
+                ) : null}
               </div>
             ) : notesTotalCount === 0 ? (
               <div className="flex min-h-0 flex-1 items-center justify-center">
