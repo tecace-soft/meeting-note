@@ -236,6 +236,10 @@ const Project: React.FC = () => {
   const noteMenuRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const hasConversation = chatMessages.length > 0 || chatSending;
+  const chatInputLineCount = chatInput.split('\n').length;
+  const visibleChatInputRows = Math.min(chatInputLineCount, 5);
+  const isChatInputExpanded = chatInputLineCount > 1;
+  const isChatInputScrollable = chatInputLineCount > 5;
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -859,15 +863,42 @@ const Project: React.FC = () => {
             onSubmit={(ev) => {
               void handleSendChat(ev);
             }}
-            className="project-chat-input-shell flex flex-shrink-0 items-center gap-2 rounded-full border-0 py-1.5 pl-4 pr-1.5 shadow-none transition-[background-color] duration-200"
+            className={`project-chat-input-shell flex flex-shrink-0 border-0 shadow-none transition-[background-color] duration-200 ${
+              isChatInputExpanded
+                ? 'flex-col gap-1 rounded-[1.75rem] pb-1.5 pl-4 pr-1.5 pt-2'
+                : 'items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5'
+            }`}
             style={{ backgroundColor: 'var(--surface)' }}
           >
-            <input
+            <textarea
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                if (e.shiftKey) {
+                  e.preventDefault();
+                  const target = e.currentTarget;
+                  const start = target.selectionStart ?? chatInput.length;
+                  const end = target.selectionEnd ?? chatInput.length;
+                  const next = `${chatInput.slice(0, start)}\n${chatInput.slice(end)}`;
+                  setChatInput(next);
+                  window.requestAnimationFrame(() => {
+                    target.selectionStart = start + 1;
+                    target.selectionEnd = start + 1;
+                  });
+                  return;
+                }
+                e.preventDefault();
+                void handleSendChat();
+              }}
               placeholder={`New chat in ${project?.name || 'Project'}`}
               disabled={chatSending || !projectId}
-              className="project-chat-input min-w-0 flex-1 bg-transparent py-2.5 text-[calc(1rem+2px)] leading-relaxed placeholder:text-[color:var(--text-muted)] placeholder:opacity-90 disabled:opacity-60"
+              rows={visibleChatInputRows}
+              className={`project-chat-input custom-scrollbar max-h-40 min-w-0 flex-1 resize-none bg-transparent text-[calc(1rem+2px)] leading-relaxed placeholder:text-[color:var(--text-muted)] placeholder:opacity-90 disabled:opacity-60 ${
+                isChatInputExpanded ? 'min-h-0 w-full py-0' : 'min-h-[2.75rem] py-2.5'
+              } ${
+                isChatInputScrollable ? 'overflow-y-auto' : 'overflow-y-hidden'
+              }`}
               style={{
                 color: 'var(--text)',
                 border: 0,
@@ -876,16 +907,18 @@ const Project: React.FC = () => {
               }}
               aria-label="Chat message"
             />
-            <button
-              type="submit"
-              disabled={chatSending || !chatInput.trim() || !projectId}
-              className="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full disabled:opacity-50"
-              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-              title="Send message"
-              aria-label="Send message"
-            >
-              {chatSending ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <PaperPlane className="h-4 w-4" aria-hidden />}
-            </button>
+            <div className={`flex items-center justify-end ${isChatInputExpanded ? 'w-full' : 'shrink-0'}`}>
+              <button
+                type="submit"
+                disabled={chatSending || !chatInput.trim() || !projectId}
+                className="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                title="Send message"
+                aria-label="Send message"
+              >
+                {chatSending ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <PaperPlane className="h-4 w-4" aria-hidden />}
+              </button>
+            </div>
           </form>
 
           {chatError ? (

@@ -121,6 +121,7 @@ async function invokeGenerateProfile(body: {
 
 const NOTES_PAGE_SIZE = 10;
 type HistoryViewMode = 'list' | 'calendar';
+type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
 
 interface CalendarDay {
   date: Date;
@@ -219,7 +220,7 @@ function getCalendarWindow(monthDate: Date): { start: Date; endExclusive: Date; 
   return { start, endExclusive, days };
 }
 
-function getWeekDays(date: Date): CalendarDay[] {
+function getCalendarWeek(date: Date): CalendarDay[] {
   const weekStart = addLocalDays(startOfLocalDay(date), -date.getDay());
   return Array.from({ length: 7 }, (_, index) => {
     const day = addLocalDays(weekStart, index);
@@ -254,6 +255,7 @@ const SummaryHistory: React.FC = () => {
   const [historyViewMode, setHistoryViewMode] = useState<HistoryViewMode>('list');
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthStart(new Date()));
   const [calendarExpandedDayKey, setCalendarExpandedDayKey] = useState<string | null>(null);
+  const [calendarDisplayMode, setCalendarDisplayMode] = useState<CalendarDisplayMode>('monthly');
 
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
@@ -550,12 +552,21 @@ const SummaryHistory: React.FC = () => {
     });
     return grouped;
   }, [notes]);
-  const selectedCalendarDate = selectedNote ? getNoteMeetingDate(selectedNote) : null;
-  const expandedCalendarDate = calendarExpandedDayKey ? new Date(`${calendarExpandedDayKey}T00:00:00`) : null;
-  const focusedCalendarDate = selectedCalendarDate ?? expandedCalendarDate;
-  const visibleCalendarDays = focusedCalendarDate ? getWeekDays(focusedCalendarDate) : calendarWindow.days;
+  const todayKey = getLocalDateKey(new Date());
+  const selectedCalendarDayKey = selectedNote ? getLocalDateKey(getNoteMeetingDate(selectedNote)) : null;
+  const focusedCalendarDayKey = calendarDisplayMode === 'daily'
+    ? selectedCalendarDayKey ?? calendarExpandedDayKey ?? todayKey
+    : selectedCalendarDayKey ?? calendarExpandedDayKey;
+  const focusedCalendarDate = focusedCalendarDayKey ? new Date(`${focusedCalendarDayKey}T00:00:00`) : calendarMonth;
+  const calendarWeekDays = useMemo(() => getCalendarWeek(focusedCalendarDate), [focusedCalendarDate]);
+  const visibleCalendarDays = calendarDisplayMode === 'weekly' ? calendarWeekDays : calendarWindow.days;
+  const calendarWeekLabel = calendarWeekDays.length
+    ? `${calendarWeekDays[0].date.toLocaleDateString([], { month: 'short', day: 'numeric' })} - ${
+        calendarWeekDays[6].date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+      }`
+    : '';
   const calendarMonthLabel = calendarMonth.toLocaleDateString([], { month: 'long', year: 'numeric' });
-  const activeCalendarDayKey = calendarExpandedDayKey;
+  const activeCalendarDayKey = focusedCalendarDayKey;
   const activeCalendarDayNotes = activeCalendarDayKey ? calendarNotesByDay.get(activeCalendarDayKey) ?? [] : [];
   const activeCalendarDayLabel = activeCalendarDayKey
     ? new Date(`${activeCalendarDayKey}T00:00:00`).toLocaleDateString([], {
@@ -564,7 +575,22 @@ const SummaryHistory: React.FC = () => {
         day: 'numeric',
       })
     : '';
-  const todayKey = getLocalDateKey(new Date());
+  const activeCalendarDateLabel = activeCalendarDayKey
+    ? new Date(`${activeCalendarDayKey}T00:00:00`).toLocaleDateString([], {
+        month: 'long',
+        day: 'numeric',
+      })
+    : '';
+  const activeCalendarWeekdayLabel = activeCalendarDayKey
+    ? new Date(`${activeCalendarDayKey}T00:00:00`).toLocaleDateString([], {
+        weekday: 'long',
+      })
+    : '';
+  const calendarHeaderLabel = calendarDisplayMode === 'daily'
+    ? activeCalendarDateLabel
+    : calendarDisplayMode === 'weekly'
+      ? calendarWeekLabel
+      : calendarMonthLabel;
   const handleStartNoteEdit = (note: Note) => {
     setEditingNoteId(note.id);
     setNoteEditDraft(note.summary_edit || note.summary || '');
@@ -1006,241 +1032,250 @@ const SummaryHistory: React.FC = () => {
                 </div>
               </div>
             ) : historyViewMode === 'calendar' ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-4 pb-1">
+              <div
+                className={`grid min-h-0 flex-1 gap-4 pb-1 ${
+                  focusedCalendarDayKey && selectedNote
+                    ? 'xl:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]'
+                    : 'xl:grid-cols-1'
+                }`}
+              >
                 <section className="card flex shrink-0 flex-col rounded-lg p-3 sm:p-4">
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em]" style={{ color: 'var(--text-muted)' }}>
-                        Calendar
-                      </p>
-                      <h2 className="mt-1 text-xl font-semibold" style={{ color: 'var(--text)' }}>
-                        {calendarMonthLabel}
-                      </h2>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {focusedCalendarDate ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setExpandedNoteId(null);
-                            setCalendarExpandedDayKey(null);
-                          }}
-                          className="rounded-lg px-3 py-2 text-sm font-medium transition-opacity hover:opacity-80"
-                          style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
-                        >
-                          Expand month
-                        </button>
-                      ) : null}
+                    <div className="flex min-w-0 items-center gap-2">
                       <button
                         type="button"
                         onClick={() => {
                           setExpandedNoteId(null);
-                          setCalendarExpandedDayKey(null);
-                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+                          if (calendarDisplayMode === 'daily') {
+                            const previousDay = addLocalDays(new Date(`${activeCalendarDayKey}T00:00:00`), -1);
+                            setCalendarExpandedDayKey(getLocalDateKey(previousDay));
+                            setCalendarMonth(getMonthStart(previousDay));
+                          } else if (calendarDisplayMode === 'weekly') {
+                            const previousWeek = addLocalDays(focusedCalendarDate, -7);
+                            setCalendarExpandedDayKey(getLocalDateKey(previousWeek));
+                            setCalendarMonth(getMonthStart(previousWeek));
+                          } else {
+                            setCalendarExpandedDayKey(null);
+                            setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+                          }
                         }}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-opacity hover:opacity-80"
-                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                        aria-label="Previous month"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
+                        style={{ color: 'var(--text-secondary)' }}
+                        aria-label={calendarDisplayMode === 'daily' ? 'Previous day' : calendarDisplayMode === 'weekly' ? 'Previous week' : 'Previous month'}
                       >
                         <ChevronLeft className="h-4 w-4" aria-hidden />
                       </button>
+                      <h2 className="min-w-0 truncate text-xl font-semibold" style={{ color: 'var(--text)' }}>
+                        {calendarHeaderLabel}
+                      </h2>
                       <button
                         type="button"
                         onClick={() => {
                           setExpandedNoteId(null);
-                          setCalendarExpandedDayKey(null);
-                          setCalendarMonth(getMonthStart(new Date()));
+                          if (calendarDisplayMode === 'daily') {
+                            const nextDay = addLocalDays(new Date(`${activeCalendarDayKey}T00:00:00`), 1);
+                            setCalendarExpandedDayKey(getLocalDateKey(nextDay));
+                            setCalendarMonth(getMonthStart(nextDay));
+                          } else if (calendarDisplayMode === 'weekly') {
+                            const nextWeek = addLocalDays(focusedCalendarDate, 7);
+                            setCalendarExpandedDayKey(getLocalDateKey(nextWeek));
+                            setCalendarMonth(getMonthStart(nextWeek));
+                          } else {
+                            setCalendarExpandedDayKey(null);
+                            setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+                          }
                         }}
-                        className="rounded-lg px-3 py-2 text-sm font-medium transition-opacity hover:opacity-80"
-                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                      >
-                        Today
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExpandedNoteId(null);
-                          setCalendarExpandedDayKey(null);
-                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
-                        }}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg transition-opacity hover:opacity-80"
-                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                        aria-label="Next month"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
+                        style={{ color: 'var(--text-secondary)' }}
+                        aria-label={calendarDisplayMode === 'daily' ? 'Next day' : calendarDisplayMode === 'weekly' ? 'Next week' : 'Next month'}
                       >
                         <ChevronRight className="h-4 w-4" aria-hidden />
                       </button>
                     </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={calendarDisplayMode}
+                        onChange={(e) => {
+                          const nextMode = e.target.value as CalendarDisplayMode;
+                          setCalendarDisplayMode(nextMode);
+                          setExpandedNoteId(null);
+                          if (nextMode === 'daily') {
+                            setCalendarExpandedDayKey(focusedCalendarDayKey ?? todayKey);
+                          } else if (nextMode === 'weekly') {
+                            setCalendarExpandedDayKey(focusedCalendarDayKey ?? todayKey);
+                          } else {
+                            setCalendarExpandedDayKey(null);
+                          }
+                        }}
+                        className="rounded-md border px-3 py-1.5 text-sm font-medium outline-none"
+                        style={{
+                          backgroundColor: 'var(--card)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-secondary)',
+                        }}
+                        aria-label="Calendar view"
+                      >
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                      </select>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--border)' }}>
-                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                  {calendarDisplayMode !== 'daily' ? (
+                    <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--border)' }}>
+                      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                        <div
+                          key={day}
+                          className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.08em]"
+                          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
+                        >
+                          {day}
+                        </div>
+                      ))}
+                      {visibleCalendarDays.map((day) => {
+                        const dayNotes = calendarNotesByDay.get(day.key) ?? [];
+                        const isToday = day.key === todayKey;
+                        const visibleDayNotes = calendarDisplayMode === 'weekly' ? dayNotes : dayNotes.slice(0, 3);
+                        return (
+                          <div
+                            key={day.key}
+                            className={`min-w-0 p-2 transition-colors ${
+                              calendarDisplayMode === 'weekly' ? 'min-h-[24rem]' : 'min-h-[7.5rem] sm:min-h-[9.5rem]'
+                            }`}
+                            style={{ backgroundColor: 'var(--card)' }}
+                          >
+                            <div className="mb-2 flex items-center justify-between gap-1">
+                              <span
+                                className="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-semibold"
+                                style={{
+                                  backgroundColor: isToday ? 'var(--accent)' : 'transparent',
+                                  color: isToday ? '#fff' : day.inMonth ? 'var(--text)' : 'var(--text-muted)',
+                                }}
+                              >
+                                {day.date.getDate()}
+                              </span>
+                              {dayNotes.length > 0 ? (
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                                  {dayNotes.length}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="space-y-1.5">
+                              {visibleDayNotes.map((note) => {
+                                const isSharedNote = isSharedWithCurrentUser(note);
+                                return (
+                                  <button
+                                    key={note.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setExpandedNoteId(note.id);
+                                      setCalendarDisplayMode('daily');
+                                      setCalendarExpandedDayKey(day.key);
+                                    }}
+                                    className="group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-all"
+                                    style={{
+                                      backgroundColor: isSharedNote
+                                        ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--bg-secondary))'
+                                        : 'var(--bg-secondary)',
+                                      color: 'var(--text)',
+                                    }}
+                                    title={getNoteDisplayTitle(note)}
+                                  >
+                                    {isSharedNote ? (
+                                      <Files className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--tc-cyan)' }} aria-hidden />
+                                    ) : (
+                                      <FileDocument className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent)' }} aria-hidden />
+                                    )}
+                                    <span className="min-w-0 truncate text-xs font-medium">
+                                      {getNoteDisplayTitle(note)}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                              {calendarDisplayMode === 'monthly' && dayNotes.length > 3 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setExpandedNoteId(null);
+                                    setCalendarDisplayMode('daily');
+                                    setCalendarExpandedDayKey(day.key);
+                                  }}
+                                  className="px-2 text-left text-[11px] font-medium transition-opacity hover:opacity-80"
+                                  style={{ color: 'var(--text-muted)' }}
+                                >
+                                  +{dayNotes.length - 3} more
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : activeCalendarDayKey ? (
+                    <div className="overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--border)' }}>
                       <div
-                        key={day}
                         className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.08em]"
                         style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
                       >
-                        {day}
+                        {activeCalendarWeekdayLabel}
                       </div>
-                    ))}
-                    {visibleCalendarDays.map((day) => {
-                      const dayNotes = calendarNotesByDay.get(day.key) ?? [];
-                      const isToday = day.key === todayKey;
-                      const isSelectedDay = selectedCalendarDate
-                        ? day.key === getLocalDateKey(selectedCalendarDate)
-                        : false;
-                      const isExpandedDay = calendarExpandedDayKey === day.key;
-                      return (
-                        <div
-                          key={day.key}
-                          className={`min-h-[7.5rem] min-w-0 p-2 transition-colors ${selectedNote ? 'sm:min-h-[8.5rem]' : 'sm:min-h-[9.5rem]'}`}
-                          style={{
-                            backgroundColor: isSelectedDay || isExpandedDay
-                              ? 'color-mix(in srgb, var(--accent-light) 72%, var(--card))'
-                              : 'var(--card)',
-                          }}
-                        >
-                          <div className="mb-2 flex items-center justify-between gap-1">
-                            <span
-                              className="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-semibold"
-                              style={{
-                                backgroundColor: isToday ? 'var(--accent)' : 'transparent',
-                                color: isToday ? '#fff' : day.inMonth ? 'var(--text)' : 'var(--text-muted)',
-                              }}
-                            >
-                              {day.date.getDate()}
-                            </span>
-                            {dayNotes.length > 0 ? (
-                              <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                                {dayNotes.length}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="space-y-1.5">
-                            {dayNotes.slice(0, 3).map((note) => {
-                              const isSharedNote = isSharedWithCurrentUser(note);
+                      <div className="min-h-[22rem] min-w-0" style={{ backgroundColor: 'var(--card)' }}>
+                        {activeCalendarDayNotes.length > 0 ? (
+                          <div className="summary-note-list">
+                            {activeCalendarDayNotes.map((note) => {
                               const isSelected = expandedNoteId === note.id;
+                              const isSharedNote = isSharedWithCurrentUser(note);
                               return (
-                                <button
-                                  key={note.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setExpandedNoteId((prev) => (prev === note.id ? null : note.id));
-                                    setCalendarExpandedDayKey(null);
-                                  }}
-                                  className="group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-all"
-                                  style={{
-                                    backgroundColor: isSelected
-                                      ? 'var(--accent)'
-                                      : isSharedNote
-                                        ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--bg-secondary))'
-                                        : 'var(--bg-secondary)',
-                                    color: isSelected ? '#fff' : 'var(--text)',
-                                  }}
-                                  title={getNoteDisplayTitle(note)}
+                                <div
+                                  key={`day-list-${note.id}`}
+                                  className={`summary-note-row ${isSelected ? 'summary-note-row-active' : ''}`}
                                 >
-                                  {isSharedNote ? (
-                                    <Files className="h-3.5 w-3.5 shrink-0" style={{ color: isSelected ? '#fff' : 'var(--tc-cyan)' }} aria-hidden />
-                                  ) : (
-                                    <FileDocument className="h-3.5 w-3.5 shrink-0" style={{ color: isSelected ? '#fff' : 'var(--accent)' }} aria-hidden />
-                                  )}
-                                  <span className="min-w-0 truncate text-xs font-medium">
-                                    {getNoteDisplayTitle(note)}
-                                  </span>
-                                </button>
+                                  <span className="summary-note-row-rail" aria-hidden />
+                                  <div
+                                    onClick={() => {
+                                      if (isSelected) {
+                                        setExpandedNoteId(null);
+                                        setCalendarExpandedDayKey(null);
+                                      } else {
+                                        setExpandedNoteId(note.id);
+                                        setCalendarExpandedDayKey(activeCalendarDayKey);
+                                      }
+                                    }}
+                                    className="summary-note-row-content flex cursor-pointer items-center gap-3 px-3 py-2.5 transition-all sm:px-4 sm:py-3"
+                                  >
+                                    <span
+                                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                                      style={{
+                                        backgroundColor: isSharedNote
+                                          ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--surface))'
+                                          : 'var(--accent-light)',
+                                      }}
+                                    >
+                                      {isSharedNote ? (
+                                        <Files className="h-4 w-4" style={{ color: 'var(--tc-cyan)' }} aria-hidden />
+                                      ) : (
+                                        <FileDocument className="h-4 w-4" style={{ color: 'var(--accent)' }} aria-hidden />
+                                      )}
+                                    </span>
+                                    <span className="min-w-0">
+                                      <span className="block truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                        {getNoteDisplayTitle(note)}
+                                      </span>
+                                      <span className="mt-0.5 block truncate text-xs" style={{ color: 'var(--text-secondary)' }}>
+                                        {formatDate(note.meeting_at || note.created_at)}
+                                      </span>
+                                    </span>
+                                  </div>
+                                </div>
                               );
                             })}
-                            {dayNotes.length > 3 ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setExpandedNoteId(null);
-                                  setCalendarExpandedDayKey((prev) => (prev === day.key ? null : day.key));
-                                }}
-                                className="px-2 text-left text-[11px] font-medium transition-opacity hover:opacity-80"
-                                style={{ color: 'var(--text-muted)' }}
-                              >
-                                +{dayNotes.length - 3} more
-                              </button>
-                            ) : null}
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {activeCalendarDayKey && activeCalendarDayNotes.length > 0 ? (
-                    <div
-                      className="mt-4 rounded-lg p-3"
-                      style={{ backgroundColor: 'var(--bg-secondary)' }}
-                    >
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-[0.12em]" style={{ color: 'var(--text-muted)' }}>
-                            {activeCalendarDayLabel}
-                          </p>
-                          <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                            {activeCalendarDayNotes.length} {activeCalendarDayNotes.length === 1 ? 'note' : 'notes'}
-                          </p>
-                        </div>
-                        {!selectedNote ? (
-                          <button
-                            type="button"
-                            onClick={() => setCalendarExpandedDayKey(null)}
-                            className="rounded-md px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-80"
-                            style={{ backgroundColor: 'var(--card)', color: 'var(--text-secondary)' }}
-                          >
-                            Close
-                          </button>
-                        ) : null}
-                      </div>
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {activeCalendarDayNotes.map((note) => {
-                          const isSharedNote = isSharedWithCurrentUser(note);
-                          const isSelected = expandedNoteId === note.id;
-                          return (
-                            <button
-                              key={`day-list-${note.id}`}
-                              type="button"
-                              onClick={() => {
-                                setExpandedNoteId((prev) => (prev === note.id ? null : note.id));
-                                setCalendarExpandedDayKey(null);
-                              }}
-                              className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-2 text-left transition-all"
-                              style={{
-                                backgroundColor: isSelected ? 'var(--accent)' : 'var(--card)',
-                                color: isSelected ? '#fff' : 'var(--text)',
-                              }}
-                              title={getNoteDisplayTitle(note)}
-                            >
-                              <span
-                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-                                style={{
-                                  backgroundColor: isSelected
-                                    ? 'color-mix(in srgb, #fff 18%, transparent)'
-                                    : isSharedNote
-                                      ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--surface))'
-                                      : 'var(--accent-light)',
-                                }}
-                              >
-                                {isSharedNote ? (
-                                  <Files className="h-4 w-4" style={{ color: isSelected ? '#fff' : 'var(--tc-cyan)' }} aria-hidden />
-                                ) : (
-                                  <FileDocument className="h-4 w-4" style={{ color: isSelected ? '#fff' : 'var(--accent)' }} aria-hidden />
-                                )}
-                              </span>
-                              <span className="min-w-0">
-                                <span className="block truncate text-sm font-semibold">
-                                  {getNoteDisplayTitle(note)}
-                                </span>
-                                <span
-                                  className="mt-0.5 block truncate text-xs"
-                                  style={{ color: isSelected ? 'rgba(255,255,255,0.78)' : 'var(--text-secondary)' }}
-                                >
-                                  {formatDate(note.meeting_at || note.created_at)}
-                                </span>
-                              </span>
-                            </button>
-                          );
-                        })}
+                        ) : (
+                          <div className="flex min-h-[12rem] items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                            No notes for this day
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : null}

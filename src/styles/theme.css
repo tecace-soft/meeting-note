@@ -1366,7 +1366,12 @@ html body .app-skin form.project-chat-input-shell input.project-chat-input:focus
 html body .app-skin form.project-chat-input-shell input.project-chat-input:active,
 html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill,
 html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:hover,
-html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:focus {
+html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:focus,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:hover,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:focus,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:focus-visible,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:active {
   -webkit-appearance: none !important;
   appearance: none !important;
   background: transparent !important;
@@ -1376,6 +1381,7 @@ html body .app-skin form.project-chat-input-shell input.project-chat-input:-webk
   border-radius: 0 !important;
   outline: 0 !important;
   box-shadow: none !important;
+  resize: none !important;
   -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
   --tw-ring-color: transparent !important;
   --tw-ring-shadow: 0 0 #0000 !important;
