@@ -39,6 +39,17 @@ function getErrorMessage(error: unknown): string {
   return 'Unknown server error';
 }
 
+function getJwtRole(token: string): string {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return 'unknown';
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { role?: unknown };
+    return typeof decoded.role === 'string' ? decoded.role : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean {
   if (!apiKey) return true;
   return req.headers.authorization === `Bearer ${apiKey}`;
@@ -257,5 +268,8 @@ export async function startHttpServer(): Promise<void> {
 
   httpServer.listen(env.port, () => {
     process.stderr.write(`Meeting Note MCP HTTP server listening on port ${env.port}\n`);
+    process.stderr.write(
+      `Meeting Note MCP diagnostics: supabase key role=${getJwtRole(env.supabaseServiceRoleKey)}, static auth=${env.mcpApiKey ? 'configured' : 'not configured'}, personal token lookup=${env.mcpTokenPepper ? 'enabled' : 'disabled'}\n`
+    );
   });
 }
