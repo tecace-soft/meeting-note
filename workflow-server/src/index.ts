@@ -22,7 +22,9 @@ interface SummarizeAudioRequest {
   userName?: unknown;
   noteId?: unknown;
   meetingAt?: unknown;
+  fileId?: unknown;
   speakerContext?: unknown;
+  language?: unknown;
 }
 
 interface CustomSpellingRule {
@@ -50,6 +52,10 @@ const env = {
   fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS ?? '1200000'),
   fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS ?? '1200000'),
 };
+
+const ASSEMBLYAI_CODE_SWITCHING_MODELS = ['universal-2'] as const;
+const ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL = ASSEMBLYAI_CODE_SWITCHING_MODELS.join('+');
+const ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES = ['en', 'ko'] as const;
 
 setGlobalDispatcher(new Agent({
   headersTimeout: env.fetchHeadersTimeoutMs,
@@ -145,8 +151,10 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
     userName: typeof body.userName === 'string' ? body.userName.trim() : '',
     noteId: requiredString(body, 'noteId'),
     meetingAt: meetingAt && !Number.isNaN(meetingAt.getTime()) ? meetingAt.toISOString() : null,
+    fileId: typeof body.fileId === 'string' && body.fileId.trim() ? body.fileId.trim() : null,
     instructions: typeof body.instructions === 'string' ? body.instructions : '',
     speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
+    language: body.language === 'ko' ? 'ko' : 'en',
   };
 }
 
@@ -193,7 +201,9 @@ interface SummarizeAudioInput {
   userName: string;
   noteId: string;
   meetingAt: string | null;
+  fileId: string | null;
   speakerContext: string;
+  language: 'en' | 'ko';
 }
 
 interface SummarizeAudioResult {
@@ -416,6 +426,7 @@ async function insertNote(input: {
   tags: string[];
   segments: TranscriptSegment[];
   meetingAt: string | null;
+  fileId: string | null;
 }): Promise<void> {
   const { error } = await supabase.from('note').insert({
     transcription: input.transcriptText,
@@ -428,6 +439,7 @@ async function insertNote(input: {
     tags: input.tags,
     diarization: input.segments,
     meeting_at: input.meetingAt,
+    audio_file_id: input.fileId,
   });
   if (error) throw error;
 }
@@ -437,13 +449,23 @@ async function transcribeWithAssembly(input: {
   noteId: string;
   userId: string;
   settings: TranscriptionSettings;
+  language: 'en' | 'ko';
 }): Promise<{ segments: TranscriptSegment[]; latencyMs: number }> {
   if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
   const startedAt = performance.now();
   const submitBody: Record<string, unknown> = {
     audio_url: input.downloadUrl,
     speaker_labels: true,
-    speech_models: [input.settings.speechModel],
+    speech_models: [...ASSEMBLYAI_CODE_SWITCHING_MODELS],
+    language_codes: [...ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES],
+    speech_understanding: {
+      request: {
+        translation: {
+          target_languages: [input.language],
+          match_original_utterance: true,
+        },
+      },
+    },
   };
   if (input.settings.keytermsPrompt.length > 0) {
     submitBody.keyterms_prompt = input.settings.keytermsPrompt;
@@ -451,6 +473,16 @@ async function transcribeWithAssembly(input: {
   if (input.settings.customSpelling.length > 0) {
     submitBody.custom_spelling = input.settings.customSpelling;
   }
+  console.log('AssemblyAI transcript submit config:', JSON.stringify({
+    speech_models: submitBody.speech_models,
+    language_codes: submitBody.language_codes,
+    language_detection: submitBody.language_detection,
+    language_detection_options: submitBody.language_detection_options,
+    translationTargets: [input.language],
+    translationMatchOriginalUtterance: true,
+    hasKeytermsPrompt: Array.isArray(submitBody.keyterms_prompt) && submitBody.keyterms_prompt.length > 0,
+    customSpellingCount: Array.isArray(submitBody.custom_spelling) ? submitBody.custom_spelling.length : 0,
+  }));
   const createResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: {
@@ -488,6 +520,12 @@ async function transcribeWithAssembly(input: {
   if (!transcript || transcript.status !== 'completed') {
     throw new Error('AssemblyAI transcription timed out.');
   }
+  console.log('AssemblyAI transcript completed:', JSON.stringify({
+    transcriptId: created.id,
+    speechModelUsed: transcript.speech_model_used ?? null,
+    languageCode: transcript.language_code ?? null,
+    languageDetectionResults: transcript.language_detection_results ?? null,
+  }));
 
   const utterances = Array.isArray(transcript.utterances) ? transcript.utterances : [];
   const utteranceDurationSeconds = utterances.reduce((maxEnd, utterance) => {
@@ -511,11 +549,20 @@ async function transcribeWithAssembly(input: {
         const label = typeof record.speaker === 'string' || typeof record.speaker === 'number'
           ? String(record.speaker)
           : '?';
+        const translatedTexts = record.translated_texts && typeof record.translated_texts === 'object' && !Array.isArray(record.translated_texts)
+          ? record.translated_texts as Record<string, unknown>
+          : {};
+        const translations = Object.fromEntries(
+          Object.entries(translatedTexts)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1].trim()))
+            .map(([language, text]) => [language, text.trim()])
+        );
         return {
           speaker: `Speaker ${label}`,
           text: typeof record.text === 'string' ? record.text.trim() : '',
           start: typeof record.start === 'number' ? record.start / 1000 : undefined,
           end: typeof record.end === 'number' ? record.end / 1000 : undefined,
+          ...(Object.keys(translations).length > 0 ? { translations } : {}),
         };
       }).filter((segment) => segment.text)
     : [{
@@ -527,7 +574,7 @@ async function transcribeWithAssembly(input: {
   await recordAssemblyUsage({
     noteId: input.noteId,
     userId: input.userId,
-    model: input.settings.speechModel,
+    model: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
     latencyMs,
     transcriptId: created.id.trim(),
     audioDurationSeconds,
@@ -558,7 +605,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   await updateWorkflowJob(jobId, { status: 'processing', stage: 'loading inputs', progress: 10 });
   const summaryRules = await loadSummaryPrompt(input.promptId, input.userId);
   const transcriptionSettings = await loadTranscriptionSettings();
-  console.log(`Processing audio ${input.fileName} with AssemblyAI model ${transcriptionSettings.speechModel}`);
+  console.log(`Processing audio ${input.fileName} with AssemblyAI Korean-English code switching models ${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}`);
 
   await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
   const { segments } = await transcribeWithAssembly({
@@ -566,9 +613,10 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     noteId: input.noteId,
     userId: input.userId,
     settings: transcriptionSettings,
+    language: input.language,
   });
   if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
-  const transcriptText = formatTranscriptText(segments);
+  const transcriptText = formatTranscriptText(segments, input.language);
 
   await updateWorkflowJob(jobId, { stage: 'generating summary', progress: 75 });
   const summaryRaw = await callGeminiWithFallback({
@@ -588,6 +636,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
           transcript: transcriptText,
           speakerContext: input.speakerContext,
           globalSummaryContext: transcriptionSettings.summaryContext,
+          outputLanguage: input.language,
         }),
       },
     ],
@@ -621,6 +670,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     tags: parsedSummary.tags,
     segments,
     meetingAt: input.meetingAt,
+    fileId: input.fileId,
   });
 
   return { transcript: segments, summary: parsedSummary.summary, title: noteName, tags: parsedSummary.tags };
@@ -733,7 +783,8 @@ const server = createServer((req, res) => {
         ok: true,
         service: 'meeting-note-workflow-server',
         transcriptionProvider: 'assemblyai',
-        transcriptionModel: env.assemblyAiSpeechModel,
+        transcriptionModel: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
+        transcriptionLanguageMode: 'ko-en-code-switching',
         summaryModel: env.summaryModel,
       });
       return;
@@ -788,5 +839,5 @@ process.on('uncaughtException', (error) => {
 
 server.listen(env.port, () => {
   console.log(`Meeting Note workflow server listening on :${env.port}`);
-  console.log(`Workflow env: transcription=assemblyai:${env.assemblyAiSpeechModel}, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
+  console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}:ko-en-code-switching, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
 });

@@ -47,12 +47,16 @@ import TranscriptDiarizedEditor, {
   TranscriptSpeakerFilterControls,
 } from '../components/TranscriptDiarizedEditor';
 import {
+  getSegmentText,
   normalizeTranscript,
+  type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 import ShareNoteModal from '../components/ShareNoteModal';
+import { useRecorder } from '../context/RecorderContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
@@ -78,6 +82,7 @@ interface UploadedFile {
   publicUrl?: string;
   bucket?: string;
   storagePath?: string;
+  audioFileId?: string;
   recordedAt?: string | null;
 }
 
@@ -95,11 +100,47 @@ interface RecentAudioFile {
 }
 
 const AUDIO_SIGNED_URL_SECONDS = 60 * 60 * 6;
-
-interface RecordingFormat {
-  mimeType: string;
-  extension: string;
-}
+const ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS = [
+  '3ga',
+  '8svx',
+  'aac',
+  'ac3',
+  'aif',
+  'aiff',
+  'alac',
+  'amr',
+  'ape',
+  'au',
+  'dss',
+  'flac',
+  'flv',
+  'm4a',
+  'm4b',
+  'm4p',
+  'm4r',
+  'mp3',
+  'mp4',
+  'mpeg',
+  'mpg',
+  'oga',
+  'ogg',
+  'opus',
+  'qcp',
+  'ra',
+  'ram',
+  'sln',
+  'spx',
+  'wav',
+  'webm',
+  'wma',
+] as const;
+const ASSEMBLYAI_AUDIO_ACCEPT = `audio/*,video/mp4,video/webm,${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS
+  .map((ext) => `.${ext}`)
+  .join(',')}`;
+const ASSEMBLYAI_AUDIO_EXTENSION_RE = new RegExp(
+  `\\.(${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS.join('|')})$`,
+  'i'
+);
 
 interface WorkflowJobStatus {
   jobId: string;
@@ -144,73 +185,36 @@ async function invokeGenerateProfile(body: {
   return parsed;
 }
 
-const RECORDING_FORMATS: RecordingFormat[] = [
-  { mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'm4a' },
-  { mimeType: 'audio/mp4', extension: 'm4a' },
-  { mimeType: 'audio/aac', extension: 'm4a' },
-  { mimeType: 'audio/webm;codecs=opus', extension: 'webm' },
-  { mimeType: 'audio/webm', extension: 'webm' },
-];
-
 const TranscriptionSummary: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { appLanguage, transcriptLanguage, t } = useLanguage();
+  const {
+    isRecording,
+    recordingTime,
+    recordedAudioUrl,
+    recordedBlob,
+    recordedFileName,
+    recordedMimeType,
+    isPlayingRecording,
+    playbackProgress,
+    playbackCurrentTime,
+    wakeLockWarning,
+    recoverableSession,
+    startRecording,
+    stopRecording,
+    clearRecording,
+    recoverRecording,
+    discardRecording,
+    togglePlayback: togglePlayRecording,
+    seekPlaybackRatio,
+    startScreenWakeLockKeepAlive,
+    ensureScreenWakeLockFromGesture,
+    releaseScreenWakeLock,
+  } = useRecorder();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadProgressGateRef = useRef<Map<string, { pct: number; at: number }>>(new Map());
-  const screenWakeLockRef = useRef<WakeLockSentinel | null>(null);
-  const keepScreenAwakeRef = useRef(false);
-  const wakeLockKeepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const activeUploadsRef = useRef(0);
-
-  /** Call from file input / recording handlers (user gesture) so Android Chrome grants wake lock. */
-  const ensureScreenWakeLockFromGesture = useCallback(async () => {
-    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
-    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-    if (screenWakeLockRef.current) return;
-    await navigator.wakeLock
-      .request('screen')
-      .then((w) => {
-        screenWakeLockRef.current = w;
-        w.addEventListener('release', () => {
-          if (screenWakeLockRef.current === w) {
-            screenWakeLockRef.current = null;
-          }
-        });
-      })
-      .catch(() => {
-        /* denied or unsupported */
-      });
-  }, []);
-
-  const startScreenWakeLockKeepAlive = useCallback(() => {
-    keepScreenAwakeRef.current = true;
-    void ensureScreenWakeLockFromGesture();
-
-    if (wakeLockKeepAliveIntervalRef.current) return;
-    wakeLockKeepAliveIntervalRef.current = setInterval(() => {
-      if (!keepScreenAwakeRef.current) return;
-      void ensureScreenWakeLockFromGesture();
-    }, 15000);
-  }, [ensureScreenWakeLockFromGesture]);
-
-  const stopScreenWakeLockKeepAlive = () => {
-    keepScreenAwakeRef.current = false;
-    if (wakeLockKeepAliveIntervalRef.current) {
-      clearInterval(wakeLockKeepAliveIntervalRef.current);
-      wakeLockKeepAliveIntervalRef.current = null;
-    }
-  };
-
-  const releaseScreenWakeLock = async () => {
-    stopScreenWakeLockKeepAlive();
-    try {
-      await screenWakeLockRef.current?.release();
-    } catch {
-      /* denied, unsupported, or already released */
-    } finally {
-      screenWakeLockRef.current = null;
-    }
-  };
 
   const [chats, setChats] = useState<TeamsChat[]>([]);
   const [chatsLoading, setChatsLoading] = useState(true);
@@ -250,16 +254,7 @@ const TranscriptionSummary: React.FC = () => {
   const [transcriptSpeakerFilters, setTranscriptSpeakerFilters] = useState<string[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Recording states
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
-  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
-  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-  const [recordedFileName, setRecordedFileName] = useState('Recording.m4a');
-  const [recordedMimeType, setRecordedMimeType] = useState('audio/mp4');
-  const [isPlayingRecording, setIsPlayingRecording] = useState(false);
-  const [playbackProgress, setPlaybackProgress] = useState(0);
-  const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  // Recording and recent audio states
   const [recentAudioFiles, setRecentAudioFiles] = useState<RecentAudioFile[]>([]);
   const [recentAudioLoading, setRecentAudioLoading] = useState(false);
   const [recentAudioError, setRecentAudioError] = useState<string | null>(null);
@@ -267,12 +262,6 @@ const TranscriptionSummary: React.FC = () => {
   const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
   );
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordingFormatRef = useRef<RecordingFormat>({ mimeType: 'audio/mp4', extension: 'm4a' });
-  const isRecordingRef = useRef(false);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -292,111 +281,13 @@ const TranscriptionSummary: React.FC = () => {
     return () => mq.removeEventListener('change', sync);
   }, []);
 
-  useEffect(() => {
-    isRecordingRef.current = isRecording;
-  }, [isRecording]);
-
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && (isRecording || activeUploadsRef.current > 0)) {
-        startScreenWakeLockKeepAlive();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isRecording, startScreenWakeLockKeepAlive]);
-
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
-
-  const getPreferredRecordingFormat = (): RecordingFormat => {
-    if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
-      return { mimeType: 'audio/webm', extension: 'webm' };
-    }
-
-    return (
-      RECORDING_FORMATS.find((format) => MediaRecorder.isTypeSupported(format.mimeType)) ??
-      { mimeType: 'audio/webm', extension: 'webm' }
-    );
-  };
-
-  const createRecordingFileName = (extension: string): string => {
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-    return `Recording_${timestamp}.${extension}`;
-  };
 
   const formatRecordingTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const startRecording = async () => {
-    try {
-      startScreenWakeLockKeepAlive();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const recordingFormat = getPreferredRecordingFormat();
-      recordingFormatRef.current = recordingFormat;
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        const mimeType = mediaRecorder.mimeType || recordingFormat.mimeType;
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        setRecordedAudioUrl(audioUrl);
-        setRecordedBlob(audioBlob);
-        setRecordedMimeType(mimeType);
-        setRecordedFileName(createRecordingFileName(recordingFormat.extension));
-        
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordingTime(0);
-      setRecordedAudioUrl(null);
-      setRecordedBlob(null);
-      setRecordedMimeType(recordingFormat.mimeType);
-      setPlaybackProgress(0);
-      setPlaybackCurrentTime(0);
-      
-      // Start timer
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
-    } catch (error) {
-      void releaseScreenWakeLock();
-      console.error('Error starting recording:', error);
-      alert('Could not access microphone. Please ensure you have granted microphone permissions.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-        recordingIntervalRef.current = null;
-      }
-      void releaseScreenWakeLock();
-    }
   };
 
   const useRecording = () => {
@@ -417,89 +308,14 @@ const TranscriptionSummary: React.FC = () => {
     
     setUploadedFiles([newFile]);
     uploadToSupabase(newFile.id, audioFile, 'recording');
-    
-    // Clean up playback
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current = null;
-    }
-    setIsPlayingRecording(false);
-  };
-
-  const togglePlayRecording = () => {
-    if (!recordedAudioUrl) return;
-    
-    if (!audioPlayerRef.current) {
-      audioPlayerRef.current = new Audio(recordedAudioUrl);
-      audioPlayerRef.current.onended = () => {
-        setIsPlayingRecording(false);
-        setPlaybackProgress(0);
-        setPlaybackCurrentTime(0);
-      };
-      audioPlayerRef.current.ontimeupdate = () => {
-        if (audioPlayerRef.current) {
-          const current = audioPlayerRef.current.currentTime;
-          const duration = audioPlayerRef.current.duration;
-          setPlaybackCurrentTime(current);
-          setPlaybackProgress(duration > 0 ? (current / duration) * 100 : 0);
-        }
-      };
-    }
-    
-    if (isPlayingRecording) {
-      audioPlayerRef.current.pause();
-      setIsPlayingRecording(false);
-    } else {
-      audioPlayerRef.current.play();
-      setIsPlayingRecording(true);
-    }
+    clearRecording();
   };
 
   const seekPlayback = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!audioPlayerRef.current) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const percentage = x / rect.width;
-    const newTime = percentage * audioPlayerRef.current.duration;
-    audioPlayerRef.current.currentTime = newTime;
-    setPlaybackCurrentTime(newTime);
-    setPlaybackProgress(percentage * 100);
+    seekPlaybackRatio(x / rect.width);
   };
-
-  const clearRecording = () => {
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current = null;
-    }
-    if (recordedAudioUrl) {
-      URL.revokeObjectURL(recordedAudioUrl);
-    }
-    setRecordedAudioUrl(null);
-    setRecordedBlob(null);
-    setRecordedFileName('Recording.m4a');
-    setRecordedMimeType('audio/mp4');
-    setRecordingTime(0);
-    setIsPlayingRecording(false);
-    setPlaybackProgress(0);
-    setPlaybackCurrentTime(0);
-  };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (recordedAudioUrl) {
-        URL.revokeObjectURL(recordedAudioUrl);
-      }
-    };
-  }, [recordedAudioUrl]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -691,9 +507,9 @@ const TranscriptionSummary: React.FC = () => {
       file: File,
       storagePath: string,
       source: 'upload' | 'recording'
-    ) => {
-      if (!user?.id) return;
-      const { error } = await supabase.from('file').insert({
+    ): Promise<string | null> => {
+      if (!user?.id) return null;
+      const { data, error } = await supabase.from('file').insert({
         user_id: user.id,
         name: file.name,
         bucket: AUDIO_BUCKET,
@@ -703,9 +519,10 @@ const TranscriptionSummary: React.FC = () => {
         size_bytes: file.size,
         source,
         recorded_at: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
-      });
+      }).select('id').single();
       if (error) throw error;
       await loadRecentAudioFiles();
+      return typeof data?.id === 'string' ? data.id : null;
     },
     [loadRecentAudioFiles, user?.id]
   );
@@ -737,6 +554,7 @@ const TranscriptionSummary: React.FC = () => {
           publicUrl: signedUrl,
           bucket: file.bucket || AUDIO_BUCKET,
           storagePath: file.storage_path,
+          audioFileId: file.id,
           recordedAt: file.recorded_at ?? null,
         },
       ]);
@@ -788,11 +606,11 @@ const TranscriptionSummary: React.FC = () => {
   const handleFiles = (files: File[]) => {
     const audioFiles = files.filter(file => 
       file.type.startsWith('audio/') || 
-      file.name.match(/\.(mp3|wav|m4a|ogg|flac|aac|wma)$/i)
+      ASSEMBLYAI_AUDIO_EXTENSION_RE.test(file.name)
     );
 
     if (audioFiles.length === 0) {
-      alert('Please upload audio files only (mp3, wav, m4a, etc.)');
+      alert('Please upload an AssemblyAI-supported audio file.');
       return;
     }
 
@@ -877,8 +695,9 @@ const TranscriptionSummary: React.FC = () => {
       await ensureStorageObjectReady(AUDIO_BUCKET, filePath);
       const signedUrl = await createAudioSignedUrl(filePath, AUDIO_BUCKET);
 
+      let audioFileId: string | null = null;
       try {
-        await saveAudioFileRecord(file, filePath, source);
+        audioFileId = await saveAudioFileRecord(file, filePath, source);
       } catch (recordError) {
         console.error('Failed to save audio file metadata:', recordError);
       }
@@ -893,6 +712,7 @@ const TranscriptionSummary: React.FC = () => {
                 publicUrl: signedUrl,
                 bucket: AUDIO_BUCKET,
                 storagePath: filePath,
+                audioFileId: audioFileId ?? undefined,
                 recordedAt: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
               }
             : f
@@ -914,7 +734,7 @@ const TranscriptionSummary: React.FC = () => {
     } finally {
       uploadProgressGateRef.current.delete(fileId);
       activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
-      if (activeUploadsRef.current === 0 && !isRecordingRef.current) {
+      if (activeUploadsRef.current === 0 && !isRecording) {
         await releaseScreenWakeLock();
       }
     }
@@ -1015,12 +835,14 @@ const TranscriptionSummary: React.FC = () => {
       const requestBody = {
         downloadUrl,
         fileName: file.name,
+        fileId: file.audioFileId,
         meetingAt: file.recordedAt ?? null,
         instructions: optionalInstructions,
         promptId: String(selectedPrompt.id),
         userId: user?.id || '',
         userName: user?.displayName || '',
         noteId,
+        language: appLanguage,
       };
 
       const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs`, {
@@ -1182,8 +1004,8 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
-  const formatTranscriptText = (segments: TranscriptSegment[]): string =>
-    segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+  const formatTranscriptText = (segments: TranscriptSegment[], language: TranscriptLanguage = transcriptLanguage): string =>
+    segments.map((s) => `${s.speaker}: ${getSegmentText(s, language)}`).join('\n\n');
 
   const handleGenerateProfile = async () => {
     if (!summaryResult || !user?.id) return;
@@ -1405,12 +1227,56 @@ const TranscriptionSummary: React.FC = () => {
             <div className="shrink-0">
             <div className="app-page-header">
               <h1 className="app-page-title">
-                    Summarize Audio File
+                    {t('uploadAudio')}
               </h1>
               <p className="app-page-subtitle">
                     Record or upload an audio file to transcribe and summarize
               </p>
             </div>
+            {wakeLockWarning && isRecording ? (
+              <div
+                className="mb-4 rounded-lg border px-4 py-3 text-sm"
+                style={{
+                  backgroundColor: 'var(--warning-light, var(--bg-secondary))',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {wakeLockWarning}
+              </div>
+            ) : null}
+            {recoverableSession && !isRecording && !recordedAudioUrl ? (
+              <div className="card mb-4 rounded-lg p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                      Recover interrupted recording
+                    </p>
+                    <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      A previous recording has saved audio chunks on this device.
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void recoverRecording()}
+                      className="rounded-lg px-4 py-2 text-sm font-medium"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      Recover recording
+                    </button>
+                    <button
+                      type="button"
+                      onClick={discardRecording}
+                      className="rounded-lg px-4 py-2 text-sm font-medium"
+                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {/* Record/Upload Options - Hidden when files are uploaded or recording complete */}
             <div className={`collapse-container ${(uploadedFiles.length > 0 || recordedAudioUrl) ? 'collapsed' : 'expanded'}`}>
               <div className="collapse-content">
@@ -1479,7 +1345,7 @@ const TranscriptionSummary: React.FC = () => {
                       id="meeting-audio-upload"
                       ref={fileInputRef}
                       type="file"
-                      accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma"
+                      accept={ASSEMBLYAI_AUDIO_ACCEPT}
                       multiple
                       onChange={handleFileSelect}
                       className="sr-only"
@@ -1566,7 +1432,7 @@ const TranscriptionSummary: React.FC = () => {
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                     >
                       <CloseMd className="w-4 h-4" />
-                      <span className="recording-action-label">Discard</span>
+                      <span className="recording-action-label">{t('discard')}</span>
                     </button>
                     <button
                       onClick={useRecording}
@@ -1658,7 +1524,7 @@ const TranscriptionSummary: React.FC = () => {
               <div className="mb-3">
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                    Recent Recordings
+                    {t('recentRecordings')}
                   </h3>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     Reuse one of your 10 most recent uploaded or recorded audio files
@@ -1827,12 +1693,12 @@ const TranscriptionSummary: React.FC = () => {
                         {isSummarizing ? (
                           <>
                             <Loading className="h-4 w-4 shrink-0 animate-spin" />
-                            Summarize
+                            {t('summarize')}
                           </>
                         ) : (
                           <>
                             <PaperPlane className="h-4 w-4 shrink-0" />
-                            Summarize
+                            {t('summarize')}
                           </>
                         )}
                       </button>
@@ -1899,7 +1765,7 @@ const TranscriptionSummary: React.FC = () => {
                               color: resultsTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                             }}
                           >
-                            Summary
+                            {t('summary')}
                           </button>
                           <button
                             type="button"
@@ -1912,7 +1778,7 @@ const TranscriptionSummary: React.FC = () => {
                                 resultsTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
                             }}
                           >
-                            Transcription
+                            {t('transcription')}
                           </button>
                         </div>
                         <div className="flex shrink-0 items-center gap-2 pb-2">
@@ -1928,12 +1794,12 @@ const TranscriptionSummary: React.FC = () => {
                               {isEditingSummary ? (
                                 <>
                                   <Save className="h-3 w-3" />
-                                  Done
+                                  {t('done')}
                                 </>
                               ) : (
                                 <>
                                   <EditPencilLine01 className="h-3 w-3" />
-                                  Edit
+                                  {t('edit')}
                                 </>
                               )}
                             </button>
@@ -1956,7 +1822,7 @@ const TranscriptionSummary: React.FC = () => {
                             ) : (
                               <Copy className="h-3 w-3" aria-hidden />
                             )}
-                            Copy
+                            {t('copy')}
                           </button>
                           <button
                             onClick={() => setShowDiscardModal(true)}
@@ -1967,14 +1833,14 @@ const TranscriptionSummary: React.FC = () => {
                             }}
                           >
                             <CloseMd className="h-3 w-3" />
-                            Discard
+                            {t('discard')}
                           </button>
                         </div>
                       </div>
                     ) : (
                       <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                          Summary
+                          {t('summary')}
                         </h3>
                         <div className="flex items-center gap-2">
                           <button
@@ -1986,7 +1852,7 @@ const TranscriptionSummary: React.FC = () => {
                             aria-label="Copy summary"
                           >
                             {copiedKey === 'summary-result' ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
-                            Copy
+                            {t('copy')}
                           </button>
                           <button
                             onClick={() => setShowDiscardModal(true)}
@@ -1997,7 +1863,7 @@ const TranscriptionSummary: React.FC = () => {
                             }}
                           >
                             <CloseMd className="h-3 w-3" />
-                            Discard
+                            {t('discard')}
                           </button>
                           <button
                             onClick={() => void handleToggleEditSummary()}
@@ -2010,12 +1876,12 @@ const TranscriptionSummary: React.FC = () => {
                             {isEditingSummary ? (
                               <>
                                 <Save className="h-3 w-3" />
-                                Done
+                                {t('done')}
                               </>
                             ) : (
                               <>
                                 <EditPencilLine01 className="h-3 w-3" />
-                                Edit
+                                {t('edit')}
                               </>
                             )}
                           </button>
@@ -2059,11 +1925,13 @@ const TranscriptionSummary: React.FC = () => {
                     {summaryResult.transcript.length > 0 && resultsTab === 'transcription' ? (
                       <div className="flex flex-1 min-h-0 flex-col pt-4">
                         <div className="mb-3 shrink-0">
-                          <TranscriptSpeakerFilterControls
-                            speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
-                            selectedSpeakers={transcriptSpeakerFilters}
-                            onSelectedSpeakersChange={setTranscriptSpeakerFilters}
-                          />
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <TranscriptSpeakerFilterControls
+                              speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
+                              selectedSpeakers={transcriptSpeakerFilters}
+                              onSelectedSpeakersChange={setTranscriptSpeakerFilters}
+                            />
+                          </div>
                         </div>
                         <TranscriptDiarizedEditor
                           segments={summaryResult.transcript}
@@ -2074,6 +1942,7 @@ const TranscriptionSummary: React.FC = () => {
                           scrollContainerClassName="flex-1 min-h-0"
                           selectedSpeakerFilters={transcriptSpeakerFilters}
                           onSelectedSpeakerFiltersChange={setTranscriptSpeakerFilters}
+                          transcriptLanguage={transcriptLanguage}
                         />
                       </div>
                     ) : null}

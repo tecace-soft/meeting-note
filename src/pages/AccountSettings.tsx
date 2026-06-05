@@ -13,6 +13,7 @@ import {
   User01,
 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
 import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
@@ -103,6 +104,7 @@ async function callMcpTokenFunction<T>(msAccessToken: string, body: Record<strin
 const AccountSettings: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { appLanguage, setAppLanguage, t } = useLanguage();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('account');
   const [mcpSetupView, setMcpSetupView] = useState<McpSetupView>('chatgpt');
@@ -556,10 +558,10 @@ const AccountSettings: React.FC = () => {
         <div className="mx-auto flex min-h-0 w-full max-w-[min(92vw,67.2rem)] flex-1 flex-col gap-4">
           <div className="app-page-header">
             <h1 className="app-page-title">
-              Account Settings
+              {t('accountSettings')}
             </h1>
             <p className="app-page-subtitle">
-              Microsoft account details for your meeting notes workspace
+              {t('accountSettingsSubtitle')}
             </p>
           </div>
 
@@ -579,7 +581,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Account
+                {t('account')}
               </button>
               <button
                 type="button"
@@ -595,7 +597,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Summary prompts
+                {t('summaryPrompts')}
               </button>
               <button
                 type="button"
@@ -611,7 +613,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Speaker Profiles
+                {t('speakerProfiles')}
               </button>
               <button
                 type="button"
@@ -627,7 +629,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                MCP Setup
+                {t('mcpSetup')}
               </button>
             </div>
 
@@ -726,6 +728,39 @@ const AccountSettings: React.FC = () => {
                         </button>
                       )
                     ) : null}
+                  </div>
+
+                  <div className="shrink-0 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                          {t('appLanguage')}
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {t('appLanguageDescription')}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 rounded-full p-1" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                        {([
+                          ['en', t('english')],
+                          ['ko', t('korean')],
+                        ] as const).map(([language, label]) => (
+                          <button
+                            key={language}
+                            type="button"
+                            onClick={() => setAppLanguage(language)}
+                            className="rounded-full px-3 py-1.5 text-sm font-medium transition-colors"
+                            style={
+                              appLanguage === language
+                                ? { backgroundColor: 'var(--bg)', color: 'var(--text)' }
+                                : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
+                            }
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
 
                   {speakersLoad.status === 'loading' || speakersLoad.status === 'idle' ? (

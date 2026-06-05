@@ -1,6 +1,6 @@
 import React, { useId, useState, useEffect, useRef, useCallback, useMemo, startTransition } from 'react';
 import { createPortal } from 'react-dom';
-import { CloseMd, EditPencilLine01, Loading, Save, TrashFull, User01 } from 'react-coolicons';
+import { CloseMd, EditPencilLine01, Loading, Pause, Play, Save, TrashFull, User01 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
@@ -9,9 +9,11 @@ import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
 import {
   applySpeakerReplacements,
+  getSegmentText,
   getTranscriptAvatarLabel,
   persistNoteDiarization,
   type ReplacementScope,
+  type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 
@@ -40,6 +42,11 @@ export interface TranscriptDiarizedEditorProps {
   scrollContainerClassName?: string;
   selectedSpeakerFilters?: string[];
   onSelectedSpeakerFiltersChange?: (next: string[]) => void;
+  activePlaybackSegmentIndex?: number | null;
+  isPlaybackActive?: boolean;
+  canPlaySegment?: (segment: TranscriptSegment, index: number) => boolean;
+  onPlaySegment?: (segment: TranscriptSegment, index: number) => void;
+  transcriptLanguage?: TranscriptLanguage;
 }
 
 export function getTranscriptSpeakerFilters(segments: TranscriptSegment[]): string[] {
@@ -130,6 +137,11 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   scrollContainerClassName,
   selectedSpeakerFilters = [],
   onSelectedSpeakerFiltersChange,
+  activePlaybackSegmentIndex = null,
+  isPlaybackActive = false,
+  canPlaySegment,
+  onPlaySegment,
+  transcriptLanguage = 'original',
 }) => {
   const scopeGroupId = useId();
   const { user, getAccessToken } = useAuth();
@@ -568,17 +580,43 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       >
         <div className="space-y-3">
           {visibleSegments.map(({ segment: seg, index: segmentIndex }) => {
+            const segmentPlayable = Boolean(canPlaySegment?.(seg, segmentIndex));
+            const segmentIsPlaying = segmentPlayable && activePlaybackSegmentIndex === segmentIndex && isPlaybackActive;
             return (
             <div key={segmentIndex} className="transcript-segment flex min-h-[75px] items-center gap-3">
-              <div
-                className="transcript-speaker-avatar flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold"
-                style={{
-                  backgroundColor: 'color-mix(in srgb, var(--accent) 22%, var(--bg-secondary))',
-                  color: 'var(--text)',
-                }}
-              >
-                {getTranscriptAvatarLabel(seg.speaker)}
-              </div>
+              {segmentPlayable ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPlaySegment?.(seg, segmentIndex);
+                  }}
+                  className={`transcript-speaker-avatar transcript-speaker-play-btn flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold ${
+                    segmentIsPlaying ? 'transcript-speaker-play-btn-active' : ''
+                  }`}
+                  style={{
+                    backgroundColor: 'color-mix(in srgb, var(--accent) 22%, var(--bg-secondary))',
+                    color: 'var(--text)',
+                  }}
+                  title={`Play segment from ${seg.speaker.trim() || 'Speaker'}`}
+                  aria-label={`Play segment from ${seg.speaker.trim() || 'Speaker'}`}
+                >
+                  <span className="transcript-speaker-initials">{getTranscriptAvatarLabel(seg.speaker)}</span>
+                  <span className="transcript-speaker-play-icon" aria-hidden>
+                    {segmentIsPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                  </span>
+                </button>
+              ) : (
+                <div
+                  className="transcript-speaker-avatar flex h-9 w-9 min-w-[2.25rem] shrink-0 items-center justify-center self-center rounded-full text-sm font-semibold"
+                  style={{
+                    backgroundColor: 'color-mix(in srgb, var(--accent) 22%, var(--bg-secondary))',
+                    color: 'var(--text)',
+                  }}
+                >
+                  {getTranscriptAvatarLabel(seg.speaker)}
+                </div>
+              )}
               <div className="min-w-0 flex-1">
               <button
                 type="button"
@@ -598,7 +636,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                 className="mt-0.5 text-base font-normal leading-relaxed whitespace-pre-wrap"
                 style={{ color: 'var(--text-secondary)' }}
               >
-                {seg.text}
+                {getSegmentText(seg, transcriptLanguage)}
               </div>
             </div>
           </div>

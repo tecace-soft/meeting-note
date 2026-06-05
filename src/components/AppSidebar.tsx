@@ -25,6 +25,7 @@ import {
 } from 'react-coolicons';
 import { IconButton } from '../ui/wantedCompat';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage, type TranslationKey } from '../context/LanguageContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { normalizeTranscript } from '../lib/transcriptSegments';
@@ -117,8 +118,8 @@ function getNoteTranscriptionText(note: SidebarNote): string {
 }
 
 const navItems = [
-  { to: '/transcription-summary', label: 'Meeting Note', icon: FileDocument, end: true as const },
-  { to: '/history', label: 'History', icon: ListOrdered, end: false as const, projects: true as const },
+  { to: '/transcription-summary', labelKey: 'meetingNote' as TranslationKey, icon: FileDocument, end: true as const },
+  { to: '/history', labelKey: 'history' as TranslationKey, icon: ListOrdered, end: false as const, projects: true as const },
   { to: '/save-summary', label: 'OneDrive', icon: Cloud, end: false as const },
 ] as const;
 
@@ -140,6 +141,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, isAuthenticated } = useAuth();
+  const { t } = useLanguage();
   const { theme, toggleTheme } = useTheme();
   const prevPathRef = useRef<string | null>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
@@ -173,10 +175,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const visibleNavItems = isAdminMicrosoftUser(user?.id)
     ? [
         ...navItems,
-        { to: '/admin-controls', label: 'Admin Controls', icon: Settings, end: false as const },
-        { to: '/admin-analytics', label: 'Admin Analytics', icon: ChartBarVertical01, end: false as const },
+        { to: '/admin-controls', labelKey: 'adminControls' as TranslationKey, icon: Settings, end: false as const },
+        { to: '/admin-analytics', labelKey: 'adminAnalytics' as TranslationKey, icon: ChartBarVertical01, end: false as const },
       ]
     : [...navItems];
+
+  const getNavItemLabel = (item: { label?: string; labelKey?: TranslationKey }): string =>
+    item.labelKey ? t(item.labelKey) : item.label ?? '';
 
   const activeProjectId =
     location.pathname === '/project'
@@ -564,7 +569,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 <NavLink
                   to={item.to}
                   end={item.end}
-                  title={collapsed ? item.label : undefined}
+                  title={collapsed ? getNavItemLabel(item) : undefined}
                   onClick={handleNavPress}
                   className={({ isActive }) =>
                     `sidebar-nav-link flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity ${
@@ -576,7 +581,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   style={({ isActive }) => linkStyle(isActive || summaryHistorySectionActive)}
                 >
                   <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
-                  {!collapsed && <span className="truncate">{item.label}</span>}
+                  {!collapsed && <span className="truncate">{getNavItemLabel(item)}</span>}
                 </NavLink>
 
                 {showProjectNav && (
@@ -584,7 +589,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                     className="mb-1 ml-2 mt-0.5 space-y-0.5 border-l pl-2"
                     style={{ borderColor: 'var(--border)' }}
                     role="group"
-                    aria-label="Projects"
+                    aria-label={t('projects')}
                   >
                     <button
                       type="button"
@@ -593,7 +598,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                       style={linkStyle(false)}
                     >
                       <FolderAdd className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
-                      <span className="truncate">New Project</span>
+                      <span className="truncate">{t('newProject')}</span>
                     </button>
 
                     {projectsLoading ? (
@@ -737,7 +742,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               key={item.to}
               to={item.to}
               end={item.end}
-              title={collapsed ? item.label : undefined}
+              title={collapsed ? getNavItemLabel(item) : undefined}
               onClick={handleNavPress}
               className={({ isActive }) =>
                 `sidebar-nav-link flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity ${
@@ -749,7 +754,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               style={({ isActive }) => linkStyle(isActive)}
             >
               <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
-              {!collapsed && <span className="truncate">{item.label}</span>}
+              {!collapsed && <span className="truncate">{getNavItemLabel(item)}</span>}
             </NavLink>
           );
         })}

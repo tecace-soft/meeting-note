@@ -1555,6 +1555,11 @@ html body .app-skin form.project-chat-input-shell:active {
   padding: 0;
 }
 
+.app-skin .summary-detail-expand-btn:hover:not(:disabled) {
+  background-color: var(--bg-secondary);
+  color: var(--text);
+}
+
 .app-skin .results-tab {
   position: relative;
   border-radius: 0;
@@ -1736,6 +1741,42 @@ html body .app-skin form.project-chat-input-shell:active {
 
 .transcript-segment:hover .transcript-speaker-avatar {
   transform: none;
+}
+
+.transcript-speaker-play-btn {
+  position: relative;
+  border: 0;
+  cursor: pointer;
+}
+
+.transcript-speaker-play-icon {
+  display: none;
+}
+
+.transcript-speaker-initials,
+.transcript-speaker-play-icon {
+  transform: translate(0.5px, 0.5px);
+}
+
+.transcript-speaker-play-btn:hover .transcript-speaker-initials,
+.transcript-speaker-play-btn:focus-visible .transcript-speaker-initials,
+.transcript-speaker-play-btn-active .transcript-speaker-initials {
+  display: none;
+}
+
+.transcript-speaker-play-btn:hover .transcript-speaker-play-icon,
+.transcript-speaker-play-btn:focus-visible .transcript-speaker-play-icon,
+.transcript-speaker-play-btn-active .transcript-speaker-play-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-skin .transcript-speaker-play-btn:hover:not(:disabled),
+.app-skin .transcript-speaker-play-btn:focus-visible,
+.app-skin .transcript-speaker-play-btn-active {
+  background-color: color-mix(in srgb, var(--accent) 32%, var(--bg-secondary)) !important;
+  color: var(--accent) !important;
 }
 
 .transcript-speaker-filter-row {

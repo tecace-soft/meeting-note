@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
+import { useLanguage } from '../context/LanguageContext';
+import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import {
   ArrowsReload01,
   Calendar,
@@ -14,12 +15,16 @@ import {
   Cloud,
   Copy,
   EditPencilLine01,
+  Expand,
   FileDocument,
   Files,
   Loading,
   MoreHorizontal,
+  Pause,
+  Play,
   Save,
   ShareAndroid,
+  Shrink,
   TrashFull,
   UserCircle,
   Users,
@@ -32,7 +37,13 @@ import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
 } from '../components/TranscriptDiarizedEditor';
-import { getNoteDiarizationRaw, hasUsableDiarization, normalizeTranscript, type TranscriptSegment } from '../lib/transcriptSegments';
+import {
+  getNoteDiarizationRaw,
+  getSegmentText,
+  hasUsableDiarization,
+  normalizeTranscript,
+  type TranscriptSegment,
+} from '../lib/transcriptSegments';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { getTeamsChats, sendChatMessage, type TeamsChat } from '../services/graphService';
 import ShareNoteModal from '../components/ShareNoteModal';
@@ -48,6 +59,8 @@ interface Note {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+  audio_file?: string | null;
+  audio_file_id?: string | null;
   shared_users?: unknown;
   /** String array or json/jsonb; Supabase may return a JSON string. */
   tag?: unknown;
@@ -122,6 +135,16 @@ async function invokeGenerateProfile(body: {
 const NOTES_PAGE_SIZE = 10;
 type HistoryViewMode = 'list' | 'calendar';
 type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
+
+interface SegmentPlaybackState {
+  noteId: string;
+  segmentIndex: number;
+  speaker: string;
+  start: number;
+  end: number | null;
+  currentTime: number;
+  isPlaying: boolean;
+}
 
 interface CalendarDay {
   date: Date;
@@ -244,6 +267,7 @@ const SummaryHistory: React.FC = () => {
   const chatId = searchParams.get('chat_id');
   
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { transcriptLanguage, t } = useLanguage();
   
   const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null);
   const [chatLoading, setChatLoading] = useState(true);
@@ -256,6 +280,13 @@ const SummaryHistory: React.FC = () => {
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthStart(new Date()));
   const [calendarExpandedDayKey, setCalendarExpandedDayKey] = useState<string | null>(null);
   const [calendarDisplayMode, setCalendarDisplayMode] = useState<CalendarDisplayMode>('monthly');
+  const [noteDetailExpanded, setNoteDetailExpanded] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const playbackStopAtRef = useRef<number | null>(null);
+  const [segmentPlayback, setSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
+  const [playbackLoadingNoteId, setPlaybackLoadingNoteId] = useState<string | null>(null);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
@@ -539,6 +570,10 @@ const SummaryHistory: React.FC = () => {
   const notesRangeStart = notesTotalCount === 0 ? 0 : (notesPage - 1) * NOTES_PAGE_SIZE + 1;
   const notesRangeEnd = Math.min(notesPage * NOTES_PAGE_SIZE, notesTotalCount);
   const selectedNote = notes.find((n) => n.id === expandedNoteId) ?? null;
+  useEffect(() => {
+    if (!selectedNote) setNoteDetailExpanded(false);
+  }, [selectedNote]);
+
   const calendarNotesByDay = useMemo(() => {
     const grouped = new Map<string, Note[]>();
     for (const note of notes) {
@@ -591,6 +626,347 @@ const SummaryHistory: React.FC = () => {
     : calendarDisplayMode === 'weekly'
       ? calendarWeekLabel
       : calendarMonthLabel;
+  const renderNoteDetailExpandButton = () => (
+    <button
+      type="button"
+      onClick={() => setNoteDetailExpanded((prev) => !prev)}
+      className="summary-detail-expand-btn flex h-8 w-8 items-center justify-center rounded-md transition-colors"
+      style={{ color: 'var(--text-secondary)' }}
+      aria-label={noteDetailExpanded ? 'Shrink note details' : 'Expand note details'}
+      title={noteDetailExpanded ? 'Shrink note details' : 'Expand note details'}
+    >
+      {noteDetailExpanded ? (
+        <Shrink className="h-4 w-4" aria-hidden />
+      ) : (
+        <Expand className="h-4 w-4" aria-hidden />
+      )}
+    </button>
+  );
+
+  const renderNoteDetailHeader = (
+    note: Note,
+    activeTab: string,
+    hasTranscription: boolean,
+    showDiarized: boolean,
+    diarRaw: unknown,
+    plainTx: string | undefined
+  ) => (
+    <div
+      className="results-header relative flex flex-col gap-5 border-b px-4 pt-4 md:px-5"
+      style={{ borderColor: 'var(--border)' }}
+    >
+      <div className="absolute right-4 top-3 md:right-5">
+        {renderNoteDetailExpandButton()}
+      </div>
+      <div className="min-w-0 pr-10">
+        <h3 className="truncate text-lg font-semibold leading-tight" style={{ color: 'var(--text)' }}>
+          {getNoteDisplayTitle(note)}
+        </h3>
+        <p className="mt-1.5 text-xs font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--text-muted)' }}>
+          Meeting {formatDate(note.meeting_at || note.created_at)}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'summary'}
+            onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
+            className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+            style={{ color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)' }}
+          >
+            {t('summary')}
+          </button>
+          {hasTranscription && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'transcription'}
+              onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
+              className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+              style={{ color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)' }}
+            >
+              {t('transcription')}
+            </button>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2 pb-2.5">
+          {activeTab === 'summary' ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)}
+                className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                title="Copy summary"
+                aria-label="Copy summary"
+              >
+                {copiedKey === `summary-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                Copy
+              </button>
+              {editingNoteId === note.id ? (
+                <button
+                  type="button"
+                  onClick={() => void handleSaveNoteEdit(note)}
+                  disabled={savingNoteId === note.id}
+                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                >
+                  {savingNoteId === note.id ? <Loading className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                  Done
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleStartNoteEdit(note)}
+                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                >
+                  <EditPencilLine01 className="h-3 w-3" />
+                  Edit
+                </button>
+              )}
+            </>
+          ) : hasTranscription ? (
+            <button
+              type="button"
+              onClick={() =>
+                void handleCopyText(
+                  showDiarized
+                    ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${getSegmentText(s, transcriptLanguage)}`).join('\n\n')
+                    : plainTx || '',
+                  `transcription-${note.id}`
+                )
+              }
+              className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+              style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+              title="Copy transcription"
+              aria-label="Copy transcription"
+            >
+              {copiedKey === `transcription-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              Copy
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+
+  const formatPlaybackTime = (seconds: number): string => {
+    const safeSeconds = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
+    const minutes = Math.floor(safeSeconds / 60);
+    const remainder = safeSeconds % 60;
+    return `${minutes}:${String(remainder).padStart(2, '0')}`;
+  };
+
+  const isPlayableSegment = (segment: TranscriptSegment): boolean =>
+    typeof segment.start === 'number' && Number.isFinite(segment.start) && segment.start >= 0;
+
+  const getNoteAudioUrl = async (note: Note): Promise<string> => {
+    const cached = audioUrlCacheRef.current.get(note.id);
+    if (cached) return cached;
+    const appToken = await getSupabaseAccessTokenForRequest();
+    const msToken = appToken ? null : await getAccessToken();
+    if (!appToken && !msToken) throw new Error('Could not get access. Please sign in again.');
+    const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/note-audio-url`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${appToken ?? SUPABASE_ANON_KEY}`,
+        ...(msToken ? { 'x-ms-access-token': msToken } : {}),
+      },
+      body: JSON.stringify({ noteId: note.id }),
+    });
+    const raw = await response.text();
+    let parsed: { url?: unknown; error?: unknown };
+    try {
+      parsed = raw ? JSON.parse(raw) as { url?: unknown; error?: unknown } : {};
+    } catch {
+      parsed = { error: raw || `HTTP ${response.status}` };
+    }
+    if (!response.ok) {
+      throw new Error(typeof parsed.error === 'string' ? parsed.error : `Audio request failed (${response.status}).`);
+    }
+    if (typeof parsed.url !== 'string' || !parsed.url.trim()) {
+      throw new Error('Audio URL was not returned.');
+    }
+    audioUrlCacheRef.current.set(note.id, parsed.url);
+    return parsed.url;
+  };
+
+  useEffect(() => {
+    if (!selectedNote) return;
+    const segments = normalizeTranscript(getNoteDiarizationRaw(selectedNote));
+    if (!segments.some(isPlayableSegment)) return;
+    void getNoteAudioUrl(selectedNote).catch((error) => {
+      console.warn('Could not preload note audio URL:', error);
+    });
+  }, [selectedNote?.id]);
+
+  const stopSegmentPlayback = () => {
+    const audio = audioRef.current;
+    if (audio) audio.pause();
+    playbackStopAtRef.current = null;
+    setSegmentPlayback(null);
+  };
+
+  const getAudioErrorMessage = (audio: HTMLAudioElement): string => {
+    const code = audio.error?.code;
+    const detail =
+      code === MediaError.MEDIA_ERR_ABORTED ? 'loading was aborted' :
+      code === MediaError.MEDIA_ERR_NETWORK ? 'a network error occurred' :
+      code === MediaError.MEDIA_ERR_DECODE ? 'the browser could not decode this audio file' :
+      code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ? 'the audio URL or format is not supported by this browser' :
+      'the browser did not provide a media error code';
+    return `Audio file could not be loaded: ${detail}.`;
+  };
+
+  const loadAudioMetadata = (audio: HTMLAudioElement, url: string): Promise<void> => {
+    if (audio.src === url && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        audio.removeEventListener('loadedmetadata', onLoaded);
+        audio.removeEventListener('canplay', onLoaded);
+        audio.removeEventListener('error', onError);
+      };
+      const onLoaded = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error(getAudioErrorMessage(audio)));
+      };
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error('Audio metadata did not load. The audio URL may be expired, blocked, or not playable in this browser.'));
+      }, 15000);
+
+      audio.addEventListener('loadedmetadata', onLoaded, { once: true });
+      audio.addEventListener('canplay', onLoaded, { once: true });
+      audio.addEventListener('error', onError, { once: true });
+
+      if (audio.src !== url) {
+        audio.src = url;
+      }
+      audio.load();
+    });
+  };
+
+  useEffect(() => {
+    if (!selectedNote || segmentPlayback?.noteId === selectedNote.id) return;
+    stopSegmentPlayback();
+  }, [selectedNote?.id, segmentPlayback?.noteId]);
+
+  const handlePlayTranscriptSegment = async (note: Note, segment: TranscriptSegment, segmentIndex: number) => {
+    if (!isPlayableSegment(segment)) return;
+    const start = segment.start ?? 0;
+    const end = typeof segment.end === 'number' && Number.isFinite(segment.end) && segment.end > start
+      ? segment.end
+      : null;
+
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (segmentPlayback?.noteId === note.id && segmentPlayback.segmentIndex === segmentIndex && segmentPlayback.isPlaying) {
+      stopSegmentPlayback();
+      return;
+    }
+
+    try {
+      setPlaybackError(null);
+      setPlaybackLoadingNoteId(note.id);
+      const url = audioUrlCacheRef.current.get(note.id) ?? await getNoteAudioUrl(note);
+      audio.muted = false;
+      audio.volume = 1;
+      playbackStopAtRef.current = end;
+      setSegmentPlayback({
+        noteId: note.id,
+        segmentIndex,
+        speaker: segment.speaker.trim() || 'Speaker',
+        start,
+        end,
+        currentTime: start,
+        isPlaying: true,
+      });
+      await loadAudioMetadata(audio, url);
+      if (Number.isFinite(audio.duration) && start > audio.duration) {
+        throw new Error(`Segment timestamp ${formatPlaybackTime(start)} is outside this audio file (${formatPlaybackTime(audio.duration)}).`);
+      }
+      audio.currentTime = start;
+      await audio.play();
+    } catch (error) {
+      console.error('Failed to play transcript segment:', error);
+      playbackStopAtRef.current = null;
+      setPlaybackError(error instanceof Error ? error.message : 'Failed to load audio for this note.');
+      setSegmentPlayback(null);
+    } finally {
+      setPlaybackLoadingNoteId(null);
+    }
+  };
+
+  const renderSegmentPlaybackBar = (note: Note) => {
+    if (!segmentPlayback || segmentPlayback.noteId !== note.id) {
+      return playbackError ? (
+        <p className="mb-2 text-xs" style={{ color: 'var(--error)' }}>
+          {playbackError}
+        </p>
+      ) : null;
+    }
+    return (
+      <div
+        className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs"
+        style={{
+          backgroundColor: 'color-mix(in srgb, var(--accent) 8%, var(--surface))',
+          color: 'var(--text-secondary)',
+        }}
+      >
+        <div className="min-w-0">
+          <span className="font-semibold" style={{ color: 'var(--text)' }}>{segmentPlayback.speaker}</span>
+          <span className="ml-2">
+            {formatPlaybackTime(segmentPlayback.currentTime)}
+            {segmentPlayback.end != null ? ` / ${formatPlaybackTime(segmentPlayback.end)}` : ''}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              const audio = audioRef.current;
+              if (!audio) return;
+              if (segmentPlayback.isPlaying) {
+                audio.pause();
+              } else {
+                void audio.play();
+              }
+            }}
+            className="summary-toolbar-btn flex h-8 w-8 items-center justify-center rounded-md transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+            aria-label={segmentPlayback.isPlaying ? 'Pause segment playback' : 'Resume segment playback'}
+            title={segmentPlayback.isPlaying ? 'Pause' : 'Resume'}
+          >
+            {segmentPlayback.isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={stopSegmentPlayback}
+            className="summary-toolbar-btn flex h-8 w-8 items-center justify-center rounded-md transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+            aria-label="Stop segment playback"
+            title="Stop"
+          >
+            <CloseMd className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    );
+  };
   const handleStartNoteEdit = (note: Note) => {
     setEditingNoteId(note.id);
     setNoteEditDraft(note.summary_edit || note.summary || '');
@@ -821,7 +1197,7 @@ const SummaryHistory: React.FC = () => {
       ((speakerRows ?? []) as { id: string; name: string; profile: string | null }[]).forEach((s) => {
         speakerMap.set(s.name.toLowerCase(), { id: s.id, profile: s.profile });
       });
-      const transcriptText = segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+      const transcriptText = segments.map((s) => `${s.speaker}: ${getSegmentText(s, 'en')}`).join('\n\n');
       setProfileGenStep('generating');
       const results = await Promise.all(
         uniqueSpeakers.map(async (speakerName): Promise<GeneratedHistoryProfile> => {
@@ -950,7 +1326,7 @@ const SummaryHistory: React.FC = () => {
                     className="results-tabs flex min-w-0 gap-5 border-b"
                     style={{ borderColor: 'var(--border)' }}
                     role="tablist"
-                    aria-label="History view"
+                    aria-label={t('history')}
                   >
                     {(['list', 'calendar'] as HistoryViewMode[]).map((mode) => {
                       const active = historyViewMode === mode;
@@ -969,7 +1345,7 @@ const SummaryHistory: React.FC = () => {
                           className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium capitalize transition-colors"
                           style={{ color: active ? 'var(--text)' : 'var(--text-secondary)' }}
                         >
-                          {mode}
+                          {mode === 'list' ? t('list') : t('calendar')}
                         </button>
                       );
                     })}
@@ -981,17 +1357,17 @@ const SummaryHistory: React.FC = () => {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <h1 className="app-page-title">
-                      History
+                      {t('history')}
                     </h1>
                     <p className="app-page-subtitle">
-                      Meeting notes you created across all chats
+                      {t('history') === 'History' ? 'Meeting notes you created across all chats' : '모든 채팅에서 생성한 회의록'}
                     </p>
                   </div>
                   <div
                     className="results-tabs flex min-w-0 gap-5 border-b"
                     style={{ borderColor: 'var(--border)' }}
                     role="tablist"
-                    aria-label="History view"
+                    aria-label={t('history')}
                   >
                     {(['list', 'calendar'] as HistoryViewMode[]).map((mode) => {
                       const active = historyViewMode === mode;
@@ -1010,7 +1386,7 @@ const SummaryHistory: React.FC = () => {
                           className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium capitalize transition-colors"
                           style={{ color: active ? 'var(--text)' : 'var(--text-secondary)' }}
                         >
-                          {mode}
+                          {mode === 'list' ? t('list') : t('calendar')}
                         </button>
                       );
                     })}
@@ -1034,12 +1410,12 @@ const SummaryHistory: React.FC = () => {
             ) : historyViewMode === 'calendar' ? (
               <div
                 className={`grid min-h-0 flex-1 gap-4 pb-1 ${
-                  focusedCalendarDayKey && selectedNote
+                  focusedCalendarDayKey && selectedNote && !noteDetailExpanded
                     ? 'xl:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]'
                     : 'xl:grid-cols-1'
                 }`}
               >
-                <section className="card flex shrink-0 flex-col rounded-lg p-3 sm:p-4">
+                <section className={`card flex shrink-0 flex-col rounded-lg p-3 sm:p-4 ${noteDetailExpanded ? 'hidden' : ''}`}>
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-center gap-2">
                       <button
@@ -1115,9 +1491,9 @@ const SummaryHistory: React.FC = () => {
                         }}
                         aria-label="Calendar view"
                       >
-                        <option value="daily">Daily</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly">Monthly</option>
+                        <option value="daily">{t('daily')}</option>
+                        <option value="weekly">{t('weekly')}</option>
+                        <option value="monthly">{t('monthly')}</option>
                       </select>
                     </div>
                   </div>
@@ -1297,99 +1673,7 @@ const SummaryHistory: React.FC = () => {
                           role="region"
                           aria-label="Note detail"
                         >
-                          <div
-                            className="results-header flex flex-col gap-5 border-b px-4 pt-4 md:px-5"
-                            style={{ borderColor: 'var(--border)' }}
-                          >
-                            <div className="min-w-0">
-                              <h3 className="truncate text-lg font-semibold leading-tight" style={{ color: 'var(--text)' }}>
-                                {getNoteDisplayTitle(note)}
-                              </h3>
-                              <p className="mt-1.5 text-xs font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--text-muted)' }}>
-                                Meeting {formatDate(note.meeting_at || note.created_at)}
-                              </p>
-                            </div>
-                            <div className="flex flex-wrap items-end justify-between gap-3">
-                              <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
-                                <button
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={activeTab === 'summary'}
-                                  onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                  className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
-                                  style={{ color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)' }}
-                                >
-                                  Summary
-                                </button>
-                                {hasTranscription && (
-                                  <button
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={activeTab === 'transcription'}
-                                    onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))}
-                                    className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
-                                    style={{ color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)' }}
-                                  >
-                                    Transcription
-                                  </button>
-                                )}
-                              </div>
-                              <div className="flex shrink-0 items-center justify-end gap-2 pb-2.5">
-                                {activeTab === 'summary' ? (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)}
-                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                    >
-                                      {copiedKey === `summary-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                                      Copy
-                                    </button>
-                                    {editingNoteId === note.id ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleSaveNoteEdit(note)}
-                                        disabled={savingNoteId === note.id}
-                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
-                                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                      >
-                                        {savingNoteId === note.id ? <Loading className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                                        Done
-                                      </button>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartNoteEdit(note)}
-                                        className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                        style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                      >
-                                        <EditPencilLine01 className="h-3 w-3" />
-                                        Edit
-                                      </button>
-                                    )}
-                                  </>
-                                ) : hasTranscription ? (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void handleCopyText(
-                                        showDiarized
-                                          ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
-                                          : plainTx || '',
-                                        `transcription-${note.id}`
-                                      )
-                                    }
-                                    className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                  >
-                                    {copiedKey === `transcription-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                                    Copy
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
+                          {renderNoteDetailHeader(note, activeTab, hasTranscription, showDiarized, diarRaw, plainTx)}
                           <div className="min-h-0 flex flex-1 flex-col overflow-hidden px-4 pb-4 pt-4 md:px-5">
                             {activeTab === 'summary' && (
                               <>
@@ -1415,6 +1699,7 @@ const SummaryHistory: React.FC = () => {
                             )}
                             {activeTab === 'transcription' && hasTranscription && (
                               <div className="min-h-0 flex flex-1 flex-col">
+                                {renderSegmentPlaybackBar(note)}
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                   {showDiarized ? (
                                     <TranscriptSpeakerFilterControls
@@ -1433,6 +1718,11 @@ const SummaryHistory: React.FC = () => {
                                       scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
                                       selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
                                       onSelectedSpeakerFiltersChange={(next) => setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))}
+                                      activePlaybackSegmentIndex={segmentPlayback?.noteId === note.id ? segmentPlayback.segmentIndex : null}
+                                      isPlaybackActive={Boolean(segmentPlayback?.noteId === note.id && segmentPlayback.isPlaying)}
+                                      canPlaySegment={isPlayableSegment}
+                                      onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
+                                      transcriptLanguage={transcriptLanguage}
                                     />
                                   </div>
                                 ) : (
@@ -1499,10 +1789,10 @@ const SummaryHistory: React.FC = () => {
             ) : (
               <div
                 className={`grid min-h-0 w-full min-w-0 flex-1 gap-4 transition-[grid-template-columns] duration-300 ease-out ${
-                  selectedNote ? 'md:grid-cols-[minmax(26rem,34rem)_minmax(0,1fr)]' : 'md:grid-cols-1'
+                  selectedNote && !noteDetailExpanded ? 'md:grid-cols-[minmax(26rem,34rem)_minmax(0,1fr)]' : 'md:grid-cols-1'
                 }`}
               >
-              <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-lg p-3">
+              <section className={`card flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-lg p-3 ${noteDetailExpanded ? 'hidden' : ''}`}>
                   <div className="mb-2 shrink-0 space-y-1">
                     {noteListActionError ? (
                       <p className="text-xs" style={{ color: 'var(--error)' }}>
@@ -1836,90 +2126,10 @@ const SummaryHistory: React.FC = () => {
                                       aria-label="Note detail"
                                     >
                                       <div className="flex min-h-0 flex-col">
-                                        <div
-                                          className="results-header flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
-                                          style={{ borderColor: 'var(--border)' }}
-                                        >
-                                          <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
-                                            <button
-                                              type="button"
-                                              role="tab"
-                                              aria-selected={activeTab === 'summary'}
-                                              onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                              className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
-                                              style={{
-                                                color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
-                                              }}
-                                            >
-                                              Summary
-                                            </button>
-                                            {hasTranscription && (
-                                              <button
-                                                type="button"
-                                                role="tab"
-                                                aria-selected={activeTab === 'transcription'}
-                                                onClick={() =>
-                                                  setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))
-                                                }
-                                                className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
-                                                style={{
-                                                  color:
-                                                    activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
-                                                }}
-                                              >
-                                                Transcription
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
+                                        {renderNoteDetailHeader(note, activeTab, hasTranscription, showDiarized, diarRaw, plainTx)}
                                         <div className="min-h-0 flex flex-1 flex-col overflow-hidden px-4 pb-4 pt-4 md:px-5">
                                           {activeTab === 'summary' && (
                                             <>
-                                              <div className="mb-2 flex shrink-0 items-center justify-end gap-2">
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)
-                                                  }
-                                                  className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                                  title="Copy summary"
-                                                  aria-label="Copy summary"
-                                                >
-                                                  {copiedKey === `summary-${note.id}` ? (
-                                                    <Check className="h-3 w-3" />
-                                                  ) : (
-                                                    <Copy className="h-3 w-3" />
-                                                  )}
-                                                  Copy
-                                                </button>
-                                                {editingNoteId === note.id ? (
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => void handleSaveNoteEdit(note)}
-                                                    disabled={savingNoteId === note.id}
-                                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
-                                                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                                  >
-                                                    {savingNoteId === note.id ? (
-                                                      <Loading className="h-3 w-3 animate-spin" />
-                                                    ) : (
-                                                      <Save className="h-3 w-3" />
-                                                    )}
-                                                    Done
-                                                  </button>
-                                                ) : (
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => handleStartNoteEdit(note)}
-                                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                                  >
-                                                    <EditPencilLine01 className="h-3 w-3" />
-                                                    Edit
-                                                  </button>
-                                                )}
-                                              </div>
                                               {editingNoteId === note.id ? (
                                                 <textarea
                                                   value={noteEditDraft}
@@ -1966,8 +2176,9 @@ const SummaryHistory: React.FC = () => {
                                           )}
                                           {activeTab === 'transcription' && hasTranscription && (
                                             <div className="min-h-0 flex flex-1 flex-col">
+                                              {renderSegmentPlaybackBar(note)}
+                                              {showDiarized ? (
                                               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                                {showDiarized ? (
                                                   <TranscriptSpeakerFilterControls
                                                     speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
                                                     selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
@@ -1975,32 +2186,8 @@ const SummaryHistory: React.FC = () => {
                                                       setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
                                                     }
                                                   />
-                                                ) : (
-                                                  <span />
-                                                )}
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    void handleCopyText(
-                                                      showDiarized
-                                                        ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
-                                                        : plainTx || '',
-                                                      `transcription-${note.id}`
-                                                    )
-                                                  }
-                                                  className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                                  style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                                  title="Copy transcription"
-                                                  aria-label="Copy transcription"
-                                                >
-                                                  {copiedKey === `transcription-${note.id}` ? (
-                                                    <Check className="h-3 w-3" />
-                                                  ) : (
-                                                    <Copy className="h-3 w-3" />
-                                                  )}
-                                                  Copy
-                                                </button>
                                               </div>
+                                              ) : null}
                                               {showDiarized ? (
                                                 <div className="min-h-0 flex-1">
                                                   <TranscriptDiarizedEditor
@@ -2016,6 +2203,11 @@ const SummaryHistory: React.FC = () => {
                                                     onSelectedSpeakerFiltersChange={(next) =>
                                                       setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
                                                     }
+                                                    activePlaybackSegmentIndex={segmentPlayback?.noteId === note.id ? segmentPlayback.segmentIndex : null}
+                                                    isPlaybackActive={Boolean(segmentPlayback?.noteId === note.id && segmentPlayback.isPlaying)}
+                                                    canPlaySegment={isPlayableSegment}
+                                                    onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
+                                                    transcriptLanguage={transcriptLanguage}
                                                   />
                                                 </div>
                                               ) : (
@@ -2215,90 +2407,10 @@ const SummaryHistory: React.FC = () => {
                           role="region"
                           aria-label="Note detail"
                         >
-                          <div
-                            className="results-header flex flex-wrap items-end justify-between gap-3 border-b px-4 pt-3 md:px-5"
-                            style={{ borderColor: 'var(--border)' }}
-                          >
-                            <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
-                              <button
-                                type="button"
-                                role="tab"
-                                aria-selected={activeTab === 'summary'}
-                                onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }))}
-                                className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
-                                style={{
-                                  color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
-                                }}
-                              >
-                                Summary
-                              </button>
-                              {hasTranscription && (
-                                <button
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={activeTab === 'transcription'}
-                                  onClick={() =>
-                                    setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'transcription' }))
-                                  }
-                                  className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
-                                  style={{
-                                    color:
-                                      activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
-                                  }}
-                                >
-                                  Transcription
-                                </button>
-                              )}
-                            </div>
-                          </div>
+                          {renderNoteDetailHeader(note, activeTab, hasTranscription, showDiarized, diarRaw, plainTx)}
                           <div className="min-h-0 flex flex-1 flex-col overflow-hidden px-4 pb-4 pt-4 md:px-5">
                             {activeTab === 'summary' && (
                               <>
-                                <div className="mb-2 flex shrink-0 items-center justify-end gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)
-                                    }
-                                    className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                    title="Copy summary"
-                                    aria-label="Copy summary"
-                                  >
-                                    {copiedKey === `summary-${note.id}` ? (
-                                      <Check className="h-3 w-3" />
-                                    ) : (
-                                      <Copy className="h-3 w-3" />
-                                    )}
-                                    Copy
-                                  </button>
-                                  {editingNoteId === note.id ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleSaveNoteEdit(note)}
-                                      disabled={savingNoteId === note.id}
-                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all disabled:opacity-50"
-                                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                                    >
-                                      {savingNoteId === note.id ? (
-                                        <Loading className="h-3 w-3 animate-spin" />
-                                      ) : (
-                                        <Save className="h-3 w-3" />
-                                      )}
-                                      Done
-                                    </button>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleStartNoteEdit(note)}
-                                      className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                    >
-                                      <EditPencilLine01 className="h-3 w-3" />
-                                      Edit
-                                    </button>
-                                  )}
-                                </div>
                                 {editingNoteId === note.id ? (
                                   <textarea
                                     value={noteEditDraft}
@@ -2345,8 +2457,9 @@ const SummaryHistory: React.FC = () => {
                             )}
                             {activeTab === 'transcription' && hasTranscription && (
                               <div className="min-h-0 flex flex-1 flex-col">
+                                {renderSegmentPlaybackBar(note)}
+                                {showDiarized ? (
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                  {showDiarized ? (
                                     <TranscriptSpeakerFilterControls
                                       speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
                                       selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
@@ -2354,32 +2467,8 @@ const SummaryHistory: React.FC = () => {
                                         setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
                                       }
                                     />
-                                  ) : (
-                                    <span />
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void handleCopyText(
-                                        showDiarized
-                                          ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
-                                          : plainTx || '',
-                                        `transcription-${note.id}`
-                                      )
-                                    }
-                                    className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                    style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                    title="Copy transcription"
-                                    aria-label="Copy transcription"
-                                  >
-                                    {copiedKey === `transcription-${note.id}` ? (
-                                      <Check className="h-3 w-3" />
-                                    ) : (
-                                      <Copy className="h-3 w-3" />
-                                    )}
-                                    Copy
-                                  </button>
                                 </div>
+                                ) : null}
                                 {showDiarized ? (
                                   <div className="min-h-0 flex-1">
                                     <TranscriptDiarizedEditor
@@ -2395,6 +2484,11 @@ const SummaryHistory: React.FC = () => {
                                       onSelectedSpeakerFiltersChange={(next) =>
                                         setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
                                       }
+                                      activePlaybackSegmentIndex={segmentPlayback?.noteId === note.id ? segmentPlayback.segmentIndex : null}
+                                      isPlaybackActive={Boolean(segmentPlayback?.noteId === note.id && segmentPlayback.isPlaying)}
+                                      canPlaySegment={isPlayableSegment}
+                                      onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
+                                      transcriptLanguage={transcriptLanguage}
                                     />
                                   </div>
                                 ) : (
@@ -2499,6 +2593,39 @@ const SummaryHistory: React.FC = () => {
           </div>
         </div>
       </main>
+
+      <audio
+        ref={audioRef}
+        className="hidden"
+        onTimeUpdate={(event) => {
+          const audio = event.currentTarget;
+          const stopAt = playbackStopAtRef.current;
+          const currentTime = audio.currentTime;
+          setSegmentPlayback((prev) => prev ? { ...prev, currentTime } : prev);
+          if (stopAt != null && currentTime >= stopAt) {
+            audio.pause();
+            playbackStopAtRef.current = null;
+            setSegmentPlayback((prev) => prev ? { ...prev, currentTime: stopAt, isPlaying: false } : prev);
+          }
+        }}
+        onPlay={(event) => {
+          const currentTime = event.currentTarget.currentTime;
+          setSegmentPlayback((prev) => prev ? { ...prev, currentTime, isPlaying: true } : prev);
+        }}
+        onPause={(event) => {
+          const currentTime = event.currentTarget.currentTime;
+          setSegmentPlayback((prev) => prev ? { ...prev, currentTime, isPlaying: false } : prev);
+        }}
+        onEnded={() => {
+          playbackStopAtRef.current = null;
+          setSegmentPlayback((prev) => prev ? { ...prev, isPlaying: false } : prev);
+        }}
+        onError={() => {
+          playbackStopAtRef.current = null;
+          setPlaybackError('Could not play this audio file.');
+          setSegmentPlayback(null);
+        }}
+      />
 
       {isDeleteNoteOpen && (
         <div

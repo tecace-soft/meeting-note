@@ -104,6 +104,7 @@ export function buildSummaryPrompt(input: {
   transcript: string;
   speakerContext?: string;
   globalSummaryContext?: string;
+  outputLanguage?: 'en' | 'ko';
 }): string {
   const speakerContext = input.speakerContext?.trim()
     ? `\nSPEAKER CONTEXT\n'''\n${input.speakerContext.trim()}\n'''\n`
@@ -115,9 +116,11 @@ export function buildSummaryPrompt(input: {
   const meetingDateLine = input.meetingDate
     ? `Meeting date is ${input.meetingDate}`
     : 'Meeting date is unknown; do not assume it is today unless the transcript says so.';
+  const outputLanguageName = input.outputLanguage === 'ko' ? 'Korean' : 'English';
 
   return `Today's date is ${input.now}
 ${meetingDateLine}
+Output language is ${outputLanguageName}. The summary field must be written in ${outputLanguageName}.
 
 <important>
 USER INPUT NON-NEGOTIABLE INSTRUCTIONS
@@ -125,7 +128,7 @@ Below in quotes are non-negotiable instructions sent by the user for your summar
 "${input.instructions ?? ''}"
 
 JSON RESPONSE STRUCTURE
-Your response must contain three fields: title, summary, and tags. Title should be a concise but descriptive (NO MORE THAN 6 WORDS) title based on the contents of the meeting. It must be in English (regardless of the summary language). Tags should be an array of single word text values that can be used to describe/categorize the meeting. Summary can be generated using the SUMMARIZATION RULES below. Most importantly your output must follow this JSON format:
+Your response must contain three fields: title, summary, and tags. Title should be a concise but descriptive (NO MORE THAN 6 WORDS) title based on the contents of the meeting. It must be in English. Tags should be an array of single word text values that can be used to describe/categorize the meeting. Summary must be generated in ${outputLanguageName} using the SUMMARIZATION RULES below. Most importantly your output must follow this JSON format:
 
 {
   "title": <concise descriptive title>,

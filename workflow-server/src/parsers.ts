@@ -1,6 +1,9 @@
 export interface TranscriptSegment {
   speaker: string;
   text: string;
+  start?: number;
+  end?: number;
+  translations?: Record<string, string>;
 }
 
 export interface ParsedSummary {
@@ -39,13 +42,27 @@ export function parseDiarizedSegments(raw: string): TranscriptSegment[] {
         ? segment.speaker.trim()
         : 'Unknown Speaker';
       const text = typeof segment.text === 'string' ? segment.text.trim() : '';
-      return { speaker, text };
+      const start = typeof segment.start === 'number' && Number.isFinite(segment.start) ? segment.start : undefined;
+      const end = typeof segment.end === 'number' && Number.isFinite(segment.end) ? segment.end : undefined;
+      return {
+        speaker,
+        text,
+        ...(start !== undefined ? { start } : {}),
+        ...(end !== undefined ? { end } : {}),
+      };
     })
     .filter((segment) => segment.text);
 }
 
-export function formatTranscriptText(segments: TranscriptSegment[]): string {
-  return segments.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n');
+export function formatTranscriptText(segments: TranscriptSegment[], language: 'original' | 'en' | 'ko' = 'original'): string {
+  return segments
+    .map((segment) => {
+      const text = language === 'original'
+        ? segment.text
+        : segment.translations?.[language]?.trim() || segment.text;
+      return `${segment.speaker}: ${text}`;
+    })
+    .join('\n');
 }
 
 export function parseSummary(raw: string): ParsedSummary {
