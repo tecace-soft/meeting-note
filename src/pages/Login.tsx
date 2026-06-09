@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileDocument, Moon, Sun } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppSpinner } from '../ui/AppSpinner';
 import { Box, Button, IconButton, Typography } from '../ui/wantedCompat';
@@ -9,6 +10,7 @@ import { Box, Button, IconButton, Typography } from '../ui/wantedCompat';
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
+  const { t } = useLanguage();
   const { isAuthenticated, isLoading, login } = useAuth();
   const [loginError, setLoginError] = React.useState<string | null>(null);
   const [isLoginLoading, setIsLoginLoading] = React.useState(false);
@@ -55,7 +57,7 @@ const Login: React.FC = () => {
           type="button"
           variant="background"
           onClick={toggleTheme}
-          aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          aria-label={theme === 'light' ? t('switchToDarkMode') : t('switchToLightMode')}
         >
           {theme === 'light' ? <Moon className="h-5 w-5" aria-hidden /> : <Sun className="h-5 w-5" aria-hidden />}
         </IconButton>
@@ -71,15 +73,14 @@ const Login: React.FC = () => {
               Meeting Note
             </Typography>
             <Typography variant="body2" color="semantic.label.alternative" className="mt-2 block">
-              Transcribe audio files and access your Teams chats
+              {t('loginSubtitle')}
             </Typography>
           </div>
 
           <Box className="app-surface-elevated p-6 sm:p-7" sx={{ borderRadius: '12px' }}>
             <div className="space-y-6">
               <Typography variant="body2" color="semantic.label.alternative" align="center" as="p">
-                Sign in with your Microsoft account to access your Teams chats and upload audio files for
-                transcription.
+                {t('loginDescription')}
               </Typography>
 
               <Button
@@ -100,7 +101,7 @@ const Login: React.FC = () => {
                   </svg>
                 }
               >
-                Sign in with Microsoft
+                {t('signInWithMicrosoft')}
               </Button>
 
               {loginError ? (
@@ -116,7 +117,7 @@ const Login: React.FC = () => {
                 style={{ borderColor: 'color-mix(in srgb, var(--border) 45%, transparent)' }}
               >
                 <Typography variant="caption1" color="semantic.label.alternative" as="p">
-                  We&apos;ll request access to your Teams chats and profile information.
+                  {t('loginConsent')}
                 </Typography>
               </div>
             </div>
@@ -128,7 +129,7 @@ const Login: React.FC = () => {
               style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '8px' }}
             >
               <Typography variant="label2" weight="medium" className="mt-2 block">
-                Audio transcription
+                {t('audioTranscription')}
               </Typography>
             </div>
             <div
@@ -136,7 +137,7 @@ const Login: React.FC = () => {
               style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '8px' }}
             >
               <Typography variant="label2" weight="medium" className="mt-2 block">
-                Teams chats
+                {t('teamsChats')}
               </Typography>
             </div>
           </div>

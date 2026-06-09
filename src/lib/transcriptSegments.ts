@@ -179,6 +179,12 @@ export function applySpeakerReplacements(
 
 export async function persistNoteDiarization(noteId: string, segments: TranscriptSegment[]): Promise<void> {
   if (!noteId) return;
-  const { error } = await supabase.from('note').update({ diarization: segments }).eq('id', noteId);
+  const { data, error } = await supabase
+    .from('note')
+    .update({ diarization: segments })
+    .eq('id', noteId)
+    .select('id')
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('Diarization save did not update the note. You may not have permission to edit this note.');
 }

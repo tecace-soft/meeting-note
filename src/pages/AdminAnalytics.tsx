@@ -10,6 +10,7 @@ import {
   Users,
 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { isAdminMicrosoftUser } from '../lib/adminAccess';
 
@@ -280,6 +281,7 @@ async function callAdminAnalytics(
 const AdminAnalytics: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { t, appLanguage } = useLanguage();
   const [chartEndDate, setChartEndDate] = useState(() => toDateInputValue(new Date()));
   const [chartStartDate, setChartStartDate] = useState(() => defaultChartStartDate(toDateInputValue(new Date())));
   const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null);
@@ -335,10 +337,10 @@ const AdminAnalytics: React.FC = () => {
       <div className="flex min-h-full items-center justify-center p-6">
         <div className="max-w-md text-center">
           <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
-            Admin access required
+            {t('adminAccessRequired')}
           </h1>
           <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-            Your Microsoft account is not authorized to view app-wide analytics.
+            {t('adminAnalyticsForbidden')}
           </p>
         </div>
       </div>
@@ -356,7 +358,7 @@ const AdminAnalytics: React.FC = () => {
   const workflowSeries = [
     {
       key: 'tokens',
-      label: 'Tokens',
+      label: t('summaryTokens'),
       color: '#2563eb',
       values: usageDays.map((day) => day.aiTokens),
       format: (value: number) => formatNumber(Math.round(value)),
@@ -364,7 +366,7 @@ const AdminAnalytics: React.FC = () => {
     },
     {
       key: 'cost',
-      label: 'Cost',
+      label: t('workflowCost'),
       color: '#16a34a',
       values: usageDays.map((day) => day.aiEstimatedCostUsd),
       format: (value: number) => formatCurrency(value),
@@ -372,7 +374,7 @@ const AdminAnalytics: React.FC = () => {
     },
     {
       key: 'transcription-latency',
-      label: 'Transcription',
+      label: t('transcription'),
       color: '#f97316',
       values: usageDays.map((day) => day.transcriptionLatencyMs),
       format: formatDurationMs,
@@ -380,7 +382,7 @@ const AdminAnalytics: React.FC = () => {
     },
     {
       key: 'summary-latency',
-      label: 'Summary',
+      label: t('summary'),
       color: '#7c3aed',
       values: usageDays.map((day) => day.summaryLatencyMs),
       format: formatDurationMs,
@@ -399,30 +401,30 @@ const AdminAnalytics: React.FC = () => {
   const chartTicks = [1, 0.75, 0.5, 0.25, 0];
   const metricCards = totals
     ? [
-        { label: 'Signed-up users', value: totals.signedUpUsers, detail: `${totals.activeUsers} active users`, icon: Users },
-        { label: 'Notes', value: totals.notes, detail: `${totals.sharedNotes} shared notes`, icon: FileDocument },
-        { label: 'Projects', value: totals.projects, detail: `${totals.summaryPrompts} prompts`, icon: ChartBarVertical01 },
-        { label: 'Speaker profiles', value: totals.speakerProfiles, detail: `${totals.ontologyProfiles} ontology, ${totals.emptySpeakerProfiles} empty`, icon: User01 },
+        { label: t('signedUpUsers'), value: totals.signedUpUsers, detail: `${totals.activeUsers} ${t('activeUsers')}`, icon: Users },
+        { label: t('notes'), value: totals.notes, detail: `${totals.sharedNotes} ${t('sharedNotes')}`, icon: FileDocument },
+        { label: t('projects'), value: totals.projects, detail: `${totals.summaryPrompts} ${t('prompts')}`, icon: ChartBarVertical01 },
+        { label: t('speakerProfilesLower'), value: totals.speakerProfiles, detail: `${totals.ontologyProfiles} ${t('profileStatusOntology')}, ${totals.emptySpeakerProfiles} ${t('profileStatusEmpty')}`, icon: User01 },
         {
-          label: 'Summary tokens',
+          label: t('summaryTokens'),
           value: totals.aiTokens ?? 0,
           detail: `${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini summary calls`,
           icon: ChartBarVertical01,
         },
         {
-          label: 'Workflow cost',
+          label: t('workflowCost'),
           valueText: formatCurrency(totals.aiEstimatedCostUsd ?? 0),
           detail: `${formatCurrency(totals.assemblyTranscriptionCostUsd ?? 0)} AssemblyAI, ${formatCurrency(totals.geminiSummaryCostUsd ?? 0)} Gemini`,
           icon: Check,
         },
         {
-          label: 'Transcription latency',
+          label: t('transcriptionLatency'),
           valueText: formatDurationMs(totals.averageTranscriptionLatencyMs ?? 0),
           detail: `${formatNumber(totals.assemblyTranscriptionCalls ?? totals.transcriptionCalls ?? 0)} AssemblyAI calls`,
           icon: ChartBarVertical01,
         },
         {
-          label: 'Summary latency',
+          label: t('summaryLatency'),
           valueText: formatDurationMs(totals.averageSummaryLatencyMs ?? 0),
           detail: `${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini calls`,
           icon: Check,
@@ -443,13 +445,13 @@ const AdminAnalytics: React.FC = () => {
           <div className="min-w-0">
             <div className="mb-1 inline-flex items-center gap-2 text-xs font-semibold" style={{ color: 'var(--accent)' }}>
               <ChartBarVertical01 className="h-3.5 w-3.5" aria-hidden />
-              Admin workspace
+              {t('adminWorkspace')}
             </div>
             <h1 className="text-2xl font-semibold tracking-normal" style={{ color: 'var(--text)' }}>
-              Analytics
+              {t('analytics')}
             </h1>
             <p className="mt-0.5 max-w-2xl text-sm" style={{ color: 'var(--text-secondary)' }}>
-              App-wide usage, user activity, and speaker profile coverage.
+              {appLanguage === 'ko' ? '앱 전체 사용량, 사용자 활동, 화자 프로필 현황입니다.' : 'App-wide usage, user activity, and speaker profile coverage.'}
             </p>
           </div>
         </div>
@@ -460,7 +462,7 @@ const AdminAnalytics: React.FC = () => {
           <div className="flex min-h-[18rem] items-center justify-center">
             <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
               <Loading className="h-4 w-4 animate-spin" aria-hidden />
-              Loading analytics...
+              {t('loadingAnalytics')}
             </div>
           </div>
         ) : null}
@@ -510,7 +512,7 @@ const AdminAnalytics: React.FC = () => {
               <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                    Generated notes by day
+                    {t('generatedNotesByDay')}
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {formatNumber(chartTotal)} notes, {formatNumber(Number(chartAverage.toFixed(1)))} daily average
@@ -555,7 +557,7 @@ const AdminAnalytics: React.FC = () => {
                     className="mb-4 rounded-lg border px-3 py-2 text-sm"
                     style={{ borderColor: 'var(--warning)', backgroundColor: 'var(--warning-light)', color: 'var(--warning)' }}
                   >
-                    Chart data is not available from the deployed admin analytics function yet.
+                    {t('chartDataUnavailable')}
                   </div>
                 ) : null}
                 <div className="mb-3 flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -598,7 +600,7 @@ const AdminAnalytics: React.FC = () => {
                   <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <p className="text-xs font-medium uppercase" style={{ color: 'var(--text-muted)' }}>
-                        Workflow trends
+                        {t('workflowTrends')}
                       </p>
                       <div className="mt-1 flex flex-wrap items-end gap-x-3 gap-y-1">
                         <h3 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
@@ -715,20 +717,20 @@ const AdminAnalytics: React.FC = () => {
               <section className="min-w-0 rounded-lg" style={{ backgroundColor: 'var(--surface)' }}>
                 <div className="px-4 py-4">
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                    Ontology coverage
+                    {t('ontologyCoverage')}
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Speaker profiles with structured ontology data.
+                    {t('ontologyCoverageDescription')}
                   </p>
                 </div>
                 <div className="space-y-4 px-4 pb-4">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Ontology</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('profileStatusOntology')}</p>
                       <p className="mt-1 text-2xl font-semibold" style={{ color: 'var(--text)' }}>{formatNumber(totals?.ontologyProfiles ?? 0)}</p>
                     </div>
                     <div>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Empty</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('profileStatusEmpty')}</p>
                       <p className="mt-1 text-2xl font-semibold" style={{ color: 'var(--text)' }}>{formatNumber(totals?.emptySpeakerProfiles ?? 0)}</p>
                     </div>
                   </div>
@@ -753,7 +755,7 @@ const AdminAnalytics: React.FC = () => {
                     </p>
                   </div>
                   <div className="flex items-center justify-between border-t pt-3 text-sm" style={{ borderColor: 'var(--border)' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Stored audio</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('storedAudio')}</span>
                     <span className="font-medium" style={{ color: 'var(--text)' }}>{formatBytes(totals?.fileBytes ?? 0)}</span>
                   </div>
                 </div>
@@ -764,10 +766,10 @@ const AdminAnalytics: React.FC = () => {
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
                   <div>
                     <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                      Users
+                      {t('users')}
                     </h2>
                     <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Last generated {formatDate(analytics.generatedAt)}
+                      {t('lastGenerated')} {formatDate(analytics.generatedAt)}
                     </p>
                   </div>
                   <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}>
@@ -775,11 +777,11 @@ const AdminAnalytics: React.FC = () => {
                   </span>
                 </div>
                 <div className="hidden grid-cols-[minmax(0,1fr)_6rem_6rem_6rem_6rem] gap-3 border-y px-4 py-2 text-xs font-semibold uppercase sm:grid" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)', backgroundColor: 'var(--surface-subtle)' }}>
-                  <span>User</span>
-                  <span className="text-right">Notes</span>
+                  <span>{t('users')}</span>
+                  <span className="text-right">{t('notes')}</span>
                   <span className="text-right">Files</span>
-                  <span className="text-right">Projects</span>
-                  <span className="text-right">Shared</span>
+                  <span className="text-right">{t('projects')}</span>
+                  <span className="text-right">{t('shared')}</span>
                 </div>
                 <div className="custom-scrollbar max-h-[34rem] overflow-y-auto">
                   <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
@@ -804,7 +806,7 @@ const AdminAnalytics: React.FC = () => {
                             </div>
                           </div>
                           <p className="mt-2 text-xs sm:ml-12" style={{ color: 'var(--text-muted)' }}>
-                            Last seen: {formatDate(row.lastSeenAt)}
+                            {t('lastSeen')}: {formatDate(row.lastSeenAt)}
                           </p>
                         </div>
                         <div className="grid grid-cols-4 gap-2 text-xs sm:contents">
@@ -831,14 +833,14 @@ const AdminAnalytics: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                 <div>
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                    Speaker profiles
+                    {t('speakerProfilesLower')}
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Metadata only. Ontology fields indicate structured speaker context.
+                    {t('speakerProfilesMetadataOnly')}
                   </p>
                 </div>
                 <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}>
-                  {formatNumber(analytics.speakerProfiles.length)} profiles
+                  {formatNumber(analytics.speakerProfiles.length)} {t('speakerProfilesLower').toLowerCase()}
                 </span>
               </div>
               <div className="custom-scrollbar max-h-[42rem] overflow-y-auto">
@@ -866,7 +868,7 @@ const AdminAnalytics: React.FC = () => {
                                     {profile.name}
                                   </p>
                                   <p className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>
-                                    {profile.email || profile.microsoftId || 'Custom speaker'}
+                                    {profile.email || profile.microsoftId || t('customSpeaker')}
                                   </p>
                                 </div>
                                 <span
@@ -878,7 +880,7 @@ const AdminAnalytics: React.FC = () => {
                                     color: profile.hasOntology ? 'var(--success)' : 'var(--text-muted)',
                                   }}
                                 >
-                                  {profile.hasOntology ? 'Ontology' : profile.hasProfile ? 'Profile' : 'Empty'}
+                                  {profile.hasOntology ? t('profileStatusOntology') : profile.hasProfile ? t('profileStatusProfile') : t('profileStatusEmpty')}
                                 </span>
                               </div>
                               <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -889,7 +891,7 @@ const AdminAnalytics: React.FC = () => {
                         </div>
                       ) : (
                         <p className="mt-3 rounded-lg border px-3 py-2 text-sm" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg)', color: 'var(--text-muted)' }}>
-                          No speaker profiles found.
+                          {t('noSpeakerProfilesFound')}
                         </p>
                       )}
                     </div>

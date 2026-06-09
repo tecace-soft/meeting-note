@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { supabase } from '../config/supabaseConfig';
 import {
   Check,
@@ -28,6 +29,8 @@ import {
 interface Note {
   id: string;
   summary?: string;
+  summary_edit?: string | null;
+  summary_translations?: Record<string, string> | null;
   transcription?: string;
   user_name?: string;
   created_at?: string;
@@ -46,6 +49,7 @@ const SaveSummary: React.FC = () => {
   const audioName = searchParams.get('audio_name') ? decodeURIComponent(searchParams.get('audio_name')!) : null;
 
   const { isAuthenticated, isLoading: authLoading, getAccessToken } = useAuth();
+  const { appLanguage, t } = useLanguage();
 
   const [note, setNote] = useState<Note | null>(null);
   const [noteLoading, setNoteLoading] = useState(true);
@@ -94,7 +98,7 @@ const SaveSummary: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('note')
-          .select('id, summary, transcription, user_name, created_at')
+          .select('id, summary, summary_edit, summary_translations, transcription, user_name, created_at')
           .eq('id', noteId)
           .single();
 
@@ -231,7 +235,8 @@ const SaveSummary: React.FC = () => {
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
 
-      await uploadTextFile(token, currentFolderId, saveFileName.trim(), note.summary);
+      const summaryText = note.summary_edit?.trim() || note.summary_translations?.[appLanguage]?.trim() || note.summary;
+      await uploadTextFile(token, currentFolderId, saveFileName.trim(), summaryText);
       setSaveSuccess(true);
       // Reset after showing success
       setTimeout(() => {
@@ -328,7 +333,7 @@ const SaveSummary: React.FC = () => {
       <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 mx-auto mb-4" style={{ borderColor: 'var(--accent)' }}></div>
-          <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+          <p style={{ color: 'var(--text-secondary)' }}>{t('loading')}</p>
         </div>
       </div>
     );
@@ -342,10 +347,10 @@ const SaveSummary: React.FC = () => {
           <div className="max-w-5xl mx-auto w-full flex-grow flex flex-col overflow-hidden">
             <div className="app-page-header">
               <h1 className="app-page-title">
-                Save Summary
+                {t('saveSummary')}
               </h1>
               <p className="app-page-subtitle">
-                Choose a OneDrive location for your summary and transcript files
+                {t('oneDriveSubtitle')}
               </p>
             </div>
             
@@ -378,7 +383,7 @@ const SaveSummary: React.FC = () => {
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }}
               >
                 <FolderAdd className="h-4 w-4" />
-                New Folder
+                {t('newFolder')}
               </button>
             </div>
 
@@ -389,7 +394,7 @@ const SaveSummary: React.FC = () => {
                   type="text"
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
-                  placeholder="New folder name"
+                  placeholder={t('newFolderName')}
                   className="flex-grow px-3 py-2 rounded-lg text-sm"
                   style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text)', border: '1px solid var(--border)' }}
                   autoFocus
@@ -401,7 +406,7 @@ const SaveSummary: React.FC = () => {
                   className="px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                 >
-                  {creatingFolderLoading ? <Loading className="w-4 h-4 animate-spin" /> : 'Create'}
+                  {creatingFolderLoading ? <Loading className="w-4 h-4 animate-spin" /> : t('create')}
                 </button>
                 <button
                   onClick={() => { setIsCreatingFolder(false); setNewFolderName(''); }}
@@ -419,7 +424,7 @@ const SaveSummary: React.FC = () => {
                 <div className="flex-grow flex items-center justify-center">
                   <div className="text-center">
                     <Loading className="w-8 h-8 animate-spin mx-auto mb-2" style={{ color: 'var(--accent)' }} />
-                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{t('loading')}</p>
                   </div>
                 </div>
               ) : error ? (
@@ -431,7 +436,7 @@ const SaveSummary: React.FC = () => {
                       className="text-sm underline"
                       style={{ color: 'var(--accent)' }}
                     >
-                      Try again
+                      {t('tryAgain')}
                     </button>
                   </div>
                 </div>
@@ -439,7 +444,7 @@ const SaveSummary: React.FC = () => {
                 <div className="flex-grow flex items-center justify-center">
                   <div className="text-center p-6">
                     <Folder className="w-12 h-12 mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
-                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>This folder is empty</p>
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{t('folderEmpty')}</p>
                   </div>
                 </div>
               ) : (
@@ -447,10 +452,10 @@ const SaveSummary: React.FC = () => {
                   <table className="w-full">
                     <thead>
                       <tr style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                        <th className="text-left px-4 py-3 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Name</th>
-                        <th className="text-left px-4 py-3 text-xs font-medium w-24" style={{ color: 'var(--text-muted)' }}>Size</th>
-                        <th className="text-left px-4 py-3 text-xs font-medium w-32" style={{ color: 'var(--text-muted)' }}>Modified</th>
-                        <th className="px-4 py-3 text-xs font-medium w-24" style={{ color: 'var(--text-muted)' }}>Actions</th>
+                        <th className="text-left px-4 py-3 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{t('name')}</th>
+                        <th className="text-left px-4 py-3 text-xs font-medium w-24" style={{ color: 'var(--text-muted)' }}>{t('size')}</th>
+                        <th className="text-left px-4 py-3 text-xs font-medium w-32" style={{ color: 'var(--text-muted)' }}>{t('modified')}</th>
+                        <th className="px-4 py-3 text-xs font-medium w-24" style={{ color: 'var(--text-muted)' }}>{t('actions')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -514,7 +519,7 @@ const SaveSummary: React.FC = () => {
                                 onClick={() => { setRenamingItemId(item.id); setRenameValue(item.name); }}
                                 className="p-1.5 rounded transition-all hover:bg-opacity-80"
                                 style={{ color: 'var(--text-muted)' }}
-                                title="Rename"
+                                title={t('rename')}
                               >
                                 <EditPencilLine02 className="h-4 w-4" />
                               </button>
@@ -523,7 +528,7 @@ const SaveSummary: React.FC = () => {
                                 disabled={deletingItemId === item.id}
                                 className="p-1.5 rounded transition-all hover:bg-opacity-80"
                                 style={{ color: 'var(--error)' }}
-                                title="Delete"
+                                title={t('delete')}
                               >
                                 {deletingItemId === item.id ? (
                                   <Loading className="w-4 h-4 animate-spin" />
@@ -550,7 +555,7 @@ const SaveSummary: React.FC = () => {
                     <div className="flex items-center gap-4">
                       <div className="flex-grow">
                         <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-muted)' }}>
-                          Summary file name
+                          {t('saveSummary')}
                         </label>
                         <input
                           type="text"
@@ -573,17 +578,17 @@ const SaveSummary: React.FC = () => {
                         {isSaving ? (
                           <>
                             <Loading className="w-4 h-4 animate-spin" />
-                            Saving...
+                            {t('saving')}
                           </>
                         ) : saveSuccess ? (
                           <>
                             <Check className="w-4 h-4" />
-                            Saved!
+                            {t('saved')}!
                           </>
                         ) : (
                           <>
                             <Save className="w-4 h-4" />
-                            Save Summary
+                            {t('saveSummary')}
                           </>
                         )}
                       </button>
@@ -602,7 +607,7 @@ const SaveSummary: React.FC = () => {
                     <div className="flex items-center gap-4">
                       <div className="flex-grow">
                         <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-muted)' }}>
-                          Transcript file name
+                          {t('transcriptFileName')}
                         </label>
                         <input
                           type="text"
@@ -625,17 +630,17 @@ const SaveSummary: React.FC = () => {
                         {isSavingTranscript ? (
                           <>
                             <Loading className="w-4 h-4 animate-spin" />
-                            Saving...
+                            {t('saving')}
                           </>
                         ) : saveTranscriptSuccess ? (
                           <>
                             <Check className="w-4 h-4" />
-                            Saved!
+                            {t('saved')}!
                           </>
                         ) : (
                           <>
                             <Save className="w-4 h-4" />
-                            Save Transcript
+                            {t('transcription')}
                           </>
                         )}
                       </button>
@@ -654,7 +659,7 @@ const SaveSummary: React.FC = () => {
                     <div className="flex items-center gap-4">
                       <div className="flex-grow">
                         <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--text-muted)' }}>
-                          Audio file name
+                          {t('audioFileName')}
                         </label>
                         <input
                           type="text"
@@ -677,17 +682,17 @@ const SaveSummary: React.FC = () => {
                         {isSavingAudio ? (
                           <>
                             <Loading className="w-4 h-4 animate-spin" />
-                            Saving...
+                            {t('saving')}
                           </>
                         ) : saveAudioSuccess ? (
                           <>
                             <Check className="w-4 h-4" />
-                            Saved!
+                            {t('saved')}!
                           </>
                         ) : (
                           <>
                             <Save className="w-4 h-4" />
-                            Save Audio
+                            {t('uploadAudio')}
                           </>
                         )}
                       </button>
@@ -696,7 +701,7 @@ const SaveSummary: React.FC = () => {
                 )}
 
                 {noteLoading && (
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading note...</p>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('loadingNote')}</p>
                 )}
               </div>
             )}

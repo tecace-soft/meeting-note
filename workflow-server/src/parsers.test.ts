@@ -62,6 +62,17 @@ test('buildNoteName uses YYMMDD and up to five capitalized title words', () => {
   );
 });
 
+test('buildNoteName uses provided timezone for YYMMDD prefix', () => {
+  assert.equal(
+    buildNoteName({
+      title: 'Late Day Meeting',
+      createdAt: new Date('2026-06-02T02:30:00.000Z'),
+      timeZone: 'America/Los_Angeles',
+    }),
+    '260601_Late_Day_Meeting',
+  );
+});
+
 test('buildNoteName limits note names to five words', () => {
   assert.equal(
     buildNoteName({

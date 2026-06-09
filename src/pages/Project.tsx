@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../config/supabaseConfig';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import {
   Calendar,
   Check,
@@ -43,6 +44,7 @@ interface NoteRow {
   user_name?: string | null;
   summary?: string | null;
   summary_edit?: string | null;
+  summary_translations?: Record<string, string> | null;
   transcription?: string | null;
   diarization?: unknown;
   tag?: unknown;
@@ -52,8 +54,8 @@ interface NoteRow {
   projects?: Array<string | number> | null;
 }
 
-function getNoteSummaryText(note: NoteRow): string {
-  return (note.summary_edit?.trim() || note.summary?.trim() || '').trim();
+function getNoteSummaryText(note: NoteRow, language: 'en' | 'ko'): string {
+  return (note.summary_edit?.trim() || note.summary_translations?.[language]?.trim() || note.summary?.trim() || '').trim();
 }
 
 function getNoteTranscriptionText(note: NoteRow): string {
@@ -186,6 +188,7 @@ const PROJECT_CHAT_WEBHOOK_URL =
 
 const Project: React.FC = () => {
   const { user } = useAuth();
+  const { appLanguage, t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const projectId = searchParams.get('id');
   const projectIdFilterValue: string | number =
@@ -588,7 +591,7 @@ const Project: React.FC = () => {
 
   const handleStartNoteEdit = (note: NoteRow) => {
     setEditingNoteId(note.id);
-    setNoteEditDraft(note.summary_edit || note.summary || '');
+    setNoteEditDraft(getNoteSummaryText(note, appLanguage));
     setNoteEditError(null);
   };
 
@@ -792,7 +795,7 @@ const Project: React.FC = () => {
       <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 mx-auto mb-4" style={{ borderColor: 'var(--accent)' }} />
-          <p style={{ color: 'var(--text-secondary)' }}>Loading project...</p>
+          <p style={{ color: 'var(--text-secondary)' }}>{t('loadingProject')}</p>
         </div>
       </div>
     );
@@ -805,10 +808,10 @@ const Project: React.FC = () => {
           <div className="app-page-header">
             <h1 className="app-page-title app-page-title-with-icon">
               <Folder className="app-page-title-icon" aria-hidden />
-              <span className="min-w-0 truncate">{project?.name || 'Project'}</span>
+              <span className="min-w-0 truncate">{project?.name || t('project')}</span>
             </h1>
             <p className="app-page-subtitle">
-              Review project chats and meeting notes in one workspace
+              {t('projectSubtitle')}
             </p>
           </div>
 
@@ -821,7 +824,7 @@ const Project: React.FC = () => {
           >
             <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
               <h2 className="mb-3 flex-shrink-0 text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-                Conversation
+                {t('conversation')}
               </h2>
               <div
                 ref={chatScrollRef}
@@ -852,7 +855,7 @@ const Project: React.FC = () => {
                 {chatSending ? (
                   <div className="flex w-full items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     <Loading className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
-                    Waiting for reply...
+                    {t('waitingForReply')}
                   </div>
                 ) : null}
               </div>
@@ -891,7 +894,7 @@ const Project: React.FC = () => {
                 e.preventDefault();
                 void handleSendChat();
               }}
-              placeholder={`New chat in ${project?.name || 'Project'}`}
+              placeholder={`${t('newProject')} ${project?.name || t('project')}`}
               disabled={chatSending || !projectId}
               rows={visibleChatInputRows}
               className={`project-chat-input custom-scrollbar max-h-40 min-w-0 flex-1 resize-none bg-transparent text-[calc(1rem+2px)] leading-relaxed placeholder:text-[color:var(--text-muted)] placeholder:opacity-90 disabled:opacity-60 ${
@@ -905,7 +908,7 @@ const Project: React.FC = () => {
                 outline: 'none',
                 boxShadow: 'none',
               }}
-              aria-label="Chat message"
+              aria-label={t('chatMessage')}
             />
             <div className={`flex items-center justify-end ${isChatInputExpanded ? 'w-full' : 'shrink-0'}`}>
               <button
@@ -913,8 +916,8 @@ const Project: React.FC = () => {
                 disabled={chatSending || !chatInput.trim() || !projectId}
                 className="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full disabled:opacity-50"
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                title="Send message"
-                aria-label="Send message"
+                title={t('sendMessage')}
+                aria-label={t('sendMessage')}
               >
                 {chatSending ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <PaperPlane className="h-4 w-4" aria-hidden />}
               </button>
@@ -941,7 +944,7 @@ const Project: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Chats
+                {t('chats')}
               </button>
               <button
                 type="button"
@@ -955,7 +958,7 @@ const Project: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Project Notes
+                {t('projectNotes')}
               </button>
             </div>
           </div>
@@ -979,7 +982,7 @@ const Project: React.FC = () => {
                     <p className="text-sm" style={{ color: 'var(--error)' }}>{error}</p>
                   ) : notes.length === 0 ? (
                     <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                      No notes found in this project.
+                      {t('noProjectNotes')}
                     </p>
                   ) : (
                     <>
@@ -1144,7 +1147,7 @@ const Project: React.FC = () => {
                                       style={{ color: 'var(--text)' }}
                                     >
                                       <FolderRemove className="h-4 w-4" aria-hidden />
-                                      Remove from Project
+                                      {t('removeFromProject')}
                                     </button>
                                     <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
                                     <button
@@ -1154,7 +1157,7 @@ const Project: React.FC = () => {
                                       style={{ color: 'var(--error)' }}
                                     >
                                       <TrashFull className="h-4 w-4" aria-hidden />
-                                      Delete Note
+                                      {t('deleteNote')}
                                     </button>
                                   </div>
                                 ) : null}
@@ -1185,7 +1188,7 @@ const Project: React.FC = () => {
                                             color: activeTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                                           }}
                                         >
-                                          Summary
+                                          {t('summary')}
                                         </button>
                                         {hasTranscription ? (
                                           <button
@@ -1198,7 +1201,7 @@ const Project: React.FC = () => {
                                               color: activeTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
                                             }}
                                           >
-                                            Transcription
+                                            {t('transcription')}
                                           </button>
                                         ) : null}
                                       </div>
@@ -1243,7 +1246,7 @@ const Project: React.FC = () => {
                                           onClick={() =>
                                             void handleCopyText(
                                               activeTab === 'summary'
-                                                ? noteEditDraft || note.summary_edit || note.summary || ''
+                                                ? noteEditDraft || getNoteSummaryText(note, appLanguage)
                                                 : showDiarized
                                                   ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
                                                   : plainTx || '',
@@ -1284,9 +1287,9 @@ const Project: React.FC = () => {
                                                 borderColor: 'var(--accent)',
                                               }}
                                             />
-                                          ) : note.summary_edit || note.summary ? (
+                                          ) : getNoteSummaryText(note, appLanguage) ? (
                                             <div className={`summary-markdown prose prose-sm max-w-none ${NOTE_SUMMARY_SCROLL}`} style={{ backgroundColor: 'transparent', color: 'var(--text)' }}>
-                                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.summary_edit || note.summary || ''}</ReactMarkdown>
+                                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{getNoteSummaryText(note, appLanguage)}</ReactMarkdown>
                                             </div>
                                           ) : (
                                             <div className={`flex items-center justify-center italic ${NOTE_SUMMARY_SCROLL}`} style={{ color: 'var(--text-muted)' }}>
@@ -1493,7 +1496,7 @@ const Project: React.FC = () => {
                       const checked = selectedNoteIdsToAdd.includes(note.id);
                       const expanded = addModalExpandedNoteId === note.id;
                       const title = note.name?.trim() || 'Untitled note';
-                      const summaryPreview = getNoteSummaryText(note);
+                      const summaryPreview = getNoteSummaryText(note, appLanguage);
                       const transcriptionPreview = getNoteTranscriptionText(note);
                       return (
                         <li
@@ -1564,7 +1567,7 @@ const Project: React.FC = () => {
                               <div>
                                 <div className="mb-2 flex items-center justify-between gap-2">
                                   <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                    Summary
+                                    {t('summary')}
                                   </h4>
                                   <button
                                     type="button"
@@ -1589,7 +1592,7 @@ const Project: React.FC = () => {
                               >
                                 <div className="mb-2 flex items-center justify-between gap-2">
                                   <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                    Transcription
+                                    {t('transcription')}
                                   </h4>
                                   <button
                                     type="button"
@@ -1638,7 +1641,7 @@ const Project: React.FC = () => {
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                 disabled={addNotesSaving}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 type="button"
@@ -1659,7 +1662,7 @@ const Project: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
           <div className="w-full max-w-sm rounded-lg border p-4 sm:p-5" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
             <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-              Delete note?
+              {t('deleteNote')}?
             </h3>
             <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
               This will permanently delete `{deleteNoteTarget?.name?.trim() || 'Untitled note'}`.
@@ -1680,7 +1683,7 @@ const Project: React.FC = () => {
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                 disabled={deletingNote}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 type="button"
@@ -1692,7 +1695,7 @@ const Project: React.FC = () => {
                 disabled={deletingNote}
               >
                 {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                Delete
+                {t('delete')}
               </button>
             </div>
           </div>

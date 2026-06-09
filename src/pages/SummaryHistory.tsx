@@ -16,12 +16,11 @@ import {
   Copy,
   EditPencilLine01,
   Expand,
+  FileAdd,
   FileDocument,
   Files,
   Loading,
   MoreHorizontal,
-  Pause,
-  Play,
   Save,
   ShareAndroid,
   Shrink,
@@ -57,6 +56,7 @@ interface Note {
   projects?: Array<string | number> | null;
   summary?: string;
   summary_edit?: string | null;
+  summary_translations?: Record<string, string> | null;
   transcription?: string | null;
   diarization?: unknown;
   audio_file?: string | null;
@@ -68,6 +68,12 @@ interface Note {
   /** Legacy column name; still read so diarized UI works until fully migrated. */
   created_at?: string;
   meeting_at?: string | null;
+}
+
+interface ProjectOption {
+  id: string;
+  name: string;
+  notes?: Array<string | number> | null;
 }
 
 interface ChatInfo {
@@ -93,6 +99,11 @@ const NOTE_SUMMARY_TEXTAREA = `w-full resize-none ${NOTE_PANEL_SCROLL_CLASS} bor
 const RESULT_ACTION_BTN_CLASS =
   'result-action-btn flex min-h-[2.75rem] w-full min-w-0 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-start sm:px-4 sm:py-2';
 const RESULT_ACTION_BTN_LABEL_CLASS = 'hidden truncate sm:inline';
+
+function getLocalizedSummary(note: Note, language: 'en' | 'ko'): string {
+  const translated = note.summary_translations?.[language]?.trim();
+  return note.summary_edit?.trim() || translated || note.summary?.trim() || '';
+}
 
 interface GeneratedHistoryProfile {
   speakerId: string | null;
@@ -135,6 +146,8 @@ async function invokeGenerateProfile(body: {
 const NOTES_PAGE_SIZE = 10;
 type HistoryViewMode = 'list' | 'calendar';
 type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
+type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
+type NoteSortKey = 'meeting_desc' | 'meeting_asc' | 'created_desc' | 'created_asc' | 'title_asc' | 'title_desc';
 
 interface SegmentPlaybackState {
   noteId: string;
@@ -261,13 +274,84 @@ function getNoteMeetingDate(note: Note): Date {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+function getNoteCreatedTime(note: Note): number {
+  const parsed = note.created_at ? new Date(note.created_at) : null;
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed.getTime() : 0;
+}
+
+function getNoteTitleSortValue(note: Note): string {
+  return (note.name?.trim() || 'Untitled note').toLocaleLowerCase();
+}
+
+function compareNotesForSort(a: Note, b: Note, sortKey: NoteSortKey): number {
+  switch (sortKey) {
+    case 'meeting_asc':
+      return getNoteMeetingDate(a).getTime() - getNoteMeetingDate(b).getTime();
+    case 'created_desc':
+      return getNoteCreatedTime(b) - getNoteCreatedTime(a);
+    case 'created_asc':
+      return getNoteCreatedTime(a) - getNoteCreatedTime(b);
+    case 'title_asc':
+      return getNoteTitleSortValue(a).localeCompare(getNoteTitleSortValue(b)) || getNoteCreatedTime(b) - getNoteCreatedTime(a);
+    case 'title_desc':
+      return getNoteTitleSortValue(b).localeCompare(getNoteTitleSortValue(a)) || getNoteCreatedTime(b) - getNoteCreatedTime(a);
+    case 'meeting_desc':
+    default:
+      return getNoteMeetingDate(b).getTime() - getNoteMeetingDate(a).getTime();
+  }
+}
+
+function toProjectIdValue(id: string): string | number {
+  const asNumber = Number(id);
+  return Number.isNaN(asNumber) ? id : asNumber;
+}
+
+function textMatchesNeedle(value: string, needle: string): boolean {
+  const text = value.trim().toLocaleLowerCase();
+  return Boolean(text) && (text.includes(needle) || needle.includes(text));
+}
+
+function noteMatchesSearch(note: Note, query: string, currentUserSearchValues: string[]): boolean {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return true;
+  const queryLooksLikeCurrentUser = currentUserSearchValues.some((value) => textMatchesNeedle(value, needle));
+
+  const searchableText = [
+    note.name,
+    note.summary,
+    note.summary_edit,
+    ...Object.values(note.summary_translations ?? {}),
+    ...normalizeTagList(note.tag),
+    ...normalizeTagList(note.tags),
+  ]
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    .join(' ')
+    .toLocaleLowerCase();
+  if (searchableText.includes(needle)) return true;
+
+  if (!queryLooksLikeCurrentUser && note.user_name?.trim().toLocaleLowerCase().includes(needle)) return true;
+
+  const speakers = normalizeTranscript(getNoteDiarizationRaw(note))
+    .map((segment) => segment.speaker.trim().toLocaleLowerCase())
+    .filter(Boolean);
+  if (speakers.some((speaker) => speaker.includes(needle))) return true;
+
+  const transcription = note.transcription || '';
+  return transcription
+    .split(/\r?\n/)
+    .some((line) => {
+      const [speakerPrefix] = line.split(':', 1);
+      return speakerPrefix?.trim().toLocaleLowerCase().includes(needle);
+    });
+}
+
 const SummaryHistory: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const chatId = searchParams.get('chat_id');
   
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
-  const { transcriptLanguage, t } = useLanguage();
+  const { appLanguage, transcriptLanguage, t } = useLanguage();
   
   const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null);
   const [chatLoading, setChatLoading] = useState(true);
@@ -280,13 +364,15 @@ const SummaryHistory: React.FC = () => {
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthStart(new Date()));
   const [calendarExpandedDayKey, setCalendarExpandedDayKey] = useState<string | null>(null);
   const [calendarDisplayMode, setCalendarDisplayMode] = useState<CalendarDisplayMode>('monthly');
+  const [noteSearchQuery, setNoteSearchQuery] = useState('');
+  const [noteOwnershipFilter, setNoteOwnershipFilter] = useState<NoteOwnershipFilter>('all');
+  const [noteSortKey, setNoteSortKey] = useState<NoteSortKey>('meeting_desc');
   const [noteDetailExpanded, setNoteDetailExpanded] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlCacheRef = useRef<Map<string, string>>(new Map());
   const playbackStopAtRef = useRef<number | null>(null);
   const [segmentPlayback, setSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
-  const [playbackLoadingNoteId, setPlaybackLoadingNoteId] = useState<string | null>(null);
-  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [playbackLoadingSegment, setPlaybackLoadingSegment] = useState<{ noteId: string; segmentIndex: number } | null>(null);
 
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
@@ -306,6 +392,11 @@ const SummaryHistory: React.FC = () => {
   const [deletingNote, setDeletingNote] = useState(false);
   const [deleteNoteError, setDeleteNoteError] = useState<string | null>(null);
   const [noteListActionError, setNoteListActionError] = useState<string | null>(null);
+  const [addToProjectNote, setAddToProjectNote] = useState<Note | null>(null);
+  const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [addToProjectSavingId, setAddToProjectSavingId] = useState<string | null>(null);
+  const [addToProjectError, setAddToProjectError] = useState<string | null>(null);
 
   // Per-note expanded tab state
   const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, 'summary' | 'transcription'>>({});
@@ -400,8 +491,13 @@ const SummaryHistory: React.FC = () => {
   }, [chatId, isAuthenticated, getAccessToken]);
 
   const calendarWindow = useMemo(() => getCalendarWindow(calendarMonth), [calendarMonth]);
-  const notesScopeKey = `${chatId ?? ''}|${user?.id ?? ''}|${historyViewMode}`;
+  const normalizedNoteSearchQuery = noteSearchQuery.trim();
+  const notesScopeKey = `${chatId ?? ''}|${user?.id ?? ''}|${historyViewMode}|${normalizedNoteSearchQuery}|${noteOwnershipFilter}|${noteSortKey}`;
   const prevNotesScopeRef = useRef(notesScopeKey);
+  const currentUserSearchValues = useMemo(() => {
+    const values = [user?.displayName, user?.microsoftAccountName, user?.email, user?.email?.split('@')[0]];
+    return values.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  }, [user?.displayName, user?.email, user?.microsoftAccountName]);
 
   useEffect(() => {
     setExpandedNoteId(null);
@@ -434,7 +530,13 @@ const SummaryHistory: React.FC = () => {
         const ownershipFilter = `user_id.eq.${user.id},shared_users.cs.{${user.id}}`;
 
         if (chatId) {
-          query = query.eq('chat_id', chatId).or(ownershipFilter);
+          query = query.eq('chat_id', chatId);
+        }
+
+        if (noteOwnershipFilter === 'mine') {
+          query = query.eq('user_id', user.id);
+        } else if (noteOwnershipFilter === 'shared') {
+          query = query.neq('user_id', user.id).filter('shared_users', 'cs', `{${user.id}}`);
         } else {
           query = query.or(ownershipFilter);
         }
@@ -447,21 +549,41 @@ const SummaryHistory: React.FC = () => {
           );
         }
 
-        const orderedQuery = historyViewMode === 'calendar'
-          ? query.order('meeting_at', { ascending: true, nullsFirst: false }).order('created_at', { ascending: true })
-          : query.order('created_at', { ascending: false });
+        const orderedQuery =
+          noteSortKey === 'title_asc'
+            ? query.order('name', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false })
+            : noteSortKey === 'title_desc'
+              ? query.order('name', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
+              : noteSortKey === 'created_asc'
+                ? query.order('created_at', { ascending: true })
+                : noteSortKey === 'created_desc'
+                  ? query.order('created_at', { ascending: false })
+                  : noteSortKey === 'meeting_asc'
+                    ? query.order('meeting_at', { ascending: true, nullsFirst: false }).order('created_at', { ascending: true })
+                    : query.order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false });
 
         const from = (effectivePage - 1) * NOTES_PAGE_SIZE;
         const to = from + NOTES_PAGE_SIZE - 1;
+        const shouldFilterBySearch = Boolean(normalizedNoteSearchQuery);
 
-        const { data, error, count } = historyViewMode === 'calendar'
+        const { data, error, count } = historyViewMode === 'calendar' || shouldFilterBySearch
           ? await orderedQuery
           : await orderedQuery.range(from, to);
 
         if (cancelled) return;
         if (error) throw error;
-        setNotes(((data as Note[]) || []));
-        setNotesTotalCount(typeof count === 'number' ? count : 0);
+        const loadedNotes = ((data as Note[]) || []);
+        const filteredNotes = shouldFilterBySearch
+          ? loadedNotes.filter((note) => noteMatchesSearch(note, normalizedNoteSearchQuery, currentUserSearchValues))
+          : loadedNotes;
+        setNotes(
+          historyViewMode === 'calendar'
+            ? filteredNotes
+            : shouldFilterBySearch
+              ? filteredNotes.slice(from, to + 1)
+              : filteredNotes
+        );
+        setNotesTotalCount(shouldFilterBySearch ? filteredNotes.length : typeof count === 'number' ? count : 0);
       } catch (error) {
         console.error('Error fetching notes:', error);
         if (!cancelled) {
@@ -477,7 +599,19 @@ const SummaryHistory: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [notesScopeKey, notesPage, chatId, user?.id, historyViewMode, calendarWindow.start, calendarWindow.endExclusive]);
+  }, [
+    notesScopeKey,
+    notesPage,
+    chatId,
+    user?.id,
+    historyViewMode,
+    calendarWindow.start,
+    calendarWindow.endExclusive,
+    currentUserSearchValues,
+    normalizedNoteSearchQuery,
+    noteOwnershipFilter,
+    noteSortKey,
+  ]);
 
   const getChatDisplayName = (): string => {
     if (!chatInfo) return 'Loading...';
@@ -583,10 +717,10 @@ const SummaryHistory: React.FC = () => {
       grouped.set(key, group);
     }
     grouped.forEach((group) => {
-      group.sort((a, b) => getNoteMeetingDate(a).getTime() - getNoteMeetingDate(b).getTime());
+      group.sort((a, b) => compareNotesForSort(a, b, noteSortKey));
     });
     return grouped;
-  }, [notes]);
+  }, [notes, noteSortKey]);
   const todayKey = getLocalDateKey(new Date());
   const selectedCalendarDayKey = selectedNote ? getLocalDateKey(getNoteMeetingDate(selectedNote)) : null;
   const focusedCalendarDayKey = calendarDisplayMode === 'daily'
@@ -696,14 +830,14 @@ const SummaryHistory: React.FC = () => {
             <>
               <button
                 type="button"
-                onClick={() => void handleCopyText(noteEditDraft || note.summary_edit || note.summary || '', `summary-${note.id}`)}
+                onClick={() => void handleCopyText(noteEditDraft || getLocalizedSummary(note, appLanguage), `summary-${note.id}`)}
                 className="flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
                 style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
                 title="Copy summary"
                 aria-label="Copy summary"
               >
                 {copiedKey === `summary-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                Copy
+                {t('copy')}
               </button>
               {editingNoteId === note.id ? (
                 <button
@@ -745,7 +879,7 @@ const SummaryHistory: React.FC = () => {
               aria-label="Copy transcription"
             >
               {copiedKey === `transcription-${note.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              Copy
+              {t('copy')}
             </button>
           ) : null}
         </div>
@@ -880,8 +1014,7 @@ const SummaryHistory: React.FC = () => {
     }
 
     try {
-      setPlaybackError(null);
-      setPlaybackLoadingNoteId(note.id);
+      setPlaybackLoadingSegment({ noteId: note.id, segmentIndex });
       const url = audioUrlCacheRef.current.get(note.id) ?? await getNoteAudioUrl(note);
       audio.muted = false;
       audio.volume = 1;
@@ -904,72 +1037,15 @@ const SummaryHistory: React.FC = () => {
     } catch (error) {
       console.error('Failed to play transcript segment:', error);
       playbackStopAtRef.current = null;
-      setPlaybackError(error instanceof Error ? error.message : 'Failed to load audio for this note.');
       setSegmentPlayback(null);
     } finally {
-      setPlaybackLoadingNoteId(null);
+      setPlaybackLoadingSegment(null);
     }
   };
 
-  const renderSegmentPlaybackBar = (note: Note) => {
-    if (!segmentPlayback || segmentPlayback.noteId !== note.id) {
-      return playbackError ? (
-        <p className="mb-2 text-xs" style={{ color: 'var(--error)' }}>
-          {playbackError}
-        </p>
-      ) : null;
-    }
-    return (
-      <div
-        className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs"
-        style={{
-          backgroundColor: 'color-mix(in srgb, var(--accent) 8%, var(--surface))',
-          color: 'var(--text-secondary)',
-        }}
-      >
-        <div className="min-w-0">
-          <span className="font-semibold" style={{ color: 'var(--text)' }}>{segmentPlayback.speaker}</span>
-          <span className="ml-2">
-            {formatPlaybackTime(segmentPlayback.currentTime)}
-            {segmentPlayback.end != null ? ` / ${formatPlaybackTime(segmentPlayback.end)}` : ''}
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={() => {
-              const audio = audioRef.current;
-              if (!audio) return;
-              if (segmentPlayback.isPlaying) {
-                audio.pause();
-              } else {
-                void audio.play();
-              }
-            }}
-            className="summary-toolbar-btn flex h-8 w-8 items-center justify-center rounded-md transition-colors"
-            style={{ color: 'var(--text-secondary)' }}
-            aria-label={segmentPlayback.isPlaying ? 'Pause segment playback' : 'Resume segment playback'}
-            title={segmentPlayback.isPlaying ? 'Pause' : 'Resume'}
-          >
-            {segmentPlayback.isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-          </button>
-          <button
-            type="button"
-            onClick={stopSegmentPlayback}
-            className="summary-toolbar-btn flex h-8 w-8 items-center justify-center rounded-md transition-colors"
-            style={{ color: 'var(--text-secondary)' }}
-            aria-label="Stop segment playback"
-            title="Stop"
-          >
-            <CloseMd className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-    );
-  };
   const handleStartNoteEdit = (note: Note) => {
     setEditingNoteId(note.id);
-    setNoteEditDraft(note.summary_edit || note.summary || '');
+    setNoteEditDraft(getLocalizedSummary(note, appLanguage));
     setNoteEditError(null);
   };
 
@@ -1094,7 +1170,7 @@ const SummaryHistory: React.FC = () => {
 
   const handleForwardSummary = async (note: Note) => {
     if (!selectedForwardChatId) return;
-    const summaryText = note.summary_edit || note.summary || '';
+    const summaryText = getLocalizedSummary(note, appLanguage);
     if (!summaryText) return;
     setIsForwarding(true);
     setForwardError(null);
@@ -1128,6 +1204,74 @@ const SummaryHistory: React.FC = () => {
     );
   };
 
+  const handleOpenAddToProject = async (note: Note) => {
+    setOpenNoteMenuId(null);
+    setNoteMenuPos(null);
+    setAddToProjectNote(note);
+    setAddToProjectError(null);
+    if (!user?.id) return;
+    setProjectsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('project')
+        .select('id, name, notes')
+        .eq('user_id', user.id)
+        .order('name', { ascending: true });
+      if (error) throw error;
+      setProjectOptions((data as ProjectOption[]) || []);
+    } catch (err: unknown) {
+      setProjectOptions([]);
+      setAddToProjectError(err instanceof Error ? err.message : 'Failed to load projects');
+    } finally {
+      setProjectsLoading(false);
+    }
+  };
+
+  const handleAddNoteToProject = async (project: ProjectOption) => {
+    if (!addToProjectNote || !user?.id) return;
+    const projectIdValue = toProjectIdValue(project.id);
+    const existingNoteProjects = Array.isArray(addToProjectNote.projects) ? addToProjectNote.projects : [];
+    const alreadyInProject = existingNoteProjects.some((id) => String(id) === String(projectIdValue));
+    if (alreadyInProject) return;
+
+    setAddToProjectSavingId(project.id);
+    setAddToProjectError(null);
+    try {
+      const nextNoteProjects = Array.from(
+        new Set([...existingNoteProjects.map((id) => String(id)), String(projectIdValue)])
+      ).map(toProjectIdValue);
+      const { error: noteUpdateError } = await supabase
+        .from('note')
+        .update({ projects: nextNoteProjects })
+        .eq('id', addToProjectNote.id)
+        .eq('user_id', user.id);
+      if (noteUpdateError) throw noteUpdateError;
+
+      const existingProjectNotes = Array.isArray(project.notes) ? project.notes : [];
+      const nextProjectNotes = Array.from(
+        new Set([...existingProjectNotes.map((id) => String(id)), addToProjectNote.id])
+      ).map(toProjectIdValue);
+      const { error: projectUpdateError } = await supabase
+        .from('project')
+        .update({ notes: nextProjectNotes })
+        .eq('id', project.id)
+        .eq('user_id', user.id);
+      if (projectUpdateError) throw projectUpdateError;
+
+      setNotes((prev) =>
+        prev.map((note) => (note.id === addToProjectNote.id ? { ...note, projects: nextNoteProjects } : note))
+      );
+      setProjectOptions((prev) =>
+        prev.map((p) => (p.id === project.id ? { ...p, notes: nextProjectNotes } : p))
+      );
+      setAddToProjectNote(null);
+      setAddToProjectSavingId(null);
+    } catch (err: unknown) {
+      setAddToProjectError(err instanceof Error ? err.message : 'Failed to add note to project');
+      setAddToProjectSavingId(null);
+    }
+  };
+
   const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook/532f465d-d198-4f59-ba75-20c39d41a079';
 
   const handleRegenerateNoteSummary = async (note: Note) => {
@@ -1159,7 +1303,7 @@ const SummaryHistory: React.FC = () => {
         body: JSON.stringify({
           noteId: note.id,
           diarization: segments,
-          previousSummary: note.summary_edit || note.summary || '',
+          previousSummary: getLocalizedSummary(note, appLanguage),
           speakerProfiles,
         }),
       });
@@ -1394,6 +1538,68 @@ const SummaryHistory: React.FC = () => {
                 </div>
               </>
             )}
+          </div>
+
+          <div className="-mt-2.5 flex w-full flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <label className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                {t('filterNotes')}
+              </span>
+              <input
+                type="search"
+                value={noteSearchQuery}
+                onChange={(e) => setNoteSearchQuery(e.target.value)}
+                placeholder={t('searchNotes')}
+                className="h-10 w-full rounded-lg px-3 text-sm outline-none transition-colors"
+                style={{
+                  backgroundColor: 'var(--card)',
+                  color: 'var(--text)',
+                }}
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-3 sm:flex sm:shrink-0 sm:items-end">
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                  {t('owner')}
+                </span>
+                <select
+                  value={noteOwnershipFilter}
+                  onChange={(e) => setNoteOwnershipFilter(e.target.value as NoteOwnershipFilter)}
+                  className="h-10 rounded-lg border px-3 text-sm font-medium outline-none transition-colors sm:min-w-[8.75rem]"
+                  style={{
+                    backgroundColor: 'var(--card)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <option value="all">{t('allNotes')}</option>
+                  <option value="mine">{t('myNotes')}</option>
+                  <option value="shared">{t('sharedWithMeNotes')}</option>
+                </select>
+              </label>
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                  {t('sort')}
+                </span>
+                <select
+                  value={noteSortKey}
+                  onChange={(e) => setNoteSortKey(e.target.value as NoteSortKey)}
+                  className="h-10 rounded-lg border px-3 text-sm font-medium outline-none transition-colors sm:min-w-[12rem]"
+                  style={{
+                    backgroundColor: 'var(--card)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <option value="meeting_desc">{t('meetingNewest')}</option>
+                  <option value="meeting_asc">{t('meetingOldest')}</option>
+                  <option value="created_desc">{t('createdNewest')}</option>
+                  <option value="created_asc">{t('createdOldest')}</option>
+                  <option value="title_asc">{t('titleAZ')}</option>
+                  <option value="title_desc">{t('titleZA')}</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           {/* Notes List — flex-1 column; rows scroll, pagination pinned to bottom */}
@@ -1684,10 +1890,10 @@ const SummaryHistory: React.FC = () => {
                                     className={`min-h-0 flex-1 ${NOTE_SUMMARY_TEXTAREA}`}
                                     style={{ backgroundColor: 'transparent', color: 'var(--text)', borderColor: 'var(--accent)' }}
                                   />
-                                ) : note.summary_edit || note.summary ? (
+                                ) : getLocalizedSummary(note, appLanguage) ? (
                                   <div className={NOTE_SUMMARY_MARKDOWN} style={{ backgroundColor: 'transparent', color: 'var(--text)' }}>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                      {note.summary_edit || note.summary || ''}
+                                      {getLocalizedSummary(note, appLanguage)}
                                     </ReactMarkdown>
                                   </div>
                                 ) : (
@@ -1699,7 +1905,6 @@ const SummaryHistory: React.FC = () => {
                             )}
                             {activeTab === 'transcription' && hasTranscription && (
                               <div className="min-h-0 flex flex-1 flex-col">
-                                {renderSegmentPlaybackBar(note)}
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                   {showDiarized ? (
                                     <TranscriptSpeakerFilterControls
@@ -1720,6 +1925,12 @@ const SummaryHistory: React.FC = () => {
                                       onSelectedSpeakerFiltersChange={(next) => setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))}
                                       activePlaybackSegmentIndex={segmentPlayback?.noteId === note.id ? segmentPlayback.segmentIndex : null}
                                       isPlaybackActive={Boolean(segmentPlayback?.noteId === note.id && segmentPlayback.isPlaying)}
+                                      loadingPlaybackSegmentIndex={playbackLoadingSegment?.noteId === note.id ? playbackLoadingSegment.segmentIndex : null}
+                                      playbackTimeLabel={
+                                        segmentPlayback?.noteId === note.id
+                                          ? `${formatPlaybackTime(segmentPlayback.currentTime)}${segmentPlayback.end != null ? ` / ${formatPlaybackTime(segmentPlayback.end)}` : ''}`
+                                          : null
+                                      }
                                       canPlaySegment={isPlayableSegment}
                                       onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
                                       transcriptLanguage={transcriptLanguage}
@@ -1734,29 +1945,29 @@ const SummaryHistory: React.FC = () => {
                             )}
                           </div>
                           <div className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5" style={{ borderColor: 'var(--border)' }}>
-                            <button type="button" onClick={() => navigate(`/save-summary?note_id=${note.id}`)} className={RESULT_ACTION_BTN_CLASS} title="Save to OneDrive" aria-label="Save to OneDrive">
+                            <button type="button" onClick={() => navigate(`/save-summary?note_id=${note.id}`)} className={RESULT_ACTION_BTN_CLASS} title={t('saveToOneDrive')} aria-label={t('saveToOneDrive')}>
                               <Cloud className="h-4 w-4 shrink-0" aria-hidden />
                               <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
                             </button>
-                            <button type="button" onClick={() => void handleOpenForwardModal(note)} className={RESULT_ACTION_BTN_CLASS} title="Forward to Teams" aria-label="Forward to Teams">
+                            <button type="button" onClick={() => void handleOpenForwardModal(note)} className={RESULT_ACTION_BTN_CLASS} title={t('forwardToTeams')} aria-label={t('forwardToTeams')}>
                               <Users className="h-4 w-4 shrink-0" aria-hidden />
                               <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
                             </button>
-                            <button type="button" onClick={() => handleOpenShareModal(note)} className={RESULT_ACTION_BTN_CLASS} title="Share" aria-label="Share">
+                            <button type="button" onClick={() => handleOpenShareModal(note)} className={RESULT_ACTION_BTN_CLASS} title={t('share')} aria-label={t('share')}>
                               <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Share</span>
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('share')}</span>
                             </button>
-                            <button type="button" onClick={() => void handleOpenProfileModal(note)} className={RESULT_ACTION_BTN_CLASS} title="Sync Profile" aria-label="Sync Profile">
+                            <button type="button" onClick={() => void handleOpenProfileModal(note)} className={RESULT_ACTION_BTN_CLASS} title={t('syncProfile')} aria-label={t('syncProfile')}>
                               <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Sync Profile</span>
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('syncProfile')}</span>
                             </button>
                             <button
                               type="button"
                               disabled={regeneratingNoteId === note.id || !hasUsableDiarization(diarRaw)}
                               onClick={() => void handleRegenerateNoteSummary(note)}
                               className={RESULT_ACTION_BTN_CLASS}
-                              title={!hasUsableDiarization(diarRaw) ? 'Requires diarized transcription' : 'Regenerate Summary'}
-                              aria-label="Regenerate Summary"
+                              title={!hasUsableDiarization(diarRaw) ? t('requiresDiarizedTranscription') : t('regenerateSummary')}
+                              aria-label={t('regenerateSummary')}
                             >
                               {regeneratingNoteId === note.id ? (
                                 <>
@@ -1950,7 +2161,7 @@ const SummaryHistory: React.FC = () => {
                               </div>
                               {isSharedNote ? (
                                 <p className="truncate text-xs font-medium leading-snug" style={{ color: 'var(--tc-magenta)' }}>
-                                  Shared By: {getSharedByLabel(note)}
+                                  {t('sharedBy')}: {getSharedByLabel(note)}
                                 </p>
                               ) : null}
                             </div>
@@ -2068,9 +2279,9 @@ const SummaryHistory: React.FC = () => {
                                     <p
                                       className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs font-medium leading-snug"
                                       style={{ color: 'var(--tc-magenta)' }}
-                                      title={`Shared By: ${getSharedByLabel(note)}`}
+                                      title={`${t('sharedBy')}: ${getSharedByLabel(note)}`}
                                     >
-                                      Shared By: {getSharedByLabel(note)}
+                                      {t('sharedBy')}: {getSharedByLabel(note)}
                                     </p>
                                   ) : null}
                                 </div>
@@ -2141,13 +2352,13 @@ const SummaryHistory: React.FC = () => {
                                                     borderColor: 'var(--accent)',
                                                   }}
                                                 />
-                                              ) : note.summary_edit || note.summary ? (
+                                              ) : getLocalizedSummary(note, appLanguage) ? (
                                                 <div
                                                   className={NOTE_SUMMARY_MARKDOWN}
                                                   style={{ backgroundColor: 'transparent', color: 'var(--text)' }}
                                                 >
                                                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                    {note.summary_edit || note.summary || ''}
+                                                    {getLocalizedSummary(note, appLanguage)}
                                                   </ReactMarkdown>
                                                 </div>
                                               ) : (
@@ -2176,7 +2387,6 @@ const SummaryHistory: React.FC = () => {
                                           )}
                                           {activeTab === 'transcription' && hasTranscription && (
                                             <div className="min-h-0 flex flex-1 flex-col">
-                                              {renderSegmentPlaybackBar(note)}
                                               {showDiarized ? (
                                               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                                   <TranscriptSpeakerFilterControls
@@ -2205,6 +2415,12 @@ const SummaryHistory: React.FC = () => {
                                                     }
                                                     activePlaybackSegmentIndex={segmentPlayback?.noteId === note.id ? segmentPlayback.segmentIndex : null}
                                                     isPlaybackActive={Boolean(segmentPlayback?.noteId === note.id && segmentPlayback.isPlaying)}
+                                                    loadingPlaybackSegmentIndex={playbackLoadingSegment?.noteId === note.id ? playbackLoadingSegment.segmentIndex : null}
+                                                    playbackTimeLabel={
+                                                      segmentPlayback?.noteId === note.id
+                                                        ? `${formatPlaybackTime(segmentPlayback.currentTime)}${segmentPlayback.end != null ? ` / ${formatPlaybackTime(segmentPlayback.end)}` : ''}`
+                                                        : null
+                                                    }
                                                     canPlaySegment={isPlayableSegment}
                                                     onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
                                                     transcriptLanguage={transcriptLanguage}
@@ -2234,8 +2450,8 @@ const SummaryHistory: React.FC = () => {
                                               navigate(`/save-summary?note_id=${note.id}`);
                                             }}
                                             className={RESULT_ACTION_BTN_CLASS}
-                                            title="Save to OneDrive"
-                                            aria-label="Save to OneDrive"
+                                            title={t('saveToOneDrive')}
+                                            aria-label={t('saveToOneDrive')}
                                           >
                                             <Cloud className="h-4 w-4 shrink-0" aria-hidden />
                                             <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
@@ -2244,8 +2460,8 @@ const SummaryHistory: React.FC = () => {
                                             type="button"
                                             onClick={() => void handleOpenForwardModal(note)}
                                             className={RESULT_ACTION_BTN_CLASS}
-                                            title="Forward to Teams"
-                                            aria-label="Forward to Teams"
+                                            title={t('forwardToTeams')}
+                                            aria-label={t('forwardToTeams')}
                                           >
                                             <Users className="h-4 w-4 shrink-0" aria-hidden />
                                             <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
@@ -2254,21 +2470,21 @@ const SummaryHistory: React.FC = () => {
                                             type="button"
                                             onClick={() => handleOpenShareModal(note)}
                                             className={RESULT_ACTION_BTN_CLASS}
-                                            title="Share"
-                                            aria-label="Share"
+                                            title={t('share')}
+                                            aria-label={t('share')}
                                           >
                                             <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
-                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Share</span>
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('share')}</span>
                                           </button>
                                           <button
                                             type="button"
                                             onClick={() => void handleOpenProfileModal(note)}
                                             className={RESULT_ACTION_BTN_CLASS}
-                                            title="Sync Profile"
-                                            aria-label="Sync Profile"
+                                            title={t('syncProfile')}
+                                            aria-label={t('syncProfile')}
                                           >
                                             <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Sync Profile</span>
+                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('syncProfile')}</span>
                                           </button>
                                           <button
                                             type="button"
@@ -2277,15 +2493,15 @@ const SummaryHistory: React.FC = () => {
                                             className={RESULT_ACTION_BTN_CLASS}
                                             title={
                                               !hasUsableDiarization(diarRaw)
-                                                ? 'Requires diarized transcription'
+                                                ? t('requiresDiarizedTranscription')
                                                 : regeneratingNoteId === note.id
                                                   ? 'Regenerating summary'
-                                                  : 'Regenerate Summary'
+                                                  : t('regenerateSummary')
                                             }
                                             aria-label={
                                               regeneratingNoteId === note.id
                                                 ? 'Regenerating summary'
-                                                : 'Regenerate Summary'
+                                                : t('regenerateSummary')
                                             }
                                           >
                                             {regeneratingNoteId === note.id ? (
@@ -2422,13 +2638,13 @@ const SummaryHistory: React.FC = () => {
                                       borderColor: 'var(--accent)',
                                     }}
                                   />
-                                ) : note.summary_edit || note.summary ? (
+                                ) : getLocalizedSummary(note, appLanguage) ? (
                                   <div
                                     className={NOTE_SUMMARY_MARKDOWN}
                                     style={{ backgroundColor: 'transparent', color: 'var(--text)' }}
                                   >
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                      {note.summary_edit || note.summary || ''}
+                                      {getLocalizedSummary(note, appLanguage)}
                                     </ReactMarkdown>
                                   </div>
                                 ) : (
@@ -2457,7 +2673,6 @@ const SummaryHistory: React.FC = () => {
                             )}
                             {activeTab === 'transcription' && hasTranscription && (
                               <div className="min-h-0 flex flex-1 flex-col">
-                                {renderSegmentPlaybackBar(note)}
                                 {showDiarized ? (
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                     <TranscriptSpeakerFilterControls
@@ -2486,6 +2701,12 @@ const SummaryHistory: React.FC = () => {
                                       }
                                       activePlaybackSegmentIndex={segmentPlayback?.noteId === note.id ? segmentPlayback.segmentIndex : null}
                                       isPlaybackActive={Boolean(segmentPlayback?.noteId === note.id && segmentPlayback.isPlaying)}
+                                      loadingPlaybackSegmentIndex={playbackLoadingSegment?.noteId === note.id ? playbackLoadingSegment.segmentIndex : null}
+                                      playbackTimeLabel={
+                                        segmentPlayback?.noteId === note.id
+                                          ? `${formatPlaybackTime(segmentPlayback.currentTime)}${segmentPlayback.end != null ? ` / ${formatPlaybackTime(segmentPlayback.end)}` : ''}`
+                                          : null
+                                      }
                                       canPlaySegment={isPlayableSegment}
                                       onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
                                       transcriptLanguage={transcriptLanguage}
@@ -2515,8 +2736,8 @@ const SummaryHistory: React.FC = () => {
                                 navigate(`/save-summary?note_id=${note.id}`);
                               }}
                               className={RESULT_ACTION_BTN_CLASS}
-                              title="Save to OneDrive"
-                              aria-label="Save to OneDrive"
+                              title={t('saveToOneDrive')}
+                              aria-label={t('saveToOneDrive')}
                             >
                               <Cloud className="h-4 w-4 shrink-0" aria-hidden />
                               <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
@@ -2525,8 +2746,8 @@ const SummaryHistory: React.FC = () => {
                               type="button"
                               onClick={() => void handleOpenForwardModal(note)}
                               className={RESULT_ACTION_BTN_CLASS}
-                              title="Forward to Teams"
-                              aria-label="Forward to Teams"
+                              title={t('forwardToTeams')}
+                              aria-label={t('forwardToTeams')}
                             >
                               <Users className="h-4 w-4 shrink-0" aria-hidden />
                               <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
@@ -2535,21 +2756,21 @@ const SummaryHistory: React.FC = () => {
                               type="button"
                               onClick={() => handleOpenShareModal(note)}
                               className={RESULT_ACTION_BTN_CLASS}
-                              title="Share"
-                              aria-label="Share"
+                              title={t('share')}
+                              aria-label={t('share')}
                             >
                               <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Share</span>
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('share')}</span>
                             </button>
                             <button
                               type="button"
                               onClick={() => void handleOpenProfileModal(note)}
                               className={RESULT_ACTION_BTN_CLASS}
-                              title="Sync Profile"
-                              aria-label="Sync Profile"
+                              title={t('syncProfile')}
+                              aria-label={t('syncProfile')}
                             >
                               <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Sync Profile</span>
+                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('syncProfile')}</span>
                             </button>
                             <button
                               type="button"
@@ -2558,15 +2779,15 @@ const SummaryHistory: React.FC = () => {
                               className={RESULT_ACTION_BTN_CLASS}
                               title={
                                 !hasUsableDiarization(diarRaw)
-                                  ? 'Requires diarized transcription'
+                                  ? t('requiresDiarizedTranscription')
                                   : regeneratingNoteId === note.id
                                     ? 'Regenerating summary'
-                                    : 'Regenerate Summary'
+                                    : t('regenerateSummary')
                               }
                               aria-label={
                                 regeneratingNoteId === note.id
                                   ? 'Regenerating summary'
-                                  : 'Regenerate Summary'
+                                  : t('regenerateSummary')
                               }
                             >
                               {regeneratingNoteId === note.id ? (
@@ -2622,7 +2843,6 @@ const SummaryHistory: React.FC = () => {
         }}
         onError={() => {
           playbackStopAtRef.current = null;
-          setPlaybackError('Could not play this audio file.');
           setSegmentPlayback(null);
         }}
       />
@@ -2644,7 +2864,7 @@ const SummaryHistory: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-              Delete note?
+              {t('deleteNote')}?
             </h3>
             <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
               This will permanently delete{' '}
@@ -2669,7 +2889,7 @@ const SummaryHistory: React.FC = () => {
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                 disabled={deletingNote}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 type="button"
@@ -2681,7 +2901,7 @@ const SummaryHistory: React.FC = () => {
                 disabled={deletingNote}
               >
                 {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                Delete
+                {t('delete')}
               </button>
             </div>
           </div>
@@ -2709,12 +2929,12 @@ const SummaryHistory: React.FC = () => {
                 style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
               >
                 <div>
-                  <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Forward to Teams</h2>
+                  <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('forwardToTeams')}</h2>
                   <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Choose a chat, then click <span className="font-medium" style={{ color: 'var(--text)' }}>Forward Summary</span>.
+                    {t('chooseChatForward')}
                   </p>
                 </div>
-                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><CloseMd className="h-5 w-5" aria-hidden /></button>
+                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label={t('close')}><CloseMd className="h-5 w-5" aria-hidden /></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-4 py-3 sm:px-5">
                 {teamsChatsLoading ? (
@@ -2726,7 +2946,7 @@ const SummaryHistory: React.FC = () => {
                 ) : teamsChats.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-10">
                     <Chat className="mb-3 h-10 w-10" style={{ color: 'var(--text-muted)' }} aria-hidden />
-                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No Teams chats found</p>
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{t('noTeamsChatsFound')}</p>
                   </div>
                 ) : (
                   <div className="max-h-[min(50vh,22rem)] overflow-y-auto custom-scrollbar rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)' }}>
@@ -2758,7 +2978,7 @@ const SummaryHistory: React.FC = () => {
                 {forwardError ? <p className="mt-3 text-xs" style={{ color: 'var(--error)' }}>{forwardError}</p> : null}
               </div>
               <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3 sm:px-5" style={{ borderColor: 'var(--border)' }}>
-                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Cancel</button>
+                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t('cancel')}</button>
                 <button
                   type="button"
                   disabled={!selectedForwardChatId || isForwarding || forwardSuccess}
@@ -2766,7 +2986,7 @@ const SummaryHistory: React.FC = () => {
                   className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                   style={{ backgroundColor: forwardSuccess ? 'var(--success)' : 'var(--accent)', color: '#fff' }}
                 >
-                  {isForwarding ? <><Loading className="h-4 w-4 animate-spin" aria-hidden />Sending…</> : forwardSuccess ? <><Check className="h-4 w-4" aria-hidden />Sent!</> : 'Forward Summary'}
+                  {isForwarding ? <><Loading className="h-4 w-4 animate-spin" aria-hidden />{t('sending')}</> : forwardSuccess ? <><Check className="h-4 w-4" aria-hidden />{t('sent')}</> : t('forwardSummary')}
                 </button>
               </div>
             </div>
@@ -2788,6 +3008,108 @@ const SummaryHistory: React.FC = () => {
         );
       })()}
 
+      {addToProjectNote ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+          role="presentation"
+          onClick={() => {
+            if (!addToProjectSavingId) setAddToProjectNote(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-note-to-project-title"
+            className="flex max-h-[min(80vh,34rem)] w-full max-w-md flex-col overflow-hidden rounded-xl app-surface-elevated"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex shrink-0 items-start justify-between gap-3 px-4 py-4 sm:px-5"
+              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
+            >
+              <div className="min-w-0">
+                <h2 id="add-note-to-project-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+                  {t('addToProject')}
+                </h2>
+                <p
+                  className="mt-1 truncate text-sm"
+                  style={{ color: 'var(--text-secondary)' }}
+                  title={getNoteDisplayTitle(addToProjectNote)}
+                >
+                  {getNoteDisplayTitle(addToProjectNote)}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={Boolean(addToProjectSavingId)}
+                onClick={() => setAddToProjectNote(null)}
+                className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70"
+                style={{ color: 'var(--text-muted)' }}
+                aria-label={t('close')}
+              >
+                <CloseMd className="h-5 w-5" aria-hidden />
+              </button>
+            </div>
+            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4">
+              {projectsLoading ? (
+                <div className="flex items-center justify-center py-10">
+                  <Loading className="h-5 w-5 animate-spin" style={{ color: 'var(--text-muted)' }} aria-hidden />
+                </div>
+              ) : projectOptions.length === 0 ? (
+                <div className="py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  {t('noProjectsFound')}
+                </div>
+              ) : (
+                <div className="summary-note-list">
+                  {projectOptions.map((project) => {
+                    const alreadyInProject = (addToProjectNote.projects || []).some((id) => String(id) === String(project.id));
+                    const isSaving = addToProjectSavingId === project.id;
+                    return (
+                      <button
+                        key={project.id}
+                        type="button"
+                        disabled={alreadyInProject || Boolean(addToProjectSavingId)}
+                        onClick={() => void handleAddNoteToProject(project)}
+                        className={`summary-note-row-content flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-all disabled:cursor-default ${
+                          alreadyInProject ? 'opacity-60' : 'hover:opacity-85'
+                        }`}
+                        style={{ color: 'var(--text)' }}
+                      >
+                        <span
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                          style={{
+                            backgroundColor: alreadyInProject ? 'var(--bg-secondary)' : 'var(--accent-light)',
+                            color: alreadyInProject ? 'var(--text-muted)' : 'var(--accent)',
+                          }}
+                          aria-hidden
+                        >
+                          {alreadyInProject ? <Check className="h-4 w-4" /> : <FileAdd className="h-4 w-4" />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">{project.name}</span>
+                          <span className="mt-0.5 block text-xs" style={{ color: 'var(--text-muted)' }}>
+                            {alreadyInProject ? t('alreadyInProject') : t('addToProject')}
+                          </span>
+                        </span>
+                        {isSaving ? (
+                          <Loading className="h-4 w-4 shrink-0 animate-spin" style={{ color: 'var(--text-muted)' }} aria-hidden />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            {addToProjectError ? (
+              <p className="shrink-0 px-4 pb-3 text-xs sm:px-5" style={{ color: 'var(--error)' }}>
+                {addToProjectError}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {/* Sync Profile modal */}
       {profileModalNoteId && (
         <div
@@ -2807,16 +3129,16 @@ const SummaryHistory: React.FC = () => {
               style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
             >
               <div>
-                <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Sync Profile</h2>
+                <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('syncProfile')}</h2>
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>AI-generated speaker profiles from the meeting transcript</p>
               </div>
-              <button type="button" disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'} onClick={() => setProfileModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label="Close"><CloseMd className="h-5 w-5" aria-hidden /></button>
+              <button type="button" disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'} onClick={() => setProfileModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label={t('close')}><CloseMd className="h-5 w-5" aria-hidden /></button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-5 py-4">
               {(profileGenStep === 'finding-speakers' || profileGenStep === 'generating') && (
                 <div className="flex flex-col items-center justify-center py-16">
                   <div className="mb-5 h-10 w-10 animate-spin rounded-full border-4 border-t-transparent" style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} aria-hidden />
-                  <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{profileGenStep === 'finding-speakers' ? 'Looking up speaker data…' : 'Generating profiles with AI…'}</p>
+                  <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{profileGenStep === 'finding-speakers' ? t('lookingUpSpeakerData') : t('generatingProfilesAi')}</p>
                 </div>
               )}
               {profileGenStep === 'error' && <div className="rounded-lg border p-4" style={{ borderColor: 'var(--error)', backgroundColor: 'var(--error-light)' }}><p className="text-sm font-medium" style={{ color: 'var(--error)' }}>{profileGenError}</p></div>}
@@ -2829,7 +3151,7 @@ const SummaryHistory: React.FC = () => {
                           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold" style={{ backgroundColor: 'color-mix(in srgb, var(--accent) 20%, var(--bg-secondary))', color: 'var(--accent)' }}>{profile.speakerName.slice(0, 2).toUpperCase()}</div>
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>{profile.speakerName}</p>
-                            <span className="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: profile.isNew ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'color-mix(in srgb, var(--success) 15%, transparent)', color: profile.isNew ? 'var(--accent)' : 'var(--success)' }}>{profile.isNew ? 'New profile' : 'Updated profile'}</span>
+                            <span className="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: profile.isNew ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'color-mix(in srgb, var(--success) 15%, transparent)', color: profile.isNew ? 'var(--accent)' : 'var(--success)' }}>{profile.isNew ? t('newProfile') : t('updatedProfile')}</span>
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
@@ -2846,13 +3168,13 @@ const SummaryHistory: React.FC = () => {
                             ) : (
                               <Copy className="h-3.5 w-3.5" aria-hidden />
                             )}
-                            Copy
+                            {t('copy')}
                           </button>
-                          {profile.saved ? <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--success)' }}><Check className="h-3.5 w-3.5" />Saved</span> : null}
+                          {profile.saved ? <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--success)' }}><Check className="h-3.5 w-3.5" />{t('saved')}</span> : null}
                           {profile.saveError ? <span className="text-xs" style={{ color: 'var(--error)' }}>{profile.saveError}</span> : null}
                           {!profile.saved && (
                             <button type="button" disabled={profile.saving} onClick={() => void handleSaveHistoryProfile(profile.speakerName)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
-                              {profile.saving ? <><Loading className="h-3.5 w-3.5 animate-spin" />Saving…</> : <><Save className="h-3.5 w-3.5" />Save Profile</>}
+                              {profile.saving ? <><Loading className="h-3.5 w-3.5 animate-spin" />{t('saving')}</> : <><Save className="h-3.5 w-3.5" />{t('saveProfile')}</>}
                             </button>
                           )}
                         </div>
@@ -2875,7 +3197,7 @@ const SummaryHistory: React.FC = () => {
               <div className="flex shrink-0 items-center justify-between gap-3 border-t px-5 py-3" style={{ borderColor: 'var(--border)' }}>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{generatedProfiles.filter((p) => p.saved).length} of {generatedProfiles.length} profile{generatedProfiles.length !== 1 ? 's' : ''} saved</p>
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Close</button>
+                  <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t('close')}</button>
                   <button
                     type="button"
                     disabled={generatedProfiles.some((p) => p.saving)}
@@ -2887,14 +3209,14 @@ const SummaryHistory: React.FC = () => {
                     className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
-                    {generatedProfiles.some((p) => p.saving) ? <><Loading className="h-4 w-4 animate-spin" />Saving…</> : 'Save All'}
+                    {generatedProfiles.some((p) => p.saving) ? <><Loading className="h-4 w-4 animate-spin" />{t('saving')}</> : t('saveAll')}
                   </button>
                 </div>
               </div>
             )}
             {profileGenStep === 'error' && (
               <div className="flex shrink-0 justify-end border-t px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-                <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>Close</button>
+                <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t('close')}</button>
               </div>
             )}
           </div>
@@ -2918,9 +3240,9 @@ const SummaryHistory: React.FC = () => {
           >
             {saveAllStatus === 'idle' && (
               <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Save all profiles?</h3>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('saveAllProfiles')}</h3>
                 <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  This will save all unsaved speaker profiles to Supabase.
+                  {t('confirmSaveAllDescription')}
                 </p>
                 <div className="mt-4 flex justify-end gap-2">
                   <button
@@ -2929,7 +3251,7 @@ const SummaryHistory: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   >
-                    Cancel
+                    {t('cancel')}
                   </button>
                   <button
                     type="button"
@@ -2937,7 +3259,7 @@ const SummaryHistory: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
-                    Confirm Save All
+                    {t('confirmSaveAll')}
                   </button>
                 </div>
               </>
@@ -2945,14 +3267,14 @@ const SummaryHistory: React.FC = () => {
             {saveAllStatus === 'saving' && (
               <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
                 <Loading className="h-4 w-4 animate-spin" aria-hidden />
-                Saving profiles...
+                {t('savingProfiles')}
               </div>
             )}
             {saveAllStatus === 'success' && (
               <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Profiles saved</h3>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('profilesSaved')}</h3>
                 <p className="mt-2 text-sm" style={{ color: 'var(--success)' }}>
-                  All profiles were successfully saved to Supabase.
+                  {t('profilesSavedDescription')}
                 </p>
                 <div className="mt-4 flex justify-end">
                   <button
@@ -2961,16 +3283,16 @@ const SummaryHistory: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
-                    Close
+                    {t('close')}
                   </button>
                 </div>
               </>
             )}
             {saveAllStatus === 'error' && (
               <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Failed to save all profiles</h3>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('failedSaveAllProfiles')}</h3>
                 <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>
-                  Some profiles could not be saved to Supabase.
+                  {t('failedSaveAllProfilesDescription')}
                 </p>
                 <ul className="mt-2 max-h-40 list-disc space-y-1 overflow-y-auto pl-5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                   {saveAllErrorDetails.map((detail, idx) => (
@@ -2984,7 +3306,7 @@ const SummaryHistory: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   >
-                    Close
+                    {t('close')}
                   </button>
                 </div>
               </>
@@ -2997,7 +3319,7 @@ const SummaryHistory: React.FC = () => {
         if (!menuNote || !noteMenuPos) return null;
         return createPortal(
           <div
-            className="fixed z-[200] w-[180px] rounded-xl border p-2 shadow-lg"
+            className="fixed z-[200] w-[190px] rounded-xl border p-2 shadow-lg"
             style={{
               top: noteMenuPos.top,
               right: noteMenuPos.right,
@@ -3012,7 +3334,7 @@ const SummaryHistory: React.FC = () => {
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
               <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-              Save to OneDrive
+              {t('saveToOneDrive')}
             </button>
             <button
               type="button"
@@ -3020,7 +3342,7 @@ const SummaryHistory: React.FC = () => {
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
               <Users className="h-4 w-4 shrink-0" aria-hidden />
-              Forward to Teams
+              {t('forwardToTeams')}
             </button>
             <button
               type="button"
@@ -3028,7 +3350,17 @@ const SummaryHistory: React.FC = () => {
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
               <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
-              Share
+              {t('share')}
+            </button>
+            <button
+              type="button"
+              disabled={!user?.id || menuNote.user_id !== user.id}
+              onClick={() => { void handleOpenAddToProject(menuNote); }}
+              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
+              title={menuNote.user_id !== user?.id ? (appLanguage === 'ko' ? '공유받은 회의록은 프로젝트에 추가할 수 없습니다.' : 'Shared notes cannot be added to projects.') : undefined}
+            >
+              <FileAdd className="h-4 w-4 shrink-0" aria-hidden />
+              {t('addToProject')}
             </button>
             <button
               type="button"
@@ -3036,19 +3368,19 @@ const SummaryHistory: React.FC = () => {
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
               <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-              Sync Profile
+              {t('syncProfile')}
             </button>
             <button
               type="button"
               disabled={regeneratingNoteId === menuNote.id || !hasUsableDiarization(getNoteDiarizationRaw(menuNote))}
               onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); void handleRegenerateNoteSummary(menuNote); }}
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
-              title={!hasUsableDiarization(getNoteDiarizationRaw(menuNote)) ? 'Requires diarized transcription' : undefined}
+              title={!hasUsableDiarization(getNoteDiarizationRaw(menuNote)) ? t('requiresDiarizedTranscription') : undefined}
             >
               {regeneratingNoteId === menuNote.id ? (
-                <><Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />Regenerating…</>
+                <><Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />{appLanguage === 'ko' ? '다시 생성 중...' : 'Regenerating...'}</>
               ) : (
-                <><ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />Regenerate Summary</>
+                <><ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />{t('regenerateSummary')}</>
               )}
             </button>
             <button
@@ -3057,7 +3389,7 @@ const SummaryHistory: React.FC = () => {
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
             >
               <EditPencilLine01 className="h-4 w-4 shrink-0" aria-hidden />
-              Rename Note
+              {t('renameNote')}
             </button>
             <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
             <button
@@ -3067,7 +3399,7 @@ const SummaryHistory: React.FC = () => {
               style={{ color: 'var(--error)' }}
             >
               <TrashFull className="h-4 w-4 shrink-0" aria-hidden />
-              Delete Note
+              {t('deleteNote')}
             </button>
           </div>,
           document.body

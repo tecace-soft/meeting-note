@@ -83,10 +83,32 @@ export function parseSummary(raw: string): ParsedSummary {
   return { title, summary, tags };
 }
 
-function toDatePrefix(date: Date): string {
+function getDateParts(date: Date, timeZone?: string): { year: string; month: string; day: string } {
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: '2-digit',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(date);
+      const year = parts.find((part) => part.type === 'year')?.value;
+      const month = parts.find((part) => part.type === 'month')?.value;
+      const day = parts.find((part) => part.type === 'day')?.value;
+      if (year && month && day) return { year, month, day };
+    } catch {
+      // Fall back to the runtime timezone if the client sent an invalid timezone.
+    }
+  }
+
   const year = String(date.getFullYear()).slice(-2);
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
+  return { year, month, day };
+}
+
+function toDatePrefix(date: Date, timeZone?: string): string {
+  const { year, month, day } = getDateParts(date, timeZone);
   return `${year}${month}${day}`;
 }
 
@@ -100,6 +122,7 @@ export function buildNoteName(input: {
   tags?: string[];
   summary?: string | null;
   createdAt?: Date;
+  timeZone?: string | null;
 }): string {
   const source = typeof input.title === 'string' && input.title.trim()
     ? input.title
@@ -111,5 +134,22 @@ export function buildNoteName(input: {
   const descriptor = words.length > 0
     ? words.map(capitalizeDescriptor).join('_')
     : 'Untitled_Meeting';
-  return `${toDatePrefix(input.createdAt ?? new Date())}_${descriptor}`;
+  return `${toDatePrefix(input.createdAt ?? new Date(), input.timeZone ?? undefined)}_${descriptor}`;
+}
+
+export function formatMeetingDateForPrompt(date: Date, timeZone?: string | null): string {
+  const timeZoneName = timeZone?.trim() || undefined;
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: timeZoneName,
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZoneName: timeZoneName ? 'short' : undefined,
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
 }

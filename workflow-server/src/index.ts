@@ -6,7 +6,7 @@ import { config as loadDotenv } from 'dotenv';
 import { Agent, setGlobalDispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, type GeminiUsageMetadata } from './gemini.js';
-import { buildNoteName, parseSummary, formatTranscriptText, type TranscriptSegment } from './parsers.js';
+import { buildNoteName, formatMeetingDateForPrompt, parseSummary, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildSummaryPrompt } from './prompts.js';
 import { sendWorkflowAlert } from './alerts.js';
 
@@ -22,6 +22,7 @@ interface SummarizeAudioRequest {
   userName?: unknown;
   noteId?: unknown;
   meetingAt?: unknown;
+  userTimeZone?: unknown;
   fileId?: unknown;
   speakerContext?: unknown;
   language?: unknown;
@@ -143,6 +144,9 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
   const meetingAt = typeof body.meetingAt === 'string' && body.meetingAt.trim()
     ? new Date(body.meetingAt)
     : null;
+  const userTimeZone = typeof body.userTimeZone === 'string' && body.userTimeZone.trim()
+    ? body.userTimeZone.trim()
+    : null;
   return {
     downloadUrl: requiredString(body, 'downloadUrl'),
     fileName: requiredString(body, 'fileName'),
@@ -151,6 +155,7 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
     userName: typeof body.userName === 'string' ? body.userName.trim() : '',
     noteId: requiredString(body, 'noteId'),
     meetingAt: meetingAt && !Number.isNaN(meetingAt.getTime()) ? meetingAt.toISOString() : null,
+    userTimeZone,
     fileId: typeof body.fileId === 'string' && body.fileId.trim() ? body.fileId.trim() : null,
     instructions: typeof body.instructions === 'string' ? body.instructions : '',
     speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
@@ -201,6 +206,7 @@ interface SummarizeAudioInput {
   userName: string;
   noteId: string;
   meetingAt: string | null;
+  userTimeZone: string | null;
   fileId: string | null;
   speakerContext: string;
   language: 'en' | 'ko';
@@ -209,6 +215,7 @@ interface SummarizeAudioInput {
 interface SummarizeAudioResult {
   transcript: TranscriptSegment[];
   summary: string;
+  summaryTranslations?: Record<'en' | 'ko', string>;
   title: string;
   tags: string[];
 }
@@ -422,6 +429,7 @@ async function insertNote(input: {
   downloadUrl: string;
   transcriptText: string;
   summary: string;
+  summaryTranslations: Record<'en' | 'ko', string>;
   title: string;
   tags: string[];
   segments: TranscriptSegment[];
@@ -431,6 +439,7 @@ async function insertNote(input: {
   const { error } = await supabase.from('note').insert({
     transcription: input.transcriptText,
     summary: input.summary,
+    summary_translations: input.summaryTranslations,
     user_id: input.userId,
     user_name: input.userName,
     id: input.noteId,
@@ -617,6 +626,11 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   });
   if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
   const transcriptText = formatTranscriptText(segments, input.language);
+  const alternateLanguage: 'en' | 'ko' = input.language === 'ko' ? 'en' : 'ko';
+  const alternateTranscriptText = formatTranscriptText(segments, alternateLanguage);
+  const meetingDateForPrompt = input.meetingAt
+    ? formatMeetingDateForPrompt(new Date(input.meetingAt), input.userTimeZone)
+    : null;
 
   await updateWorkflowJob(jobId, { stage: 'generating summary', progress: 75 });
   const summaryRaw = await callGeminiWithFallback({
@@ -629,7 +643,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
       {
         text: buildSummaryPrompt({
           now: new Date().toISOString(),
-          meetingDate: input.meetingAt,
+          meetingDate: meetingDateForPrompt,
           instructions: input.instructions,
           summaryRules,
           fileName: input.fileName,
@@ -651,6 +665,45 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     latencyMs: summaryRaw.latencyMs,
   });
   const parsedSummary = parseSummary(summaryRaw.text);
+  const summaryTranslations: Record<'en' | 'ko', string> = {
+    en: input.language === 'en' ? parsedSummary.summary : '',
+    ko: input.language === 'ko' ? parsedSummary.summary : '',
+  };
+
+  await updateWorkflowJob(jobId, { stage: `generating ${alternateLanguage === 'ko' ? 'Korean' : 'English'} summary`, progress: 84 });
+  const alternateSummaryRaw = await callGeminiWithFallback({
+    stage: `Summarization (${alternateLanguage})`,
+    model: env.summaryModel,
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    responseMimeType: 'application/json',
+    maxOutputTokens: 16384,
+    parts: [
+      {
+        text: buildSummaryPrompt({
+          now: new Date().toISOString(),
+          meetingDate: meetingDateForPrompt,
+          instructions: input.instructions,
+          summaryRules,
+          fileName: input.fileName,
+          transcript: alternateTranscriptText,
+          speakerContext: input.speakerContext,
+          globalSummaryContext: transcriptionSettings.summaryContext,
+          outputLanguage: alternateLanguage,
+        }),
+      },
+    ],
+  });
+  await recordGeminiUsage({
+    noteId: input.noteId,
+    userId: input.userId,
+    stage: `summarization-${alternateLanguage}`,
+    model: alternateSummaryRaw.model,
+    inputType: 'text',
+    usageMetadata: alternateSummaryRaw.usageMetadata,
+    latencyMs: alternateSummaryRaw.latencyMs,
+  });
+  const parsedAlternateSummary = parseSummary(alternateSummaryRaw.text);
+  summaryTranslations[alternateLanguage] = parsedAlternateSummary.summary;
 
   await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
   const noteName = buildNoteName({
@@ -658,6 +711,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     tags: parsedSummary.tags,
     summary: parsedSummary.summary,
     createdAt: input.meetingAt ? new Date(input.meetingAt) : undefined,
+    timeZone: input.userTimeZone,
   });
   await insertNote({
     noteId: input.noteId,
@@ -666,6 +720,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     downloadUrl: input.downloadUrl,
     transcriptText,
     summary: parsedSummary.summary,
+    summaryTranslations,
     title: noteName,
     tags: parsedSummary.tags,
     segments,
@@ -673,7 +728,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     fileId: input.fileId,
   });
 
-  return { transcript: segments, summary: parsedSummary.summary, title: noteName, tags: parsedSummary.tags };
+  return { transcript: segments, summary: parsedSummary.summary, summaryTranslations, title: noteName, tags: parsedSummary.tags };
 }
 
 async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {

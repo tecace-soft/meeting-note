@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AddPlus, CloseMd, Loading, Save, Settings } from 'react-coolicons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { isAdminMicrosoftUser } from '../lib/adminAccess';
 
@@ -25,6 +26,7 @@ type AdminControlsTab = 'transcription' | 'summary';
 const AdminControls: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { appLanguage, t } = useLanguage();
   const [speechModel, setSpeechModel] = useState('universal-3-pro');
   const [keytermsText, setKeytermsText] = useState('');
   const [customSpelling, setCustomSpelling] = useState<CustomSpellingDraft[]>([]);
@@ -151,17 +153,19 @@ const AdminControls: React.FC = () => {
           <div className="app-page-header">
             <div className="app-page-title-with-icon">
               <Settings className="app-page-title-icon" aria-hidden />
-              <h1 className="app-page-title">Admin Controls</h1>
+              <h1 className="app-page-title">{t('adminControls')}</h1>
             </div>
             <p className="app-page-subtitle">
-              Global transcription and summary-generation settings for all app users.
+              {appLanguage === 'en'
+                ? 'Global transcription and summary-generation settings for all app users.'
+                : '모든 사용자의 전사 및 요약 생성 설정을 관리합니다.'}
             </p>
           </div>
 
           <div className="flex flex-shrink-0 flex-wrap gap-2" role="tablist" aria-label="Admin control sections">
             {([
-              ['transcription', 'Transcription Controls'],
-              ['summary', 'Summary Controls'],
+              ['transcription', t('transcriptionControls')],
+              ['summary', t('summaryControls')],
             ] as const).map(([tab, label]) => (
               <button
                 key={tab}
@@ -190,7 +194,7 @@ const AdminControls: React.FC = () => {
           ) : null}
           {saved ? (
             <div className="rounded-lg p-3 text-sm" style={{ backgroundColor: 'var(--success-light)', color: 'var(--success)' }}>
-              Transcription settings saved.
+              {t('transcriptionSettingsSaved')}
             </div>
           ) : null}
 
@@ -203,7 +207,7 @@ const AdminControls: React.FC = () => {
                 className="card rounded-lg p-4"
               >
                 <label className="mb-2 block text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                  Speech model
+                  {appLanguage === 'ko' ? '음성 모델' : 'Speech model'}
                 </label>
                 <select
                   value={speechModel}
@@ -219,15 +223,15 @@ const AdminControls: React.FC = () => {
               <section className="card rounded-lg p-4">
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <label className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                    Keyterms prompt
+                    {appLanguage === 'ko' ? '핵심 용어 프롬프트' : 'Keyterms prompt'}
                   </label>
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{keyterms.length} terms</span>
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{keyterms.length} {appLanguage === 'ko' ? '개 용어' : 'terms'}</span>
                 </div>
                 <textarea
                   value={keytermsText}
                   onChange={(event) => setKeytermsText(event.target.value)}
                   rows={10}
-                  placeholder="One key term per line, e.g. TecAce, AX Pro, Hansoo Lee"
+                  placeholder={appLanguage === 'ko' ? '한 줄에 핵심 용어 하나씩 입력하세요. 예: TecAce, AX Pro, Hansoo Lee' : 'One key term per line, e.g. TecAce, AX Pro, Hansoo Lee'}
                   className="w-full resize-y rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
                   style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text)' }}
                 />
@@ -236,8 +240,10 @@ const AdminControls: React.FC = () => {
               <section className="card rounded-lg p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Custom spelling</h2>
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Comma-separate possible heard forms, then set the desired spelling.</p>
+                    <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{appLanguage === 'ko' ? '사용자 지정 철자' : 'Custom spelling'}</h2>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {appLanguage === 'ko' ? '들릴 수 있는 표현을 쉼표로 구분한 뒤 원하는 표기를 설정하세요.' : 'Comma-separate possible heard forms, then set the desired spelling.'}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -246,27 +252,27 @@ const AdminControls: React.FC = () => {
                     style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
                   >
                     <AddPlus className="h-4 w-4" />
-                    Add
+                    {appLanguage === 'ko' ? '추가' : 'Add'}
                   </button>
                 </div>
                 <div className="flex flex-col gap-2">
                   {customSpelling.length === 0 ? (
                     <p className="rounded-lg border border-dashed p-4 text-sm" style={{ color: 'var(--text-muted)', borderColor: 'var(--border)' }}>
-                      No custom spelling rules yet.
+                      {appLanguage === 'ko' ? '사용자 지정 철자 규칙이 아직 없습니다.' : 'No custom spelling rules yet.'}
                     </p>
                   ) : customSpelling.map((rule, index) => (
                     <div key={index} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,0.5fr)_auto]">
                       <input
                         value={rule.from}
                         onChange={(event) => setCustomSpelling((prev) => prev.map((item, i) => i === index ? { ...item, from: event.target.value } : item))}
-                        placeholder="Heard as: tech ace, tek ace"
+                        placeholder={appLanguage === 'ko' ? '들리는 표현: tech ace, tek ace' : 'Heard as: tech ace, tek ace'}
                         className="h-10 min-w-0 rounded-lg px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
                         style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text)' }}
                       />
                       <input
                         value={rule.to}
                         onChange={(event) => setCustomSpelling((prev) => prev.map((item, i) => i === index ? { ...item, to: event.target.value } : item))}
-                        placeholder="Spell as: TecAce"
+                        placeholder={appLanguage === 'ko' ? '표기: TecAce' : 'Spell as: TecAce'}
                         className="h-10 min-w-0 rounded-lg px-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
                         style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text)' }}
                       />
@@ -275,7 +281,7 @@ const AdminControls: React.FC = () => {
                         onClick={() => setCustomSpelling((prev) => prev.filter((_, i) => i !== index))}
                         className="flex h-10 w-10 items-center justify-center rounded-lg"
                         style={{ color: 'var(--text-muted)' }}
-                        aria-label="Remove custom spelling rule"
+                        aria-label={appLanguage === 'ko' ? '사용자 지정 철자 규칙 제거' : 'Remove custom spelling rule'}
                       >
                         <CloseMd className="h-4 w-4" />
                       </button>
@@ -292,17 +298,18 @@ const AdminControls: React.FC = () => {
               className="card rounded-lg p-4"
             >
               <label className="mb-2 block text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                Global summary context
+                {t('globalSummaryContext')}
               </label>
               <p className="mb-3 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                This context is injected into every Gemini summary request. Use it for company background, preferred terminology,
-                recurring product names, and formatting preferences. It cannot override the transcript.
+                {appLanguage === 'ko'
+                  ? '이 컨텍스트는 모든 Gemini 요약 요청에 포함됩니다. 회사 배경, 선호 용어, 반복되는 제품명, 형식 선호도를 입력하세요. 전사 내용 자체를 덮어쓸 수는 없습니다.'
+                  : 'This context is injected into every Gemini summary request. Use it for company background, preferred terminology, recurring product names, and formatting preferences. It cannot override the transcript.'}
               </p>
               <textarea
                 value={summaryContext}
                 onChange={(event) => setSummaryContext(event.target.value)}
                 rows={16}
-                placeholder="Example: TecAce is a technology consulting company. Prefer concise executive summaries. AX Pro refers to..."
+                placeholder={appLanguage === 'ko' ? '예: TecAce는 기술 컨설팅 회사입니다. 간결한 임원용 요약을 선호합니다. AX Pro는...' : 'Example: TecAce is a technology consulting company. Prefer concise executive summaries. AX Pro refers to...'}
                 className="w-full resize-y rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text)' }}
               />
@@ -311,7 +318,9 @@ const AdminControls: React.FC = () => {
 
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              {updatedAt ? `Last updated ${new Date(updatedAt).toLocaleString()}` : 'Not updated yet'}
+              {updatedAt
+                ? `${appLanguage === 'ko' ? '마지막 업데이트' : 'Last updated'} ${new Date(updatedAt).toLocaleString()}`
+                : appLanguage === 'ko' ? '아직 업데이트되지 않음' : 'Not updated yet'}
             </p>
             <button
               type="button"
@@ -321,7 +330,7 @@ const AdminControls: React.FC = () => {
               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
             >
               {saving ? <Loading className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Save settings
+              {t('save')}
             </button>
           </div>
         </div>
