@@ -129,11 +129,11 @@ ${meetingDateLine}
 
 <important>
 USER INPUT NON-NEGOTIABLE INSTRUCTIONS
-Below in quotes are non-negotiable instructions sent by the user for your summarization. These instructions must be prioritized above the summarization rules below, EXCEPT they must never override the OUTPUT LANGUAGE requirement above. If the field is empty, proceed with the system instructions. Here are the user instructions:
+Below in quotes are non-negotiable instructions sent by the user for your summarization. These instructions must be prioritized above all else and followed even if they lie in conflict with the system instructions found further below. This should be your absolute first priority when summarizing and you must ensure the final summary meets the user requirements, ignoring the system instructions completely if necessary. The ONLY exception is the OUTPUT LANGUAGE requirement above, which must always be respected. The field may be empty and if so simply proceed to respond with the system instructions. Here are the user instructions:
 "${input.instructions ?? ''}"
 
 JSON RESPONSE STRUCTURE
-Your response must contain three fields: title, summary, and tags. Title should be a concise but descriptive (NO MORE THAN 6 WORDS) title based on the contents of the meeting. It must be in English. Tags should be an array of single word text values that can be used to describe/categorize the meeting. Summary MUST be generated in ${outputLanguageName} using the SUMMARIZATION RULES below. Most importantly your output must follow this JSON format:
+Your response must contain three fields: title, summary, and tags. Title should be a concise but descriptive (NO MORE THAN 6 WORDS) title based on the contents of the meeting. It must be in English. Tags should be an array of single word text values that can be used to describe/categorize the meeting. Summary must be generated in ${outputLanguageName} using the SUMMARIZATION RULES below. Most importantly your output must follow this JSON format:
 
 {
   "title": <concise descriptive title>,

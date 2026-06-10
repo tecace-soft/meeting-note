@@ -58,6 +58,11 @@ const ASSEMBLYAI_CODE_SWITCHING_MODELS = ['universal-2'] as const;
 const ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL = ASSEMBLYAI_CODE_SWITCHING_MODELS.join('+');
 const ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES = ['en', 'ko'] as const;
 
+// Translation features are temporarily disabled to shorten processing time:
+// when false, AssemblyAI skips per-utterance translation and only one summary
+// (in the selected language) is generated. Flip to true to restore them.
+const TRANSLATION_ENABLED = false;
+
 setGlobalDispatcher(new Agent({
   headersTimeout: env.fetchHeadersTimeoutMs,
   bodyTimeout: env.fetchBodyTimeoutMs,
@@ -467,15 +472,17 @@ async function transcribeWithAssembly(input: {
     speaker_labels: true,
     speech_models: [...ASSEMBLYAI_CODE_SWITCHING_MODELS],
     language_codes: [...ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES],
-    speech_understanding: {
+  };
+  if (TRANSLATION_ENABLED) {
+    submitBody.speech_understanding = {
       request: {
         translation: {
           target_languages: [input.language],
           match_original_utterance: true,
         },
       },
-    },
-  };
+    };
+  }
   if (input.settings.keytermsPrompt.length > 0) {
     submitBody.keyterms_prompt = input.settings.keytermsPrompt;
   }
@@ -626,8 +633,6 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   });
   if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
   const transcriptText = formatTranscriptText(segments, input.language);
-  const alternateLanguage: 'en' | 'ko' = input.language === 'ko' ? 'en' : 'ko';
-  const alternateTranscriptText = formatTranscriptText(segments, alternateLanguage);
   const meetingDateForPrompt = input.meetingAt
     ? formatMeetingDateForPrompt(new Date(input.meetingAt), input.userTimeZone)
     : null;
@@ -670,40 +675,46 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     ko: input.language === 'ko' ? parsedSummary.summary : '',
   };
 
-  await updateWorkflowJob(jobId, { stage: `generating ${alternateLanguage === 'ko' ? 'Korean' : 'English'} summary`, progress: 84 });
-  const alternateSummaryRaw = await callGeminiWithFallback({
-    stage: `Summarization (${alternateLanguage})`,
-    model: env.summaryModel,
-    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
-    responseMimeType: 'application/json',
-    maxOutputTokens: 16384,
-    parts: [
-      {
-        text: buildSummaryPrompt({
-          now: new Date().toISOString(),
-          meetingDate: meetingDateForPrompt,
-          instructions: input.instructions,
-          summaryRules,
-          fileName: input.fileName,
-          transcript: alternateTranscriptText,
-          speakerContext: input.speakerContext,
-          globalSummaryContext: transcriptionSettings.summaryContext,
-          outputLanguage: alternateLanguage,
-        }),
-      },
-    ],
-  });
-  await recordGeminiUsage({
-    noteId: input.noteId,
-    userId: input.userId,
-    stage: `summarization-${alternateLanguage}`,
-    model: alternateSummaryRaw.model,
-    inputType: 'text',
-    usageMetadata: alternateSummaryRaw.usageMetadata,
-    latencyMs: alternateSummaryRaw.latencyMs,
-  });
-  const parsedAlternateSummary = parseSummary(alternateSummaryRaw.text);
-  summaryTranslations[alternateLanguage] = parsedAlternateSummary.summary;
+  // Alternate-language summary is temporarily disabled (see TRANSLATION_ENABLED) to
+  // shorten processing time; only the selected-language summary above is generated.
+  if (TRANSLATION_ENABLED) {
+    const alternateLanguage: 'en' | 'ko' = input.language === 'ko' ? 'en' : 'ko';
+    const alternateTranscriptText = formatTranscriptText(segments, alternateLanguage);
+    await updateWorkflowJob(jobId, { stage: `generating ${alternateLanguage === 'ko' ? 'Korean' : 'English'} summary`, progress: 84 });
+    const alternateSummaryRaw = await callGeminiWithFallback({
+      stage: `Summarization (${alternateLanguage})`,
+      model: env.summaryModel,
+      fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+      responseMimeType: 'application/json',
+      maxOutputTokens: 16384,
+      parts: [
+        {
+          text: buildSummaryPrompt({
+            now: new Date().toISOString(),
+            meetingDate: meetingDateForPrompt,
+            instructions: input.instructions,
+            summaryRules,
+            fileName: input.fileName,
+            transcript: alternateTranscriptText,
+            speakerContext: input.speakerContext,
+            globalSummaryContext: transcriptionSettings.summaryContext,
+            outputLanguage: alternateLanguage,
+          }),
+        },
+      ],
+    });
+    await recordGeminiUsage({
+      noteId: input.noteId,
+      userId: input.userId,
+      stage: `summarization-${alternateLanguage}`,
+      model: alternateSummaryRaw.model,
+      inputType: 'text',
+      usageMetadata: alternateSummaryRaw.usageMetadata,
+      latencyMs: alternateSummaryRaw.latencyMs,
+    });
+    const parsedAlternateSummary = parseSummary(alternateSummaryRaw.text);
+    summaryTranslations[alternateLanguage] = parsedAlternateSummary.summary;
+  }
 
   await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
   const noteName = buildNoteName({
