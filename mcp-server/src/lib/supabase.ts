@@ -17,6 +17,7 @@ export interface NoteRow {
   projects?: Array<string | number> | null;
   chat_id?: string | null;
   created_at?: string | null;
+  meeting_at?: string | null;
 }
 
 export interface SpeakerRow {
@@ -121,6 +122,7 @@ export function summarizeNote(note: NoteRow) {
     id: note.id,
     title: getNoteTitle(note),
     createdAt: note.created_at ?? null,
+    meetingAt: note.meeting_at ?? null,
     tags: getNoteTags(note),
     projects: note.projects ?? [],
     chatId: note.chat_id ?? null,

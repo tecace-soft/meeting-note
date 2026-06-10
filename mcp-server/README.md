@@ -173,6 +173,8 @@ or:
 
 `YYYY-MM-DD` values are treated as UTC calendar days. ISO date-times are also accepted for `startDate` and `endDate`.
 
+Date filtering and ordering use `note.meeting_at` (the meeting date), falling back to `note.created_at` for notes whose `meeting_at` is null. Results are ordered by `meeting_at` descending, with `created_at` as a tiebreaker; notes without a `meeting_at` sort after those that have one.
+
 ## Resources
 
 - `note://{noteId}`

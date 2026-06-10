@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { applyCreatedAtFilter, describeDateFilter, resolveDateFilter } from '../lib/dateFilters.js';
+import { applyMeetingDateFilter, describeDateFilter, resolveDateFilter } from '../lib/dateFilters.js';
 import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
 import {
   fetchNote,
@@ -96,10 +96,10 @@ export function registerNoteTools(server: McpServer): void {
       const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
-      let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
+      let query = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
       query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-      query = applyCreatedAtFilter(query, dateFilter);
+      query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
@@ -123,9 +123,9 @@ export function registerNoteTools(server: McpServer): void {
       if (!userId) return errorResult('A scoped user id is required to list personal notes.');
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
-      let query = supabase.from('note').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(resolvedLimit);
+      let query = supabase.from('note').select('*').eq('user_id', userId).order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-      query = applyCreatedAtFilter(query, dateFilter);
+      query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({
@@ -157,10 +157,10 @@ export function registerNoteTools(server: McpServer): void {
         .select('*')
         .contains('shared_users', [userId])
         .neq('user_id', userId)
-        .order('created_at', { ascending: false })
+        .order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
         .limit(resolvedLimit);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-      query = applyCreatedAtFilter(query, dateFilter);
+      query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({
@@ -197,10 +197,10 @@ export function registerNoteTools(server: McpServer): void {
         .select('*')
         .contains('shared_users', [userId])
         .neq('user_id', userId)
-        .order('created_at', { ascending: false })
+        .order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
         .limit(200);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-      query = applyCreatedAtFilter(query, dateFilter);
+      query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       const notes = ((data as NoteRow[]) ?? [])
@@ -235,10 +235,10 @@ export function registerNoteTools(server: McpServer): void {
       const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
-      let dbQuery = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(200);
+      let dbQuery = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(200);
       dbQuery = applyNoteAccessScope(dbQuery, userId);
       if (projectId) dbQuery = dbQuery.contains('projects', [toIdValue(projectId)]);
-      dbQuery = applyCreatedAtFilter(dbQuery, dateFilter);
+      dbQuery = applyMeetingDateFilter(dbQuery, dateFilter);
       const { data, error } = await dbQuery;
       if (error) return errorResult(error.message);
       const notes = ((data as NoteRow[]) ?? []).filter((note) => noteMatchesQuery(note, query)).slice(0, resolvedLimit);
@@ -263,10 +263,10 @@ export function registerNoteTools(server: McpServer): void {
       const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
-      let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
+      let query = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
       query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-      query = applyCreatedAtFilter(query, dateFilter);
+      query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
@@ -291,10 +291,10 @@ export function registerNoteTools(server: McpServer): void {
       const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
-      let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
+      let query = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
       query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-      query = applyCreatedAtFilter(query, dateFilter);
+      query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({
@@ -327,10 +327,10 @@ export function registerNoteTools(server: McpServer): void {
       const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
-      let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
+      let query = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
       query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-      query = applyCreatedAtFilter(query, dateFilter);
+      query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({
@@ -468,7 +468,7 @@ export function registerNoteTools(server: McpServer): void {
         dateFilter = resolveDateFilter({});
       } else {
         const { supabase } = getDataContext();
-        let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedNoteLimit);
+        let query = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedNoteLimit);
         if (noteScope === 'personal') {
           if (!userId) return errorResult('A scoped user id is required to search personal notes.');
           query = query.eq('user_id', userId);
@@ -479,7 +479,7 @@ export function registerNoteTools(server: McpServer): void {
           query = applyNoteAccessScope(query, userId);
         }
         if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
-        query = applyCreatedAtFilter(query, dateFilter);
+        query = applyMeetingDateFilter(query, dateFilter);
         const { data, error } = await query;
         if (error) return errorResult(error.message);
         notes = ((data as NoteRow[]) ?? []);
