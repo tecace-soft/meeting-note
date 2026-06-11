@@ -9,8 +9,9 @@ Create `mcp-server/.env` or set environment variables in your shell/deployment:
 ```bash
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
-MEETING_NOTE_USER_ID=... # optional, strongly recommended for single-user scoping
-MCP_API_KEY=...          # required only for HTTP auth
+MEETING_NOTE_USER_ID=... # local/dev identity only when MCP_ALLOW_DEV_IDENTITY=true
+MCP_ALLOW_DEV_IDENTITY=false
+MCP_API_KEY=...          # optional local/dev static key, not a production identity source
 MCP_USER_TOKENS='{"opaque-user-token":"meeting-note-user-id"}' # optional multi-user token map
 MCP_PUBLIC_BASE_URL=https://meeting-note-mcp.onrender.com # recommended for OAuth metadata
 MCP_OAUTH_RESOURCE=api://<AZURE_APPLICATION_CLIENT_ID>
@@ -52,23 +53,19 @@ Endpoints:
 - `GET /.well-known/oauth-protected-resource`
 - `GET /.well-known/oauth-protected-resource/mcp-chatgpt`
 
-If `MCP_API_KEY` is set, clients must send:
+For production `/mcp` use a personal MCP token issued by the app:
 
 ```text
-Authorization: Bearer <MCP_API_KEY>
+Authorization: Bearer <personal MCP token>
 ```
 
-Remote HTTP clients may also pass the user scope per request:
+The server does not trust caller-supplied user ids. Do not send `x-meeting-note-user-id`; identity is resolved server-side from the bearer token or OAuth token.
 
-```text
-x-meeting-note-user-id: <note/speaker/project user_id>
-```
-
-If this header is absent, the server falls back to `MEETING_NOTE_USER_ID`. For hosted use, prefer the header so one Render deployment can serve different user scopes without redeploying.
+`MCP_API_KEY` plus `MEETING_NOTE_USER_ID` is supported only when `MCP_ALLOW_DEV_IDENTITY=true`, and should be kept to local/dev testing.
 
 ## ChatGPT web setup
 
-Claude Desktop should continue using `/mcp` with `MCP_API_KEY` and `x-meeting-note-user-id`.
+Claude Desktop should use `/mcp` with a personal MCP bearer token.
 
 For ChatGPT web Developer Mode, use:
 
@@ -133,11 +130,20 @@ Authorization: Bearer <their opaque token>
 The server never trusts a raw `user_id` from ChatGPT. It accepts either:
 
 - a Microsoft OAuth access token resolvable through Microsoft Graph `/me`
+- a personal MCP token from the `mcp_token` table
 - an opaque token from `MCP_USER_TOKENS`
 
-If neither works, `/mcp-chatgpt` falls back to `MEETING_NOTE_USER_ID` for single-user testing.
+If none works, `/mcp-chatgpt` returns `401`. Set `MCP_ALLOW_DEV_IDENTITY=true` only for local/dev single-user testing.
 
 For a public app with self-service onboarding, replace `MCP_USER_TOKENS` with real OAuth and derive the Meeting Note user id from the authenticated account.
+
+## Personal MCP token scopes
+
+Personal MCP tokens are stored hashed in `public.mcp_token`, can expire, and can be revoked. Supported scopes are:
+
+- `notes:metadata` for note/project/speaker lists and metadata.
+- `notes:summary` for summaries and speaker profiles.
+- `notes:transcript` for transcript retrieval and transcript-backed search.
 
 ## Tools
 

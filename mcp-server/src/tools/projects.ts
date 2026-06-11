@@ -1,7 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult } from '../lib/formatters.js';
-import { applyNoteAccessScope, fetchProject, getDataContext, getScopedUserId, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
+import { applyNoteAccessScope, fetchProject, getDataContext, getScopedUserId, hasMcpScope, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
+
+function requireMetadataScope() {
+  return hasMcpScope('notes:metadata') ? null : errorResult('This MCP token does not include the notes:metadata scope.');
+}
 
 export function registerProjectTools(server: McpServer): void {
   server.registerTool(
@@ -14,6 +18,8 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     async ({ limit }) => {
+      const denied = requireMetadataScope();
+      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 50, 100);
@@ -43,6 +49,8 @@ export function registerProjectTools(server: McpServer): void {
       },
     },
     async ({ projectId, noteLimit }) => {
+      const denied = requireMetadataScope();
+      if (denied) return denied;
       const project = await fetchProject(projectId);
       if (!project) return errorResult(`Project not found: ${projectId}`);
       const { supabase } = getDataContext();
