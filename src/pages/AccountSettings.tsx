@@ -38,6 +38,8 @@ type McpTokenRow = {
   tokenPrefix: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  expiresAt?: string | null;
+  scopes?: string[] | null;
   createdAt: string;
 };
 
@@ -162,12 +164,9 @@ const AccountSettings: React.FC = () => {
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
-                '--header',
-                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
                 AUTH_HEADER: claudeAuthHeader,
-                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -175,7 +174,7 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [claudeAuthHeader, user?.id]
+    [claudeAuthHeader]
   );
   const claudeDesktopConfigWindows = useMemo(
     () =>
@@ -190,12 +189,9 @@ const AccountSettings: React.FC = () => {
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
-                '--header',
-                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
                 AUTH_HEADER: claudeAuthHeader,
-                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -203,7 +199,7 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [claudeAuthHeader, user?.id]
+    [claudeAuthHeader]
   );
   const claudeDesktopConfig = clientOs === 'windows' ? claudeDesktopConfigWindows : claudeDesktopConfigMac;
   const claudeDesktopConfigLabel =
@@ -1358,6 +1354,9 @@ const AccountSettings: React.FC = () => {
                             <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                               {mcpTokens.map((token) => {
                                 const revoked = Boolean(token.revokedAt);
+                                const expired = token.expiresAt ? Date.parse(token.expiresAt) <= Date.now() : false;
+                                const inactive = revoked || expired;
+                                const scopeLabel = token.scopes?.length ? token.scopes.join(', ') : 'default scopes';
                                 return (
                                   <div
                                     key={token.id}
@@ -1365,7 +1364,7 @@ const AccountSettings: React.FC = () => {
                                     style={{ borderColor: 'var(--border)' }}
                                   >
                                     <div className="min-w-0">
-                                      <p className="truncate text-sm font-medium" style={{ color: revoked ? 'var(--text-muted)' : 'var(--text)' }}>
+                                      <p className="truncate text-sm font-medium" style={{ color: inactive ? 'var(--text-muted)' : 'var(--text)' }}>
                                         {token.name}
                                       </p>
                                       <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -1373,8 +1372,15 @@ const AccountSettings: React.FC = () => {
                                         {token.lastUsedAt ? ` · Last used ${new Date(token.lastUsedAt).toLocaleDateString()}` : ''}
                                         {revoked ? ' · Revoked' : ''}
                                       </p>
+                                      <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+                                        {token.expiresAt ? `Expires ${new Date(token.expiresAt).toLocaleDateString()}` : 'No expiry recorded'}
+                                        {expired ? ' - Expired' : ''}
+                                      </p>
+                                      <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+                                        Scopes: {scopeLabel}
+                                      </p>
                                     </div>
-                                    {!revoked ? (
+                                    {!inactive ? (
                                       <button
                                         type="button"
                                         onClick={() => void handleRevokeMcpToken(token.id)}
@@ -1487,14 +1493,14 @@ const AccountSettings: React.FC = () => {
                                 'Claude Desktop 설정을 열고 개발자 MCP 설정 파일을 찾습니다.',
                                 '아래 mcpServers 블록을 기존 JSON에 추가합니다. 기존 설정이 있으면 유지하고 mcpServers를 같은 레벨의 속성으로 추가합니다.',
                                 '위에서 개인 MCP 키를 생성합니다. 아래 설정은 마지막으로 생성된 키를 env.AUTH_HEADER에 넣습니다.',
-                                '키를 생성한 뒤 설정을 복사하여 Claude가 올바른 인증 헤더와 Meeting Note 사용자 ID를 받도록 합니다.',
+                                '키를 생성한 뒤 설정을 복사하여 Claude가 올바른 개인 MCP 인증 헤더를 받도록 합니다.',
                                 'Claude Desktop을 다시 시작하고 Meeting Note MCP 도구가 보이는지 확인합니다.',
                               ]
                             : [
                                 'Open Claude Desktop settings and locate the developer MCP configuration file.',
                                 'Add the mcpServers block below to the existing JSON. If the file already has preferences, keep them and add mcpServers as a sibling property.',
                                 'Generate a personal MCP key above. The config below will place the last generated key under env.AUTH_HEADER.',
-                                'Copy the config after generating the key so Claude receives the correct auth header and your Meeting Note user ID.',
+                                'Copy the config after generating the key so Claude receives the correct personal MCP auth header.',
                                 'Restart Claude Desktop and look for the Meeting Note MCP tools.',
                               ]).map((step, index) => (
                             <li key={step}><span className="font-medium" style={{ color: 'var(--text)' }}>{index + 1}.</span> {step}</li>
