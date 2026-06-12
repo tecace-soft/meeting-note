@@ -9,6 +9,8 @@ import AppSidebar, {
   writeSidebarCollapsed,
 } from './AppSidebar';
 import { useIsMdUp } from '../hooks/useIsMdUp';
+import FloatingRecorderWidget from './FloatingRecorderWidget';
+import { RecorderProvider } from '../context/RecorderContext';
 
 function readInitialCollapsed(): boolean {
   if (typeof window === 'undefined') return false;
@@ -68,55 +70,59 @@ const AppShell: React.FC = () => {
   }, [isMdUp, collapsed, persistCollapsed]);
 
   return (
-    <div
-      className="relative flex h-screen w-full overflow-hidden"
-      style={{ backgroundColor: 'var(--bg)' }}
-    >
-      <AppSidebar
-        collapsed={collapsed}
-        onToggleCollapsed={onToggleCollapsed}
-        onExpandSidebar={onExpandSidebar}
-        mobileOverlay={mobileOverlay}
-        onMobileOverlayNavigate={onMobileOverlayNavigate}
-      />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <Outlet />
-      </div>
+    <RecorderProvider>
+      <div
+        className="relative flex h-screen w-full overflow-hidden"
+        style={{ backgroundColor: 'var(--bg)' }}
+      >
+        <AppSidebar
+          collapsed={collapsed}
+          onToggleCollapsed={onToggleCollapsed}
+          onExpandSidebar={onExpandSidebar}
+          mobileOverlay={mobileOverlay}
+          onMobileOverlayNavigate={onMobileOverlayNavigate}
+        />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <Outlet />
+        </div>
 
-      {mobileOverlay && collapsed ? (
-        <div
-          className="fixed z-30 md:hidden"
-          style={{
-            bottom: 'max(0.75rem, env(safe-area-inset-bottom))',
-            left: 'max(0.75rem, env(safe-area-inset-left))',
-          }}
-        >
-          <IconButton
-            type="button"
-            variant="solid"
-            aria-label="Open menu"
-            onClick={() => {
-              setCollapsed(false);
-              persistCollapsed(false);
+        <FloatingRecorderWidget />
+
+        {mobileOverlay && collapsed ? (
+          <div
+            className="fixed z-30 md:hidden"
+            style={{
+              bottom: 'max(0.75rem, env(safe-area-inset-bottom))',
+              left: 'max(0.75rem, env(safe-area-inset-left))',
             }}
           >
-            <WindowSidebar width={22} height={22} aria-hidden />
-          </IconButton>
-        </div>
-      ) : null}
+            <IconButton
+              type="button"
+              variant="solid"
+              aria-label="Open menu"
+              onClick={() => {
+                setCollapsed(false);
+                persistCollapsed(false);
+              }}
+            >
+              <WindowSidebar width={22} height={22} aria-hidden />
+            </IconButton>
+          </div>
+        ) : null}
 
-      {mobileOverlay && !collapsed ? (
-        <button
-          type="button"
-          className="fixed inset-0 z-40 cursor-default bg-black/40 md:hidden"
-          aria-label="Close menu"
-          onClick={() => {
-            setCollapsed(true);
-            persistCollapsed(true);
-          }}
-        />
-      ) : null}
-    </div>
+        {mobileOverlay && !collapsed ? (
+          <button
+            type="button"
+            className="fixed inset-0 z-40 cursor-default bg-black/40 md:hidden"
+            aria-label="Close menu"
+            onClick={() => {
+              setCollapsed(true);
+              persistCollapsed(true);
+            }}
+          />
+        ) : null}
+      </div>
+    </RecorderProvider>
   );
 };
 

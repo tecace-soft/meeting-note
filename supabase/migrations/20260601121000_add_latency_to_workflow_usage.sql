@@ -1,0 +1,2 @@
+ALTER TABLE public.workflow_usage
+ADD COLUMN IF NOT EXISTS latency_ms INTEGER NOT NULL DEFAULT 0;

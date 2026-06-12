@@ -838,6 +838,38 @@ select:focus {
   background-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent);
 }
 
+.app-skin .summary-calendar-event {
+  background-color: transparent !important;
+  border-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent) !important;
+  color: var(--text);
+}
+
+.app-skin {
+  --summary-calendar-gridline: color-mix(in srgb, var(--border) 52%, transparent);
+}
+
+.app-skin .summary-calendar-event:hover {
+  background-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent) !important;
+  border-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent) !important;
+}
+
+.app-skin .summary-calendar-event-active,
+.app-skin .summary-calendar-event-active:hover {
+  background-color: color-mix(in srgb, var(--accent) 10%, var(--surface)) !important;
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.app-skin .summary-calendar-event-active:focus,
+.app-skin .summary-calendar-event-active:focus-visible {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 .app-skin .summary-note-row:hover .summary-note-row-rail {
   opacity: 0.44;
   transform: scaleY(0.82);
@@ -923,6 +955,33 @@ select:focus {
 
 :root[data-theme="dark"] .app-skin .summary-note-row:hover {
   background-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent);
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event {
+  background-color: transparent !important;
+  border-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent) !important;
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event:hover {
+  background-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent) !important;
+  border-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent) !important;
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active,
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active:hover {
+  background-color: color-mix(in srgb, var(--accent) 18%, var(--surface)) !important;
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active:focus,
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active:focus-visible {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 :root[data-theme="dark"] .app-skin .summary-note-row-active,
@@ -1182,7 +1241,7 @@ select:focus {
 
 .app-skin .chat-item:hover,
 .app-skin .folder-item:hover,
-.app-skin button:not(.summary-toolbar-btn-danger):not(.app-toolbar-btn-danger):not(.sidebar-toggle-btn):not(.sidebar-footer-action):not(.transcript-speaker-trigger):not([data-transcript-speaker-trigger]):hover:not(:disabled),
+.app-skin button:not(.summary-toolbar-btn-danger):not(.app-toolbar-btn-danger):not(.sidebar-toggle-btn):not(.sidebar-footer-action):not(.transcript-speaker-trigger):not([data-transcript-speaker-trigger]):not(.app-language-toggle-option-active):hover:not(:disabled),
 .app-skin a:not(.sidebar-nav-link):hover {
   background-color: color-mix(in srgb, var(--tc-cyan) 7%, var(--surface-hover));
 }
@@ -1366,7 +1425,12 @@ html body .app-skin form.project-chat-input-shell input.project-chat-input:focus
 html body .app-skin form.project-chat-input-shell input.project-chat-input:active,
 html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill,
 html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:hover,
-html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:focus {
+html body .app-skin form.project-chat-input-shell input.project-chat-input:-webkit-autofill:focus,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:hover,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:focus,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:focus-visible,
+html body .app-skin form.project-chat-input-shell textarea.project-chat-input:active {
   -webkit-appearance: none !important;
   appearance: none !important;
   background: transparent !important;
@@ -1376,6 +1440,7 @@ html body .app-skin form.project-chat-input-shell input.project-chat-input:-webk
   border-radius: 0 !important;
   outline: 0 !important;
   box-shadow: none !important;
+  resize: none !important;
   -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
   --tw-ring-color: transparent !important;
   --tw-ring-shadow: 0 0 #0000 !important;
@@ -1547,6 +1612,11 @@ html body .app-skin form.project-chat-input-shell:active {
 .app-skin .results-tabs {
   background-color: transparent;
   padding: 0;
+}
+
+.app-skin .summary-detail-expand-btn:hover:not(:disabled) {
+  background-color: var(--bg-secondary);
+  color: var(--text);
 }
 
 .app-skin .results-tab {
@@ -1730,6 +1800,94 @@ html body .app-skin form.project-chat-input-shell:active {
 
 .transcript-segment:hover .transcript-speaker-avatar {
   transform: none;
+}
+
+.transcript-segment-text-button {
+  display: block;
+  width: 100%;
+  border: 0 !important;
+  border-radius: 4px;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 4px;
+  transition: color 0.16s ease, text-decoration-color 0.16s ease;
+}
+
+.app-skin .transcript-segment-text-button:hover,
+.app-skin .transcript-segment-text-button:focus-visible {
+  background-color: transparent !important;
+  color: color-mix(in srgb, var(--text-secondary) 78%, var(--accent)) !important;
+  text-decoration-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.transcript-segment-edit-text {
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  outline: none;
+  box-shadow: none;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  text-decoration: none;
+}
+
+.transcript-segment-edit-text:focus,
+.transcript-segment-edit-text:focus-visible {
+  border: 0;
+  box-shadow: none;
+  text-decoration: none;
+}
+
+:root[data-theme="dark"] .transcript-segment-edit-text {
+  background: transparent;
+}
+
+.transcript-segment-audio-btn {
+  display: inline-flex;
+  height: 1.25rem;
+  width: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 0 !important;
+  border-radius: 4px;
+  background: transparent !important;
+  color: var(--accent);
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0;
+  transition: color 0.16s ease, opacity 0.16s ease;
+}
+
+.app-skin .transcript-segment-audio-btn:hover,
+.app-skin .transcript-segment-audio-btn:focus-visible,
+.app-skin .transcript-segment-audio-btn-active {
+  background: transparent !important;
+  color: var(--tc-cyan) !important;
+  opacity: 1;
+}
+
+:root[data-theme="dark"] .app-skin .transcript-segment-audio-btn:hover,
+:root[data-theme="dark"] .app-skin .transcript-segment-audio-btn:focus-visible,
+:root[data-theme="dark"] .app-skin .transcript-segment-audio-btn-active {
+  color: var(--accent-hover) !important;
+}
+
+.transcript-segment-audio-time {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--text-muted);
 }
 
 .transcript-speaker-filter-row {
@@ -1942,4 +2100,24 @@ button[data-transcript-speaker-trigger]:focus-visible::after {
   --tw-ring-color: transparent !important;
   --tw-ring-offset-width: 0px !important;
   --tw-ring-offset-color: transparent !important;
+}
+
+.app-skin .app-language-toggle {
+  background: var(--surface);
+}
+
+.app-skin .app-language-toggle-option {
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.app-skin .app-language-toggle-option:not(.app-language-toggle-option-active):hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-subtle);
+}
+
+.app-skin .app-language-toggle-option-active {
+  color: var(--accent);
+  background: var(--accent-light);
 }

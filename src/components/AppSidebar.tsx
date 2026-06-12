@@ -18,16 +18,21 @@ import {
   LogOut,
   Moon,
   MoreHorizontal,
+  Settings,
   Sun,
   TrashFull,
   UserAdd,
 } from 'react-coolicons';
 import { IconButton } from '../ui/wantedCompat';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage, type TranslationKey } from '../context/LanguageContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { normalizeTranscript } from '../lib/transcriptSegments';
+import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { isAdminMicrosoftUser } from '../lib/adminAccess';
+import tecaceLogoNavy from '../assets/tecace-logo-navy.svg';
+import tecaceLogoWhite from '../assets/tecace-logo-white.svg';
 
 const STORAGE_KEY = 'meeting_note_sidebar_collapsed';
 const MOBILE_STORAGE_KEY = 'meeting_note_sidebar_mobile_collapsed';
@@ -80,6 +85,7 @@ interface SidebarNote {
   id: string;
   name?: string | null;
   created_at?: string | null;
+  duration_seconds?: number | null;
   projects?: Array<string | number> | null;
   summary?: string | null;
   summary_edit?: string | null;
@@ -115,9 +121,13 @@ function getNoteTranscriptionText(note: SidebarNote): string {
   return segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
 }
 
+function getNoteDurationMeta(note: SidebarNote): string | null {
+  return formatDurationMeta(getNoteDurationSeconds(note));
+}
+
 const navItems = [
-  { to: '/transcription-summary', label: 'Meeting Note', icon: FileDocument, end: true as const },
-  { to: '/history', label: 'History', icon: ListOrdered, end: false as const, projects: true as const },
+  { to: '/transcription-summary', labelKey: 'meetingNote' as TranslationKey, icon: FileDocument, end: true as const },
+  { to: '/history', labelKey: 'history' as TranslationKey, icon: ListOrdered, end: false as const, projects: true as const },
   { to: '/save-summary', label: 'OneDrive', icon: Cloud, end: false as const },
 ] as const;
 
@@ -139,7 +149,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, isAuthenticated } = useAuth();
+  const { t } = useLanguage();
   const { theme, toggleTheme } = useTheme();
+  const tecaceLogo = theme === 'dark' ? tecaceLogoWhite : tecaceLogoNavy;
   const prevPathRef = useRef<string | null>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
 
@@ -170,8 +182,15 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const summaryHistorySectionActive = location.pathname === '/history' || location.pathname === '/summary-history';
   const visibleNavItems = isAdminMicrosoftUser(user?.id)
-    ? [...navItems, { to: '/admin-analytics', label: 'Admin Analytics', icon: ChartBarVertical01, end: false as const }]
+    ? [
+        ...navItems,
+        { to: '/admin-controls', labelKey: 'adminControls' as TranslationKey, icon: Settings, end: false as const },
+        { to: '/admin-analytics', labelKey: 'adminAnalytics' as TranslationKey, icon: ChartBarVertical01, end: false as const },
+      ]
     : [...navItems];
+
+  const getNavItemLabel = (item: { label?: string; labelKey?: TranslationKey }): string =>
+    item.labelKey ? t(item.labelKey) : item.label ?? '';
 
   const activeProjectId =
     location.pathname === '/project'
@@ -328,7 +347,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     if (!user?.id) return;
     const projectName = newProjectName.trim();
     if (!projectName) {
-      setCreateProjectError('Project name is required.');
+      setCreateProjectError(t('projectNameRequired'));
       return;
     }
 
@@ -411,7 +430,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     if (!user?.id || !renameProjectId || renamingProject) return;
     const name = renameProjectName.trim();
     if (!name) {
-      setRenameProjectError('Project name is required.');
+      setRenameProjectError(t('projectNameRequired'));
       return;
     }
 
@@ -521,18 +540,25 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     >
       <div
         className={`flex items-center py-2 ${
-          collapsed ? 'justify-center px-0' : 'justify-between gap-1 px-2'
+          collapsed ? 'flex-col justify-center gap-1 px-0' : 'justify-between gap-2 px-2'
         }`}
         style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
       >
-        {!collapsed && (
-          <span
-            className="flex-1 truncate px-2 text-xs font-semibold uppercase tracking-wider"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            Meeting Note
-          </span>
-        )}
+        {!collapsed ? (
+          <div className="flex min-w-0 flex-1 flex-col px-2 py-1">
+            <img
+              src={tecaceLogo}
+              alt="TecAce"
+              className="h-auto w-[7.75rem] max-w-full"
+            />
+            <span
+              className="mt-1 truncate text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: 'var(--text-muted)', marginLeft: 14 }}
+            >
+              Meeting Note
+            </span>
+          </div>
+        ) : null}
         <IconButton
           type="button"
           variant="background"
@@ -559,7 +585,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 <NavLink
                   to={item.to}
                   end={item.end}
-                  title={collapsed ? item.label : undefined}
+                  title={collapsed ? getNavItemLabel(item) : undefined}
                   onClick={handleNavPress}
                   className={({ isActive }) =>
                     `sidebar-nav-link flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity ${
@@ -571,7 +597,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   style={({ isActive }) => linkStyle(isActive || summaryHistorySectionActive)}
                 >
                   <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
-                  {!collapsed && <span className="truncate">{item.label}</span>}
+                  {!collapsed && <span className="truncate">{getNavItemLabel(item)}</span>}
                 </NavLink>
 
                 {showProjectNav && (
@@ -579,7 +605,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                     className="mb-1 ml-2 mt-0.5 space-y-0.5 border-l pl-2"
                     style={{ borderColor: 'var(--border)' }}
                     role="group"
-                    aria-label="Projects"
+                    aria-label={t('projects')}
                   >
                     <button
                       type="button"
@@ -588,7 +614,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                       style={linkStyle(false)}
                     >
                       <FolderAdd className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
-                      <span className="truncate">New Project</span>
+                      <span className="truncate">{t('newProject')}</span>
                     </button>
 
                     {projectsLoading ? (
@@ -714,7 +740,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 style={{ color: 'var(--error)' }}
                               >
                                 <TrashFull className="h-4 w-4" aria-hidden />
-                                Delete project
+                                {t('deleteProject')}
                               </button>
                             </div>
                           ) : null}
@@ -732,7 +758,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               key={item.to}
               to={item.to}
               end={item.end}
-              title={collapsed ? item.label : undefined}
+              title={collapsed ? getNavItemLabel(item) : undefined}
               onClick={handleNavPress}
               className={({ isActive }) =>
                 `sidebar-nav-link flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium opacity-90 transition-opacity ${
@@ -744,7 +770,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               style={({ isActive }) => linkStyle(isActive)}
             >
               <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
-              {!collapsed && <span className="truncate">{item.label}</span>}
+              {!collapsed && <span className="truncate">{getNavItemLabel(item)}</span>}
             </NavLink>
           );
         })}
@@ -761,14 +787,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             collapsed ? 'justify-center px-2' : 'px-3'
           }`}
           style={{ color: 'var(--text-secondary)' }}
-          title={collapsed ? (theme === 'light' ? 'Dark Mode' : 'Light Mode') : undefined}
+          title={collapsed ? (theme === 'light' ? t('darkMode') : t('lightMode')) : undefined}
         >
           {theme === 'light' ? (
             <Moon className="h-4 w-4 flex-shrink-0" aria-hidden />
           ) : (
             <Sun className="h-4 w-4 flex-shrink-0" aria-hidden />
           )}
-          {!collapsed && <span>Theme</span>}
+          {!collapsed && <span>{t('theme')}</span>}
         </button>
 
         {isAuthenticated && user ? (
@@ -778,8 +804,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               onClick={handleOpenAccountSettings}
               className={`sidebar-footer-action flex w-full items-center gap-2 rounded-lg py-1 text-left transition-opacity hover:opacity-90 ${collapsed ? 'justify-center px-0' : 'px-2'}`}
               style={{ color: 'var(--text)' }}
-              title={collapsed ? 'Account Settings' : undefined}
-              aria-label="Open account settings"
+              title={collapsed ? t('accountSettings') : undefined}
+              aria-label={t('openAccountSettings')}
             >
               <div
                 className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-sm font-medium"
@@ -851,7 +877,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             >
               <div>
                 <h3 id="new-project-dialog-title" className="text-lg font-semibold sm:text-xl" style={{ color: 'var(--text)' }}>
-                  New Project
+                  {t('newProject')}
                 </h3>
                 <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
                   Name your folder and choose which meeting notes to include.
@@ -879,7 +905,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                     className="mb-1.5 block text-sm font-medium"
                     style={{ color: 'var(--text-secondary)' }}
                   >
-                    Project name
+                    {t('projectName')}
                   </label>
                   <input
                     id="new-project-name"
@@ -979,9 +1005,15 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 <p
                                   className="mt-0.5 truncate text-xs leading-snug"
                                   style={{ color: 'var(--text-muted)' }}
-                                  title={formatNoteModalDate(note.created_at)}
+                                  title={`${formatNoteModalDate(note.created_at)}${getNoteDurationMeta(note) ? `, ${getNoteDurationMeta(note)}` : ''}`}
                                 >
                                   {formatNoteModalDate(note.created_at)}
+                                  {getNoteDurationMeta(note) ? (
+                                    <>
+                                      <span className="mx-1.5" aria-hidden>•</span>
+                                      {getNoteDurationMeta(note)}
+                                    </>
+                                  ) : null}
                                 </p>
                               </div>
                               <div className="flex h-10 shrink-0 items-center justify-end">
@@ -1004,7 +1036,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                               >
                                 <div>
                                   <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                    Summary
+                                    {t('summary')}
                                   </h4>
                                   <div
                                     className="custom-scrollbar project-note-picker-preview max-h-48 min-h-0 overflow-y-auto whitespace-pre-wrap p-3 text-sm leading-relaxed max-md:text-base"
@@ -1018,7 +1050,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                   style={{ borderColor: 'var(--border)' }}
                                 >
                                   <h4 className="mb-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                    Transcription
+                                    {t('transcription')}
                                   </h4>
                                   <div
                                     className="custom-scrollbar project-note-picker-preview max-h-56 min-h-0 overflow-y-auto whitespace-pre-wrap p-3 text-sm leading-relaxed max-md:text-base"
@@ -1057,7 +1089,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                   style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   disabled={creatingProject}
                 >
-                  Cancel
+                  {t('cancel')}
                 </button>
                 <button
                   type="submit"
@@ -1084,7 +1116,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           style={{ backgroundColor: 'var(--surface)' }}
           >
             <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-              Delete project?
+              {t('deleteProject')}?
             </h3>
             <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
               This will remove the project and unlink it from all notes. Notes are not deleted.
@@ -1102,7 +1134,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
                 disabled={deletingProject}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 type="button"
@@ -1114,7 +1146,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 disabled={deletingProject}
               >
                 {deletingProject ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                Delete
+                {t('delete')}
               </button>
             </div>
           </div>

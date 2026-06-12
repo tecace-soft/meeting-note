@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult } from '../lib/formatters.js';
-import { fetchProject, getDataContext, getScopedUserId, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
+import { applyNoteAccessScope, fetchProject, getDataContext, getScopedUserId, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
 
 export function registerProjectTools(server: McpServer): void {
   server.registerTool(
@@ -54,7 +54,7 @@ export function registerProjectTools(server: McpServer): void {
         .contains('projects', [toIdValue(projectId)])
         .order('created_at', { ascending: false })
         .limit(limit);
-      if (userId) query = query.eq('user_id', userId);
+      query = applyNoteAccessScope(query, userId);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       return jsonResult({

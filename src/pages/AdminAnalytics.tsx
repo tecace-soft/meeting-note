@@ -10,6 +10,7 @@ import {
   Users,
 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { isAdminMicrosoftUser } from '../lib/adminAccess';
 
@@ -47,7 +48,22 @@ interface AdminSpeakerProfile {
 interface UsageDay {
   date: string;
   notes: number;
+  aiTokens: number;
+  aiEstimatedCostUsd: number;
+  transcriptionLatencyMs: number;
+  transcriptionLatencySamples: number;
+  summaryLatencyMs: number;
+  summaryLatencySamples: number;
   total: number;
+}
+
+interface ChartTooltip {
+  chart: 'daily' | 'workflow';
+  x: number;
+  y: number;
+  title: string;
+  value: string;
+  color: string;
 }
 
 interface AdminAnalyticsResponse {
@@ -72,6 +88,19 @@ interface AdminAnalyticsResponse {
     summaryPrompts: number;
     mcpTokens: number;
     activeMcpTokens: number;
+    aiCalls?: number;
+    transcriptionCalls?: number;
+    assemblyTranscriptionCalls?: number;
+    summaryCalls?: number;
+    geminiSummaryCalls?: number;
+    aiPromptTokens?: number;
+    aiCandidateTokens?: number;
+    aiTokens?: number;
+    aiEstimatedCostUsd?: number;
+    assemblyTranscriptionCostUsd?: number;
+    geminiSummaryCostUsd?: number;
+    averageTranscriptionLatencyMs?: number;
+    averageSummaryLatencyMs?: number;
   };
   usageChart?: {
     startDate?: string;
@@ -113,6 +142,25 @@ function formatBytes(value: number): string {
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
 }
 
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat([], {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value >= 1 ? 2 : 4,
+    maximumFractionDigits: value >= 1 ? 2 : 4,
+  }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatDurationMs(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0s';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  const seconds = value / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
 function toDateInputValue(date: Date): string {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 10);
@@ -139,6 +187,10 @@ function formatChartDay(value: string): string {
   }
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 function addLocalDays(dateKey: string, days: number): string {
   const date = new Date(`${dateKey}T00:00:00`);
   date.setDate(date.getDate() + days);
@@ -157,6 +209,12 @@ function emptyUsageDays(startDate: string, endDate: string): UsageDay[] {
     days.push({
       date,
       notes: 0,
+      aiTokens: 0,
+      aiEstimatedCostUsd: 0,
+      transcriptionLatencyMs: 0,
+      transcriptionLatencySamples: 0,
+      summaryLatencyMs: 0,
+      summaryLatencySamples: 0,
       total: 0,
     });
     cursor = addLocalDays(cursor, 1);
@@ -168,6 +226,12 @@ function emptyUsageDays(startDate: string, endDate: string): UsageDay[] {
         return {
           date,
           notes: 0,
+          aiTokens: 0,
+          aiEstimatedCostUsd: 0,
+          transcriptionLatencyMs: 0,
+          transcriptionLatencySamples: 0,
+          summaryLatencyMs: 0,
+          summaryLatencySamples: 0,
           total: 0,
         };
       });
@@ -205,9 +269,12 @@ async function callAdminAnalytics(
 const AdminAnalytics: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { t, appLanguage } = useLanguage();
   const [chartEndDate, setChartEndDate] = useState(() => toDateInputValue(new Date()));
   const [chartStartDate, setChartStartDate] = useState(() => defaultChartStartDate(toDateInputValue(new Date())));
   const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null);
+  const [workflowMetric, setWorkflowMetric] = useState<'tokens' | 'cost' | 'transcription-latency' | 'summary-latency'>('tokens');
+  const [chartTooltip, setChartTooltip] = useState<ChartTooltip | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -259,10 +326,10 @@ const AdminAnalytics: React.FC = () => {
       <div className="flex min-h-full items-center justify-center p-6">
         <div className="max-w-md text-center">
           <h1 className="text-xl font-semibold" style={{ color: 'var(--text)' }}>
-            Admin access required
+            {t('adminAccessRequired')}
           </h1>
           <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-            Your Microsoft account is not authorized to view app-wide analytics.
+            {t('adminAnalyticsForbidden')}
           </p>
         </div>
       </div>
@@ -274,17 +341,95 @@ const AdminAnalytics: React.FC = () => {
   const usageChartStartDate = analytics?.usageChart?.startDate ?? chartStartDate;
   const usageChartEndDate = analytics?.usageChart?.endDate ?? chartEndDate;
   const usageDays = analytics?.usageChart?.days ?? emptyUsageDays(usageChartStartDate, usageChartEndDate);
-  const usageMax = Math.max(1, ...usageDays.map((day) => day.total));
+  const usageMax = Math.max(1, ...usageDays.map((day) => day.notes));
   const chartTotal = usageDays.reduce((sum, day) => sum + day.notes, 0);
   const chartAverage = usageDays.length > 0 ? chartTotal / usageDays.length : 0;
+  const workflowSeries = [
+    {
+      key: 'tokens',
+      label: t('summaryTokens'),
+      color: '#2563eb',
+      values: usageDays.map((day) => day.aiTokens),
+      format: (value: number) => formatNumber(Math.round(value)),
+      total: usageDays.reduce((sum, day) => sum + day.aiTokens, 0),
+    },
+    {
+      key: 'cost',
+      label: t('workflowCost'),
+      color: '#16a34a',
+      values: usageDays.map((day) => day.aiEstimatedCostUsd),
+      format: (value: number) => formatCurrency(value),
+      total: usageDays.reduce((sum, day) => sum + day.aiEstimatedCostUsd, 0),
+    },
+    {
+      key: 'transcription-latency',
+      label: t('transcription'),
+      color: '#f97316',
+      values: usageDays.map((day) => day.transcriptionLatencyMs),
+      format: formatDurationMs,
+      total: totals?.averageTranscriptionLatencyMs ?? 0,
+    },
+    {
+      key: 'summary-latency',
+      label: t('summary'),
+      color: '#7c3aed',
+      values: usageDays.map((day) => day.summaryLatencyMs),
+      format: formatDurationMs,
+      total: totals?.averageSummaryLatencyMs ?? 0,
+    },
+  ];
+  const selectedWorkflowSeries = workflowSeries.find((series) => series.key === workflowMetric) ?? workflowSeries[0];
+  const lineChartWidth = 900;
+  const lineChartHeight = 230;
+  const lineChartPadding = 48;
+  const selectedWorkflowMax = Math.max(1, ...selectedWorkflowSeries.values);
+  const selectedWorkflowLatest = selectedWorkflowSeries.values[selectedWorkflowSeries.values.length - 1] ?? 0;
+  const selectedWorkflowAverage = selectedWorkflowSeries.values.length > 0
+    ? selectedWorkflowSeries.values.reduce((sum, value) => sum + value, 0) / selectedWorkflowSeries.values.length
+    : 0;
+  const chartTicks = [1, 0.75, 0.5, 0.25, 0];
   const metricCards = totals
     ? [
-        { label: 'Signed-up users', value: totals.signedUpUsers, detail: `${totals.activeUsers} active users`, icon: Users },
-        { label: 'Notes', value: totals.notes, detail: `${totals.sharedNotes} shared notes`, icon: FileDocument },
-        { label: 'Summaries', value: totals.summariesGenerated, detail: `${totals.transcriptionsGenerated} transcriptions`, icon: Check },
-        { label: 'Audio files', value: totals.files, detail: `${totals.recordedFiles} recorded, ${totals.uploadedFiles} uploaded`, icon: Download },
-        { label: 'Projects', value: totals.projects, detail: `${totals.summaryPrompts} prompts`, icon: ChartBarVertical01 },
-        { label: 'Speaker profiles', value: totals.speakerProfiles, detail: `${totals.ontologyProfiles} ontology, ${totals.emptySpeakerProfiles} empty`, icon: User01 },
+        { label: t('signedUpUsers'), value: totals.signedUpUsers, detail: `${totals.activeUsers} ${t('activeUsers')}`, icon: Users },
+        { label: t('notes'), value: totals.notes, detail: `${totals.sharedNotes} ${t('sharedNotes')}`, icon: FileDocument },
+        { label: t('projects'), value: totals.projects, detail: `${totals.summaryPrompts} ${t('prompts')}`, icon: ChartBarVertical01 },
+        { label: t('speakerProfilesLower'), value: totals.speakerProfiles, detail: `${totals.ontologyProfiles} ${t('profileStatusOntology')}, ${totals.emptySpeakerProfiles} ${t('profileStatusEmpty')}`, icon: User01 },
+      {
+        label: appLanguage === 'ko' ? '총 요약 토큰' : 'Total summary tokens',
+        value: totals.aiTokens ?? 0,
+        detail:
+          appLanguage === 'ko'
+            ? `${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini 요약 호출, 제공업체 보고 토큰`
+            : `${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini summary calls, provider-reported tokens`,
+        icon: ChartBarVertical01,
+      },
+      {
+        label: appLanguage === 'ko' ? '총 워크플로 비용' : 'Total workflow cost',
+        valueText: formatCurrency(totals.aiEstimatedCostUsd ?? 0),
+        detail:
+          appLanguage === 'ko'
+            ? `추정 총액: ${formatCurrency(totals.assemblyTranscriptionCostUsd ?? 0)} AssemblyAI + ${formatCurrency(totals.geminiSummaryCostUsd ?? 0)} Gemini`
+            : `Estimated total: ${formatCurrency(totals.assemblyTranscriptionCostUsd ?? 0)} AssemblyAI + ${formatCurrency(totals.geminiSummaryCostUsd ?? 0)} Gemini`,
+        icon: Check,
+      },
+      {
+        label: appLanguage === 'ko' ? '평균 전사 지연 시간' : 'Avg transcription latency',
+        valueText: formatDurationMs(totals.averageTranscriptionLatencyMs ?? 0),
+        detail:
+          appLanguage === 'ko'
+            ? `${formatNumber(totals.assemblyTranscriptionCalls ?? totals.transcriptionCalls ?? 0)} AssemblyAI 전사 호출 평균`
+            : `Average across ${formatNumber(totals.assemblyTranscriptionCalls ?? totals.transcriptionCalls ?? 0)} AssemblyAI transcription calls`,
+        icon: ChartBarVertical01,
+      },
+      {
+        label: appLanguage === 'ko' ? '평균 요약 지연 시간' : 'Avg summary latency',
+        valueText: formatDurationMs(totals.averageSummaryLatencyMs ?? 0),
+        detail:
+          appLanguage === 'ko'
+            ? `${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini 요약 호출 평균`
+            : `Average across ${formatNumber(totals.geminiSummaryCalls ?? totals.summaryCalls ?? 0)} Gemini summary calls`,
+        icon: Check,
+      },
       ]
     : [];
 
@@ -301,13 +446,13 @@ const AdminAnalytics: React.FC = () => {
           <div className="min-w-0">
             <div className="mb-1 inline-flex items-center gap-2 text-xs font-semibold" style={{ color: 'var(--accent)' }}>
               <ChartBarVertical01 className="h-3.5 w-3.5" aria-hidden />
-              Admin workspace
+              {t('adminWorkspace')}
             </div>
             <h1 className="text-2xl font-semibold tracking-normal" style={{ color: 'var(--text)' }}>
-              Analytics
+              {t('analytics')}
             </h1>
             <p className="mt-0.5 max-w-2xl text-sm" style={{ color: 'var(--text-secondary)' }}>
-              App-wide usage, user activity, and speaker profile coverage.
+              {appLanguage === 'ko' ? '앱 전체 사용량, 사용자 활동, 화자 프로필 현황입니다.' : 'App-wide usage, user activity, and speaker profile coverage.'}
             </p>
           </div>
         </div>
@@ -318,7 +463,7 @@ const AdminAnalytics: React.FC = () => {
           <div className="flex min-h-[18rem] items-center justify-center">
             <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
               <Loading className="h-4 w-4 animate-spin" aria-hidden />
-              Loading analytics...
+              {t('loadingAnalytics')}
             </div>
           </div>
         ) : null}
@@ -332,7 +477,7 @@ const AdminAnalytics: React.FC = () => {
         {analytics ? (
           <div className="mx-auto w-full max-w-[96rem] space-y-4">
             <div
-              className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+              className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
             >
               {metricCards.map((card) => {
                 const Icon = card.icon;
@@ -353,9 +498,9 @@ const AdminAnalytics: React.FC = () => {
                       </p>
                     </div>
                     <p className="mt-3 text-xl font-semibold" style={{ color: 'var(--text)' }}>
-                      {formatNumber(card.value)}
+                      {'valueText' in card ? card.valueText : formatNumber(card.value)}
                     </p>
-                    <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
                       {card.detail}
                     </p>
                   </div>
@@ -364,11 +509,12 @@ const AdminAnalytics: React.FC = () => {
             </div>
 
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <div className="min-w-0 space-y-4">
             <section className="rounded-lg" style={{ backgroundColor: 'var(--surface)' }}>
-              <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                    Generated notes by day
+                    {t('generatedNotesByDay')}
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {formatNumber(chartTotal)} notes, {formatNumber(Number(chartAverage.toFixed(1)))} daily average
@@ -413,65 +559,368 @@ const AdminAnalytics: React.FC = () => {
                     className="mb-4 rounded-lg border px-3 py-2 text-sm"
                     style={{ borderColor: 'var(--warning)', backgroundColor: 'var(--warning-light)', color: 'var(--warning)' }}
                   >
-                    Chart data is not available from the deployed admin analytics function yet.
+                    {t('chartDataUnavailable')}
                   </div>
                 ) : null}
                 <div className="mb-3 flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
                   <span>{formatChartDate(usageChartStartDate)}</span>
                   <span>{formatChartDate(usageChartEndDate)}</span>
                 </div>
-                <div className="custom-scrollbar flex h-52 items-end gap-2 overflow-x-auto pb-2 pt-3 sm:gap-3">
-                  {usageDays.map((day) => {
-                    const height = Math.max(day.total > 0 ? 8 : 2, Math.round((day.total / usageMax) * 100));
-                    const title = `${formatChartDate(day.date)}: ${day.notes} generated notes`;
-                    return (
-                      <div key={day.date} className="flex h-full min-w-[4.25rem] flex-1 flex-col items-center justify-end gap-2" title={title}>
-                        <div className="flex w-full flex-1 items-end rounded-md px-1" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                          <div
-                            className="w-full rounded-t-md transition-all"
-                            style={{
-                              height: `${height}%`,
-                              background: day.notes > 0
-                                ? 'linear-gradient(180deg, var(--accent-hover), var(--accent))'
-                                : 'var(--border)',
-                            }}
+                <div className="pb-2 pt-3">
+                  <svg
+                    role="img"
+                    aria-label="Daily generated notes"
+                    viewBox={`0 0 ${lineChartWidth} ${lineChartHeight}`}
+                    className="block h-auto w-full"
+                  >
+                    <rect
+                      x={lineChartPadding}
+                      y={lineChartPadding}
+                      width={lineChartWidth - lineChartPadding * 2}
+                      height={lineChartHeight - lineChartPadding * 2}
+                      rx="10"
+                      fill="var(--bg-secondary)"
+                    />
+                    {chartTicks.map((tick) => {
+                      const y = lineChartPadding + (1 - tick) * (lineChartHeight - lineChartPadding * 2);
+                      return (
+                        <g key={tick}>
+                          <text
+                            x={lineChartPadding - 14}
+                            y={y + 4}
+                            textAnchor="end"
+                            fontSize="11"
+                            fill="var(--text-muted)"
+                          >
+                            {formatNumber(Math.round(usageMax * tick))}
+                          </text>
+                          <line
+                            x1={lineChartPadding}
+                            x2={lineChartWidth - lineChartPadding}
+                            y1={y}
+                            y2={y}
+                            stroke="var(--border)"
+                            strokeOpacity={tick === 0 ? '1' : '0.6'}
+                            strokeWidth="1"
                           />
-                        </div>
-                        <div className="w-full text-center">
-                          <p className="truncate text-xs font-semibold" style={{ color: 'var(--text)' }}>
-                            {formatNumber(day.notes)}
-                          </p>
-                          <p className="truncate text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            {formatChartDay(day.date)}
-                          </p>
-                          <p className="truncate text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            {formatChartDate(day.date)}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        </g>
+                      );
+                    })}
+                    {usageDays.map((day, index) => {
+                      const plotHeight = lineChartHeight - lineChartPadding * 2;
+                      const plotWidth = lineChartWidth - lineChartPadding * 2;
+                      const slotWidth = plotWidth / Math.max(1, usageDays.length);
+                      const barWidth = Math.max(12, Math.min(48, slotWidth * 0.62));
+                      const barHeight = day.notes > 0
+                        ? Math.max(6, (day.notes / usageMax) * plotHeight)
+                        : 2;
+                      const x = lineChartPadding + index * slotWidth + (slotWidth - barWidth) / 2;
+                      const y = lineChartHeight - lineChartPadding - barHeight;
+                      return (
+                        <rect
+                          key={day.date}
+                          x={x}
+                          y={y}
+                          width={barWidth}
+                          height={barHeight}
+                          rx="6"
+                          fill={day.notes > 0 ? 'var(--accent)' : 'var(--border)'}
+                          opacity={day.notes > 0 ? '0.95' : '1'}
+                          onMouseEnter={() => setChartTooltip({
+                            chart: 'daily',
+                            x: x + barWidth / 2,
+                            y,
+                            title: formatChartDate(day.date),
+                            value: `${formatNumber(day.notes)} generated notes`,
+                            color: 'var(--accent)',
+                          })}
+                          onMouseLeave={() => setChartTooltip(null)}
+                          onFocus={() => setChartTooltip({
+                            chart: 'daily',
+                            x: x + barWidth / 2,
+                            y,
+                            title: formatChartDate(day.date),
+                            value: `${formatNumber(day.notes)} generated notes`,
+                            color: 'var(--accent)',
+                          })}
+                          onBlur={() => setChartTooltip(null)}
+                          tabIndex={0}
+                          className="cursor-pointer outline-none"
+                        >
+                          <title>{`${formatChartDate(day.date)}: ${day.notes} generated notes`}</title>
+                        </rect>
+                      );
+                    })}
+                    {chartTooltip?.chart === 'daily' ? (() => {
+                      const tooltipWidth = 174;
+                      const tooltipHeight = 48;
+                      const tooltipX = clampNumber(chartTooltip.x - tooltipWidth / 2, lineChartPadding + 8, lineChartWidth - lineChartPadding - tooltipWidth - 8);
+                      const tooltipY = Math.max(10, chartTooltip.y - tooltipHeight - 12);
+                      return (
+                        <g pointerEvents="none">
+                          <line
+                            x1={chartTooltip.x}
+                            x2={chartTooltip.x}
+                            y1={lineChartPadding}
+                            y2={lineChartHeight - lineChartPadding}
+                            stroke={chartTooltip.color}
+                            strokeOpacity="0.22"
+                            strokeWidth="1"
+                          />
+                          <rect
+                            x={tooltipX}
+                            y={tooltipY}
+                            width={tooltipWidth}
+                            height={tooltipHeight}
+                            rx="8"
+                            fill="var(--surface)"
+                            stroke="var(--border)"
+                            strokeWidth="1"
+                          />
+                          <circle cx={tooltipX + 14} cy={tooltipY + 17} r="4" fill={chartTooltip.color} />
+                          <text x={tooltipX + 24} y={tooltipY + 21} fontSize="12" fontWeight="600" fill="var(--text)">
+                            {chartTooltip.title}
+                          </text>
+                          <text x={tooltipX + 14} y={tooltipY + 38} fontSize="11" fill="var(--text-muted)">
+                            {chartTooltip.value}
+                          </text>
+                        </g>
+                      );
+                    })() : null}
+                    {usageDays.map((day, index) => {
+                      const plotWidth = lineChartWidth - lineChartPadding * 2;
+                      const slotWidth = plotWidth / Math.max(1, usageDays.length);
+                      const x = lineChartPadding + index * slotWidth + slotWidth / 2;
+                      return (
+                        <g key={day.date}>
+                          <text
+                            x={x}
+                            y={lineChartHeight - 14}
+                            textAnchor="middle"
+                            fontSize="11"
+                            fill="var(--text-muted)"
+                          >
+                            {usageDays.length <= 14 || index % Math.ceil(usageDays.length / 7) === 0 ? formatChartDate(day.date) : ''}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    <line
+                      x1={lineChartPadding}
+                      x2={lineChartWidth - lineChartPadding}
+                      y1={lineChartHeight - lineChartPadding}
+                      y2={lineChartHeight - lineChartPadding}
+                      stroke="var(--border)"
+                      strokeWidth="1"
+                    />
+                  </svg>
                 </div>
               </div>
             </section>
 
-              <section className="min-w-0 rounded-lg" style={{ backgroundColor: 'var(--surface)' }}>
-                <div className="px-4 py-4">
+            <section className="rounded-lg" style={{ backgroundColor: 'var(--surface)' }}>
+              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                    Ontology coverage
+                    {t('workflowTrends')}
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Speaker profiles with structured ontology data.
+                    Latest {selectedWorkflowSeries.format(selectedWorkflowLatest)}, {selectedWorkflowSeries.format(selectedWorkflowAverage)} average
                   </p>
                 </div>
-                <div className="space-y-4 px-4 pb-4">
+                <div className="inline-flex w-fit flex-wrap gap-1 rounded-lg p-1" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                  {workflowSeries.map((series) => (
+                    <button
+                      key={series.key}
+                      type="button"
+                      onClick={() => setWorkflowMetric(series.key as typeof workflowMetric)}
+                      className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                      style={{
+                        backgroundColor: workflowMetric === series.key ? 'var(--accent-light)' : 'transparent',
+                        color: workflowMetric === series.key ? 'var(--accent)' : 'var(--text-secondary)',
+                      }}
+                    >
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: series.color }} />
+                      {series.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="px-4 pb-3">
+                <div className="mb-2 flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <span>{formatChartDate(usageChartStartDate)}</span>
+                  <span>{formatChartDate(usageChartEndDate)}</span>
+                </div>
+                <div className="pb-1">
+                  <svg
+                    role="img"
+                    aria-label={`Daily workflow ${selectedWorkflowSeries.label}`}
+                    viewBox={`0 0 ${lineChartWidth} ${lineChartHeight}`}
+                    className="block h-auto w-full"
+                  >
+                    <rect
+                      x={lineChartPadding}
+                      y={lineChartPadding}
+                      width={lineChartWidth - lineChartPadding * 2}
+                      height={lineChartHeight - lineChartPadding * 2}
+                      rx="10"
+                      fill="var(--bg-secondary)"
+                    />
+                    {chartTicks.map((tick) => {
+                      const y = lineChartPadding + (1 - tick) * (lineChartHeight - lineChartPadding * 2);
+                      return (
+                        <g key={tick}>
+                          <text
+                            x={lineChartPadding - 14}
+                            y={y + 4}
+                            textAnchor="end"
+                            fontSize="11"
+                            fill="var(--text-muted)"
+                          >
+                            {selectedWorkflowSeries.format(selectedWorkflowMax * tick)}
+                          </text>
+                          <line
+                            x1={lineChartPadding}
+                            x2={lineChartWidth - lineChartPadding}
+                            y1={y}
+                            y2={y}
+                            stroke="var(--border)"
+                            strokeOpacity={tick === 0 ? '1' : '0.6'}
+                            strokeWidth="1"
+                          />
+                        </g>
+                      );
+                    })}
+                    {selectedWorkflowSeries.values.map((value, index) => {
+                      const plotHeight = lineChartHeight - lineChartPadding * 2;
+                      const plotWidth = lineChartWidth - lineChartPadding * 2;
+                      const slotWidth = plotWidth / Math.max(1, selectedWorkflowSeries.values.length);
+                      const barWidth = Math.max(12, Math.min(48, slotWidth * 0.62));
+                      const barHeight = value > 0
+                        ? Math.max(6, (value / selectedWorkflowMax) * plotHeight)
+                        : 2;
+                      const x = lineChartPadding + index * slotWidth + (slotWidth - barWidth) / 2;
+                      const y = lineChartHeight - lineChartPadding - barHeight;
+                      return (
+                        <rect
+                          key={`${selectedWorkflowSeries.key}-${usageDays[index]?.date ?? index}`}
+                          x={x}
+                          y={y}
+                          width={barWidth}
+                          height={barHeight}
+                          rx="6"
+                          fill={value > 0 ? selectedWorkflowSeries.color : 'var(--border)'}
+                          opacity={value > 0 ? '0.95' : '1'}
+                          onMouseEnter={() => setChartTooltip({
+                            chart: 'workflow',
+                            x: x + barWidth / 2,
+                            y,
+                            title: formatChartDate(usageDays[index]?.date ?? ''),
+                            value: `${selectedWorkflowSeries.label}: ${selectedWorkflowSeries.format(value)}`,
+                            color: selectedWorkflowSeries.color,
+                          })}
+                          onMouseLeave={() => setChartTooltip(null)}
+                          onFocus={() => setChartTooltip({
+                            chart: 'workflow',
+                            x: x + barWidth / 2,
+                            y,
+                            title: formatChartDate(usageDays[index]?.date ?? ''),
+                            value: `${selectedWorkflowSeries.label}: ${selectedWorkflowSeries.format(value)}`,
+                            color: selectedWorkflowSeries.color,
+                          })}
+                          onBlur={() => setChartTooltip(null)}
+                          tabIndex={0}
+                          className="cursor-pointer outline-none"
+                        >
+                          <title>{`${formatChartDate(usageDays[index]?.date ?? '')} ${selectedWorkflowSeries.label}: ${selectedWorkflowSeries.format(value)}`}</title>
+                        </rect>
+                      );
+                    })}
+                    {chartTooltip?.chart === 'workflow' ? (() => {
+                      const tooltipWidth = 190;
+                      const tooltipHeight = 48;
+                      const tooltipX = clampNumber(chartTooltip.x - tooltipWidth / 2, lineChartPadding + 8, lineChartWidth - lineChartPadding - tooltipWidth - 8);
+                      const tooltipY = Math.max(10, chartTooltip.y - tooltipHeight - 12);
+                      return (
+                        <g pointerEvents="none">
+                          <line
+                            x1={chartTooltip.x}
+                            x2={chartTooltip.x}
+                            y1={lineChartPadding}
+                            y2={lineChartHeight - lineChartPadding}
+                            stroke={chartTooltip.color}
+                            strokeOpacity="0.22"
+                            strokeWidth="1"
+                          />
+                          <rect
+                            x={tooltipX}
+                            y={tooltipY}
+                            width={tooltipWidth}
+                            height={tooltipHeight}
+                            rx="8"
+                            fill="var(--surface)"
+                            stroke="var(--border)"
+                            strokeWidth="1"
+                          />
+                          <circle cx={tooltipX + 14} cy={tooltipY + 17} r="4" fill={chartTooltip.color} />
+                          <text x={tooltipX + 24} y={tooltipY + 21} fontSize="12" fontWeight="600" fill="var(--text)">
+                            {chartTooltip.title}
+                          </text>
+                          <text x={tooltipX + 14} y={tooltipY + 38} fontSize="11" fill="var(--text-muted)">
+                            {chartTooltip.value}
+                          </text>
+                        </g>
+                      );
+                    })() : null}
+                    {usageDays.map((day, index) => {
+                      const plotWidth = lineChartWidth - lineChartPadding * 2;
+                      const slotWidth = plotWidth / Math.max(1, usageDays.length);
+                      const x = lineChartPadding + index * slotWidth + slotWidth / 2;
+                      return (
+                        <g key={day.date}>
+                          <text
+                            x={x}
+                            y={lineChartHeight - 14}
+                            textAnchor="middle"
+                            fontSize="11"
+                            fill="var(--text-muted)"
+                          >
+                            {usageDays.length <= 14 || index % Math.ceil(usageDays.length / 7) === 0 ? formatChartDate(day.date) : ''}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    <line
+                      x1={lineChartPadding}
+                      x2={lineChartWidth - lineChartPadding}
+                      y1={lineChartHeight - lineChartPadding}
+                      y2={lineChartHeight - lineChartPadding}
+                      stroke="var(--border)"
+                      strokeWidth="1"
+                    />
+                  </svg>
+                </div>
+              </div>
+            </section>
+            </div>
+
+              <section className="min-w-0 rounded-lg xl:self-start" style={{ backgroundColor: 'var(--surface)' }}>
+                <div className="px-4 py-3">
+                  <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+                    {t('ontologyCoverage')}
+                  </h2>
+                  <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {t('ontologyCoverageDescription')}
+                  </p>
+                </div>
+                <div className="space-y-4 px-4 pb-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Ontology</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('profileStatusOntology')}</p>
                       <p className="mt-1 text-2xl font-semibold" style={{ color: 'var(--text)' }}>{formatNumber(totals?.ontologyProfiles ?? 0)}</p>
                     </div>
                     <div>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Empty</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t('profileStatusEmpty')}</p>
                       <p className="mt-1 text-2xl font-semibold" style={{ color: 'var(--text)' }}>{formatNumber(totals?.emptySpeakerProfiles ?? 0)}</p>
                     </div>
                   </div>
@@ -496,7 +945,7 @@ const AdminAnalytics: React.FC = () => {
                     </p>
                   </div>
                   <div className="flex items-center justify-between border-t pt-3 text-sm" style={{ borderColor: 'var(--border)' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Stored audio</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('storedAudio')}</span>
                     <span className="font-medium" style={{ color: 'var(--text)' }}>{formatBytes(totals?.fileBytes ?? 0)}</span>
                   </div>
                 </div>
@@ -507,10 +956,10 @@ const AdminAnalytics: React.FC = () => {
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
                   <div>
                     <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                      Users
+                      {t('users')}
                     </h2>
                     <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Last generated {formatDate(analytics.generatedAt)}
+                      {t('lastGenerated')} {formatDate(analytics.generatedAt)}
                     </p>
                   </div>
                   <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}>
@@ -518,11 +967,11 @@ const AdminAnalytics: React.FC = () => {
                   </span>
                 </div>
                 <div className="hidden grid-cols-[minmax(0,1fr)_6rem_6rem_6rem_6rem] gap-3 border-y px-4 py-2 text-xs font-semibold uppercase sm:grid" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)', backgroundColor: 'var(--surface-subtle)' }}>
-                  <span>User</span>
-                  <span className="text-right">Notes</span>
+                  <span>{t('users')}</span>
+                  <span className="text-right">{t('notes')}</span>
                   <span className="text-right">Files</span>
-                  <span className="text-right">Projects</span>
-                  <span className="text-right">Shared</span>
+                  <span className="text-right">{t('projects')}</span>
+                  <span className="text-right">{t('shared')}</span>
                 </div>
                 <div className="custom-scrollbar max-h-[34rem] overflow-y-auto">
                   <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
@@ -547,7 +996,7 @@ const AdminAnalytics: React.FC = () => {
                             </div>
                           </div>
                           <p className="mt-2 text-xs sm:ml-12" style={{ color: 'var(--text-muted)' }}>
-                            Last seen: {formatDate(row.lastSeenAt)}
+                            {t('lastSeen')}: {formatDate(row.lastSeenAt)}
                           </p>
                         </div>
                         <div className="grid grid-cols-4 gap-2 text-xs sm:contents">
@@ -574,14 +1023,14 @@ const AdminAnalytics: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                 <div>
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                    Speaker profiles
+                    {t('speakerProfilesLower')}
                   </h2>
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Metadata only. Ontology fields indicate structured speaker context.
+                    {t('speakerProfilesMetadataOnly')}
                   </p>
                 </div>
                 <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}>
-                  {formatNumber(analytics.speakerProfiles.length)} profiles
+                  {formatNumber(analytics.speakerProfiles.length)} {t('speakerProfilesLower').toLowerCase()}
                 </span>
               </div>
               <div className="custom-scrollbar max-h-[42rem] overflow-y-auto">
@@ -609,7 +1058,7 @@ const AdminAnalytics: React.FC = () => {
                                     {profile.name}
                                   </p>
                                   <p className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>
-                                    {profile.email || profile.microsoftId || 'Custom speaker'}
+                                    {profile.email || profile.microsoftId || t('customSpeaker')}
                                   </p>
                                 </div>
                                 <span
@@ -621,7 +1070,7 @@ const AdminAnalytics: React.FC = () => {
                                     color: profile.hasOntology ? 'var(--success)' : 'var(--text-muted)',
                                   }}
                                 >
-                                  {profile.hasOntology ? 'Ontology' : profile.hasProfile ? 'Profile' : 'Empty'}
+                                  {profile.hasOntology ? t('profileStatusOntology') : profile.hasProfile ? t('profileStatusProfile') : t('profileStatusEmpty')}
                                 </span>
                               </div>
                               <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -632,7 +1081,7 @@ const AdminAnalytics: React.FC = () => {
                         </div>
                       ) : (
                         <p className="mt-3 rounded-lg border px-3 py-2 text-sm" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg)', color: 'var(--text-muted)' }}>
-                          No speaker profiles found.
+                          {t('noSpeakerProfilesFound')}
                         </p>
                       )}
                     </div>

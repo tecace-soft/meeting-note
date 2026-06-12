@@ -8,6 +8,7 @@ import {
   getNoteSummary,
   getNoteTranscriptText,
   getScopedUserId,
+  applyNoteAccessScope,
   summarizeNote,
   toIdValue,
   type NoteRow,
@@ -56,6 +57,28 @@ function ownerNameMatches(noteOwnerName: string | null | undefined, ownerName: s
   return ownerTokens.length > 0 && ownerTokens.every((token) => noteTokens.has(token));
 }
 
+function normalizeSpeakerName(value: string, options: { stripParentheticals?: boolean } = {}): string {
+  let normalized = value.toLowerCase();
+  if (options.stripParentheticals) normalized = normalized.replace(/\([^)]*\)/g, ' ');
+  return normalized
+    .replace(/[^\p{L}\p{N}\s'-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function speakerNameMatches(segmentSpeaker: string | null | undefined, speakerName: string): boolean {
+  const haystack = normalizeSpeakerName(segmentSpeaker ?? '');
+  const haystackNoParen = normalizeSpeakerName(segmentSpeaker ?? '', { stripParentheticals: true });
+  const needle = normalizeSpeakerName(speakerName);
+  const needleNoParen = normalizeSpeakerName(speakerName, { stripParentheticals: true });
+  if (!haystack || !needle) return false;
+  if (haystack === needle || haystackNoParen === needleNoParen) return true;
+  if (haystack.includes(needle) || haystackNoParen.includes(needleNoParen)) return true;
+  const speakerTokens = new Set(haystackNoParen.split(' ').filter(Boolean));
+  const requestedTokens = needleNoParen.split(' ').filter(Boolean);
+  return requestedTokens.length > 0 && requestedTokens.every((token) => speakerTokens.has(token));
+}
+
 export function registerNoteTools(server: McpServer): void {
   server.registerTool(
     'list_recent_notes',
@@ -74,7 +97,7 @@ export function registerNoteTools(server: McpServer): void {
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
-      if (userId) query = query.eq('user_id', userId);
+      query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyCreatedAtFilter(query, dateFilter);
       const { data, error } = await query;
@@ -213,7 +236,7 @@ export function registerNoteTools(server: McpServer): void {
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       let dbQuery = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(200);
-      if (userId) dbQuery = dbQuery.eq('user_id', userId);
+      dbQuery = applyNoteAccessScope(dbQuery, userId);
       if (projectId) dbQuery = dbQuery.contains('projects', [toIdValue(projectId)]);
       dbQuery = applyCreatedAtFilter(dbQuery, dateFilter);
       const { data, error } = await dbQuery;
@@ -241,7 +264,7 @@ export function registerNoteTools(server: McpServer): void {
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
-      if (userId) query = query.eq('user_id', userId);
+      query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyCreatedAtFilter(query, dateFilter);
       const { data, error } = await query;
@@ -269,7 +292,7 @@ export function registerNoteTools(server: McpServer): void {
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
-      if (userId) query = query.eq('user_id', userId);
+      query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyCreatedAtFilter(query, dateFilter);
       const { data, error } = await query;
@@ -305,7 +328,7 @@ export function registerNoteTools(server: McpServer): void {
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedLimit);
-      if (userId) query = query.eq('user_id', userId);
+      query = applyNoteAccessScope(query, userId);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyCreatedAtFilter(query, dateFilter);
       const { data, error } = await query;
@@ -392,7 +415,7 @@ export function registerNoteTools(server: McpServer): void {
     'get_note_speaker_segments',
     {
       title: 'Get Note Speaker Segments',
-      description: 'Return diarized transcript segments for one or more speakers.',
+      description: 'Return diarized transcript segments for one or more speakers in a single note.',
       inputSchema: {
         noteId: z.string().min(1),
         speakers: z.array(z.string().min(1)).min(1),
@@ -402,13 +425,99 @@ export function registerNoteTools(server: McpServer): void {
     async ({ noteId, speakers, maxSegments }) => {
       const note = await fetchNote(noteId);
       if (!note) return errorResult(`Note not found: ${noteId}`);
-      const wanted = new Set(speakers.map((speaker) => speaker.trim().toLowerCase()));
-      const segments = normalizeTranscript(note.diarization).filter((segment) => wanted.has(segment.speaker.trim().toLowerCase()));
+      const segments = normalizeTranscript(note.diarization).filter((segment) =>
+        speakers.some((speaker) => speakerNameMatches(segment.speaker, speaker)),
+      );
       return jsonResult({
         noteId,
         speakers,
         segments: maxSegments ? segments.slice(0, maxSegments) : segments,
         totalSegments: segments.length,
+      });
+    },
+  );
+
+  server.registerTool(
+    'get_speaker_segments',
+    {
+      title: 'Get Speaker Segments',
+      description:
+        'Find diarized transcript segments by speaker name. Use this for questions like "points made by Gene"; pass noteId for one meeting, or omit noteId to search accessible personal and shared notes.',
+      inputSchema: {
+        speakerName: z.string().min(1),
+        noteId: z.string().min(1).optional(),
+        noteScope: z.enum(['all', 'personal', 'shared']).optional(),
+        projectId: z.string().optional(),
+        noteLimit: z.number().int().min(1).max(500).optional(),
+        maxSegments: z.number().int().min(1).max(2000).optional(),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ speakerName, noteId, noteScope = 'all', projectId, noteLimit, maxSegments, date, startDate, endDate }) => {
+      const userId = getScopedUserId();
+      const resolvedNoteLimit = clampLimit(noteLimit, 100, 500);
+      const resolvedSegmentLimit = clampLimit(maxSegments, 250, 2000);
+
+      let notes: NoteRow[];
+      let dateFilter = resolveDateFilter({ date, startDate, endDate });
+
+      if (noteId) {
+        const note = await fetchNote(noteId);
+        if (!note) return errorResult(`Note not found: ${noteId}`);
+        notes = [note];
+        dateFilter = resolveDateFilter({});
+      } else {
+        const { supabase } = getDataContext();
+        let query = supabase.from('note').select('*').order('created_at', { ascending: false }).limit(resolvedNoteLimit);
+        if (noteScope === 'personal') {
+          if (!userId) return errorResult('A scoped user id is required to search personal notes.');
+          query = query.eq('user_id', userId);
+        } else if (noteScope === 'shared') {
+          if (!userId) return errorResult('A scoped user id is required to search shared notes.');
+          query = query.contains('shared_users', [userId]).neq('user_id', userId);
+        } else {
+          query = applyNoteAccessScope(query, userId);
+        }
+        if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+        query = applyCreatedAtFilter(query, dateFilter);
+        const { data, error } = await query;
+        if (error) return errorResult(error.message);
+        notes = ((data as NoteRow[]) ?? []);
+      }
+
+      const segments: Array<{
+        noteId: string;
+        noteTitle: string;
+        createdAt: string | null;
+        ownerName: string;
+        speaker: string;
+        text: string;
+      }> = [];
+
+      for (const note of notes) {
+        for (const segment of normalizeTranscript(note.diarization)) {
+          if (!speakerNameMatches(segment.speaker, speakerName)) continue;
+          segments.push({
+            noteId: note.id,
+            noteTitle: summarizeNote(note).title,
+            createdAt: note.created_at ?? null,
+            ownerName: note.user_name?.trim() || 'Unknown user',
+            speaker: segment.speaker,
+            text: segment.text,
+          });
+          if (segments.length >= resolvedSegmentLimit) break;
+        }
+        if (segments.length >= resolvedSegmentLimit) break;
+      }
+
+      return jsonResult({
+        speakerName,
+        noteId: noteId ?? null,
+        noteScope: noteId ? 'single-note' : noteScope,
+        dateFilter: noteId ? null : describeDateFilter({ date, startDate, endDate }, dateFilter),
+        searchedNotes: notes.length,
+        totalMatchingSegments: segments.length,
+        segments,
       });
     },
   );

@@ -142,6 +142,9 @@ For a public app with self-service onboarding, replace `MCP_USER_TOKENS` with re
 ## Tools
 
 - `list_recent_notes`
+- `list_personal_notes`
+- `list_shared_notes`
+- `get_shared_notes_by_owner`
 - `search_notes`
 - `get_notes_by_date`
 - `get_summaries_by_date`
@@ -150,6 +153,7 @@ For a public app with self-service onboarding, replace `MCP_USER_TOKENS` with re
 - `get_note_summary`
 - `get_note_transcript`
 - `get_note_speaker_segments`
+- `get_speaker_segments`
 - `list_speakers`
 - `get_speaker_profile`
 - `list_projects`

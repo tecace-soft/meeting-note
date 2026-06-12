@@ -2,7 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, startTransition } from
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
-import { supabase, AUDIO_BUCKET, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabaseConfig';
+import {
+  supabase,
+  AUDIO_BUCKET,
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  getSupabaseAccessTokenForRequest,
+} from '../config/supabaseConfig';
 import {
   isSupabaseResumableConfigured,
   shouldUseResumableUpload,
@@ -41,15 +47,20 @@ import TranscriptDiarizedEditor, {
   TranscriptSpeakerFilterControls,
 } from '../components/TranscriptDiarizedEditor';
 import {
+  getSegmentText,
   normalizeTranscript,
-  persistNoteDiarization,
+  type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
+import { formatDurationMeta } from '../lib/noteDuration';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 import ShareNoteModal from '../components/ShareNoteModal';
+import { useRecorder } from '../context/RecorderContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
+const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
 
 interface GeneratedProfile {
   speakerId: string | null;
@@ -70,6 +81,10 @@ interface UploadedFile {
   progress?: number;
   error?: string;
   publicUrl?: string;
+  bucket?: string;
+  storagePath?: string;
+  audioFileId?: string;
+  recordedAt?: string | null;
 }
 
 interface RecentAudioFile {
@@ -81,81 +96,136 @@ interface RecentAudioFile {
   mime_type?: string | null;
   size_bytes?: number | null;
   source?: 'upload' | 'recording' | string | null;
+  recorded_at?: string | null;
   created_at?: string | null;
 }
 
-interface RecordingFormat {
-  mimeType: string;
-  extension: string;
+interface SegmentPlaybackState {
+  segmentIndex: number;
+  start: number;
+  end: number | null;
+  currentTime: number;
+  isPlaying: boolean;
 }
 
-const RECORDING_FORMATS: RecordingFormat[] = [
-  { mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'm4a' },
-  { mimeType: 'audio/mp4', extension: 'm4a' },
-  { mimeType: 'audio/aac', extension: 'm4a' },
-  { mimeType: 'audio/webm;codecs=opus', extension: 'webm' },
-  { mimeType: 'audio/webm', extension: 'webm' },
-];
+const AUDIO_SIGNED_URL_SECONDS = 60 * 60 * 6;
+const ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS = [
+  '3ga',
+  '8svx',
+  'aac',
+  'ac3',
+  'aif',
+  'aiff',
+  'alac',
+  'amr',
+  'ape',
+  'au',
+  'dss',
+  'flac',
+  'flv',
+  'm4a',
+  'm4b',
+  'm4p',
+  'm4r',
+  'mp3',
+  'mp4',
+  'mpeg',
+  'mpg',
+  'oga',
+  'ogg',
+  'opus',
+  'qcp',
+  'ra',
+  'ram',
+  'sln',
+  'spx',
+  'wav',
+  'webm',
+  'wma',
+] as const;
+const ASSEMBLYAI_AUDIO_ACCEPT = `audio/*,video/mp4,video/webm,${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS
+  .map((ext) => `.${ext}`)
+  .join(',')}`;
+const ASSEMBLYAI_AUDIO_EXTENSION_RE = new RegExp(
+  `\\.(${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS.join('|')})$`,
+  'i'
+);
+
+interface WorkflowJobStatus {
+  jobId: string;
+  noteId?: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  stage?: string;
+  progress?: number;
+  result?: {
+    transcript?: unknown;
+    summary?: unknown;
+    summaryTranslations?: Record<string, string>;
+    title?: unknown;
+    tags?: unknown;
+    audioDurationSeconds?: unknown;
+  } | null;
+  error?: string | null;
+}
+
+async function invokeGenerateProfile(body: {
+  speakerName: string;
+  speakerId: string;
+  transcriptText: string;
+  existingProfile: string | null;
+}): Promise<{ profile?: string; error?: string }> {
+  const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/generate-profile`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const raw = await response.text();
+  let parsed: { profile?: string; error?: string };
+  try {
+    parsed = raw ? JSON.parse(raw) as { profile?: string; error?: string } : {};
+  } catch {
+    parsed = { error: raw || `HTTP ${response.status}` };
+  }
+  if (!response.ok) {
+    throw new Error(parsed.error || raw || `HTTP ${response.status}`);
+  }
+  return parsed;
+}
 
 const TranscriptionSummary: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { appLanguage, transcriptLanguage, t } = useLanguage();
+  const {
+    isRecording,
+    recordingTime,
+    recordedAudioUrl,
+    recordedBlob,
+    recordedFileName,
+    recordedMimeType,
+    isPlayingRecording,
+    playbackProgress,
+    playbackCurrentTime,
+    wakeLockWarning,
+    recoverableSession,
+    startRecording,
+    stopRecording,
+    clearRecording,
+    recoverRecording,
+    discardRecording,
+    togglePlayback: togglePlayRecording,
+    seekPlaybackRatio,
+    startScreenWakeLockKeepAlive,
+    ensureScreenWakeLockFromGesture,
+    releaseScreenWakeLock,
+  } = useRecorder();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadProgressGateRef = useRef<Map<string, { pct: number; at: number }>>(new Map());
-  const screenWakeLockRef = useRef<WakeLockSentinel | null>(null);
-  const keepScreenAwakeRef = useRef(false);
-  const wakeLockKeepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const activeUploadsRef = useRef(0);
-
-  /** Call from file input / recording handlers (user gesture) so Android Chrome grants wake lock. */
-  const ensureScreenWakeLockFromGesture = useCallback(async () => {
-    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
-    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-    if (screenWakeLockRef.current) return;
-    await navigator.wakeLock
-      .request('screen')
-      .then((w) => {
-        screenWakeLockRef.current = w;
-        w.addEventListener('release', () => {
-          if (screenWakeLockRef.current === w) {
-            screenWakeLockRef.current = null;
-          }
-        });
-      })
-      .catch(() => {
-        /* denied or unsupported */
-      });
-  }, []);
-
-  const startScreenWakeLockKeepAlive = useCallback(() => {
-    keepScreenAwakeRef.current = true;
-    void ensureScreenWakeLockFromGesture();
-
-    if (wakeLockKeepAliveIntervalRef.current) return;
-    wakeLockKeepAliveIntervalRef.current = setInterval(() => {
-      if (!keepScreenAwakeRef.current) return;
-      void ensureScreenWakeLockFromGesture();
-    }, 15000);
-  }, [ensureScreenWakeLockFromGesture]);
-
-  const stopScreenWakeLockKeepAlive = () => {
-    keepScreenAwakeRef.current = false;
-    if (wakeLockKeepAliveIntervalRef.current) {
-      clearInterval(wakeLockKeepAliveIntervalRef.current);
-      wakeLockKeepAliveIntervalRef.current = null;
-    }
-  };
-
-  const releaseScreenWakeLock = async () => {
-    stopScreenWakeLockKeepAlive();
-    try {
-      await screenWakeLockRef.current?.release();
-    } catch {
-      /* denied, unsupported, or already released */
-    } finally {
-      screenWakeLockRef.current = null;
-    }
-  };
 
   const [chats, setChats] = useState<TeamsChat[]>([]);
   const [chatsLoading, setChatsLoading] = useState(true);
@@ -168,8 +238,13 @@ const TranscriptionSummary: React.FC = () => {
   /** Optional free-text instructions; separate from the saved summarization template (`promptId`). */
   const [optionalInstructions, setOptionalInstructions] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
-  const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string } | null>(null);
+  const [summaryProgress, setSummaryProgress] = useState<{ stage: string; progress: number } | null>(null);
+  const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string; summaryTranslations?: Record<string, string>; audioDurationSeconds?: number | null } | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const resultAudioRef = useRef<HTMLAudioElement | null>(null);
+  const resultPlaybackStopAtRef = useRef<number | null>(null);
+  const [resultSegmentPlayback, setResultSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
+  const [resultPlaybackLoadingSegmentIndex, setResultPlaybackLoadingSegmentIndex] = useState<number | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [isForwarding, setIsForwarding] = useState(false);
   const [forwardSuccess, setForwardSuccess] = useState(false);
@@ -194,16 +269,7 @@ const TranscriptionSummary: React.FC = () => {
   const [transcriptSpeakerFilters, setTranscriptSpeakerFilters] = useState<string[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Recording states
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
-  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
-  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-  const [recordedFileName, setRecordedFileName] = useState('Recording.m4a');
-  const [recordedMimeType, setRecordedMimeType] = useState('audio/mp4');
-  const [isPlayingRecording, setIsPlayingRecording] = useState(false);
-  const [playbackProgress, setPlaybackProgress] = useState(0);
-  const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  // Recording and recent audio states
   const [recentAudioFiles, setRecentAudioFiles] = useState<RecentAudioFile[]>([]);
   const [recentAudioLoading, setRecentAudioLoading] = useState(false);
   const [recentAudioError, setRecentAudioError] = useState<string | null>(null);
@@ -211,12 +277,6 @@ const TranscriptionSummary: React.FC = () => {
   const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
   );
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordingFormatRef = useRef<RecordingFormat>({ mimeType: 'audio/mp4', extension: 'm4a' });
-  const isRecordingRef = useRef(false);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -236,111 +296,13 @@ const TranscriptionSummary: React.FC = () => {
     return () => mq.removeEventListener('change', sync);
   }, []);
 
-  useEffect(() => {
-    isRecordingRef.current = isRecording;
-  }, [isRecording]);
-
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && (isRecording || activeUploadsRef.current > 0)) {
-        startScreenWakeLockKeepAlive();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isRecording, startScreenWakeLockKeepAlive]);
-
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
-
-  const getPreferredRecordingFormat = (): RecordingFormat => {
-    if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
-      return { mimeType: 'audio/webm', extension: 'webm' };
-    }
-
-    return (
-      RECORDING_FORMATS.find((format) => MediaRecorder.isTypeSupported(format.mimeType)) ??
-      { mimeType: 'audio/webm', extension: 'webm' }
-    );
-  };
-
-  const createRecordingFileName = (extension: string): string => {
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-    return `Recording_${timestamp}.${extension}`;
-  };
 
   const formatRecordingTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const startRecording = async () => {
-    try {
-      startScreenWakeLockKeepAlive();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const recordingFormat = getPreferredRecordingFormat();
-      recordingFormatRef.current = recordingFormat;
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        const mimeType = mediaRecorder.mimeType || recordingFormat.mimeType;
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        setRecordedAudioUrl(audioUrl);
-        setRecordedBlob(audioBlob);
-        setRecordedMimeType(mimeType);
-        setRecordedFileName(createRecordingFileName(recordingFormat.extension));
-        
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordingTime(0);
-      setRecordedAudioUrl(null);
-      setRecordedBlob(null);
-      setRecordedMimeType(recordingFormat.mimeType);
-      setPlaybackProgress(0);
-      setPlaybackCurrentTime(0);
-      
-      // Start timer
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
-    } catch (error) {
-      void releaseScreenWakeLock();
-      console.error('Error starting recording:', error);
-      alert('Could not access microphone. Please ensure you have granted microphone permissions.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-        recordingIntervalRef.current = null;
-      }
-      void releaseScreenWakeLock();
-    }
   };
 
   const useRecording = () => {
@@ -361,89 +323,14 @@ const TranscriptionSummary: React.FC = () => {
     
     setUploadedFiles([newFile]);
     uploadToSupabase(newFile.id, audioFile, 'recording');
-    
-    // Clean up playback
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current = null;
-    }
-    setIsPlayingRecording(false);
-  };
-
-  const togglePlayRecording = () => {
-    if (!recordedAudioUrl) return;
-    
-    if (!audioPlayerRef.current) {
-      audioPlayerRef.current = new Audio(recordedAudioUrl);
-      audioPlayerRef.current.onended = () => {
-        setIsPlayingRecording(false);
-        setPlaybackProgress(0);
-        setPlaybackCurrentTime(0);
-      };
-      audioPlayerRef.current.ontimeupdate = () => {
-        if (audioPlayerRef.current) {
-          const current = audioPlayerRef.current.currentTime;
-          const duration = audioPlayerRef.current.duration;
-          setPlaybackCurrentTime(current);
-          setPlaybackProgress(duration > 0 ? (current / duration) * 100 : 0);
-        }
-      };
-    }
-    
-    if (isPlayingRecording) {
-      audioPlayerRef.current.pause();
-      setIsPlayingRecording(false);
-    } else {
-      audioPlayerRef.current.play();
-      setIsPlayingRecording(true);
-    }
+    clearRecording();
   };
 
   const seekPlayback = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!audioPlayerRef.current) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const percentage = x / rect.width;
-    const newTime = percentage * audioPlayerRef.current.duration;
-    audioPlayerRef.current.currentTime = newTime;
-    setPlaybackCurrentTime(newTime);
-    setPlaybackProgress(percentage * 100);
+    seekPlaybackRatio(x / rect.width);
   };
-
-  const clearRecording = () => {
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current = null;
-    }
-    if (recordedAudioUrl) {
-      URL.revokeObjectURL(recordedAudioUrl);
-    }
-    setRecordedAudioUrl(null);
-    setRecordedBlob(null);
-    setRecordedFileName('Recording.m4a');
-    setRecordedMimeType('audio/mp4');
-    setRecordingTime(0);
-    setIsPlayingRecording(false);
-    setPlaybackProgress(0);
-    setPlaybackCurrentTime(0);
-  };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (recordedAudioUrl) {
-        URL.revokeObjectURL(recordedAudioUrl);
-      }
-    };
-  }, [recordedAudioUrl]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -523,9 +410,14 @@ const TranscriptionSummary: React.FC = () => {
 
   const handleSummaryPromptSelect = useCallback(
     (promptId: string) => {
-      setSelectedSummaryPromptId(promptId);
+      const nextPromptId = promptId || null;
+      setSelectedSummaryPromptId(nextPromptId);
       if (user?.id && typeof localStorage !== 'undefined') {
-        localStorage.setItem(`mn.selectedSummaryPrompt.${user.id}`, promptId);
+        if (nextPromptId) {
+          localStorage.setItem(`mn.selectedSummaryPrompt.${user.id}`, nextPromptId);
+        } else {
+          localStorage.removeItem(`mn.selectedSummaryPrompt.${user.id}`);
+        }
       }
     },
     [user?.id]
@@ -595,12 +487,26 @@ const TranscriptionSummary: React.FC = () => {
     setRecentAudioLoading(true);
     setRecentAudioError(null);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('file')
-        .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, created_at')
+        .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, recorded_at, created_at')
         .eq('user_id', user.id)
+        .order('recorded_at', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(10);
+      let { data, error }: { data: unknown[] | null; error: { message: string } | null } = await query;
+
+      if (error && /recorded_at/i.test(error.message)) {
+        const fallback = await supabase
+          .from('file')
+          .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        data = fallback.data;
+        error = fallback.error;
+      }
+
       if (error) throw error;
       setRecentAudioFiles((data ?? []) as RecentAudioFile[]);
     } catch (error) {
@@ -615,41 +521,63 @@ const TranscriptionSummary: React.FC = () => {
     async (
       file: File,
       storagePath: string,
-      publicUrl: string,
       source: 'upload' | 'recording'
-    ) => {
-      if (!user?.id) return;
-      const { error } = await supabase.from('file').insert({
+    ): Promise<string | null> => {
+      if (!user?.id) return null;
+      const { data, error } = await supabase.from('file').insert({
         user_id: user.id,
         name: file.name,
         bucket: AUDIO_BUCKET,
         storage_path: storagePath,
-        public_url: publicUrl,
+        public_url: '',
         mime_type: file.type || 'application/octet-stream',
         size_bytes: file.size,
         source,
-      });
+        recorded_at: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
+      }).select('id').single();
       if (error) throw error;
       await loadRecentAudioFiles();
+      return typeof data?.id === 'string' ? data.id : null;
     },
     [loadRecentAudioFiles, user?.id]
   );
 
-  const selectRecentAudioFile = (file: RecentAudioFile) => {
+  const createAudioSignedUrl = useCallback(async (storagePath: string, bucket = AUDIO_BUCKET): Promise<string> => {
+    const { data, error } = await supabase.storage
+      .from(bucket || AUDIO_BUCKET)
+      .createSignedUrl(storagePath, AUDIO_SIGNED_URL_SECONDS);
+    if (error || !data?.signedUrl) {
+      throw error ?? new Error('Could not create a signed audio URL.');
+    }
+    return data.signedUrl;
+  }, []);
+
+  const selectRecentAudioFile = async (file: RecentAudioFile) => {
     ensureScreenWakeLockFromGesture();
-    clearRecording();
-    setUploadedFiles([
-      {
-        id: file.id,
-        name: file.name,
-        size: Number(file.size_bytes ?? 0),
-        type: file.mime_type || 'audio/*',
-        status: 'completed',
-        progress: 100,
-        publicUrl: file.public_url,
-      },
-    ]);
-    setSummaryError(null);
+    setRecentAudioError(null);
+    try {
+      const signedUrl = await createAudioSignedUrl(file.storage_path, file.bucket || AUDIO_BUCKET);
+      clearRecording();
+      setUploadedFiles([
+        {
+          id: file.id,
+          name: file.name,
+          size: Number(file.size_bytes ?? 0),
+          type: file.mime_type || 'audio/*',
+          status: 'completed',
+          progress: 100,
+          publicUrl: signedUrl,
+          bucket: file.bucket || AUDIO_BUCKET,
+          storagePath: file.storage_path,
+          audioFileId: file.id,
+          recordedAt: file.recorded_at ?? null,
+        },
+      ]);
+      setSummaryError(null);
+    } catch (error) {
+      console.error('Failed to create signed URL for recent audio file:', error);
+      setRecentAudioError(error instanceof Error ? error.message : 'Failed to load recent recording');
+    }
   };
 
   const deleteRecentAudioFile = async (file: RecentAudioFile) => {
@@ -688,16 +616,23 @@ const TranscriptionSummary: React.FC = () => {
     void loadRecentAudioFiles();
   }, [isAuthenticated, loadRecentAudioFiles, user?.id]);
 
+  useEffect(() => {
+    const translatedSummary = summaryResult?.summaryTranslations?.[appLanguage]?.trim();
+    if (!translatedSummary || isEditingSummary) return;
+    setEditedSummary(translatedSummary);
+    setSummaryResult((prev) => (prev ? { ...prev, summary: translatedSummary } : prev));
+  }, [appLanguage, isEditingSummary, summaryResult?.summaryTranslations]);
+
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB - matches Supabase bucket limit
 
   const handleFiles = (files: File[]) => {
     const audioFiles = files.filter(file => 
       file.type.startsWith('audio/') || 
-      file.name.match(/\.(mp3|wav|m4a|ogg|flac|aac|wma)$/i)
+      ASSEMBLYAI_AUDIO_EXTENSION_RE.test(file.name)
     );
 
     if (audioFiles.length === 0) {
-      alert('Please upload audio files only (mp3, wav, m4a, etc.)');
+      alert('Please upload an AssemblyAI-supported audio file.');
       return;
     }
 
@@ -713,6 +648,7 @@ const TranscriptionSummary: React.FC = () => {
       size: file.size,
       type: file.type,
       status: 'pending' as const,
+      recordedAt: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
     }));
 
     setUploadedFiles((prev) => [...prev, ...newUploadedFiles]);
@@ -743,11 +679,14 @@ const TranscriptionSummary: React.FC = () => {
         isSupabaseResumableConfigured(SUPABASE_URL) && shouldUseResumableUpload(file.size);
 
       if (useTus) {
+        const uploadAccessToken = await getSupabaseAccessTokenForRequest();
+        if (!uploadAccessToken) throw new Error('Could not get Supabase auth token for upload.');
         await uploadWithTus(
           filePath,
           file,
           SUPABASE_URL,
           SUPABASE_ANON_KEY,
+          uploadAccessToken,
           (uploaded, total) => {
             const pct = total > 0 ? Math.min(100, Math.round((uploaded / total) * 100)) : 0;
             const now = Date.now();
@@ -775,11 +714,12 @@ const TranscriptionSummary: React.FC = () => {
         if (error) throw error;
       }
 
-      const { data: urlData } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(filePath);
+      await ensureStorageObjectReady(AUDIO_BUCKET, filePath);
+      const signedUrl = await createAudioSignedUrl(filePath, AUDIO_BUCKET);
 
-      await ensureStorageObjectReady(AUDIO_BUCKET, filePath, urlData.publicUrl);
+      let audioFileId: string | null = null;
       try {
-        await saveAudioFileRecord(file, filePath, urlData.publicUrl, source);
+        audioFileId = await saveAudioFileRecord(file, filePath, source);
       } catch (recordError) {
         console.error('Failed to save audio file metadata:', recordError);
       }
@@ -791,7 +731,11 @@ const TranscriptionSummary: React.FC = () => {
                 ...f,
                 status: 'completed',
                 progress: 100,
-                publicUrl: urlData.publicUrl,
+                publicUrl: signedUrl,
+                bucket: AUDIO_BUCKET,
+                storagePath: filePath,
+                audioFileId: audioFileId ?? undefined,
+                recordedAt: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
               }
             : f
         )
@@ -812,7 +756,7 @@ const TranscriptionSummary: React.FC = () => {
     } finally {
       uploadProgressGateRef.current.delete(fileId);
       activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
-      if (activeUploadsRef.current === 0 && !isRecordingRef.current) {
+      if (activeUploadsRef.current === 0 && !isRecording) {
         await releaseScreenWakeLock();
       }
     }
@@ -831,17 +775,149 @@ const TranscriptionSummary: React.FC = () => {
     showPromptSection &&
     (!isNarrowViewport || !summaryFlowActive);
 
+  const waitForWorkflowJob = async (jobId: string, token: string): Promise<WorkflowJobStatus> => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 60 * 60 * 1000) {
+      const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs/${encodeURIComponent(jobId)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(detail?.error || `Workflow status request failed: ${response.status}`);
+      }
+
+      const status = (await response.json()) as WorkflowJobStatus;
+      setSummaryProgress({
+        stage: status.stage || status.status,
+        progress: typeof status.progress === 'number' ? status.progress : 0,
+      });
+
+      if (status.status === 'completed') return status;
+      if (status.status === 'failed') throw new Error(status.error || 'Workflow job failed.');
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+    throw new Error('Workflow job timed out.');
+  };
+
+  const downloadStorageAudioFile = async (
+    storagePath: string | undefined,
+    fileName: string,
+    bucket = AUDIO_BUCKET,
+    fallbackUrl?: string
+  ) => {
+    try {
+      const url = storagePath ? await createAudioSignedUrl(storagePath, bucket) : fallbackUrl;
+      if (!url) throw new Error('Could not create a signed download URL.');
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.rel = 'noopener noreferrer';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } catch (error) {
+      console.error('Failed to download audio file:', error);
+      setSummaryError(error instanceof Error ? error.message : 'Failed to download audio file');
+    }
+  };
+
+  const isPlayableSegment = (segment: TranscriptSegment): boolean =>
+    typeof segment.start === 'number' && Number.isFinite(segment.start) && segment.start >= 0;
+
+  const getResultAudioUrl = async (): Promise<string> => {
+    const completedFile = uploadedFiles.find((f) => f.status === 'completed' && (f.storagePath || f.publicUrl));
+    if (!completedFile) throw new Error('No audio file is available for playback.');
+    if (completedFile.storagePath) {
+      return createAudioSignedUrl(completedFile.storagePath, completedFile.bucket || AUDIO_BUCKET);
+    }
+    if (completedFile.publicUrl) return completedFile.publicUrl;
+    throw new Error('No audio file is available for playback.');
+  };
+
+  const stopResultSegmentPlayback = () => {
+    const audio = resultAudioRef.current;
+    if (audio) audio.pause();
+    resultPlaybackStopAtRef.current = null;
+    setResultSegmentPlayback(null);
+  };
+
+  const handlePlayResultTranscriptSegment = async (segment: TranscriptSegment, segmentIndex: number) => {
+    if (!isPlayableSegment(segment)) return;
+    const audio = resultAudioRef.current;
+    if (!audio) return;
+
+    if (resultSegmentPlayback?.segmentIndex === segmentIndex && resultSegmentPlayback.isPlaying) {
+      stopResultSegmentPlayback();
+      return;
+    }
+
+    const start = segment.start ?? 0;
+    const end = typeof segment.end === 'number' && Number.isFinite(segment.end) && segment.end > start ? segment.end : null;
+
+    try {
+      setResultPlaybackLoadingSegmentIndex(segmentIndex);
+      const url = await getResultAudioUrl();
+      audio.muted = false;
+      audio.volume = 1;
+      resultPlaybackStopAtRef.current = end;
+      setResultSegmentPlayback({
+        segmentIndex,
+        start,
+        end,
+        currentTime: start,
+        isPlaying: true,
+      });
+      if (audio.src !== url) {
+        audio.src = url;
+        audio.load();
+      }
+      if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+        await new Promise<void>((resolve, reject) => {
+          const cleanup = () => {
+            audio.removeEventListener('loadedmetadata', onReady);
+            audio.removeEventListener('canplay', onReady);
+            audio.removeEventListener('error', onError);
+          };
+          const onReady = () => {
+            cleanup();
+            resolve();
+          };
+          const onError = () => {
+            cleanup();
+            reject(new Error('Could not load audio for playback.'));
+          };
+          audio.addEventListener('loadedmetadata', onReady, { once: true });
+          audio.addEventListener('canplay', onReady, { once: true });
+          audio.addEventListener('error', onError, { once: true });
+        });
+      }
+      audio.currentTime = start;
+      await audio.play();
+    } catch (error) {
+      console.error('Failed to play generated transcript segment:', error);
+      resultPlaybackStopAtRef.current = null;
+      setResultSegmentPlayback(null);
+    } finally {
+      setResultPlaybackLoadingSegmentIndex(null);
+    }
+  };
+
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
-    if (!selectedSummaryPromptId) {
+    const selectedPrompt = summaryPromptRows.find((row) => row.id === selectedSummaryPromptId) ?? summaryPromptRows[0] ?? null;
+    if (!selectedPrompt?.id) {
       setSummaryError('Select a summarization prompt.');
       return;
     }
 
-    const completedFiles = uploadedFiles.filter(f => f.status === 'completed' && f.publicUrl);
+    const completedFiles = uploadedFiles.filter(f => f.status === 'completed' && (f.publicUrl || f.storagePath));
     if (completedFiles.length === 0) return;
 
+    stopResultSegmentPlayback();
     setIsSummarizing(true);
+    setSummaryProgress({ stage: 'starting', progress: 0 });
     setSummaryResult(null);
     setSummaryError(null);
     
@@ -850,75 +926,74 @@ const TranscriptionSummary: React.FC = () => {
       const noteId = generateNoteId();
       setCurrentNoteId(noteId);
 
-      // Fetch saved speaker profiles to enrich the summary prompt with ontology context
-      let speakerContext = '';
-      if (user?.id) {
-        try {
-          const { data: speakerRows } = await supabase
-            .from('speaker')
-            .select('name, profile')
-            .eq('user_id', user.id);
-          if (speakerRows && speakerRows.length > 0) {
-            const contexts = (speakerRows as { name: string; profile: string | null }[])
-              .map((s) => buildSpeakerContextForSummary(s.name, s.profile))
-              .filter(Boolean);
-            if (contexts.length > 0) {
-              speakerContext = contexts.join('\n\n');
-            }
-          }
-        } catch {
-          // Non-fatal: proceed without speaker context
-        }
+      if (!WORKFLOW_API_URL) {
+        throw new Error('Workflow API URL is not configured.');
       }
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not acquire Microsoft access token.');
+      const downloadUrl = file.storagePath
+        ? await createAudioSignedUrl(file.storagePath, file.bucket || AUDIO_BUCKET)
+        : file.publicUrl;
+      if (!downloadUrl) throw new Error('Could not create a signed audio URL.');
 
-      const response = await fetch(
-        'https://n8n.srv1153481.hstgr.cloud/webhook/e616c0f9-df5f-471b-ad68-579919548ed7',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            downloadUrl: file.publicUrl,
-            fileName: file.name,
-            instructions: optionalInstructions,
-            promptId: selectedSummaryPromptId,
-            userId: user?.id || '',
-            userName: user?.displayName || '',
-            noteId: noteId,
-            ...(speakerContext ? { speakerContext } : {}),
-          }),
-        }
-      );
+      const requestBody = {
+        downloadUrl,
+        fileName: file.name,
+        fileId: file.audioFileId,
+        meetingAt: file.recordedAt ?? null,
+        userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        instructions: optionalInstructions,
+        promptId: String(selectedPrompt.id),
+        userId: user?.id || '',
+        userName: user?.displayName || '',
+        noteId,
+        language: appLanguage,
+      };
+
+      const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(requestBody),
+      });
 
       if (!response.ok) {
-        throw new Error(`Request failed: ${response.status}`);
+        const detail = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(detail?.error || `Request failed: ${response.status}`);
       }
 
-      const result = await response.json();
+      const createdJob = (await response.json()) as { jobId?: string };
+      if (!createdJob.jobId) throw new Error('Workflow did not return a job id.');
+      const completedJob = await waitForWorkflowJob(createdJob.jobId, token);
+      const result = completedJob.result ?? {};
+      const summaryTranslations = result.summaryTranslations && typeof result.summaryTranslations === 'object'
+        ? result.summaryTranslations
+        : undefined;
       const summaryText =
-        typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
+        summaryTranslations?.[appLanguage]?.trim() ||
+        (typeof result.summary === 'string' ? result.summary : String(result.summary ?? ''));
       const transcript = normalizeTranscript(result.transcript);
+      const audioDurationSeconds =
+        typeof result.audioDurationSeconds === 'number' && Number.isFinite(result.audioDurationSeconds)
+          ? result.audioDurationSeconds
+          : null;
       setSummaryResult({
         summary: summaryText,
+        summaryTranslations,
         transcript,
+        audioDurationSeconds,
       });
       setEditedSummary(summaryText);
       setResultsTab('summary');
-
-      if (transcript.length > 0) {
-        try {
-          await persistNoteDiarization(noteId, transcript);
-        } catch (dErr: unknown) {
-          console.error('Failed to persist transcript diarization on note:', dErr);
-        }
-      }
       
     } catch (error: any) {
       console.error('Error summarizing:', error);
       setSummaryError(error.message || 'Failed to generate summary');
     } finally {
       setIsSummarizing(false);
+      setSummaryProgress(null);
     }
   };
 
@@ -947,6 +1022,18 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
+  const formatExactDateTime = (dateString: string): string => {
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return dateString;
+    return date.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const getChatDisplayName = (chat: TeamsChat): string => {
     if (chat.topic) return chat.topic;
     if (chat.members && chat.members.length > 0) {
@@ -969,12 +1056,10 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-
       const { error } = await supabase
         .from('note')
         .update({ summary_edit: summaryText })
         .eq('id', currentNoteId);
-
       if (error) throw error;
       return true;
     } catch (err: unknown) {
@@ -1034,8 +1119,8 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
-  const formatTranscriptText = (segments: TranscriptSegment[]): string =>
-    segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+  const formatTranscriptText = (segments: TranscriptSegment[], language: TranscriptLanguage = transcriptLanguage): string =>
+    segments.map((s) => `${s.speaker}: ${getSegmentText(s, language)}`).join('\n\n');
 
   const handleGenerateProfile = async () => {
     if (!summaryResult || !user?.id) return;
@@ -1069,22 +1154,15 @@ const TranscriptionSummary: React.FC = () => {
           const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
           const existingProfile = record?.profile?.trim() || null;
 
-          const geminiKey =
-            (import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ??
-            (import.meta.env.VITE_GOOGLE_API_KEY as string | undefined) ??
-            '';
-          const { data, error } = await supabase.functions.invoke<{ profile?: string; error?: string }>(
-            'generate-profile',
-            {
-              body: { speakerName, speakerId: record?.id ?? '', transcriptText, existingProfile, apiKey: geminiKey },
-              headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-            }
-          );
-
-          if (error) {
-            const detail = (data as { error?: string } | null)?.error ?? error.message;
-            throw new Error(`Edge function error for "${speakerName}": ${detail}`);
-          }
+          const data = await invokeGenerateProfile({
+            speakerName,
+            speakerId: record?.id ?? '',
+            transcriptText,
+            existingProfile,
+          }).catch((error: unknown) => {
+            console.error(`generate-profile failed for "${speakerName}"`, error);
+            throw new Error(`Edge function error for "${speakerName}": ${error instanceof Error ? error.message : String(error)}`);
+          });
           if (data?.error) throw new Error(`Profile error for "${speakerName}": ${data.error}`);
 
           const draft = canonicalOntologyProfileString(data?.profile ?? '');
@@ -1264,12 +1342,56 @@ const TranscriptionSummary: React.FC = () => {
             <div className="shrink-0">
             <div className="app-page-header">
               <h1 className="app-page-title">
-                    Summarize Audio File
+                    {t('uploadAudio')}
               </h1>
               <p className="app-page-subtitle">
-                    Record or upload an audio file to transcribe and summarize
+                    {t('uploadAudioPageSubtitle')}
               </p>
             </div>
+            {wakeLockWarning && isRecording ? (
+              <div
+                className="mb-4 rounded-lg border px-4 py-3 text-sm"
+                style={{
+                  backgroundColor: 'var(--warning-light, var(--bg-secondary))',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {wakeLockWarning}
+              </div>
+            ) : null}
+            {recoverableSession && !isRecording && !recordedAudioUrl ? (
+              <div className="card mb-4 rounded-lg p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                      {appLanguage === 'ko' ? '중단된 녹음 복구' : 'Recover interrupted recording'}
+                    </p>
+                    <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      {appLanguage === 'ko' ? '이 기기에 이전 녹음의 오디오 조각이 저장되어 있습니다.' : 'A previous recording has saved audio chunks on this device.'}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void recoverRecording()}
+                      className="rounded-lg px-4 py-2 text-sm font-medium"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      {appLanguage === 'ko' ? '녹음 복구' : 'Recover recording'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={discardRecording}
+                      className="rounded-lg px-4 py-2 text-sm font-medium"
+                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                    >
+                      {t('discard')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {/* Record/Upload Options - Hidden when files are uploaded or recording complete */}
             <div className={`collapse-container ${(uploadedFiles.length > 0 || recordedAudioUrl) ? 'collapsed' : 'expanded'}`}>
               <div className="collapse-content">
@@ -1289,10 +1411,10 @@ const TranscriptionSummary: React.FC = () => {
                           <UserVoice className="h-7 w-7" />
                         </span>
                         <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
-                          Record Audio
+                          {t('recordAudio')}
                         </p>
                         <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                          Click to start recording
+                          {t('clickToStartRecording')}
                         </p>
                       </>
                     ) : (
@@ -1313,7 +1435,7 @@ const TranscriptionSummary: React.FC = () => {
                           {formatRecordingTime(recordingTime)}
                         </p>
                         <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                          Recording... Click to stop
+                          {t('recordingClickToStop')}
                         </p>
                       </>
                     )}
@@ -1322,7 +1444,7 @@ const TranscriptionSummary: React.FC = () => {
                   {/* OR Divider */}
                   <div className="audio-source-divider flex md:flex-col items-center justify-center gap-2 py-2 md:py-0 md:px-2">
                     <div className="flex-1 h-px md:h-auto md:w-px md:flex-1" style={{ backgroundColor: 'var(--border)' }} />
-                    <span className="text-xs font-medium px-2" style={{ color: 'var(--text-muted)' }}>or</span>
+                    <span className="text-xs font-medium px-2" style={{ color: 'var(--text-muted)' }}>{t('or')}</span>
                     <div className="flex-1 h-px md:h-auto md:w-px md:flex-1" style={{ backgroundColor: 'var(--border)' }} />
                   </div>
 
@@ -1338,20 +1460,20 @@ const TranscriptionSummary: React.FC = () => {
                       id="meeting-audio-upload"
                       ref={fileInputRef}
                       type="file"
-                      accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma"
+                      accept={ASSEMBLYAI_AUDIO_ACCEPT}
                       multiple
                       onChange={handleFileSelect}
                       className="sr-only"
                     />
                     <CloudUpload className="mx-auto mb-3 h-10 w-10" style={{ color: 'var(--text-muted)' }} />
                     <p className="text-sm font-medium mb-1" style={{ color: 'var(--text)' }}>
-                      Upload Audio File
+                      {t('uploadAudioFile')}
                     </p>
                     <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Drop files or click to browse
+                      {t('dropFilesBrowse')}
                     </p>
                     <p className="text-xs mt-2 max-w-xs mx-auto" style={{ color: 'var(--text-muted)' }}>
-                      Large files: keep this tab open and screen on until upload finishes.
+                      {t('largeFilesKeepOpen')}
                     </p>
                   </label>
                 </div>
@@ -1376,7 +1498,7 @@ const TranscriptionSummary: React.FC = () => {
                     </button>
                     <div className="flex-grow">
                       <p className="text-sm font-medium mb-2" style={{ color: 'var(--text)' }}>
-                        Recording Complete
+                        {t('recordingComplete')}
                       </p>
                       {/* Progress Bar */}
                       <div 
@@ -1416,7 +1538,7 @@ const TranscriptionSummary: React.FC = () => {
                         aria-label={`Download ${recordedFileName}`}
                       >
                         <Download className="w-4 h-4" />
-                        <span className="recording-action-label">Download</span>
+                        <span className="recording-action-label">{t('download')}</span>
                       </a>
                     ) : null}
                     <button
@@ -1425,7 +1547,7 @@ const TranscriptionSummary: React.FC = () => {
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                     >
                       <CloseMd className="w-4 h-4" />
-                      <span className="recording-action-label">Discard</span>
+                      <span className="recording-action-label">{t('discard')}</span>
                     </button>
                     <button
                       onClick={useRecording}
@@ -1433,7 +1555,7 @@ const TranscriptionSummary: React.FC = () => {
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                     >
                       <Check className="w-4 h-4" />
-                      <span className="recording-action-label">Use Recording</span>
+                      <span className="recording-action-label">{t('useRecording')}</span>
                     </button>
                   </div>
                 </div>
@@ -1464,37 +1586,37 @@ const TranscriptionSummary: React.FC = () => {
                     <div className="flex items-center gap-2">
                       {file.status === 'uploading' && (
                         <span className="text-xs uploading-ellipsis" style={{ color: 'var(--accent)' }}>
-                          Uploading
+                          {t('uploading')}
                           {file.progress != null && file.progress > 0 ? ` ${file.progress}%` : ''}
                         </span>
                       )}
                       {file.status === 'processing' && (
                         <div className="flex items-center gap-1">
                           <Loading className="w-4 h-4 animate-spin" style={{ color: 'var(--accent)' }} />
-                          <span className="text-xs" style={{ color: 'var(--accent)' }}>Processing...</span>
+                          <span className="text-xs" style={{ color: 'var(--accent)' }}>{t('processing')}</span>
                         </div>
                       )}
                       {file.status === 'completed' && (
                         <span className="text-xs px-2 py-1 rounded-full" style={{ backgroundColor: 'var(--success-light)', color: 'var(--success)' }}>
-                          Ready
+                          {t('ready')}
                         </span>
                       )}
                       {file.status === 'error' && (
                         <span className="text-xs px-2 py-1 rounded-full" style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)' }}>
-                          Error
+                          {t('error')}
                         </span>
                       )}
-                      {file.status === 'completed' && file.publicUrl ? (
-                        <a
-                          href={file.publicUrl}
-                          download={file.name}
+                      {file.status === 'completed' && (file.publicUrl || file.storagePath) ? (
+                        <button
+                          type="button"
+                          onClick={() => void downloadStorageAudioFile(file.storagePath, file.name, file.bucket, file.publicUrl)}
                           className="p-1 rounded hover:bg-opacity-80"
                           style={{ color: 'var(--text-muted)' }}
                           title={`Download ${file.name}`}
                           aria-label={`Download ${file.name}`}
                         >
                           <Download className="w-4 h-4" />
-                        </a>
+                        </button>
                       ) : null}
                       <button
                         onClick={() => removeFile(file.id)}
@@ -1517,10 +1639,10 @@ const TranscriptionSummary: React.FC = () => {
               <div className="mb-3">
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                    Recent Recordings
+                    {t('recentRecordings')}
                   </h3>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Reuse one of your 10 most recent uploaded or recorded audio files
+                    {t('recentRecordingsSubtitle')}
                   </p>
                 </div>
               </div>
@@ -1528,7 +1650,7 @@ const TranscriptionSummary: React.FC = () => {
               {recentAudioLoading ? (
                 <div className="flex items-center gap-2 py-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
                   <Loading className="h-4 w-4 animate-spin" aria-hidden />
-                  Loading recent recordings...
+                  {t('loadingRecentRecordings')}
                 </div>
               ) : recentAudioError ? (
                 <p className="text-sm" style={{ color: 'var(--error)' }}>
@@ -1536,7 +1658,7 @@ const TranscriptionSummary: React.FC = () => {
                 </p>
               ) : recentAudioFiles.length === 0 ? (
                 <p className="py-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                  No recent recordings yet.
+                  {t('noRecentRecordings')}
                 </p>
               ) : (
                 <div className="summary-note-list recent-recordings-list custom-scrollbar">
@@ -1546,11 +1668,11 @@ const TranscriptionSummary: React.FC = () => {
                       role="button"
                       tabIndex={0}
                       className="summary-note-row cursor-pointer"
-                      onClick={() => selectRecentAudioFile(file)}
+                      onClick={() => void selectRecentAudioFile(file)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();
-                          selectRecentAudioFile(file);
+                          void selectRecentAudioFile(file);
                         }
                       }}
                     >
@@ -1567,23 +1689,27 @@ const TranscriptionSummary: React.FC = () => {
                             {file.name}
                           </p>
                           <p className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>
-                            {file.source === 'recording' ? 'Recorded' : 'Uploaded'}
-                            {file.size_bytes ? ` - ${formatFileSize(Number(file.size_bytes))}` : ''}
-                            {file.created_at ? ` - ${formatDate(file.created_at)}` : ''}
+                            {[
+                              file.size_bytes ? formatFileSize(Number(file.size_bytes)) : null,
+                              file.created_at ? `${t('uploaded')} ${formatDate(file.created_at)}` : null,
+                              file.recorded_at ? `${t('meetingDate')}: ${formatExactDateTime(file.recorded_at)}` : null,
+                            ].filter(Boolean).join(' - ')}
                           </p>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          <a
-                            href={file.public_url}
-                            download={file.name}
+                          <button
+                            type="button"
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
                             style={{ color: 'var(--text-secondary)' }}
-                            onClick={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void downloadStorageAudioFile(file.storage_path, file.name, file.bucket || AUDIO_BUCKET, file.public_url);
+                            }}
                             title={`Download ${file.name}`}
                             aria-label={`Download ${file.name}`}
                           >
                             <Download className="h-4 w-4" aria-hidden />
-                          </a>
+                          </button>
                           <button
                             type="button"
                             className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
@@ -1616,12 +1742,12 @@ const TranscriptionSummary: React.FC = () => {
                 <div className="flex w-full min-w-0 flex-col gap-4 md:flex-row md:items-start md:gap-4">
                   <div className="min-w-0 flex-1 basis-0">
                     <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
-                      Add instructions (optional)
+                      {t('addInstructionsOptional')}
                     </label>
                     <textarea
                       value={optionalInstructions}
                       onChange={(e) => setOptionalInstructions(e.target.value)}
-                      placeholder="e.g., Focus on action items and decisions..."
+                      placeholder={t('addInstructionsPlaceholder')}
                       rows={1}
                       className="box-border h-10 min-h-[2.5rem] w-full max-w-full min-w-0 resize-y rounded-lg border px-3 py-2 text-sm leading-normal outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60 max-h-[200px]"
                       style={{
@@ -1682,12 +1808,12 @@ const TranscriptionSummary: React.FC = () => {
                         {isSummarizing ? (
                           <>
                             <Loading className="h-4 w-4 shrink-0 animate-spin" />
-                            Summarize
+                            {t('summarize')}
                           </>
                         ) : (
                           <>
                             <PaperPlane className="h-4 w-4 shrink-0" />
-                            Summarize
+                            {t('summarize')}
                           </>
                         )}
                       </button>
@@ -1710,8 +1836,17 @@ const TranscriptionSummary: React.FC = () => {
                         style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
                     </div>
                     <p className="mt-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                      Analyzing audio and generating summary...
+                      {summaryProgress?.stage || 'Analyzing audio and generating summary...'}
                     </p>
+                    <div className="mt-4 h-2 w-56 overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${Math.max(4, Math.min(100, summaryProgress?.progress ?? 8))}%`,
+                          backgroundColor: 'var(--accent)',
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -1725,6 +1860,11 @@ const TranscriptionSummary: React.FC = () => {
 
                 {summaryResult && !isSummarizing && (
                   <div className="flex flex-1 min-h-0 flex-col px-4 pt-4 md:px-6 md:pt-5">
+                    {formatDurationMeta(summaryResult.audioDurationSeconds) ? (
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                        {formatDurationMeta(summaryResult.audioDurationSeconds)}
+                      </p>
+                    ) : null}
                     {summaryResult.transcript.length > 0 ? (
                       <div
                         className="results-header flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"
@@ -1745,7 +1885,7 @@ const TranscriptionSummary: React.FC = () => {
                               color: resultsTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)',
                             }}
                           >
-                            Summary
+                            {t('summary')}
                           </button>
                           <button
                             type="button"
@@ -1758,7 +1898,7 @@ const TranscriptionSummary: React.FC = () => {
                                 resultsTab === 'transcription' ? 'var(--text)' : 'var(--text-secondary)',
                             }}
                           >
-                            Transcription
+                            {t('transcription')}
                           </button>
                         </div>
                         <div className="flex shrink-0 items-center gap-2 pb-2">
@@ -1774,12 +1914,12 @@ const TranscriptionSummary: React.FC = () => {
                               {isEditingSummary ? (
                                 <>
                                   <Save className="h-3 w-3" />
-                                  Done
+                                  {t('done')}
                                 </>
                               ) : (
                                 <>
                                   <EditPencilLine01 className="h-3 w-3" />
-                                  Edit
+                                  {t('edit')}
                                 </>
                               )}
                             </button>
@@ -1802,7 +1942,7 @@ const TranscriptionSummary: React.FC = () => {
                             ) : (
                               <Copy className="h-3 w-3" aria-hidden />
                             )}
-                            Copy
+                            {t('copy')}
                           </button>
                           <button
                             onClick={() => setShowDiscardModal(true)}
@@ -1813,14 +1953,14 @@ const TranscriptionSummary: React.FC = () => {
                             }}
                           >
                             <CloseMd className="h-3 w-3" />
-                            Discard
+                            {t('discard')}
                           </button>
                         </div>
                       </div>
                     ) : (
                       <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                          Summary
+                          {t('summary')}
                         </h3>
                         <div className="flex items-center gap-2">
                           <button
@@ -1832,7 +1972,7 @@ const TranscriptionSummary: React.FC = () => {
                             aria-label="Copy summary"
                           >
                             {copiedKey === 'summary-result' ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
-                            Copy
+                            {t('copy')}
                           </button>
                           <button
                             onClick={() => setShowDiscardModal(true)}
@@ -1843,7 +1983,7 @@ const TranscriptionSummary: React.FC = () => {
                             }}
                           >
                             <CloseMd className="h-3 w-3" />
-                            Discard
+                            {t('discard')}
                           </button>
                           <button
                             onClick={() => void handleToggleEditSummary()}
@@ -1856,12 +1996,12 @@ const TranscriptionSummary: React.FC = () => {
                             {isEditingSummary ? (
                               <>
                                 <Save className="h-3 w-3" />
-                                Done
+                                {t('done')}
                               </>
                             ) : (
                               <>
                                 <EditPencilLine01 className="h-3 w-3" />
-                                Edit
+                                {t('edit')}
                               </>
                             )}
                           </button>
@@ -1905,11 +2045,13 @@ const TranscriptionSummary: React.FC = () => {
                     {summaryResult.transcript.length > 0 && resultsTab === 'transcription' ? (
                       <div className="flex flex-1 min-h-0 flex-col pt-4">
                         <div className="mb-3 shrink-0">
-                          <TranscriptSpeakerFilterControls
-                            speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
-                            selectedSpeakers={transcriptSpeakerFilters}
-                            onSelectedSpeakersChange={setTranscriptSpeakerFilters}
-                          />
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <TranscriptSpeakerFilterControls
+                              speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
+                              selectedSpeakers={transcriptSpeakerFilters}
+                              onSelectedSpeakersChange={setTranscriptSpeakerFilters}
+                            />
+                          </div>
                         </div>
                         <TranscriptDiarizedEditor
                           segments={summaryResult.transcript}
@@ -1920,6 +2062,19 @@ const TranscriptionSummary: React.FC = () => {
                           scrollContainerClassName="flex-1 min-h-0"
                           selectedSpeakerFilters={transcriptSpeakerFilters}
                           onSelectedSpeakerFiltersChange={setTranscriptSpeakerFilters}
+                          activePlaybackSegmentIndex={resultSegmentPlayback?.segmentIndex ?? null}
+                          isPlaybackActive={Boolean(resultSegmentPlayback?.isPlaying)}
+                          loadingPlaybackSegmentIndex={resultPlaybackLoadingSegmentIndex}
+                          playbackTimeLabel={
+                            resultSegmentPlayback
+                              ? `${formatRecordingTime(Math.floor(resultSegmentPlayback.currentTime))}${
+                                  resultSegmentPlayback.end != null ? ` / ${formatRecordingTime(Math.floor(resultSegmentPlayback.end))}` : ''
+                                }`
+                              : null
+                          }
+                          canPlaySegment={isPlayableSegment}
+                          onPlaySegment={(segment, index) => void handlePlayResultTranscriptSegment(segment, index)}
+                          transcriptLanguage={transcriptLanguage}
                         />
                       </div>
                     ) : null}
@@ -1930,14 +2085,17 @@ const TranscriptionSummary: React.FC = () => {
                     >
                       <button
                         type="button"
-                        title="Save to OneDrive"
-                        aria-label="Save to OneDrive"
-                        onClick={() => {
-                          const completedFile = uploadedFiles.find((f) => f.status === 'completed' && f.publicUrl);
-                          const audioUrl = completedFile?.publicUrl ? encodeURIComponent(completedFile.publicUrl) : '';
+                        title={t('saveToOneDrive')}
+                        aria-label={t('saveToOneDrive')}
+                        onClick={() => void (async () => {
+                          const completedFile = uploadedFiles.find((f) => f.status === 'completed' && (f.storagePath || f.publicUrl));
+                          const signedUrl = completedFile?.storagePath
+                            ? await createAudioSignedUrl(completedFile.storagePath, completedFile.bucket || AUDIO_BUCKET)
+                            : completedFile?.publicUrl;
+                          const audioUrl = signedUrl ? encodeURIComponent(signedUrl) : '';
                           const audioName = completedFile?.name ? encodeURIComponent(completedFile.name) : '';
                           navigate(`/save-summary?note_id=${currentNoteId}&audio_url=${audioUrl}&audio_name=${audioName}`);
-                        }}
+                        })()}
                         className={resultActionBtnClass}
                       >
                         <Cloud className="h-4 w-4 shrink-0" aria-hidden />
@@ -1947,17 +2105,17 @@ const TranscriptionSummary: React.FC = () => {
                         type="button"
                         title={
                           isForwarding
-                            ? 'Sending to Teams'
+                            ? t('sending')
                             : forwardSuccess
-                              ? 'Sent to Teams'
-                              : 'Forward to Teams'
+                              ? t('sent')
+                              : t('forwardToTeams')
                         }
                         aria-label={
                           isForwarding
-                            ? 'Sending to Teams'
+                            ? t('sending')
                             : forwardSuccess
-                              ? 'Sent to Teams'
-                              : 'Forward to Teams'
+                              ? t('sent')
+                              : t('forwardToTeams')
                         }
                         onClick={() => setIsForwardTeamsModalOpen(true)}
                         disabled={isForwarding}
@@ -1966,12 +2124,12 @@ const TranscriptionSummary: React.FC = () => {
                         {isForwarding ? (
                           <>
                             <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Sending...</span>
+                            <span className={resultActionBtnLabelClass}>{t('sending')}</span>
                           </>
                         ) : forwardSuccess ? (
                           <>
                             <Check className="h-4 w-4 shrink-0" style={{ color: 'var(--success)' }} aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Sent!</span>
+                            <span className={resultActionBtnLabelClass}>{t('sent')}</span>
                           </>
                         ) : (
                           <>
@@ -1982,29 +2140,29 @@ const TranscriptionSummary: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        title="Share"
-                        aria-label="Share"
+                        title={t('share')}
+                        aria-label={t('share')}
                         onClick={() => setIsShareNoteModalOpen(true)}
                         disabled={!currentNoteId}
                         className={resultActionBtnClass}
                       >
                         <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
-                        <span className={resultActionBtnLabelClass}>Share</span>
+                        <span className={resultActionBtnLabelClass}>{t('share')}</span>
                       </button>
                       <button
                         type="button"
-                        title="Sync Profile"
-                        aria-label="Sync Profile"
+                        title={t('syncProfile')}
+                        aria-label={t('syncProfile')}
                         onClick={() => void handleGenerateProfile()}
                         className={resultActionBtnClass}
                       >
                         <UserCircle className="h-4 w-4 shrink-0" aria-hidden />
-                        <span className={resultActionBtnLabelClass}>Sync Profile</span>
+                        <span className={resultActionBtnLabelClass}>{t('syncProfile')}</span>
                       </button>
                       <button
                         type="button"
-                        title={isRegenerating ? 'Regenerating summary' : 'Regenerate Summary'}
-                        aria-label={isRegenerating ? 'Regenerating summary' : 'Regenerate Summary'}
+                        title={t('regenerateSummary')}
+                        aria-label={t('regenerateSummary')}
                         disabled={isRegenerating || summaryResult.transcript.length === 0}
                         onClick={() => void handleRegenerateSummary()}
                         className={resultActionBtnClass}
@@ -2035,6 +2193,38 @@ const TranscriptionSummary: React.FC = () => {
         </div>
       </main>
 
+      <audio
+        ref={resultAudioRef}
+        className="hidden"
+        onTimeUpdate={(event) => {
+          const audio = event.currentTarget;
+          const stopAt = resultPlaybackStopAtRef.current;
+          const currentTime = audio.currentTime;
+          setResultSegmentPlayback((prev) => (prev ? { ...prev, currentTime } : prev));
+          if (stopAt != null && currentTime >= stopAt) {
+            audio.pause();
+            resultPlaybackStopAtRef.current = null;
+            setResultSegmentPlayback((prev) => (prev ? { ...prev, currentTime: stopAt, isPlaying: false } : prev));
+          }
+        }}
+        onPlay={(event) => {
+          const currentTime = event.currentTarget.currentTime;
+          setResultSegmentPlayback((prev) => (prev ? { ...prev, currentTime, isPlaying: true } : prev));
+        }}
+        onPause={(event) => {
+          const currentTime = event.currentTarget.currentTime;
+          setResultSegmentPlayback((prev) => (prev ? { ...prev, currentTime, isPlaying: false } : prev));
+        }}
+        onEnded={() => {
+          resultPlaybackStopAtRef.current = null;
+          setResultSegmentPlayback((prev) => (prev ? { ...prev, isPlaying: false } : prev));
+        }}
+        onError={() => {
+          resultPlaybackStopAtRef.current = null;
+          setResultSegmentPlayback(null);
+        }}
+      />
+
       {isForwardTeamsModalOpen && summaryResult && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center p-4"
@@ -2056,7 +2246,7 @@ const TranscriptionSummary: React.FC = () => {
               style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
             >
               <h2 id="forward-teams-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                Forward to Teams
+                {t('forwardToTeams')}
               </h2>
               <button
                 type="button"
@@ -2064,13 +2254,13 @@ const TranscriptionSummary: React.FC = () => {
                 onClick={() => setIsForwardTeamsModalOpen(false)}
                 className="rounded-md p-2 transition-opacity disabled:opacity-50"
                 style={{ color: 'var(--text-muted)' }}
-                aria-label="Close"
+                aria-label={t('close')}
               >
                 <CloseMd className="h-5 w-5" aria-hidden />
               </button>
             </div>
             <p className="shrink-0 px-4 pt-3 text-sm sm:px-5" style={{ color: 'var(--text-secondary)' }}>
-              Choose a chat, then click <span className="font-medium" style={{ color: 'var(--text)' }}>Forward Summary</span>.
+              {t('chooseChatForward')}
             </p>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-3 sm:px-5">
               {chatsLoading ? (
@@ -2080,7 +2270,7 @@ const TranscriptionSummary: React.FC = () => {
                     style={{ borderColor: 'var(--accent)' }}
                   />
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Loading your Teams chats...
+                    {t('loadingTeamsChats')}
                   </p>
                 </div>
               ) : chatsError ? (
@@ -2089,14 +2279,14 @@ const TranscriptionSummary: React.FC = () => {
                     {chatsError}
                   </p>
                   <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Make sure you have the necessary permissions to access Teams chats.
+                    {t('teamsPermissionHint')}
                   </p>
                 </div>
               ) : chats.length === 0 ? (
                 <div className="rounded-lg border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
                   <Chat className="mx-auto mb-4 h-12 w-12" style={{ color: 'var(--text-muted)' }} aria-hidden />
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    No Teams chats found
+                    {t('noTeamsChatsFound')}
                   </p>
                 </div>
               ) : (
@@ -2211,7 +2401,7 @@ const TranscriptionSummary: React.FC = () => {
                 className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 type="button"
@@ -2223,10 +2413,10 @@ const TranscriptionSummary: React.FC = () => {
                 {isForwarding ? (
                   <>
                     <Loading className="h-4 w-4 animate-spin" aria-hidden />
-                    Sending...
+                    {t('sending')}
                   </>
                 ) : (
-                  'Forward Summary'
+                  t('forwardSummary')
                 )}
               </button>
             </div>
@@ -2268,7 +2458,7 @@ const TranscriptionSummary: React.FC = () => {
             >
               <div>
                 <h2 id="profile-modal-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                  Sync Profile
+                  {t('syncProfile')}
                 </h2>
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
                   AI-generated speaker profiles from the meeting transcript
@@ -2280,7 +2470,7 @@ const TranscriptionSummary: React.FC = () => {
                 onClick={() => setIsProfileModalOpen(false)}
                 className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70"
                 style={{ color: 'var(--text-muted)' }}
-                aria-label="Close"
+                aria-label={t('close')}
               >
                 <CloseMd className="h-5 w-5" aria-hidden />
               </button>
@@ -2296,7 +2486,7 @@ const TranscriptionSummary: React.FC = () => {
                     aria-hidden
                   />
                   <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>
-                    {profileGenStep === 'finding-speakers' ? 'Looking up speaker data…' : 'Generating profiles with AI…'}
+                    {profileGenStep === 'finding-speakers' ? t('lookingUpSpeakerData') : t('generatingProfilesAi')}
                   </p>
                 </div>
               )}
@@ -2348,7 +2538,7 @@ const TranscriptionSummary: React.FC = () => {
                                 color: profile.isNew ? 'var(--accent)' : 'var(--success)',
                               }}
                             >
-                              {profile.isNew ? 'New profile' : 'Updated profile'}
+                              {profile.isNew ? t('newProfile') : t('updatedProfile')}
                             </span>
                           </div>
                         </div>
@@ -2390,7 +2580,7 @@ const TranscriptionSummary: React.FC = () => {
                               {profile.saving ? (
                                 <><Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />Saving…</>
                               ) : (
-                                <><Save className="h-3.5 w-3.5" aria-hidden />Save Profile</>
+                                <><Save className="h-3.5 w-3.5" aria-hidden />{t('saveProfile')}</>
                               )}
                             </button>
                           )}
@@ -2441,7 +2631,7 @@ const TranscriptionSummary: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity"
                     style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   >
-                    Close
+                    {t('close')}
                   </button>
                   <button
                     type="button"
@@ -2475,7 +2665,7 @@ const TranscriptionSummary: React.FC = () => {
                   className="rounded-lg px-4 py-2 text-sm font-medium"
                   style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                 >
-                  Close
+                  {t('close')}
                 </button>
               </div>
             )}
@@ -2501,7 +2691,7 @@ const TranscriptionSummary: React.FC = () => {
           >
             {saveAllStatus === 'idle' && (
               <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Save all profiles?</h3>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('saveAllProfiles')}</h3>
                 <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
                   This will save all unsaved speaker profiles to Supabase.
                 </p>
@@ -2512,7 +2702,7 @@ const TranscriptionSummary: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   >
-                    Cancel
+                    {t('cancel')}
                   </button>
                   <button
                     type="button"
@@ -2520,7 +2710,7 @@ const TranscriptionSummary: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
-                    Confirm Save All
+                    {t('confirmSaveAll')}
                   </button>
                 </div>
               </>
@@ -2528,12 +2718,12 @@ const TranscriptionSummary: React.FC = () => {
             {saveAllStatus === 'saving' && (
               <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
                 <Loading className="h-4 w-4 animate-spin" aria-hidden />
-                Saving profiles...
+                {t('savingProfiles')}
               </div>
             )}
             {saveAllStatus === 'success' && (
               <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Profiles saved</h3>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('profilesSaved')}</h3>
                 <p className="mt-2 text-sm" style={{ color: 'var(--success)' }}>
                   All profiles were successfully saved to Supabase.
                 </p>
@@ -2544,14 +2734,14 @@ const TranscriptionSummary: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
-                    Close
+                    {t('close')}
                   </button>
                 </div>
               </>
             )}
             {saveAllStatus === 'error' && (
               <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>Failed to save all profiles</h3>
+                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('failedSaveAllProfiles')}</h3>
                 <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>
                   Some profiles could not be saved to Supabase.
                 </p>
@@ -2567,7 +2757,7 @@ const TranscriptionSummary: React.FC = () => {
                     className="rounded-lg px-4 py-2 text-sm font-medium"
                     style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   >
-                    Close
+                    {t('close')}
                   </button>
                 </div>
               </>
@@ -2588,7 +2778,7 @@ const TranscriptionSummary: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text)' }}>
-              Discard Summary
+              {t('discardSummary')}
             </h3>
             <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
               Are you sure you want to discard this summary? This action cannot be undone.
@@ -2599,10 +2789,11 @@ const TranscriptionSummary: React.FC = () => {
                 className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 onClick={() => {
+                  stopResultSegmentPlayback();
                   setSummaryResult(null);
                   setSummaryError(null);
                   setSummaryEditError(null);

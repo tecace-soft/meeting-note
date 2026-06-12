@@ -13,6 +13,7 @@ import {
   User01,
 } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
 import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
@@ -37,6 +38,8 @@ type McpTokenRow = {
   tokenPrefix: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  expiresAt?: string | null;
+  scopes?: string[] | null;
   createdAt: string;
 };
 
@@ -103,6 +106,7 @@ async function callMcpTokenFunction<T>(msAccessToken: string, body: Record<strin
 const AccountSettings: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
+  const { appLanguage, setAppLanguage, t } = useLanguage();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('account');
   const [mcpSetupView, setMcpSetupView] = useState<McpSetupView>('chatgpt');
@@ -160,12 +164,9 @@ const AccountSettings: React.FC = () => {
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
-                '--header',
-                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
                 AUTH_HEADER: claudeAuthHeader,
-                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -173,7 +174,7 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [claudeAuthHeader, user?.id]
+    [claudeAuthHeader]
   );
   const claudeDesktopConfigWindows = useMemo(
     () =>
@@ -188,12 +189,9 @@ const AccountSettings: React.FC = () => {
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
-                '--header',
-                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
                 AUTH_HEADER: claudeAuthHeader,
-                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -201,7 +199,7 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [claudeAuthHeader, user?.id]
+    [claudeAuthHeader]
   );
   const claudeDesktopConfig = clientOs === 'windows' ? claudeDesktopConfigWindows : claudeDesktopConfigMac;
   const claudeDesktopConfigLabel =
@@ -545,7 +543,7 @@ const AccountSettings: React.FC = () => {
   if (isLoading) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
-        <p style={{ color: 'var(--text-secondary)' }}>Loading account...</p>
+        <p style={{ color: 'var(--text-secondary)' }}>{t('loadingAccount')}</p>
       </div>
     );
   }
@@ -556,10 +554,10 @@ const AccountSettings: React.FC = () => {
         <div className="mx-auto flex min-h-0 w-full max-w-[min(92vw,67.2rem)] flex-1 flex-col gap-4">
           <div className="app-page-header">
             <h1 className="app-page-title">
-              Account Settings
+              {t('accountSettings')}
             </h1>
             <p className="app-page-subtitle">
-              Microsoft account details for your meeting notes workspace
+              {t('accountSettingsSubtitle')}
             </p>
           </div>
 
@@ -579,7 +577,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Account
+                {t('account')}
               </button>
               <button
                 type="button"
@@ -595,7 +593,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Summary prompts
+                {t('summaryPrompts')}
               </button>
               <button
                 type="button"
@@ -611,7 +609,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                Speaker Profiles
+                {t('speakerProfiles')}
               </button>
               <button
                 type="button"
@@ -627,7 +625,7 @@ const AccountSettings: React.FC = () => {
                     : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
                 }
               >
-                MCP Setup
+                {t('mcpSetup')}
               </button>
             </div>
 
@@ -683,7 +681,7 @@ const AccountSettings: React.FC = () => {
                             className="rounded-lg px-3 py-2 text-sm transition-opacity disabled:opacity-50"
                             style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                           >
-                            Cancel
+                            {t('cancel')}
                           </button>
                           <button
                             type="button"
@@ -697,7 +695,7 @@ const AccountSettings: React.FC = () => {
                             ) : (
                               <Save className="h-4 w-4" aria-hidden />
                             )}
-                            Save
+                            {t('save')}
                           </button>
                         </div>
                       ) : (
@@ -722,16 +720,48 @@ const AccountSettings: React.FC = () => {
                           style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                         >
                           <EditPencilLine01 className="h-4 w-4" aria-hidden />
-                          Edit profile
+                          {t('editProfile')}
                         </button>
                       )
                     ) : null}
                   </div>
 
+                  <div className="shrink-0 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                          {t('appLanguage')}
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {t('appLanguageDescription')}
+                        </p>
+                      </div>
+                      <div className="app-language-toggle inline-flex w-fit shrink-0 gap-1 rounded-lg p-1" role="radiogroup" aria-label={t('appLanguage')}>
+                        {([
+                          ['en', 'English'],
+                          ['ko', 'Korean'],
+                        ] as const).map(([language, label]) => (
+                          <button
+                            key={language}
+                            type="button"
+                            role="radio"
+                            aria-checked={appLanguage === language}
+                            onClick={() => setAppLanguage(language)}
+                            className={`app-language-toggle-option inline-flex items-center rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                              appLanguage === language ? 'app-language-toggle-option-active' : ''
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
                   {speakersLoad.status === 'loading' || speakersLoad.status === 'idle' ? (
                     <div className="flex flex-1 items-center gap-2 px-5 py-8 text-sm" style={{ color: 'var(--text-muted)' }}>
                       <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                      Loading speaker data…
+                      {t('loadingSpeakerData')}
                     </div>
                   ) : null}
 
@@ -765,7 +795,7 @@ const AccountSettings: React.FC = () => {
                       {speakerProfileSavedFlash ? (
                         <div className="shrink-0 px-5 pt-3">
                           <p className="text-sm" style={{ color: 'var(--success)' }}>
-                            Profile saved.
+                            {t('profileSaved')}
                           </p>
                         </div>
                       ) : null}
@@ -779,11 +809,11 @@ const AccountSettings: React.FC = () => {
                                 onClick={() => void handleCopyText(speakerProfileDraft, 'self-speaker-profile')}
                                 className="inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
                                 style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                title="Copy speaker profile JSON"
-                                aria-label="Copy speaker profile JSON"
+                                title={appLanguage === 'ko' ? '화자 프로필 JSON 복사' : 'Copy speaker profile JSON'}
+                                aria-label={appLanguage === 'ko' ? '화자 프로필 JSON 복사' : 'Copy speaker profile JSON'}
                               >
                                 {copiedKey === 'self-speaker-profile' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                                Copy
+                                {t('copy')}
                               </button>
                             </div>
                             <textarea
@@ -808,10 +838,9 @@ const AccountSettings: React.FC = () => {
                             style={{ color: 'var(--text-muted)' }}
                           >
                             <User01 className="mb-3 h-10 w-10 opacity-40" aria-hidden />
-                            <p className="text-sm">No ontology profile stored yet.</p>
+                            <p className="text-sm">{appLanguage === 'ko' ? '저장된 온톨로지 프로필이 아직 없습니다.' : 'No ontology profile stored yet.'}</p>
                             <p className="mt-2 max-w-sm text-xs leading-relaxed">
-                              Use <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>Edit profile</span>{' '}
-                              to add JSON.
+                              {t('useEditProfileHint')}
                             </p>
                           </div>
                         )}
@@ -831,7 +860,7 @@ const AccountSettings: React.FC = () => {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                        Summary prompts
+                        {t('summaryPrompts')}
                       </h3>
                       <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
                         Named templates stored on your account. The Meeting Note page can choose which template to send with
@@ -920,7 +949,7 @@ const AccountSettings: React.FC = () => {
                                     aria-label={`Copy prompt for ${row.name}`}
                                   >
                                     {copiedKey === `summary-prompt-${row.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                                    Copy
+                                    {t('copy')}
                                   </button>
                                 </div>
                                 <textarea
@@ -963,7 +992,7 @@ const AccountSettings: React.FC = () => {
                                       }}
                                     >
                                       <TrashFull className="h-4 w-4" aria-hidden />
-                                      Delete
+                                      {t('delete')}
                                     </button>
                                   ) : null}
                                   <button
@@ -999,17 +1028,16 @@ const AccountSettings: React.FC = () => {
                   className="card rounded-lg p-5"
                 >
                   <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                    Other speaker profiles
+                    {appLanguage === 'ko' ? '기타 화자 프로필' : 'Other speaker profiles'}
                   </h3>
                   <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Saved speakers on your account (excluding the profile matched to your Microsoft name on the Account
-                    tab).
+                    {t('savedSpeakersDescription')}
                   </p>
 
                   {speakersLoad.status === 'loading' || speakersLoad.status === 'idle' ? (
                     <div className="mt-6 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
                       <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                      Loading speaker profiles…
+                      {t('loadingSpeakerData')}
                     </div>
                   ) : null}
 
@@ -1022,8 +1050,8 @@ const AccountSettings: React.FC = () => {
                   {speakersLoad.status === 'ready' && otherSpeakers.length === 0 ? (
                     <p className="mt-6 text-sm" style={{ color: 'var(--text-secondary)' }}>
                       {matchedSelf
-                        ? 'No other saved speakers for this account.'
-                        : 'No saved speakers yet. Speakers are created when you label or save names in transcripts.'}
+                        ? appLanguage === 'ko' ? '이 계정에는 다른 저장된 화자가 없습니다.' : 'No other saved speakers for this account.'
+                        : appLanguage === 'ko' ? '저장된 화자가 아직 없습니다. 전사에서 이름을 지정하거나 저장하면 화자가 생성됩니다.' : 'No saved speakers yet. Speakers are created when you label or save names in transcripts.'}
                     </p>
                   ) : null}
 
@@ -1109,7 +1137,7 @@ const AccountSettings: React.FC = () => {
                                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                                     >
                                       <EditPencilLine01 className="h-4 w-4" aria-hidden />
-                                      Edit profile
+                                      {t('editProfile')}
                                     </button>
                                   </div>
                                 ) : null}
@@ -1132,11 +1160,11 @@ const AccountSettings: React.FC = () => {
                                           onClick={() => void handleCopyText(otherSpeakerDraft, `other-speaker-${sp.id}`)}
                                           className="inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium"
                                           style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                          title={`Copy profile JSON for ${sp.name}`}
-                                          aria-label={`Copy profile JSON for ${sp.name}`}
+                                          title={appLanguage === 'ko' ? `${sp.name} 프로필 JSON 복사` : `Copy profile JSON for ${sp.name}`}
+                                          aria-label={appLanguage === 'ko' ? `${sp.name} 프로필 JSON 복사` : `Copy profile JSON for ${sp.name}`}
                                         >
                                           {copiedKey === `other-speaker-${sp.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                                          Copy
+                                          {t('copy')}
                                         </button>
                                       </div>
                                       <textarea
@@ -1149,7 +1177,7 @@ const AccountSettings: React.FC = () => {
                                           borderColor: 'var(--border)',
                                         }}
                                         spellCheck={false}
-                                        aria-label={`Edit profile JSON for ${sp.name}`}
+                                        aria-label={appLanguage === 'ko' ? `${sp.name} 프로필 JSON 편집` : `Edit profile JSON for ${sp.name}`}
                                         placeholder="{}"
                                       />
                                       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
@@ -1174,7 +1202,7 @@ const AccountSettings: React.FC = () => {
                                           className="rounded-lg px-3 py-2 text-sm transition-opacity disabled:opacity-50"
                                           style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                                         >
-                                          Cancel
+                                          {t('cancel')}
                                         </button>
                                         <button
                                           type="button"
@@ -1191,7 +1219,7 @@ const AccountSettings: React.FC = () => {
                                           ) : (
                                             <Save className="h-4 w-4" aria-hidden />
                                           )}
-                                          Save
+                                          {t('save')}
                                         </button>
                                       </div>
                                     </>
@@ -1203,10 +1231,9 @@ const AccountSettings: React.FC = () => {
                                       style={{ color: 'var(--text-muted)' }}
                                     >
                                       <User01 className="mb-2 h-9 w-9 opacity-40" aria-hidden />
-                                      <p className="text-sm">No profile saved for this speaker.</p>
+                                      <p className="text-sm">{appLanguage === 'ko' ? '이 화자의 저장된 프로필이 없습니다.' : 'No profile saved for this speaker.'}</p>
                                       <p className="mt-2 max-w-sm text-xs leading-relaxed">
-                                        Use <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>Edit profile</span>{' '}
-                                        above to add JSON.
+                                        {t('useEditProfileHint')}
                                       </p>
                                     </div>
                                   )}
@@ -1230,11 +1257,10 @@ const AccountSettings: React.FC = () => {
                 >
                   <div>
                     <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                      Meeting Note MCP setup
+                      {t('mcpSetupTitle')}
                     </h3>
                     <p className="mt-1 max-w-3xl text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                      Connect Meeting Note to ChatGPT or Claude so the assistant can search your notes, summaries,
-                      transcripts, projects, and speaker profiles. The MCP is read-only for note data.
+                      {t('mcpSetupDescription')}
                     </p>
                   </div>
 
@@ -1267,11 +1293,10 @@ const AccountSettings: React.FC = () => {
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0">
                             <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                              Personal MCP key
+                              {t('personalMcpKey')}
                             </h4>
                             <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                              Generate a personal key for Claude Desktop. The full key is shown once; after you leave
-                              this page only the shortened key label remains.
+                              {t('personalMcpKeyDescription')}
                             </p>
                           </div>
                           <button
@@ -1281,7 +1306,7 @@ const AccountSettings: React.FC = () => {
                             className="mcp-copy-btn disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {mcpTokenActionLoading ? <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-                            Generate Key
+                            {t('generateKey')}
                           </button>
                         </div>
 
@@ -1295,7 +1320,7 @@ const AccountSettings: React.FC = () => {
                           <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                             <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
                               <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                                New MCP key - copy now
+                                {t('newMcpKeyCopy')}
                               </span>
                               <button
                                 type="button"
@@ -1303,7 +1328,7 @@ const AccountSettings: React.FC = () => {
                                 className="mcp-copy-btn"
                               >
                                 {copiedKey === 'new-mcp-token' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
-                                {copiedKey === 'new-mcp-token' ? 'Copied' : 'Copy'}
+                                {copiedKey === 'new-mcp-token' ? t('copied') : t('copy')}
                               </button>
                             </div>
                             <code className="block overflow-x-auto px-3 py-2 text-xs" style={{ color: 'var(--text)' }}>
@@ -1314,21 +1339,24 @@ const AccountSettings: React.FC = () => {
 
                         <div className="mt-4">
                           <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                            Existing keys
+                            {t('existingKeys')}
                           </h5>
                           {mcpTokensLoading ? (
                             <div className="mt-3 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
                               <Loading className="h-4 w-4 animate-spin" aria-hidden />
-                              Loading keys...
+                              {t('loadingKeys')}
                             </div>
                           ) : mcpTokens.length === 0 ? (
                             <p className="mt-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                              No MCP keys have been generated yet.
+                              {t('noMcpKeys')}
                             </p>
                           ) : (
                             <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                               {mcpTokens.map((token) => {
                                 const revoked = Boolean(token.revokedAt);
+                                const expired = token.expiresAt ? Date.parse(token.expiresAt) <= Date.now() : false;
+                                const inactive = revoked || expired;
+                                const scopeLabel = token.scopes?.length ? token.scopes.join(', ') : 'default scopes';
                                 return (
                                   <div
                                     key={token.id}
@@ -1336,7 +1364,7 @@ const AccountSettings: React.FC = () => {
                                     style={{ borderColor: 'var(--border)' }}
                                   >
                                     <div className="min-w-0">
-                                      <p className="truncate text-sm font-medium" style={{ color: revoked ? 'var(--text-muted)' : 'var(--text)' }}>
+                                      <p className="truncate text-sm font-medium" style={{ color: inactive ? 'var(--text-muted)' : 'var(--text)' }}>
                                         {token.name}
                                       </p>
                                       <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -1344,8 +1372,15 @@ const AccountSettings: React.FC = () => {
                                         {token.lastUsedAt ? ` · Last used ${new Date(token.lastUsedAt).toLocaleDateString()}` : ''}
                                         {revoked ? ' · Revoked' : ''}
                                       </p>
+                                      <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+                                        {token.expiresAt ? `Expires ${new Date(token.expiresAt).toLocaleDateString()}` : 'No expiry recorded'}
+                                        {expired ? ' - Expired' : ''}
+                                      </p>
+                                      <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+                                        Scopes: {scopeLabel}
+                                      </p>
                                     </div>
-                                    {!revoked ? (
+                                    {!inactive ? (
                                       <button
                                         type="button"
                                         onClick={() => void handleRevokeMcpToken(token.id)}
@@ -1356,7 +1391,7 @@ const AccountSettings: React.FC = () => {
                                           color: 'var(--error)',
                                         }}
                                       >
-                                        Revoke
+                                        {t('revoke')}
                                       </button>
                                     ) : null}
                                   </div>
@@ -1376,11 +1411,10 @@ const AccountSettings: React.FC = () => {
                         <div>
                           <div>
                             <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                              ChatGPT setup
+                              {t('chatgptSetup')}
                             </h4>
                             <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                              Use this option for ChatGPT web. ChatGPT connects through OAuth, so users sign in with
-                              their Microsoft account instead of pasting an API key.
+                              {t('chatgptSetupDescription')}
                             </p>
                           </div>
                         </div>
@@ -1388,7 +1422,7 @@ const AccountSettings: React.FC = () => {
                         <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
                           <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
                             <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                              ChatGPT MCP URL
+                              {t('chatgptMcpUrl')}
                             </span>
                             <button
                               type="button"
@@ -1396,7 +1430,7 @@ const AccountSettings: React.FC = () => {
                               className="mcp-copy-btn"
                             >
                               {copiedKey === 'mcp-chatgpt-url' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
-                              {copiedKey === 'mcp-chatgpt-url' ? 'Copied' : 'Copy'}
+                              {copiedKey === 'mcp-chatgpt-url' ? t('copied') : t('copy')}
                             </button>
                           </div>
                           <code className="block overflow-x-auto px-3 py-2 text-xs" style={{ color: 'var(--text)' }}>
@@ -1405,16 +1439,29 @@ const AccountSettings: React.FC = () => {
                         </div>
 
                         <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>1.</span> Open ChatGPT settings.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>2.</span> Go to Connectors. If needed, enable Developer mode under the advanced connector settings.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Add a remote MCP server and paste the ChatGPT MCP URL above.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Complete the Microsoft sign-in and consent screen.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>5.</span> Start a chat and choose Meeting Note from the connector/tools menu when you want ChatGPT to use your meeting data.</li>
+                          {(appLanguage === 'ko'
+                            ? [
+                                'ChatGPT 설정을 엽니다.',
+                                '커넥터로 이동합니다. 필요한 경우 고급 커넥터 설정에서 개발자 모드를 켭니다.',
+                                '원격 MCP 서버를 추가하고 위의 ChatGPT MCP URL을 붙여넣습니다.',
+                                'Microsoft 로그인 및 동의 화면을 완료합니다.',
+                                '채팅을 시작하고 Meeting Note 데이터를 사용하고 싶을 때 커넥터/도구 메뉴에서 Meeting Note를 선택합니다.',
+                              ]
+                            : [
+                                'Open ChatGPT settings.',
+                                'Go to Connectors. If needed, enable Developer mode under the advanced connector settings.',
+                                'Add a remote MCP server and paste the ChatGPT MCP URL above.',
+                                'Complete the Microsoft sign-in and consent screen.',
+                                'Start a chat and choose Meeting Note from the connector/tools menu when you want ChatGPT to use your meeting data.',
+                              ]).map((step, index) => (
+                            <li key={step}><span className="font-medium" style={{ color: 'var(--text)' }}>{index + 1}.</span> {step}</li>
+                          ))}
                         </ol>
 
                         <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                          If ChatGPT reports an account connection error after a server update, disconnect the connector
-                          and reconnect it so ChatGPT refreshes the OAuth permission grant.
+                          {appLanguage === 'ko'
+                            ? '서버 업데이트 후 ChatGPT에서 계정 연결 오류가 표시되면 커넥터 연결을 해제한 뒤 다시 연결하여 OAuth 권한을 새로고침하세요.'
+                            : 'If ChatGPT reports an account connection error after a server update, disconnect the connector and reconnect it so ChatGPT refreshes the OAuth permission grant.'}
                         </p>
                       </div>
                     </div>
@@ -1428,21 +1475,36 @@ const AccountSettings: React.FC = () => {
                         <div>
                           <div>
                             <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                              Claude Desktop setup
+                              {t('claudeDesktopSetup')}
                             </h4>
                             <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                              Claude Desktop uses a local bridge called <span className="font-medium">mcp-remote</span>.
-                              You will use the personal MCP key generated above.
+                              {appLanguage === 'ko' ? (
+                                <>Claude Desktop은 <span className="font-medium">mcp-remote</span>라는 로컬 브리지를 사용합니다. 위에서 생성한 개인 MCP 키를 사용합니다.</>
+                              ) : (
+                                <>Claude Desktop uses a local bridge called <span className="font-medium">mcp-remote</span>. You will use the personal MCP key generated above.</>
+                              )}
                             </p>
                           </div>
                         </div>
 
                         <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>1.</span> Open Claude Desktop settings and locate the developer MCP configuration file.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>2.</span> Add the <span className="font-medium">mcpServers</span> block below to the existing JSON. If the file already has preferences, keep them and add <span className="font-medium">mcpServers</span> as a sibling property.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>3.</span> Generate a personal MCP key above. The config below will place the last generated key under <span className="font-medium">env.AUTH_HEADER</span>.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>4.</span> Copy the config after generating the key so Claude receives the correct auth header and your Meeting Note user ID.</li>
-                          <li><span className="font-medium" style={{ color: 'var(--text)' }}>5.</span> Restart Claude Desktop and look for the Meeting Note MCP tools.</li>
+                          {(appLanguage === 'ko'
+                            ? [
+                                'Claude Desktop 설정을 열고 개발자 MCP 설정 파일을 찾습니다.',
+                                '아래 mcpServers 블록을 기존 JSON에 추가합니다. 기존 설정이 있으면 유지하고 mcpServers를 같은 레벨의 속성으로 추가합니다.',
+                                '위에서 개인 MCP 키를 생성합니다. 아래 설정은 마지막으로 생성된 키를 env.AUTH_HEADER에 넣습니다.',
+                                '키를 생성한 뒤 설정을 복사하여 Claude가 올바른 개인 MCP 인증 헤더를 받도록 합니다.',
+                                'Claude Desktop을 다시 시작하고 Meeting Note MCP 도구가 보이는지 확인합니다.',
+                              ]
+                            : [
+                                'Open Claude Desktop settings and locate the developer MCP configuration file.',
+                                'Add the mcpServers block below to the existing JSON. If the file already has preferences, keep them and add mcpServers as a sibling property.',
+                                'Generate a personal MCP key above. The config below will place the last generated key under env.AUTH_HEADER.',
+                                'Copy the config after generating the key so Claude receives the correct personal MCP auth header.',
+                                'Restart Claude Desktop and look for the Meeting Note MCP tools.',
+                              ]).map((step, index) => (
+                            <li key={step}><span className="font-medium" style={{ color: 'var(--text)' }}>{index + 1}.</span> {step}</li>
+                          ))}
                         </ol>
 
                         <div className="mt-4 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
@@ -1456,7 +1518,7 @@ const AccountSettings: React.FC = () => {
                               className="mcp-copy-btn"
                             >
                               {copiedKey === 'mcp-claude-config' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
-                              {copiedKey === 'mcp-claude-config' ? 'Copied' : 'Copy'}
+                              {copiedKey === 'mcp-claude-config' ? t('copied') : t('copy')}
                             </button>
                           </div>
                           <pre className="custom-scrollbar max-h-80 overflow-auto p-3 text-xs leading-relaxed" style={{ color: 'var(--text)' }}>
@@ -1470,14 +1532,17 @@ const AccountSettings: React.FC = () => {
                       <span className="summary-note-row-rail" aria-hidden />
                       <div className="summary-note-row-content px-4 py-4">
                         <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                          Key safety
+                          {t('keySafety')}
                         </h4>
                         <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          Personal MCP keys are scoped to your Meeting Note account. Store the key in Claude Desktop
-                          only, and revoke it here if it is no longer needed or may have been exposed.
+                          {appLanguage === 'ko'
+                            ? '개인 MCP 키는 Meeting Note 계정에만 연결됩니다. 키는 Claude Desktop에만 저장하고, 더 이상 필요하지 않거나 노출되었을 수 있으면 여기에서 해지하세요.'
+                            : 'Personal MCP keys are scoped to your Meeting Note account. Store the key in Claude Desktop only, and revoke it here if it is no longer needed or may have been exposed.'}
                         </p>
                         <div className="mt-3 rounded-md px-3 py-2 text-xs" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
-                          The full key is only shown once. Existing keys show a shortened label for identification.
+                          {appLanguage === 'ko'
+                            ? '전체 키는 한 번만 표시됩니다. 기존 키는 식별을 위해 축약된 라벨만 표시됩니다.'
+                            : 'The full key is only shown once. Existing keys show a shortened label for identification.'}
                         </div>
                       </div>
                     </div>
@@ -1488,16 +1553,25 @@ const AccountSettings: React.FC = () => {
                       <span className="summary-note-row-rail" aria-hidden />
                       <div className="summary-note-row-content px-4 py-4">
                         <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                          Quick test prompts
+                          {t('quickTestPrompts')}
                         </h4>
                         <ul className="mt-3 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          <li>List my recent meeting notes.</li>
-                          <li>Find notes from yesterday and summarize the action items.</li>
-                          <li>Search my transcripts for a discussion about project risks.</li>
-                          <li>Show the profile context for a saved speaker.</li>
+                          {(appLanguage === 'ko'
+                            ? [
+                                '최근 회의록을 나열해 주세요.',
+                                '어제 회의록을 찾아 실행 항목을 요약해 주세요.',
+                                '프로젝트 리스크에 대해 논의한 전사를 검색해 주세요.',
+                                '저장된 화자의 프로필 컨텍스트를 보여 주세요.',
+                              ]
+                            : [
+                                'List my recent meeting notes.',
+                                'Find notes from yesterday and summarize the action items.',
+                                'Search my transcripts for a discussion about project risks.',
+                                'Show the profile context for a saved speaker.',
+                              ]).map((prompt) => <li key={prompt}>{prompt}</li>)}
                         </ul>
                         <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                          The MCP can read meeting note data, but it should not edit or delete notes.
+                          {t('mcpReadOnlyNote')}
                         </p>
                       </div>
                     </div>
@@ -1590,7 +1664,7 @@ const AccountSettings: React.FC = () => {
                   disabled={!createPrompt.trim()}
                 >
                   {copiedKey === 'create-summary-prompt' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  Copy
+                  {t('copy')}
                 </button>
               </div>
               {createError ? (
@@ -1610,7 +1684,7 @@ const AccountSettings: React.FC = () => {
                 className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 type="button"
@@ -1649,7 +1723,7 @@ const AccountSettings: React.FC = () => {
               style={{ borderColor: 'var(--border)' }}
             >
               <h2 id="delete-summary-prompt-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                Delete prompt
+                {t('deletePrompt')}
               </h2>
               <button
                 type="button"
@@ -1684,7 +1758,7 @@ const AccountSettings: React.FC = () => {
                 className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
                 style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
               >
-                Cancel
+                {t('cancel')}
               </button>
               <button
                 type="button"
@@ -1694,7 +1768,7 @@ const AccountSettings: React.FC = () => {
                 style={{ borderColor: 'var(--error)', color: 'var(--error)', backgroundColor: 'transparent' }}
               >
                 {deletePromptSaving ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <TrashFull className="h-4 w-4" aria-hidden />}
-                Delete
+                {t('delete')}
               </button>
             </div>
           </div>

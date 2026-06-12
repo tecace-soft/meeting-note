@@ -12,6 +12,7 @@ export interface NoteRow {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+  shared_users?: unknown;
   tags?: unknown;
   projects?: Array<string | number> | null;
   chat_id?: string | null;
@@ -65,6 +66,11 @@ export async function runWithScopedUserId<T>(userId: string | undefined, callbac
 function applyUserScope<T>(query: T, userId: string | undefined): T {
   if (!userId) return query;
   return (query as { eq: (column: string, value: string) => T }).eq('user_id', userId);
+}
+
+export function applyNoteAccessScope<T>(query: T, userId: string | undefined): T {
+  if (!userId) return query;
+  return (query as { or: (filters: string) => T }).or(`user_id.eq.${userId},shared_users.cs.{${userId}}`);
 }
 
 export function toIdValue(id: string): string | number {
@@ -130,7 +136,7 @@ export async function fetchNote(noteId: string): Promise<NoteRow | null> {
   const { supabase } = getDataContext();
   const userId = getScopedUserId();
   let query = supabase.from('note').select('*').eq('id', noteId).limit(1);
-  query = applyUserScope(query, userId);
+  query = applyNoteAccessScope(query, userId);
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
   return (data as NoteRow | null) ?? null;

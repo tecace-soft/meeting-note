@@ -1,7 +1,8 @@
 import React, { useId, useState, useEffect, useRef, useCallback, useMemo, startTransition } from 'react';
 import { createPortal } from 'react-dom';
-import { CloseMd, EditPencilLine01, Loading, Save, TrashFull, User01 } from 'react-coolicons';
+import { CloseMd, EditPencilLine01, Loading, Save, Stop, TrashFull, User01, VolumeMax } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
 import { supabase } from '../config/supabaseConfig';
@@ -9,9 +10,11 @@ import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
 import {
   applySpeakerReplacements,
+  getSegmentText,
   getTranscriptAvatarLabel,
   persistNoteDiarization,
   type ReplacementScope,
+  type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 
@@ -32,6 +35,73 @@ const SPEAKER_LIST_AVATAR_BACKGROUNDS = [
   'color-mix(in srgb, var(--accent) 40%, var(--bg-secondary))',
 ] as const;
 
+function getTextOffsetFromPoint(container: HTMLElement, clientX: number, clientY: number): number | null {
+  const doc = container.ownerDocument;
+  const pointDocument = doc as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+
+  let targetNode: Node | null = null;
+  let targetOffset = 0;
+  const position = pointDocument.caretPositionFromPoint?.(clientX, clientY);
+  if (position) {
+    targetNode = position.offsetNode;
+    targetOffset = position.offset;
+  } else {
+    const range = pointDocument.caretRangeFromPoint?.(clientX, clientY);
+    if (range) {
+      targetNode = range.startContainer;
+      targetOffset = range.startOffset;
+    }
+  }
+
+  if (!targetNode || !container.contains(targetNode)) return null;
+
+  let textOffset = 0;
+  const walker = doc.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let current = walker.nextNode();
+  while (current) {
+    const length = current.textContent?.length ?? 0;
+    if (current === targetNode) {
+      return textOffset + Math.min(targetOffset, length);
+    }
+    textOffset += length;
+    current = walker.nextNode();
+  }
+
+  return null;
+}
+
+function setEditableCaretOffset(editable: HTMLElement, offset: number | null): void {
+  editable.focus();
+  const doc = editable.ownerDocument;
+  const range = doc.createRange();
+  const selection = window.getSelection();
+  const targetOffset = Math.max(0, offset ?? editable.innerText.length);
+  let remaining = targetOffset;
+  const walker = doc.createTreeWalker(editable, NodeFilter.SHOW_TEXT);
+  let current = walker.nextNode();
+
+  while (current) {
+    const length = current.textContent?.length ?? 0;
+    if (remaining <= length) {
+      range.setStart(current, remaining);
+      range.collapse(true);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return;
+    }
+    remaining -= length;
+    current = walker.nextNode();
+  }
+
+  range.selectNodeContents(editable);
+  range.collapse(false);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 export interface TranscriptDiarizedEditorProps {
   segments: TranscriptSegment[];
   onSegmentsChange: (next: TranscriptSegment[]) => void;
@@ -40,6 +110,13 @@ export interface TranscriptDiarizedEditorProps {
   scrollContainerClassName?: string;
   selectedSpeakerFilters?: string[];
   onSelectedSpeakerFiltersChange?: (next: string[]) => void;
+  activePlaybackSegmentIndex?: number | null;
+  isPlaybackActive?: boolean;
+  loadingPlaybackSegmentIndex?: number | null;
+  playbackTimeLabel?: string | null;
+  canPlaySegment?: (segment: TranscriptSegment, index: number) => boolean;
+  onPlaySegment?: (segment: TranscriptSegment, index: number) => void;
+  transcriptLanguage?: TranscriptLanguage;
 }
 
 export function getTranscriptSpeakerFilters(segments: TranscriptSegment[]): string[] {
@@ -65,6 +142,7 @@ export const TranscriptSpeakerFilterControls: React.FC<TranscriptSpeakerFilterCo
   selectedSpeakers,
   onSelectedSpeakersChange,
 }) => {
+  const { t } = useLanguage();
   if (speakers.length <= 1) return null;
 
   const toggleSpeaker = (speaker: string) => {
@@ -78,16 +156,16 @@ export const TranscriptSpeakerFilterControls: React.FC<TranscriptSpeakerFilterCo
   return (
     <div className="transcript-speaker-filter-row flex min-w-0 items-center gap-1.5">
       <label className="sr-only" htmlFor="transcript-speaker-filter-select">
-        Filter transcript by speaker
+        {t('filterTranscriptBySpeaker')}
       </label>
       <select
         id="transcript-speaker-filter-select"
         className="transcript-speaker-filter-select sm:hidden"
         value={selectedSpeakers[0] ?? ''}
         onChange={(e) => onSelectedSpeakersChange(e.target.value ? [e.target.value] : [])}
-        aria-label="Filter transcript by speaker"
+        aria-label={t('filterTranscriptBySpeaker')}
       >
-        <option value="">All speakers</option>
+        <option value="">{t('allSpeakers')}</option>
         {speakers.map((speaker) => (
           <option key={speaker} value={speaker}>
             {speaker}
@@ -101,7 +179,7 @@ export const TranscriptSpeakerFilterControls: React.FC<TranscriptSpeakerFilterCo
           aria-pressed={selectedSpeakers.length === 0}
           onClick={() => onSelectedSpeakersChange([])}
         >
-          All
+          {t('allSpeakers')}
         </button>
         {speakers.map((speaker) => {
           const isActive = selectedSpeakers.includes(speaker);
@@ -130,9 +208,17 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   scrollContainerClassName,
   selectedSpeakerFilters = [],
   onSelectedSpeakerFiltersChange,
+  activePlaybackSegmentIndex = null,
+  isPlaybackActive = false,
+  loadingPlaybackSegmentIndex = null,
+  playbackTimeLabel = null,
+  canPlaySegment,
+  onPlaySegment,
+  transcriptLanguage = 'original',
 }) => {
   const scopeGroupId = useId();
   const { user, getAccessToken } = useAuth();
+  const { t } = useLanguage();
   const [speakerMenu, setSpeakerMenu] = useState<SpeakerMenuState | null>(null);
   const [savedSpeakers, setSavedSpeakers] = useState<DbSpeaker[]>([]);
   const [microsoftContacts, setMicrosoftContacts] = useState<MicrosoftContact[]>([]);
@@ -153,7 +239,14 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const [profileDraft, setProfileDraft] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
+  const [editingSegment, setEditingSegment] = useState<{ index: number; text: string } | null>(null);
+  const [segmentEditSavingIndex, setSegmentEditSavingIndex] = useState<number | null>(null);
+  const [segmentEditError, setSegmentEditError] = useState<string | null>(null);
   const speakerMenuPanelRef = useRef<HTMLDivElement>(null);
+  const segmentEditTextRef = useRef<HTMLDivElement | null>(null);
+  const pendingSegmentCaretOffsetRef = useRef<number | null>(null);
+  const segmentEditDraftRef = useRef('');
+  const segmentEditSaveTimeoutRef = useRef<number | null>(null);
 
   const closeSpeakerMenu = useCallback(() => {
     setSpeakerMenu(null);
@@ -171,6 +264,104 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setProfileDraft('');
     setProfileSaveError(null);
   }, []);
+
+  useEffect(() => {
+    if (!editingSegment) return;
+    segmentEditDraftRef.current = editingSegment.text;
+    const frameId = window.requestAnimationFrame(() => {
+      const editable = segmentEditTextRef.current;
+      if (!editable) return;
+      setEditableCaretOffset(editable, pendingSegmentCaretOffsetRef.current);
+      pendingSegmentCaretOffsetRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [editingSegment?.index]);
+
+  useEffect(() => {
+    return () => {
+      if (segmentEditSaveTimeoutRef.current != null) {
+        window.clearTimeout(segmentEditSaveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const startSegmentTextEdit = useCallback(
+    (segmentIndex: number, segment: TranscriptSegment, caretOffset: number | null = null) => {
+      setSegmentEditError(null);
+      pendingSegmentCaretOffsetRef.current = caretOffset;
+      setEditingSegment({
+        index: segmentIndex,
+        text: getSegmentText(segment, transcriptLanguage),
+      });
+    },
+    [transcriptLanguage]
+  );
+
+  const cancelSegmentTextEdit = useCallback(() => {
+    setEditingSegment(null);
+    setSegmentEditError(null);
+  }, []);
+
+  const saveSegmentTextEdit = useCallback(async (options: { close?: boolean } = {}) => {
+    if (!editingSegment) return;
+    const shouldClose = options.close ?? true;
+    const targetSegment = segments[editingSegment.index];
+    if (!targetSegment) {
+      setEditingSegment(null);
+      return;
+    }
+
+    const nextText = (segmentEditTextRef.current?.innerText ?? segmentEditDraftRef.current ?? editingSegment.text).trim();
+    const currentText = getSegmentText(targetSegment, transcriptLanguage).trim();
+    if (nextText === currentText) {
+      if (shouldClose) setEditingSegment(null);
+      setSegmentEditError(null);
+      return;
+    }
+
+    const nextTranscript = segments.map((segment, index) => {
+      if (index !== editingSegment.index) return segment;
+      if (transcriptLanguage === 'original') {
+        return { ...segment, text: nextText };
+      }
+      return {
+        ...segment,
+        translations: {
+          ...(segment.translations ?? {}),
+          [transcriptLanguage]: nextText,
+        },
+      };
+    });
+
+      setSegmentEditSavingIndex(editingSegment.index);
+      setSegmentEditError(null);
+    try {
+      if (noteId) {
+        await persistNoteDiarization(noteId, nextTranscript);
+      }
+      startTransition(() => {
+        onSegmentsChange(nextTranscript);
+      });
+      if (shouldClose) {
+        setEditingSegment(null);
+      }
+    } catch (err) {
+      console.error('Failed to save transcript segment edit:', err);
+      setSegmentEditError(err instanceof Error ? err.message : t('failedSaveSegmentEdit'));
+    } finally {
+      setSegmentEditSavingIndex(null);
+    }
+  }, [editingSegment, noteId, onSegmentsChange, segments, t, transcriptLanguage]);
+
+  const scheduleSegmentTextAutosave = useCallback(() => {
+    if (segmentEditSaveTimeoutRef.current != null) {
+      window.clearTimeout(segmentEditSaveTimeoutRef.current);
+    }
+    segmentEditSaveTimeoutRef.current = window.setTimeout(() => {
+      segmentEditSaveTimeoutRef.current = null;
+      void saveSegmentTextEdit({ close: false });
+    }, 700);
+  }, [saveSegmentTextEdit]);
 
   const loadSpeakersForMenu = useCallback(async () => {
     if (!user?.id) {
@@ -568,6 +759,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       >
         <div className="space-y-3">
           {visibleSegments.map(({ segment: seg, index: segmentIndex }) => {
+            const segmentPlayable = Boolean(canPlaySegment?.(seg, segmentIndex));
+            const segmentIsPlaying = segmentPlayable && activePlaybackSegmentIndex === segmentIndex && isPlaybackActive;
+            const segmentIsLoading = segmentPlayable && loadingPlaybackSegmentIndex === segmentIndex;
             return (
             <div key={segmentIndex} className="transcript-segment flex min-h-[75px] items-center gap-3">
               <div
@@ -580,26 +774,112 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                 {getTranscriptAvatarLabel(seg.speaker)}
               </div>
               <div className="min-w-0 flex-1">
-              <button
-                type="button"
-                data-transcript-speaker-trigger
-                className={`transcript-speaker-trigger text-left text-base font-semibold ${
-                  speakerMenu?.segmentIndex === segmentIndex ? 'transcript-speaker-trigger-active' : ''
-                }`}
-                style={{ color: 'var(--accent)' }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openSpeakerMenuFromSegment(segmentIndex, e.currentTarget);
-                }}
-              >
-                {seg.speaker.trim() || 'Speaker'}
-              </button>
-              <div
-                className="mt-0.5 text-base font-normal leading-relaxed whitespace-pre-wrap"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                {seg.text}
+              <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+                <button
+                  type="button"
+                  data-transcript-speaker-trigger
+                  className={`transcript-speaker-trigger text-left text-base font-semibold ${
+                    speakerMenu?.segmentIndex === segmentIndex ? 'transcript-speaker-trigger-active' : ''
+                  }`}
+                  style={{ color: 'var(--accent)' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openSpeakerMenuFromSegment(segmentIndex, e.currentTarget);
+                  }}
+                >
+                  {seg.speaker.trim() || 'Speaker'}
+                </button>
+                {segmentPlayable ? (
+                  <span className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPlaySegment?.(seg, segmentIndex);
+                      }}
+                      className={`transcript-segment-audio-btn ${segmentIsPlaying ? 'transcript-segment-audio-btn-active' : ''}`}
+                      title={`${segmentIsPlaying ? 'Stop' : 'Play'} segment from ${seg.speaker.trim() || 'Speaker'}`}
+                      aria-label={`${segmentIsPlaying ? 'Stop' : 'Play'} segment from ${seg.speaker.trim() || 'Speaker'}`}
+                    >
+                      {segmentIsLoading ? (
+                        <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                      ) : segmentIsPlaying ? (
+                        <Stop className="h-3.5 w-3.5" aria-hidden />
+                      ) : (
+                        <VolumeMax className="h-3.5 w-3.5" aria-hidden />
+                      )}
+                    </button>
+                    {segmentIsPlaying && playbackTimeLabel ? (
+                      <span className="transcript-segment-audio-time">{playbackTimeLabel}</span>
+                    ) : null}
+                  </span>
+                ) : null}
               </div>
+              {editingSegment?.index === segmentIndex ? (
+                <div className="mt-0.5">
+                  <div
+                    ref={segmentEditTextRef}
+                    contentEditable={segmentEditSavingIndex !== segmentIndex}
+                    suppressContentEditableWarning
+                    className="transcript-segment-edit-text"
+                    role="textbox"
+                    aria-label={t('editTranscriptSegment')}
+                    onBlur={() => {
+                      if (editingSegment?.index === segmentIndex && segmentEditSavingIndex !== segmentIndex) {
+                        if (segmentEditSaveTimeoutRef.current != null) {
+                          window.clearTimeout(segmentEditSaveTimeoutRef.current);
+                          segmentEditSaveTimeoutRef.current = null;
+                        }
+                        void saveSegmentTextEdit();
+                      }
+                    }}
+                    onInput={(e) => {
+                      segmentEditDraftRef.current = e.currentTarget.innerText;
+                      scheduleSegmentTextAutosave();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        if (segmentEditSaveTimeoutRef.current != null) {
+                          window.clearTimeout(segmentEditSaveTimeoutRef.current);
+                          segmentEditSaveTimeoutRef.current = null;
+                        }
+                        cancelSegmentTextEdit();
+                        return;
+                      }
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (segmentEditSaveTimeoutRef.current != null) {
+                          window.clearTimeout(segmentEditSaveTimeoutRef.current);
+                          segmentEditSaveTimeoutRef.current = null;
+                        }
+                        void saveSegmentTextEdit();
+                      }
+                    }}
+                  >
+                    {editingSegment.text}
+                  </div>
+                  {segmentEditError ? (
+                    <p className="mt-1 text-xs" style={{ color: 'var(--error)' }}>
+                      {segmentEditError}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="transcript-segment-text-button mt-0.5 text-base font-normal leading-relaxed whitespace-pre-wrap"
+                  style={{ color: 'var(--text-secondary)' }}
+                  title={t('editTranscriptSegment')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const caretOffset = getTextOffsetFromPoint(e.currentTarget, e.clientX, e.clientY);
+                    startSegmentTextEdit(segmentIndex, seg, caretOffset);
+                  }}
+                >
+                  {getSegmentText(seg, transcriptLanguage)}
+                </button>
+              )}
             </div>
           </div>
             );
@@ -643,7 +923,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   setSpeakerNameInput(e.target.value);
                   setPickedSpeakerId(null);
                 }}
-                placeholder="Search or type a new name…"
+                placeholder={t('searchOrTypeSpeaker')}
                 className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                 style={{
                   backgroundColor: 'var(--surface-subtle)',
@@ -683,7 +963,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                         className="border-b px-3 py-1.5 text-[0.68rem] font-semibold uppercase tracking-wide"
                         style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
                       >
-                        Saved speakers
+                        {t('savedSpeakers')}
                       </li>
                     ) : null}
                     {displayOrderedSpeakers.map((row, i) => {
@@ -853,7 +1133,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                 {speakerChangeSaving ? (
                   <span className="inline-flex items-center justify-center gap-2">
                     <Loading className="h-4 w-4 animate-spin" />
-                    Applying…
+                    {t('applying')}
                   </span>
                 ) : (
                   'Change'
@@ -887,7 +1167,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
               onClick={(e) => e.stopPropagation()}
             >
               <h3 id="delete-speaker-title" className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-                Delete saved speaker?
+                {t('deleteSavedSpeaker')}
               </h3>
               <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
                 Remove{' '}
@@ -914,7 +1194,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   className="rounded-lg px-3 py-2 text-sm transition-opacity disabled:opacity-50"
                   style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
                 >
-                  Cancel
+                  {t('cancel')}
                 </button>
                 <button
                   type="button"
@@ -924,7 +1204,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   style={{ backgroundColor: 'var(--error)', color: '#fff' }}
                 >
                   {deletingSpeakerId ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                  Delete
+                  {t('delete')}
                 </button>
               </div>
             </div>
@@ -986,7 +1266,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                         className="rounded-lg px-3 py-1.5 text-sm transition-opacity disabled:opacity-50"
                         style={{ backgroundColor: 'var(--surface-subtle)', color: 'var(--text-secondary)' }}
                       >
-                        Cancel
+                        {t('cancel')}
                       </button>
                       <button
                         type="button"
@@ -1059,7 +1339,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                     style={{ color: 'var(--text-muted)' }}
                   >
                     <User01 className="mb-3 h-10 w-10 opacity-40" aria-hidden />
-                    <p className="text-sm">No profile yet for this speaker.</p>
+                    <p className="text-sm">{t('noProfileYet')}</p>
                     <button
                       type="button"
                       onClick={() => { setProfileDraft(''); setIsEditingProfile(true); }}

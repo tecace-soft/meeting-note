@@ -1,6 +1,14 @@
 import { supabase } from '../config/supabaseConfig';
 
-export type TranscriptSegment = { speaker: string; text: string };
+export type TranscriptLanguage = 'original' | 'en' | 'ko';
+
+export type TranscriptSegment = {
+  speaker: string;
+  text: string;
+  start?: number;
+  end?: number;
+  translations?: Record<string, string>;
+};
 
 export type ReplacementScope = 'single' | 'from_here' | 'all';
 
@@ -41,7 +49,16 @@ export function coerceDiarizationArray(raw: unknown): unknown[] | null {
   return null;
 }
 
-function segmentSpeakerText(o: Record<string, unknown>): { speaker: string; text: string } {
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function segmentSpeakerText(o: Record<string, unknown>): TranscriptSegment {
   const sp =
     o.speaker ??
     o.Speaker ??
@@ -57,7 +74,28 @@ function segmentSpeakerText(o: Record<string, unknown>): { speaker: string; text
     o.body;
   const speaker = typeof sp === 'string' ? sp : String(sp ?? '');
   const text = typeof tx === 'string' ? tx : String(tx ?? '');
-  return { speaker, text };
+  const start = finiteNumber(o.start ?? o.start_time ?? o.startTime);
+  const end = finiteNumber(o.end ?? o.end_time ?? o.endTime);
+  const rawTranslations = o.translations ?? o.translated_texts ?? o.translatedTexts;
+  const translations = rawTranslations && typeof rawTranslations === 'object' && !Array.isArray(rawTranslations)
+    ? Object.fromEntries(
+        Object.entries(rawTranslations as Record<string, unknown>)
+          .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1].trim()))
+          .map(([language, translatedText]) => [language, translatedText.trim()])
+      )
+    : undefined;
+  return {
+    speaker,
+    text,
+    ...(start !== undefined ? { start } : {}),
+    ...(end !== undefined ? { end } : {}),
+    ...(translations && Object.keys(translations).length > 0 ? { translations } : {}),
+  };
+}
+
+export function getSegmentText(segment: TranscriptSegment, language: TranscriptLanguage = 'original'): string {
+  if (language === 'original') return segment.text;
+  return segment.translations?.[language]?.trim() || segment.text;
 }
 
 export function normalizeTranscript(raw: unknown): TranscriptSegment[] {
@@ -69,17 +107,17 @@ export function normalizeTranscript(raw: unknown): TranscriptSegment[] {
     for (const item of coerced) {
       if (item == null || typeof item !== 'object') continue;
       const o = item as Record<string, unknown>;
-      const { speaker, text } = segmentSpeakerText(o);
-      if (!text.trim() && !speaker.trim()) continue;
-      out.push({ speaker, text });
+      const segment = segmentSpeakerText(o);
+      if (!segment.text.trim() && !segment.speaker.trim()) continue;
+      out.push(segment);
     }
     return out;
   }
 
   if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
     const o = raw as Record<string, unknown>;
-    const { speaker, text } = segmentSpeakerText(o);
-    if (text.trim() || speaker.trim()) return [{ speaker, text }];
+    const segment = segmentSpeakerText(o);
+    if (segment.text.trim() || segment.speaker.trim()) return [segment];
   }
 
   if (typeof raw === 'string') {
@@ -141,6 +179,12 @@ export function applySpeakerReplacements(
 
 export async function persistNoteDiarization(noteId: string, segments: TranscriptSegment[]): Promise<void> {
   if (!noteId) return;
-  const { error } = await supabase.from('note').update({ diarization: segments }).eq('id', noteId);
+  const { data, error } = await supabase
+    .from('note')
+    .update({ diarization: segments })
+    .eq('id', noteId)
+    .select('id')
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('Diarization save did not update the note. You may not have permission to edit this note.');
 }
