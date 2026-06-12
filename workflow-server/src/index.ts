@@ -57,6 +57,8 @@ const env = {
 const ASSEMBLYAI_CODE_SWITCHING_MODELS = ['universal-2'] as const;
 const ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL = ASSEMBLYAI_CODE_SWITCHING_MODELS.join('+');
 const ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES = ['en', 'ko'] as const;
+const ASSEMBLYAI_ENGLISH_LANGUAGE_CODE = 'en';
+const ASSEMBLYAI_DEFAULT_SPEECH_MODELS = ['universal-3-pro', 'universal-2'] as const;
 
 // Translation features are temporarily disabled to shorten processing time:
 // when false, AssemblyAI skips per-utterance translation and only one summary
@@ -74,6 +76,15 @@ const supabase = createClient(env.supabaseUrl || 'https://placeholder.supabase.c
 
 function normalizeOrigin(origin: string): string {
   return origin.trim().replace(/\/+$/, '');
+}
+
+function normalizeAssemblySpeechModels(value: string): string[] {
+  const models = value
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean)
+    .filter((model) => model !== 'universal');
+  return models.length > 0 ? models : [...ASSEMBLYAI_DEFAULT_SPEECH_MODELS];
 }
 
 function corsHeaders(): Record<string, string> {
@@ -168,6 +179,16 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
   };
 }
 
+function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: number | null): string | null {
+  if (!recordingEndedAt) return null;
+  const end = new Date(recordingEndedAt);
+  if (Number.isNaN(end.getTime())) return null;
+  if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return end.toISOString();
+  }
+  return new Date(end.getTime() - Math.round(durationSeconds * 1000)).toISOString();
+}
+
 function getBearerToken(req: IncomingMessage): string {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) throw new Error('Missing bearer token.');
@@ -223,6 +244,8 @@ interface SummarizeAudioResult {
   summaryTranslations?: Record<'en' | 'ko', string>;
   title: string;
   tags: string[];
+  audioDurationSeconds: number | null;
+  meetingStartAt: string | null;
 }
 
 interface WorkflowJobRow {
@@ -440,8 +463,9 @@ async function insertNote(input: {
   segments: TranscriptSegment[];
   meetingAt: string | null;
   fileId: string | null;
+  audioDurationSeconds: number | null;
 }): Promise<void> {
-  const { error } = await supabase.from('note').insert({
+  const notePayload = {
     transcription: input.transcriptText,
     summary: input.summary,
     summary_translations: input.summaryTranslations,
@@ -454,7 +478,16 @@ async function insertNote(input: {
     diarization: input.segments,
     meeting_at: input.meetingAt,
     audio_file_id: input.fileId,
-  });
+    duration_seconds: input.audioDurationSeconds,
+  };
+  const { error } = await supabase.from('note').insert(notePayload);
+  if (error?.code === 'PGRST204' && error.message.includes("'duration_seconds'")) {
+    const { duration_seconds: _durationSeconds, ...payloadWithoutDuration } = notePayload;
+    const { error: retryError } = await supabase.from('note').insert(payloadWithoutDuration);
+    if (retryError) throw retryError;
+    console.warn('Inserted note without duration_seconds because the column is missing from the PostgREST schema cache.');
+    return;
+  }
   if (error) throw error;
 }
 
@@ -464,15 +497,25 @@ async function transcribeWithAssembly(input: {
   userId: string;
   settings: TranscriptionSettings;
   language: 'en' | 'ko';
-}): Promise<{ segments: TranscriptSegment[]; latencyMs: number }> {
+}): Promise<{ segments: TranscriptSegment[]; latencyMs: number; audioDurationSeconds: number | null }> {
   if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
   const startedAt = performance.now();
+  const useCodeSwitching = input.language === 'ko';
+  const speechModels = normalizeAssemblySpeechModels(input.settings.speechModel || env.assemblyAiSpeechModel);
+  const transcriptionModelLabel = useCodeSwitching
+    ? ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL
+    : speechModels.join('+');
   const submitBody: Record<string, unknown> = {
     audio_url: input.downloadUrl,
     speaker_labels: true,
-    speech_models: [...ASSEMBLYAI_CODE_SWITCHING_MODELS],
-    language_codes: [...ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES],
   };
+  if (useCodeSwitching) {
+    submitBody.speech_models = [...ASSEMBLYAI_CODE_SWITCHING_MODELS];
+    submitBody.language_codes = [...ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES];
+  } else {
+    submitBody.speech_models = speechModels;
+    submitBody.language_code = ASSEMBLYAI_ENGLISH_LANGUAGE_CODE;
+  }
   if (TRANSLATION_ENABLED) {
     submitBody.speech_understanding = {
       request: {
@@ -491,6 +534,7 @@ async function transcribeWithAssembly(input: {
   }
   console.log('AssemblyAI transcript submit config:', JSON.stringify({
     speech_models: submitBody.speech_models,
+    language_code: submitBody.language_code,
     language_codes: submitBody.language_codes,
     language_detection: submitBody.language_detection,
     language_detection_options: submitBody.language_detection_options,
@@ -552,11 +596,14 @@ async function transcribeWithAssembly(input: {
       ? Math.max(maxEnd, record.end / 1000)
       : maxEnd;
   }, 0);
-  const audioDurationSeconds = typeof transcript.audio_duration === 'number'
+  const rawAudioDurationSeconds = typeof transcript.audio_duration === 'number'
     ? transcript.audio_duration
     : typeof transcript.audio_duration_seconds === 'number'
       ? transcript.audio_duration_seconds
       : utteranceDurationSeconds;
+  const audioDurationSeconds = Number.isFinite(rawAudioDurationSeconds) && rawAudioDurationSeconds > 0
+    ? rawAudioDurationSeconds
+    : null;
   const segments = utterances.length > 0
     ? utterances.map((utterance) => {
         const record = utterance && typeof utterance === 'object' && !Array.isArray(utterance)
@@ -590,12 +637,12 @@ async function transcribeWithAssembly(input: {
   await recordAssemblyUsage({
     noteId: input.noteId,
     userId: input.userId,
-    model: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
+    model: transcriptionModelLabel,
     latencyMs,
     transcriptId: created.id.trim(),
-    audioDurationSeconds,
+    audioDurationSeconds: audioDurationSeconds ?? 0,
   });
-  return { segments, latencyMs };
+  return { segments, latencyMs, audioDurationSeconds };
 }
 
 async function updateWorkflowJob(jobId: string | null, patch: {
@@ -621,10 +668,10 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   await updateWorkflowJob(jobId, { status: 'processing', stage: 'loading inputs', progress: 10 });
   const summaryRules = await loadSummaryPrompt(input.promptId, input.userId);
   const transcriptionSettings = await loadTranscriptionSettings();
-  console.log(`Processing audio ${input.fileName} with AssemblyAI Korean-English code switching models ${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}`);
+  console.log(`Processing audio ${input.fileName} with AssemblyAI ${input.language === 'ko' ? `Korean-English code switching models ${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}` : `English models ${normalizeAssemblySpeechModels(transcriptionSettings.speechModel || env.assemblyAiSpeechModel).join('+')}`}`);
 
   await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
-  const { segments } = await transcribeWithAssembly({
+  const { segments, audioDurationSeconds } = await transcribeWithAssembly({
     downloadUrl: input.downloadUrl,
     noteId: input.noteId,
     userId: input.userId,
@@ -632,9 +679,10 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     language: input.language,
   });
   if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
-  const transcriptText = formatTranscriptText(segments, input.language);
-  const meetingDateForPrompt = input.meetingAt
-    ? formatMeetingDateForPrompt(new Date(input.meetingAt), input.userTimeZone)
+  const transcriptText = formatTranscriptText(segments, 'original');
+  const meetingStartAt = inferMeetingStartAt(input.meetingAt, audioDurationSeconds);
+  const meetingDateForPrompt = meetingStartAt
+    ? formatMeetingDateForPrompt(new Date(meetingStartAt), input.userTimeZone)
     : null;
 
   await updateWorkflowJob(jobId, { stage: 'generating summary', progress: 75 });
@@ -721,7 +769,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     title: parsedSummary.title,
     tags: parsedSummary.tags,
     summary: parsedSummary.summary,
-    createdAt: input.meetingAt ? new Date(input.meetingAt) : undefined,
+    createdAt: meetingStartAt ? new Date(meetingStartAt) : undefined,
     timeZone: input.userTimeZone,
   });
   await insertNote({
@@ -735,11 +783,12 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     title: noteName,
     tags: parsedSummary.tags,
     segments,
-    meetingAt: input.meetingAt,
+    meetingAt: meetingStartAt,
     fileId: input.fileId,
+    audioDurationSeconds,
   });
 
-  return { transcript: segments, summary: parsedSummary.summary, summaryTranslations, title: noteName, tags: parsedSummary.tags };
+  return { transcript: segments, summary: parsedSummary.summary, summaryTranslations, title: noteName, tags: parsedSummary.tags, audioDurationSeconds, meetingStartAt };
 }
 
 async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -849,8 +898,9 @@ const server = createServer((req, res) => {
         ok: true,
         service: 'meeting-note-workflow-server',
         transcriptionProvider: 'assemblyai',
-        transcriptionModel: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
-        transcriptionLanguageMode: 'ko-en-code-switching',
+        transcriptionModel: env.assemblyAiSpeechModel,
+        transcriptionLanguageMode: 'english-default; ko-en-code-switching-when-korean-summary-requested',
+        codeSwitchingModel: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
         summaryModel: env.summaryModel,
       });
       return;
@@ -905,5 +955,5 @@ process.on('uncaughtException', (error) => {
 
 server.listen(env.port, () => {
   console.log(`Meeting Note workflow server listening on :${env.port}`);
-  console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}:ko-en-code-switching, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
+  console.log(`Workflow env: transcription=assemblyai:${env.assemblyAiSpeechModel}:english-default/${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}:ko-en-code-switching, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
 });

@@ -31,6 +31,7 @@ import {
   hasUsableDiarization,
   normalizeTranscript,
 } from '../lib/transcriptSegments';
+import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 
 interface ProjectRow {
   id: string;
@@ -51,6 +52,7 @@ interface NoteRow {
   tags?: unknown;
   created_at?: string | null;
   meeting_at?: string | null;
+  duration_seconds?: number | null;
   projects?: Array<string | number> | null;
 }
 
@@ -64,6 +66,10 @@ function getNoteTranscriptionText(note: NoteRow): string {
   const segments = normalizeTranscript(getNoteDiarizationRaw(note));
   if (segments.length === 0) return '';
   return segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+}
+
+function getNoteDurationMeta(note: NoteRow): string | null {
+  return formatDurationMeta(getNoteDurationSeconds(note));
 }
 
 function formatNoteModalDate(createdAt?: string | null): string {
@@ -1102,6 +1108,16 @@ const Project: React.FC = () => {
                                     <span className="min-w-0 truncate">Meeting {formatDate(note.meeting_at)}</span>
                                   </div>
                                 ) : null}
+                                {getNoteDurationMeta(note) ? (
+                                  <div
+                                    className="mt-1 flex min-w-0 items-center gap-1 text-sm"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                    title={getNoteDurationMeta(note) ?? undefined}
+                                  >
+                                    <span aria-hidden>•</span>
+                                    <span className="min-w-0 truncate">{getNoteDurationMeta(note)}</span>
+                                  </div>
+                                ) : null}
                                 <p
                                   className="mt-1 truncate text-sm leading-snug"
                                   style={{ color: 'var(--text-secondary)' }}
@@ -1540,10 +1556,11 @@ const Project: React.FC = () => {
                               <p
                                 className="mt-0.5 truncate text-xs leading-snug"
                                 style={{ color: 'var(--text-muted)' }}
-                                title={`Created ${formatNoteModalDate(note.created_at)}${note.meeting_at ? `, Meeting ${formatNoteModalDate(note.meeting_at)}` : ''}`}
+                                title={`Created ${formatNoteModalDate(note.created_at)}${note.meeting_at ? `, Meeting ${formatNoteModalDate(note.meeting_at)}` : ''}${getNoteDurationMeta(note) ? `, ${getNoteDurationMeta(note)}` : ''}`}
                               >
                                 Created {formatNoteModalDate(note.created_at)}
                                 {note.meeting_at ? ` - Meeting ${formatNoteModalDate(note.meeting_at)}` : ''}
+                                {getNoteDurationMeta(note) ? ` - ${getNoteDurationMeta(note)}` : ''}
                               </p>
                             </div>
                             <div className="flex h-10 shrink-0 items-center justify-end">

@@ -53,6 +53,7 @@ import {
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
+import { formatDurationMeta } from '../lib/noteDuration';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 import ShareNoteModal from '../components/ShareNoteModal';
 import { useRecorder } from '../context/RecorderContext';
@@ -162,6 +163,7 @@ interface WorkflowJobStatus {
     summaryTranslations?: Record<string, string>;
     title?: unknown;
     tags?: unknown;
+    audioDurationSeconds?: unknown;
   } | null;
   error?: string | null;
 }
@@ -237,7 +239,7 @@ const TranscriptionSummary: React.FC = () => {
   const [optionalInstructions, setOptionalInstructions] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summaryProgress, setSummaryProgress] = useState<{ stage: string; progress: number } | null>(null);
-  const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string; summaryTranslations?: Record<string, string> } | null>(null);
+  const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string; summaryTranslations?: Record<string, string>; audioDurationSeconds?: number | null } | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const resultAudioRef = useRef<HTMLAudioElement | null>(null);
   const resultPlaybackStopAtRef = useRef<number | null>(null);
@@ -973,10 +975,15 @@ const TranscriptionSummary: React.FC = () => {
         summaryTranslations?.[appLanguage]?.trim() ||
         (typeof result.summary === 'string' ? result.summary : String(result.summary ?? ''));
       const transcript = normalizeTranscript(result.transcript);
+      const audioDurationSeconds =
+        typeof result.audioDurationSeconds === 'number' && Number.isFinite(result.audioDurationSeconds)
+          ? result.audioDurationSeconds
+          : null;
       setSummaryResult({
         summary: summaryText,
         summaryTranslations,
         transcript,
+        audioDurationSeconds,
       });
       setEditedSummary(summaryText);
       setResultsTab('summary');
@@ -1853,6 +1860,11 @@ const TranscriptionSummary: React.FC = () => {
 
                 {summaryResult && !isSummarizing && (
                   <div className="flex flex-1 min-h-0 flex-col px-4 pt-4 md:px-6 md:pt-5">
+                    {formatDurationMeta(summaryResult.audioDurationSeconds) ? (
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                        {formatDurationMeta(summaryResult.audioDurationSeconds)}
+                      </p>
+                    ) : null}
                     {summaryResult.transcript.length > 0 ? (
                       <div
                         className="results-header flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"

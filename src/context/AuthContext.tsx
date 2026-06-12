@@ -22,7 +22,7 @@ interface AuthContextType {
   isLoading: boolean;
   login: () => Promise<void>;
   logout: () => void;
-  getAccessToken: () => Promise<string | null>;
+  getAccessToken: (scopes?: string[]) => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -75,34 +75,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [instance]);
 
-  const getAccessToken = useCallback(async (): Promise<string | null> => {
+  const getAccessToken = useCallback(async (scopes?: string[]): Promise<string | null> => {
     const all = instance.getAllAccounts();
     if (all.length === 0) return null;
     const account = all[0] as AccountInfo;
+    const tokenRequest = scopes?.length
+      ? { scopes, account }
+      : { ...loginRequest, account };
     try {
-      const response = await instance.acquireTokenSilent({
-        ...loginRequest,
-        account,
-      });
+      const response = await instance.acquireTokenSilent(tokenRequest);
       return response.accessToken;
     } catch (error) {
       console.error('Failed to acquire token silently:', error);
       if (shouldUseRedirectInteraction()) {
         try {
-          await instance.acquireTokenRedirect({
-            ...loginRequest,
-            account,
-          });
+          await instance.acquireTokenRedirect(tokenRequest);
         } catch (redirectError) {
           console.error('acquireTokenRedirect failed:', redirectError);
         }
         return null;
       }
       try {
-        const response = await instance.acquireTokenPopup({
-          ...loginRequest,
-          account,
-        });
+        const response = await instance.acquireTokenPopup(tokenRequest);
         return response.accessToken;
       } catch (popupError) {
         console.error('Failed to acquire token via popup:', popupError);

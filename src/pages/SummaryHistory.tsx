@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { graphScopes } from '../config/msalConfig';
 import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import {
   ArrowsReload01,
@@ -44,7 +45,8 @@ import {
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
-import { getTeamsChats, sendChatMessage, type TeamsChat } from '../services/graphService';
+import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
+import { getOutlookCalendarEvents, getTeamsChats, sendChatMessage, type OutlookCalendarEvent, type TeamsChat } from '../services/graphService';
 import ShareNoteModal from '../components/ShareNoteModal';
 
 interface Note {
@@ -68,6 +70,7 @@ interface Note {
   /** Legacy column name; still read so diarized UI works until fully migrated. */
   created_at?: string;
   meeting_at?: string | null;
+  duration_seconds?: number | null;
 }
 
 interface ProjectOption {
@@ -144,6 +147,13 @@ async function invokeGenerateProfile(body: {
 }
 
 const NOTES_PAGE_SIZE = 10;
+const CALENDAR_VISIBLE_START_HOUR = 8;
+const CALENDAR_VISIBLE_END_HOUR = 20;
+const CALENDAR_HOUR_HEIGHT_PX = 120;
+const CALENDAR_EVENT_GAP_PX = 4;
+const CALENDAR_EVENT_TOP_INSET_PX = 2;
+const CALENDAR_EVENT_BOTTOM_INSET_PX = 6;
+const SHOW_OUTLOOK_CALENDAR_EVENTS = false;
 type HistoryViewMode = 'list' | 'calendar';
 type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
 type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
@@ -163,6 +173,42 @@ interface CalendarDay {
   date: Date;
   key: string;
   inMonth: boolean;
+}
+
+interface OutlookCalendarItem {
+  id: string;
+  title: string;
+  start: Date;
+  end: Date;
+  isAllDay: boolean;
+  location: string;
+  organizer: string;
+  webLink: string;
+  joinUrl: string;
+}
+
+type HourlyCalendarLayoutItem =
+  | {
+      type: 'outlook';
+      key: string;
+      sortStartMinutes: number;
+      startMinutes: number;
+      endMinutes: number;
+      event: OutlookCalendarItem;
+    }
+  | {
+      type: 'note';
+      key: string;
+      sortStartMinutes: number;
+      startMinutes: number;
+      endMinutes: number;
+      note: Note;
+    };
+
+interface PositionedHourlyCalendarItem {
+  item: HourlyCalendarLayoutItem;
+  top: number;
+  height: number;
 }
 
 /** When totalPages > 5, compress middle with ellipses; otherwise list every page. */
@@ -283,6 +329,33 @@ function getNoteTitleSortValue(note: Note): string {
   return (note.name?.trim() || 'Untitled note').toLocaleLowerCase();
 }
 
+function getNoteDurationMeta(note: Note): string | null {
+  return formatDurationMeta(getNoteDurationSeconds(note));
+}
+
+function parseOutlookEventDateTime(value: OutlookCalendarEvent['start'] | OutlookCalendarEvent['end'] | undefined): Date | null {
+  if (!value?.dateTime) return null;
+  const parsed = new Date(value.dateTime);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function normalizeOutlookCalendarEvent(event: OutlookCalendarEvent): OutlookCalendarItem | null {
+  const start = parseOutlookEventDateTime(event.start);
+  const end = parseOutlookEventDateTime(event.end);
+  if (!start || !end) return null;
+  return {
+    id: event.id,
+    title: event.subject?.trim() || 'Outlook event',
+    start,
+    end,
+    isAllDay: Boolean(event.isAllDay),
+    location: event.location?.displayName?.trim() ?? '',
+    organizer: event.organizer?.emailAddress?.name?.trim() || event.organizer?.emailAddress?.address?.trim() || '',
+    webLink: event.webLink ?? '',
+    joinUrl: event.onlineMeeting?.joinUrl ?? '',
+  };
+}
+
 function compareNotesForSort(a: Note, b: Note, sortKey: NoteSortKey): number {
   switch (sortKey) {
     case 'meeting_asc':
@@ -364,6 +437,11 @@ const SummaryHistory: React.FC = () => {
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthStart(new Date()));
   const [calendarExpandedDayKey, setCalendarExpandedDayKey] = useState<string | null>(null);
   const [calendarDisplayMode, setCalendarDisplayMode] = useState<CalendarDisplayMode>('monthly');
+  const hourlyCalendarScrollerRef = useRef<HTMLDivElement | null>(null);
+  const [hourlyCalendarScrollbarWidth, setHourlyCalendarScrollbarWidth] = useState(0);
+  const [outlookEvents, setOutlookEvents] = useState<OutlookCalendarItem[]>([]);
+  const [outlookEventsLoading, setOutlookEventsLoading] = useState(false);
+  const [outlookEventsError, setOutlookEventsError] = useState<string | null>(null);
   const [noteSearchQuery, setNoteSearchQuery] = useState('');
   const [noteOwnershipFilter, setNoteOwnershipFilter] = useState<NoteOwnershipFilter>('all');
   const [noteSortKey, setNoteSortKey] = useState<NoteSortKey>('meeting_desc');
@@ -613,6 +691,50 @@ const SummaryHistory: React.FC = () => {
     noteSortKey,
   ]);
 
+  useEffect(() => {
+    if (!isAuthenticated || historyViewMode !== 'calendar') {
+      setOutlookEvents([]);
+      setOutlookEventsError(null);
+      setOutlookEventsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadOutlookEvents = async () => {
+      setOutlookEventsLoading(true);
+      setOutlookEventsError(null);
+      try {
+        const token = await getAccessToken(graphScopes.calendar);
+        if (!token) throw new Error('Could not get Microsoft calendar access.');
+        const rawEvents = await getOutlookCalendarEvents(
+          token,
+          calendarWindow.start.toISOString(),
+          calendarWindow.endExclusive.toISOString()
+        );
+        if (cancelled) return;
+        setOutlookEvents(rawEvents.map(normalizeOutlookCalendarEvent).filter((event): event is OutlookCalendarItem => Boolean(event)));
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Error loading Outlook events:', error);
+        setOutlookEvents([]);
+        setOutlookEventsError(error instanceof Error ? error.message : 'Outlook calendar events unavailable.');
+      } finally {
+        if (!cancelled) setOutlookEventsLoading(false);
+      }
+    };
+
+    void loadOutlookEvents();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    calendarWindow.endExclusive,
+    calendarWindow.start,
+    getAccessToken,
+    historyViewMode,
+    isAuthenticated,
+  ]);
+
   const getChatDisplayName = (): string => {
     if (!chatInfo) return 'Loading...';
     if (chatInfo.topic) return chatInfo.topic;
@@ -736,23 +858,10 @@ const SummaryHistory: React.FC = () => {
     : '';
   const calendarMonthLabel = calendarMonth.toLocaleDateString([], { month: 'long', year: 'numeric' });
   const activeCalendarDayKey = focusedCalendarDayKey;
-  const activeCalendarDayNotes = activeCalendarDayKey ? calendarNotesByDay.get(activeCalendarDayKey) ?? [] : [];
-  const activeCalendarDayLabel = activeCalendarDayKey
-    ? new Date(`${activeCalendarDayKey}T00:00:00`).toLocaleDateString([], {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-      })
-    : '';
   const activeCalendarDateLabel = activeCalendarDayKey
     ? new Date(`${activeCalendarDayKey}T00:00:00`).toLocaleDateString([], {
         month: 'long',
         day: 'numeric',
-      })
-    : '';
-  const activeCalendarWeekdayLabel = activeCalendarDayKey
-    ? new Date(`${activeCalendarDayKey}T00:00:00`).toLocaleDateString([], {
-        weekday: 'long',
       })
     : '';
   const calendarHeaderLabel = calendarDisplayMode === 'daily'
@@ -760,6 +869,321 @@ const SummaryHistory: React.FC = () => {
     : calendarDisplayMode === 'weekly'
       ? calendarWeekLabel
       : calendarMonthLabel;
+  const calendarHours = useMemo(
+    () => Array.from({ length: CALENDAR_VISIBLE_END_HOUR - CALENDAR_VISIBLE_START_HOUR }, (_, index) => CALENDAR_VISIBLE_START_HOUR + index),
+    []
+  );
+  const calendarDayHeight = CALENDAR_HOUR_HEIGHT_PX * calendarHours.length;
+  useLayoutEffect(() => {
+    if (calendarDisplayMode === 'monthly') {
+      setHourlyCalendarScrollbarWidth(0);
+      return;
+    }
+    const measureScrollbar = () => {
+      const scroller = hourlyCalendarScrollerRef.current;
+      if (!scroller) return;
+      const nextWidth = Math.max(0, scroller.offsetWidth - scroller.clientWidth);
+      setHourlyCalendarScrollbarWidth((current) => (current === nextWidth ? current : nextWidth));
+    };
+    measureScrollbar();
+    window.addEventListener('resize', measureScrollbar);
+    return () => window.removeEventListener('resize', measureScrollbar);
+  }, [calendarDayHeight, calendarDisplayMode, notes.length, selectedNote?.id]);
+  const formatCalendarHour = (hour: number): string => {
+    const date = new Date();
+    date.setHours(hour, 0, 0, 0);
+    return date.toLocaleTimeString([], { hour: 'numeric' });
+  };
+  const formatCalendarEventTime = (note: Note): string => {
+    const start = getNoteMeetingDate(note);
+    const durationSeconds = getNoteDurationSeconds(note);
+    const startText = start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (!durationSeconds || durationSeconds <= 0) return startText;
+    const end = new Date(start.getTime() + durationSeconds * 1000);
+    return `${startText} - ${end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  };
+  const formatOutlookEventTime = (event: OutlookCalendarItem): string => {
+    if (event.isAllDay) return 'All day';
+    const startText = event.start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const endText = event.end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return `${startText} - ${endText}`;
+  };
+  const getRoundedNoteCalendarRange = (note: Note): { startMinutes: number; endMinutes: number; durationMinutes: number } => {
+    const start = getNoteMeetingDate(note);
+    const durationSeconds = getNoteDurationSeconds(note);
+    const rawStartMinutes = start.getHours() * 60 + start.getMinutes();
+    const rawDurationMinutes = durationSeconds && durationSeconds > 0 ? durationSeconds / 60 : 30;
+    const roundedStartMinutes = Math.min(23 * 60 + 30, Math.max(0, Math.round(rawStartMinutes / 30) * 30));
+    const roundedDurationMinutes = Math.max(30, Math.round(rawDurationMinutes / 30) * 30);
+    return {
+      startMinutes: roundedStartMinutes,
+      endMinutes: Math.min(24 * 60, roundedStartMinutes + roundedDurationMinutes),
+      durationMinutes: roundedDurationMinutes,
+    };
+  };
+  const getOutlookCalendarRange = (event: OutlookCalendarItem): { startMinutes: number; endMinutes: number } => {
+    if (event.isAllDay) return { startMinutes: 0, endMinutes: 24 * 60 };
+    const startMinutes = event.start.getHours() * 60 + event.start.getMinutes();
+    const endMinutes = event.end.getHours() * 60 + event.end.getMinutes();
+    return {
+      startMinutes,
+      endMinutes: Math.max(startMinutes + 15, endMinutes),
+    };
+  };
+  const rangesOverlap = (first: { startMinutes: number; endMinutes: number }, second: { startMinutes: number; endMinutes: number }): boolean => (
+    first.startMinutes < second.endMinutes && second.startMinutes < first.endMinutes
+  );
+  const visibleStartMinutes = CALENDAR_VISIBLE_START_HOUR * 60;
+  const visibleEndMinutes = CALENDAR_VISIBLE_END_HOUR * 60;
+  const clampCalendarRangeToVisibleHours = (range: { startMinutes: number; endMinutes: number }): { startMinutes: number; endMinutes: number } | null => {
+    if (range.endMinutes <= visibleStartMinutes || range.startMinutes >= visibleEndMinutes) return null;
+    return {
+      startMinutes: Math.max(visibleStartMinutes, range.startMinutes),
+      endMinutes: Math.min(visibleEndMinutes, range.endMinutes),
+    };
+  };
+  const getCalendarEventTop = (startMinutes: number): number => (
+    ((startMinutes - visibleStartMinutes) / 60) * CALENDAR_HOUR_HEIGHT_PX
+  );
+  const getCalendarEventHeight = (startMinutes: number, endMinutes: number, compact: boolean): number => (
+    compact ? 42 : Math.max(48, ((endMinutes - startMinutes) / 60) * CALENDAR_HOUR_HEIGHT_PX)
+  );
+  const layoutHourlyCalendarItems = (items: HourlyCalendarLayoutItem[], compact: boolean): PositionedHourlyCalendarItem[] => {
+    let nextAvailableTop = 0;
+    return [...items]
+      .sort((a, b) => (
+        a.sortStartMinutes - b.sortStartMinutes
+        || (a.type === b.type ? 0 : a.type === 'outlook' ? -1 : 1)
+        || a.key.localeCompare(b.key)
+      ))
+      .map((item) => {
+        const naturalTop = getCalendarEventTop(item.startMinutes) + CALENDAR_EVENT_TOP_INSET_PX;
+        const height = Math.max(
+          compact ? 42 : 48,
+          getCalendarEventHeight(item.startMinutes, item.endMinutes, compact) - CALENDAR_EVENT_TOP_INSET_PX - CALENDAR_EVENT_BOTTOM_INSET_PX
+        );
+        const top = Math.max(naturalTop, nextAvailableTop);
+        nextAvailableTop = top + height + CALENDAR_EVENT_GAP_PX;
+        return { item, top, height };
+      });
+  };
+  const renderCalendarEvent = (note: Note, compact = false, top: number, height: number) => {
+    const start = getNoteMeetingDate(note);
+    const isSelected = expandedNoteId === note.id;
+    const isSharedNote = isSharedWithCurrentUser(note);
+    const iconColor = isSharedNote ? 'var(--tc-cyan)' : 'var(--accent)';
+    return (
+      <button
+        key={note.id}
+        type="button"
+        onClick={() => {
+          setExpandedNoteId(isSelected ? null : note.id);
+          if (!isSelected) setCalendarDisplayMode('daily');
+          setCalendarExpandedDayKey(getLocalDateKey(start));
+        }}
+        className={`summary-calendar-event ${isSelected ? 'summary-calendar-event-active' : ''} group absolute left-1.5 right-1.5 overflow-hidden rounded-md border text-left transition-colors focus:outline-none focus-visible:ring-2 ${compact ? 'p-[6px]' : 'px-[6px] py-1'}`}
+        style={{
+          top,
+          height,
+          color: 'var(--text)',
+        }}
+        title={`${formatCalendarEventTime(note)} - ${getNoteDisplayTitle(note)}`}
+      >
+        <span
+          className="absolute inset-y-2 left-0 w-[3px] rounded-full opacity-0 transition-all group-hover:opacity-50"
+          style={{
+            background: 'var(--tc-gradient-cyan)',
+            opacity: isSelected ? 1 : undefined,
+          }}
+          aria-hidden
+        />
+        <span className="flex min-w-0 items-center gap-1 truncate text-[11px] font-semibold leading-[1.15]" style={{ color: iconColor }}>
+          {isSharedNote ? (
+            <Files className="h-3 w-3 shrink-0" aria-hidden />
+          ) : (
+            <FileDocument className="h-3 w-3 shrink-0" aria-hidden />
+          )}
+          <span className="min-w-0 truncate">{formatCalendarEventTime(note)}</span>
+        </span>
+        <span className="mt-0.5 block truncate text-xs font-semibold leading-[1.25]">
+          {getNoteDisplayTitle(note)}
+        </span>
+        {!compact ? (
+          <span className="mt-0.5 block truncate text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+            {getNoteParticipantsLabel(note)}
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+  const renderOutlookCalendarEvent = (event: OutlookCalendarItem, compact = false, top: number, height: number) => {
+    const href = event.joinUrl || event.webLink;
+    return (
+      <button
+        key={`outlook-${event.id}`}
+        type="button"
+        onClick={() => {
+          if (href) window.open(href, '_blank', 'noopener,noreferrer');
+        }}
+        className={`summary-calendar-event group absolute left-1.5 right-1.5 overflow-hidden rounded-md border text-left transition-colors focus:outline-none focus-visible:ring-2 ${compact ? 'p-[6px]' : 'px-[6px] py-1'}`}
+        style={{
+          top,
+          height,
+          color: 'var(--text)',
+        }}
+        title={`${formatOutlookEventTime(event)} - ${event.title}`}
+      >
+        <span
+          className="absolute inset-y-2 left-0 w-[3px] rounded-full opacity-0 transition-all group-hover:opacity-50"
+          style={{ background: 'var(--tc-gradient-cyan)' }}
+          aria-hidden
+        />
+        <span className="flex min-w-0 items-center gap-1 truncate text-[11px] font-semibold leading-[1.15]" style={{ color: 'var(--tc-cyan)' }}>
+          <Calendar className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">{formatOutlookEventTime(event)}</span>
+        </span>
+        <span className="mt-0.5 block truncate text-xs font-semibold leading-[1.25]">
+          {event.title}
+        </span>
+        {!compact && (event.location || event.organizer) ? (
+          <span className="mt-0.5 block truncate text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+            {event.location || event.organizer}
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+  const renderHourlyCalendar = (days: CalendarDay[]) => (
+    <div className="overflow-hidden rounded-lg border" style={{ borderColor: 'var(--summary-calendar-gridline)', backgroundColor: 'var(--card)' }}>
+      <div
+        className="grid border-b"
+        style={{
+          borderColor: 'var(--summary-calendar-gridline)',
+          gridTemplateColumns: `4.5rem repeat(${days.length}, minmax(0, 1fr)) ${hourlyCalendarScrollbarWidth}px`,
+          backgroundColor: 'var(--bg-secondary)',
+        }}
+      >
+        <div className="border-r px-2 py-2" style={{ borderColor: 'var(--summary-calendar-gridline)' }} />
+        {days.map((day) => {
+          const isToday = day.key === todayKey;
+          return (
+            <div
+              key={day.key}
+              className="min-w-0 border-r px-2 py-2 text-center last:border-r-0"
+              style={{ borderColor: 'var(--summary-calendar-gridline)' }}
+            >
+              <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--text-muted)' }}>
+                {day.date.toLocaleDateString([], { weekday: 'short' })}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setExpandedNoteId(null);
+                  setCalendarDisplayMode('daily');
+                  setCalendarExpandedDayKey(day.key);
+                }}
+                className="mt-1 inline-flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-sm font-semibold"
+                style={{
+                  backgroundColor: isToday ? 'var(--accent)' : 'transparent',
+                  color: isToday ? '#fff' : 'var(--text)',
+                }}
+              >
+                {day.date.getDate()}
+              </button>
+            </div>
+          );
+        })}
+        <div aria-hidden />
+      </div>
+      <div ref={hourlyCalendarScrollerRef} className="custom-scrollbar max-h-[36rem] overflow-y-auto">
+        <div
+          className="grid"
+          style={{
+            gridTemplateColumns: `4.5rem repeat(${days.length}, minmax(0, 1fr))`,
+            minHeight: calendarDayHeight,
+          }}
+        >
+          <div className="relative border-r" style={{ borderColor: 'var(--summary-calendar-gridline)', height: calendarDayHeight }}>
+            {calendarHours.map((hour) => (
+              <div
+                key={hour}
+                className="border-b pr-2 text-right text-[11px]"
+                style={{
+                  borderColor: 'var(--summary-calendar-gridline)',
+                  color: 'var(--text-muted)',
+                  height: CALENDAR_HOUR_HEIGHT_PX,
+                }}
+              >
+                <span className="relative -top-2 bg-[var(--card)] px-1">
+                  {formatCalendarHour(hour)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {days.map((day) => {
+            const dayNotes = [...(calendarNotesByDay.get(day.key) ?? [])].sort(
+              (a, b) => getNoteMeetingDate(a).getTime() - getNoteMeetingDate(b).getTime()
+            );
+            const dayOutlookEvents = SHOW_OUTLOOK_CALENDAR_EVENTS
+              ? outlookEvents
+                  .filter((event) => getLocalDateKey(event.start) === day.key)
+                  .sort((a, b) => a.start.getTime() - b.start.getTime())
+              : [];
+            const positionedItems = layoutHourlyCalendarItems([
+              ...dayOutlookEvents.flatMap((event): HourlyCalendarLayoutItem[] => {
+                const rawRange = getOutlookCalendarRange(event);
+                const visibleRange = clampCalendarRangeToVisibleHours(rawRange);
+                return visibleRange
+                  ? [{
+                      type: 'outlook',
+                      key: `outlook-${event.id}`,
+                      sortStartMinutes: rawRange.startMinutes,
+                      startMinutes: visibleRange.startMinutes,
+                      endMinutes: visibleRange.endMinutes,
+                      event,
+                    }]
+                  : [];
+              }),
+              ...dayNotes.flatMap((note): HourlyCalendarLayoutItem[] => {
+                const rawRange = getRoundedNoteCalendarRange(note);
+                const visibleRange = clampCalendarRangeToVisibleHours(rawRange);
+                return visibleRange
+                  ? [{
+                      type: 'note',
+                      key: `note-${note.id}`,
+                      sortStartMinutes: rawRange.startMinutes,
+                      startMinutes: visibleRange.startMinutes,
+                      endMinutes: visibleRange.endMinutes,
+                      note,
+                    }]
+                  : [];
+              }),
+            ], days.length > 1);
+            return (
+              <div
+                key={day.key}
+                className="relative min-w-0 border-r last:border-r-0"
+                style={{ borderColor: 'var(--summary-calendar-gridline)', height: calendarDayHeight }}
+              >
+                {calendarHours.map((hour) => (
+                  <div
+                    key={`${day.key}-${hour}`}
+                    className="border-b"
+                    style={{ borderColor: 'var(--summary-calendar-gridline)', height: CALENDAR_HOUR_HEIGHT_PX }}
+                  />
+                ))}
+                {positionedItems.map(({ item, top, height }) => (
+                  item.type === 'outlook'
+                    ? renderOutlookCalendarEvent(item.event, days.length > 1, top, height)
+                    : renderCalendarEvent(item.note, days.length > 1, top, height)
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
   const renderNoteDetailExpandButton = () => (
     <button
       type="button"
@@ -798,6 +1222,12 @@ const SummaryHistory: React.FC = () => {
         </h3>
         <p className="mt-1.5 text-xs font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--text-muted)' }}>
           Meeting {formatDate(note.meeting_at || note.created_at)}
+          {getNoteDurationMeta(note) ? (
+            <>
+              <span className="mx-2" aria-hidden>•</span>
+              {getNoteDurationMeta(note)}
+            </>
+          ) : null}
         </p>
       </div>
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1704,28 +2134,56 @@ const SummaryHistory: React.FC = () => {
                     </div>
                   </div>
 
-                  {calendarDisplayMode !== 'daily' ? (
-                    <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--border)' }}>
+                  {SHOW_OUTLOOK_CALENDAR_EVENTS && historyViewMode === 'calendar' && (outlookEventsLoading || outlookEventsError) ? (
+                    <div
+                      className="mb-3 rounded-md border px-3 py-2 text-xs"
+                      style={{
+                        borderColor: outlookEventsError ? 'var(--warning)' : 'var(--border)',
+                        backgroundColor: outlookEventsError ? 'var(--warning-light)' : 'var(--bg-secondary)',
+                        color: outlookEventsError ? 'var(--warning)' : 'var(--text-muted)',
+                      }}
+                    >
+                      {outlookEventsError ? `Outlook events unavailable: ${outlookEventsError}` : 'Loading Outlook calendar events...'}
+                    </div>
+                  ) : null}
+
+                  {calendarDisplayMode === 'monthly' ? (
+                    <div
+                      className="grid grid-cols-7 overflow-hidden rounded-lg border border-b-0 border-r-0"
+                      style={{ borderColor: 'var(--summary-calendar-gridline)', backgroundColor: 'var(--card)' }}
+                    >
                       {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
                         <div
                           key={day}
-                          className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.08em]"
-                          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
+                          className="border-b border-r px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.08em]"
+                          style={{
+                            borderColor: 'var(--summary-calendar-gridline)',
+                            backgroundColor: 'var(--bg-secondary)',
+                            color: 'var(--text-muted)',
+                          }}
                         >
                           {day}
                         </div>
                       ))}
                       {visibleCalendarDays.map((day) => {
                         const dayNotes = calendarNotesByDay.get(day.key) ?? [];
+                        const dayOutlookEvents = SHOW_OUTLOOK_CALENDAR_EVENTS
+                          ? outlookEvents
+                              .filter((event) => getLocalDateKey(event.start) === day.key)
+                              .sort((a, b) => a.start.getTime() - b.start.getTime())
+                          : [];
+                        const dayItemCount = dayNotes.length + dayOutlookEvents.length;
                         const isToday = day.key === todayKey;
-                        const visibleDayNotes = calendarDisplayMode === 'weekly' ? dayNotes : dayNotes.slice(0, 3);
+                        const visibleDayNotes = dayNotes.slice(0, 3);
+                        const visibleDayOutlookEvents = dayOutlookEvents.slice(0, Math.max(0, 3 - visibleDayNotes.length));
                         return (
                           <div
                             key={day.key}
-                            className={`min-w-0 p-2 transition-colors ${
-                              calendarDisplayMode === 'weekly' ? 'min-h-[24rem]' : 'min-h-[7.5rem] sm:min-h-[9.5rem]'
-                            }`}
-                            style={{ backgroundColor: 'var(--card)' }}
+                            className="min-w-0 border-b border-r p-2 transition-colors min-h-[7.5rem] sm:min-h-[9.5rem]"
+                            style={{
+                              borderColor: 'var(--summary-calendar-gridline)',
+                              backgroundColor: 'var(--card)',
+                            }}
                           >
                             <div className="mb-2 flex items-center justify-between gap-1">
                               <span
@@ -1737,15 +2195,16 @@ const SummaryHistory: React.FC = () => {
                               >
                                 {day.date.getDate()}
                               </span>
-                              {dayNotes.length > 0 ? (
+                              {dayItemCount > 0 ? (
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                                  {dayNotes.length}
+                                  {dayItemCount}
                                 </span>
                               ) : null}
                             </div>
                             <div className="space-y-1.5">
                               {visibleDayNotes.map((note) => {
                                 const isSharedNote = isSharedWithCurrentUser(note);
+                                const isSelected = expandedNoteId === note.id;
                                 return (
                                   <button
                                     key={note.id}
@@ -1755,11 +2214,8 @@ const SummaryHistory: React.FC = () => {
                                       setCalendarDisplayMode('daily');
                                       setCalendarExpandedDayKey(day.key);
                                     }}
-                                    className="group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-all"
+                                    className={`summary-calendar-event ${isSelected ? 'summary-calendar-event-active' : ''} group flex w-full min-w-0 items-center gap-2 rounded-md border px-[6px] py-1.5 text-left transition-colors`}
                                     style={{
-                                      backgroundColor: isSharedNote
-                                        ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--bg-secondary))'
-                                        : 'var(--bg-secondary)',
                                       color: 'var(--text)',
                                     }}
                                     title={getNoteDisplayTitle(note)}
@@ -1775,7 +2231,27 @@ const SummaryHistory: React.FC = () => {
                                   </button>
                                 );
                               })}
-                              {calendarDisplayMode === 'monthly' && dayNotes.length > 3 ? (
+                              {visibleDayOutlookEvents.map((event) => (
+                                <button
+                                  key={`month-outlook-${event.id}`}
+                                  type="button"
+                                  onClick={() => {
+                                    const href = event.joinUrl || event.webLink;
+                                    if (href) window.open(href, '_blank', 'noopener,noreferrer');
+                                  }}
+                                  className="summary-calendar-event group flex w-full min-w-0 items-center gap-2 rounded-md border px-[6px] py-1.5 text-left transition-colors"
+                                  style={{
+                                    color: 'var(--text)',
+                                  }}
+                                  title={event.title}
+                                >
+                                  <Calendar className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--tc-cyan)' }} aria-hidden />
+                                  <span className="min-w-0 truncate text-xs font-medium">
+                                    {event.title}
+                                  </span>
+                                </button>
+                              ))}
+                              {calendarDisplayMode === 'monthly' && dayItemCount > visibleDayNotes.length + visibleDayOutlookEvents.length ? (
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1786,7 +2262,7 @@ const SummaryHistory: React.FC = () => {
                                   className="px-2 text-left text-[11px] font-medium transition-opacity hover:opacity-80"
                                   style={{ color: 'var(--text-muted)' }}
                                 >
-                                  +{dayNotes.length - 3} more
+                                  +{dayItemCount - visibleDayNotes.length - visibleDayOutlookEvents.length} more
                                 </button>
                               ) : null}
                             </div>
@@ -1794,72 +2270,16 @@ const SummaryHistory: React.FC = () => {
                         );
                       })}
                     </div>
+                  ) : calendarDisplayMode === 'weekly' ? (
+                    renderHourlyCalendar(calendarWeekDays)
                   ) : activeCalendarDayKey ? (
-                    <div className="overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--border)' }}>
-                      <div
-                        className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.08em]"
-                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}
-                      >
-                        {activeCalendarWeekdayLabel}
-                      </div>
-                      <div className="min-h-[22rem] min-w-0" style={{ backgroundColor: 'var(--card)' }}>
-                        {activeCalendarDayNotes.length > 0 ? (
-                          <div className="summary-note-list">
-                            {activeCalendarDayNotes.map((note) => {
-                              const isSelected = expandedNoteId === note.id;
-                              const isSharedNote = isSharedWithCurrentUser(note);
-                              return (
-                                <div
-                                  key={`day-list-${note.id}`}
-                                  className={`summary-note-row ${isSelected ? 'summary-note-row-active' : ''}`}
-                                >
-                                  <span className="summary-note-row-rail" aria-hidden />
-                                  <div
-                                    onClick={() => {
-                                      if (isSelected) {
-                                        setExpandedNoteId(null);
-                                        setCalendarExpandedDayKey(null);
-                                      } else {
-                                        setExpandedNoteId(note.id);
-                                        setCalendarExpandedDayKey(activeCalendarDayKey);
-                                      }
-                                    }}
-                                    className="summary-note-row-content flex cursor-pointer items-center gap-3 px-3 py-2.5 transition-all sm:px-4 sm:py-3"
-                                  >
-                                    <span
-                                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-                                      style={{
-                                        backgroundColor: isSharedNote
-                                          ? 'color-mix(in srgb, var(--tc-cyan) 10%, var(--surface))'
-                                          : 'var(--accent-light)',
-                                      }}
-                                    >
-                                      {isSharedNote ? (
-                                        <Files className="h-4 w-4" style={{ color: 'var(--tc-cyan)' }} aria-hidden />
-                                      ) : (
-                                        <FileDocument className="h-4 w-4" style={{ color: 'var(--accent)' }} aria-hidden />
-                                      )}
-                                    </span>
-                                    <span className="min-w-0">
-                                      <span className="block truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                                        {getNoteDisplayTitle(note)}
-                                      </span>
-                                      <span className="mt-0.5 block truncate text-xs" style={{ color: 'var(--text-secondary)' }}>
-                                        {formatDate(note.meeting_at || note.created_at)}
-                                      </span>
-                                    </span>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="flex min-h-[12rem] items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                            No notes for this day
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                    renderHourlyCalendar([
+                      {
+                        date: new Date(`${activeCalendarDayKey}T00:00:00`),
+                        key: activeCalendarDayKey,
+                        inMonth: true,
+                      },
+                    ])
                   ) : null}
                 </section>
 
@@ -2147,7 +2567,15 @@ const SummaryHistory: React.FC = () => {
                                 style={{ color: 'var(--text-secondary)' }}
                               >
                                 <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                                <span className="min-w-0 break-words">{formatDate(note.created_at)}</span>
+                                <span className="min-w-0 break-words">
+                                  {formatDate(note.created_at)}
+                                  {getNoteDurationMeta(note) ? (
+                                    <>
+                                      <span className="mx-1.5" aria-hidden>•</span>
+                                      {getNoteDurationMeta(note)}
+                                    </>
+                                  ) : null}
+                                </span>
                               </div>
                               <div
                                 className="flex min-w-0 items-center gap-1.5 text-xs"
@@ -2266,7 +2694,15 @@ const SummaryHistory: React.FC = () => {
                                     title={formatDate(note.created_at)}
                                   >
                                     <Calendar className="h-3 w-3 shrink-0" aria-hidden />
-                                    <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
+                                    <span className="min-w-0 truncate">
+                                      {formatDate(note.created_at)}
+                                      {getNoteDurationMeta(note) ? (
+                                        <>
+                                          <span className="mx-1" aria-hidden>•</span>
+                                          {getNoteDurationMeta(note)}
+                                        </>
+                                      ) : null}
+                                    </span>
                                   </div>
                                   <p
                                     className="mt-1 block w-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-snug"

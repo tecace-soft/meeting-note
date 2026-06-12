@@ -503,7 +503,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const value = useMemo<LanguageContextValue>(
     () => ({
       appLanguage,
-      transcriptLanguage: appLanguage,
+      transcriptLanguage: 'original',
       setAppLanguage,
       t: (key) => translations[appLanguage][key] ?? translations.en[key],
     }),

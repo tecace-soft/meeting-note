@@ -838,6 +838,38 @@ select:focus {
   background-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent);
 }
 
+.app-skin .summary-calendar-event {
+  background-color: transparent !important;
+  border-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent) !important;
+  color: var(--text);
+}
+
+.app-skin {
+  --summary-calendar-gridline: color-mix(in srgb, var(--border) 52%, transparent);
+}
+
+.app-skin .summary-calendar-event:hover {
+  background-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent) !important;
+  border-color: color-mix(in srgb, var(--tc-bg-pale) 38%, transparent) !important;
+}
+
+.app-skin .summary-calendar-event-active,
+.app-skin .summary-calendar-event-active:hover {
+  background-color: color-mix(in srgb, var(--accent) 10%, var(--surface)) !important;
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.app-skin .summary-calendar-event-active:focus,
+.app-skin .summary-calendar-event-active:focus-visible {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 .app-skin .summary-note-row:hover .summary-note-row-rail {
   opacity: 0.44;
   transform: scaleY(0.82);
@@ -923,6 +955,33 @@ select:focus {
 
 :root[data-theme="dark"] .app-skin .summary-note-row:hover {
   background-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent);
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event {
+  background-color: transparent !important;
+  border-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent) !important;
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event:hover {
+  background-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent) !important;
+  border-color: color-mix(in srgb, var(--tc-lilac) 5%, transparent) !important;
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active,
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active:hover {
+  background-color: color-mix(in srgb, var(--accent) 18%, var(--surface)) !important;
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active:focus,
+:root[data-theme="dark"] .app-skin .summary-calendar-event-active:focus-visible {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 :root[data-theme="dark"] .app-skin .summary-note-row-active,

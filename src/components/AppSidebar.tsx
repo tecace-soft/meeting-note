@@ -29,6 +29,7 @@ import { useLanguage, type TranslationKey } from '../context/LanguageContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { normalizeTranscript } from '../lib/transcriptSegments';
+import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { isAdminMicrosoftUser } from '../lib/adminAccess';
 import tecaceLogoNavy from '../assets/tecace-logo-navy.svg';
 import tecaceLogoWhite from '../assets/tecace-logo-white.svg';
@@ -84,6 +85,7 @@ interface SidebarNote {
   id: string;
   name?: string | null;
   created_at?: string | null;
+  duration_seconds?: number | null;
   projects?: Array<string | number> | null;
   summary?: string | null;
   summary_edit?: string | null;
@@ -117,6 +119,10 @@ function getNoteTranscriptionText(note: SidebarNote): string {
   const segments = normalizeTranscript(diarized);
   if (segments.length === 0) return '';
   return segments.map((s) => `${s.speaker}: ${s.text}`).join('\n\n');
+}
+
+function getNoteDurationMeta(note: SidebarNote): string | null {
+  return formatDurationMeta(getNoteDurationSeconds(note));
 }
 
 const navItems = [
@@ -999,9 +1005,15 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                                 <p
                                   className="mt-0.5 truncate text-xs leading-snug"
                                   style={{ color: 'var(--text-muted)' }}
-                                  title={formatNoteModalDate(note.created_at)}
+                                  title={`${formatNoteModalDate(note.created_at)}${getNoteDurationMeta(note) ? `, ${getNoteDurationMeta(note)}` : ''}`}
                                 >
                                   {formatNoteModalDate(note.created_at)}
+                                  {getNoteDurationMeta(note) ? (
+                                    <>
+                                      <span className="mx-1.5" aria-hidden>•</span>
+                                      {getNoteDurationMeta(note)}
+                                    </>
+                                  ) : null}
                                 </p>
                               </div>
                               <div className="flex h-10 shrink-0 items-center justify-end">
