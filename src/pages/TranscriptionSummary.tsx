@@ -54,7 +54,6 @@ import {
 } from '../lib/transcriptSegments';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta } from '../lib/noteDuration';
-import { buildEncryptedNoteColumns, encryptNoteSensitivePayload } from '../lib/noteEncryption';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 import ShareNoteModal from '../components/ShareNoteModal';
 import { useRecorder } from '../context/RecorderContext';
@@ -165,7 +164,6 @@ interface WorkflowJobStatus {
     title?: unknown;
     tags?: unknown;
     audioDurationSeconds?: unknown;
-    meetingStartAt?: unknown;
   } | null;
   error?: string | null;
 }
@@ -950,7 +948,6 @@ const TranscriptionSummary: React.FC = () => {
         userName: user?.displayName || '',
         noteId,
         language: appLanguage,
-        clientEncrypted: true,
       };
 
       const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs`, {
@@ -978,31 +975,10 @@ const TranscriptionSummary: React.FC = () => {
         summaryTranslations?.[appLanguage]?.trim() ||
         (typeof result.summary === 'string' ? result.summary : String(result.summary ?? ''));
       const transcript = normalizeTranscript(result.transcript);
-      const title = typeof result.title === 'string' && result.title.trim()
-        ? result.title.trim()
-        : file.name.replace(/\.[^.]+$/, '') || 'Untitled Meeting';
-      const tags = Array.isArray(result.tags)
-        ? result.tags.filter((tag): tag is string => typeof tag === 'string' && Boolean(tag.trim()))
-        : [];
       const audioDurationSeconds =
         typeof result.audioDurationSeconds === 'number' && Number.isFinite(result.audioDurationSeconds)
           ? result.audioDurationSeconds
           : null;
-      const meetingStartAt = typeof result.meetingStartAt === 'string' && result.meetingStartAt.trim()
-        ? result.meetingStartAt.trim()
-        : null;
-      await saveEncryptedGeneratedNote({
-        noteId,
-        downloadUrl,
-        fileId: file.audioFileId ?? null,
-        title,
-        tags,
-        summary: summaryText,
-        summaryTranslations,
-        transcript,
-        meetingStartAt,
-        audioDurationSeconds,
-      });
       setSummaryResult({
         summary: summaryText,
         summaryTranslations,
@@ -1145,46 +1121,6 @@ const TranscriptionSummary: React.FC = () => {
 
   const formatTranscriptText = (segments: TranscriptSegment[], language: TranscriptLanguage = transcriptLanguage): string =>
     segments.map((s) => `${s.speaker}: ${getSegmentText(s, language)}`).join('\n\n');
-
-  const saveEncryptedGeneratedNote = async (input: {
-    noteId: string;
-    downloadUrl: string;
-    fileId: string | null;
-    title: string;
-    tags: string[];
-    summary: string;
-    summaryTranslations?: Record<string, string>;
-    transcript: TranscriptSegment[];
-    meetingStartAt: string | null;
-    audioDurationSeconds: number | null;
-  }): Promise<void> => {
-    if (!user?.id) throw new Error('Missing authenticated user.');
-    const encryptedPayload = await encryptNoteSensitivePayload(user.id, {
-      summary: input.summary,
-      summary_edit: null,
-      summary_translations: input.summaryTranslations ?? null,
-      transcription: formatTranscriptText(input.transcript, 'original'),
-      diarization: input.transcript,
-    });
-    const { error } = await supabase.from('note').insert({
-      id: input.noteId,
-      user_id: user.id,
-      user_name: user.displayName || '',
-      audio_file: input.downloadUrl,
-      audio_file_id: input.fileId,
-      name: input.title,
-      tags: input.tags,
-      meeting_at: input.meetingStartAt,
-      duration_seconds: input.audioDurationSeconds,
-      summary: '',
-      summary_edit: null,
-      summary_translations: {},
-      transcription: '',
-      diarization: null,
-      ...buildEncryptedNoteColumns(encryptedPayload),
-    });
-    if (error) throw error;
-  };
 
   const handleGenerateProfile = async () => {
     if (!summaryResult || !user?.id) return;

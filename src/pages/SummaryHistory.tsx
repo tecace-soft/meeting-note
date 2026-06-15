@@ -46,7 +46,6 @@ import {
 } from '../lib/transcriptSegments';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
-import { decryptNotesForDisplay } from '../lib/noteEncryption';
 import { getOutlookCalendarEvents, getTeamsChats, sendChatMessage, type OutlookCalendarEvent, type TeamsChat } from '../services/graphService';
 import ShareNoteModal from '../components/ShareNoteModal';
 
@@ -72,8 +71,6 @@ interface Note {
   created_at?: string;
   meeting_at?: string | null;
   duration_seconds?: number | null;
-  encrypted_payload?: unknown;
-  encryption_version?: number | null;
 }
 
 interface ProjectOption {
@@ -653,7 +650,7 @@ const SummaryHistory: React.FC = () => {
 
         if (cancelled) return;
         if (error) throw error;
-        const loadedNotes = await decryptNotesForDisplay(user.id, ((data as Note[]) || []));
+        const loadedNotes = ((data as Note[]) || []);
         const filteredNotes = shouldFilterBySearch
           ? loadedNotes.filter((note) => noteMatchesSearch(note, normalizedNoteSearchQuery, currentUserSearchValues))
           : loadedNotes;
@@ -2572,6 +2569,12 @@ const SummaryHistory: React.FC = () => {
                                 <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden />
                                 <span className="min-w-0 break-words">
                                   {formatDate(note.created_at)}
+                                  {getNoteDurationMeta(note) ? (
+                                    <>
+                                      <span className="mx-1.5" aria-hidden>•</span>
+                                      {getNoteDurationMeta(note)}
+                                    </>
+                                  ) : null}
                                 </span>
                               </div>
                               <div
@@ -2693,6 +2696,12 @@ const SummaryHistory: React.FC = () => {
                                     <Calendar className="h-3 w-3 shrink-0" aria-hidden />
                                     <span className="min-w-0 truncate">
                                       {formatDate(note.created_at)}
+                                      {getNoteDurationMeta(note) ? (
+                                        <>
+                                          <span className="mx-1" aria-hidden>•</span>
+                                          {getNoteDurationMeta(note)}
+                                        </>
+                                      ) : null}
                                     </span>
                                   </div>
                                   <p
