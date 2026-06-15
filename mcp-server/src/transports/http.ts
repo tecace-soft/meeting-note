@@ -222,7 +222,10 @@ export async function startHttpServer(): Promise<void> {
 
       const requestBaseUrl = env.mcpPublicBaseUrl ?? getRequestBaseUrl(req);
 
-      if (url.pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt') {
+      if (
+        url.pathname === '/.well-known/oauth-protected-resource' ||
+        url.pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt'
+      ) {
         sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, env.mcpOAuthScope));
         return;
       }
