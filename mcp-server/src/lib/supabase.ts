@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getEnv } from './env.js';
+import { decryptNoteForMcp } from './noteEncryption.js';
 import { normalizeTranscript, uniqueSpeakersFromSegments } from './transcript.js';
 
 export interface NoteRow {
@@ -12,6 +13,10 @@ export interface NoteRow {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+  summary_translations?: unknown;
+  encrypted_payload?: unknown;
+  encryption_version?: number | null;
+  decryption_error?: string | null;
   shared_users?: unknown;
   tags?: unknown;
   projects?: Array<string | number> | null;
@@ -48,6 +53,7 @@ export interface RequestAuthContext {
   authMethod?: 'personal-token' | 'oauth' | 'static-dev' | 'env-dev';
   tokenId?: string;
   scopes?: McpScope[];
+  noteEncryptionSecret?: string;
 }
 
 let context: DataContext | null = null;
@@ -160,6 +166,8 @@ export function summarizeNote(note: NoteRow) {
     hasPlainTranscript: Boolean(note.transcription?.trim()),
     hasDiarizedTranscript: segments.length > 0,
     transcriptCharacters: transcriptText.length,
+    isEncrypted: Boolean(note.encryption_version),
+    decryptionAvailable: !note.decryption_error,
   };
 }
 
@@ -170,7 +178,8 @@ export async function fetchNote(noteId: string): Promise<NoteRow | null> {
   query = applyNoteAccessScope(query, userId);
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
-  return (data as NoteRow | null) ?? null;
+  const note = (data as NoteRow | null) ?? null;
+  return note ? decryptNoteForMcp(note) : null;
 }
 
 export async function fetchSpeakerByIdOrName(input: { speakerId?: string; speakerName?: string }): Promise<SpeakerRow | null> {

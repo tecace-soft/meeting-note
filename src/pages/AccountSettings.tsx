@@ -23,6 +23,7 @@ import { DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 const MCP_CHATGPT_URL = 'https://meeting-note-mcp.onrender.com/mcp-chatgpt';
 const MCP_CLAUDE_URL = 'https://meeting-note-mcp.onrender.com/mcp';
+const NOTE_ENCRYPTION_SECRET_PREFIX = 'meeting-note:encryption-secret:';
 
 type SettingsTab = 'account' | 'summary' | 'speaker' | 'mcp';
 type McpSetupView = 'chatgpt' | 'claude';
@@ -55,6 +56,28 @@ function detectClientOs(): ClientOs {
   if (platform.includes('mac')) return 'macos';
   if (platform.includes('linux')) return 'linux';
   return 'unknown';
+}
+
+function randomBase64Secret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function getOrCreateNoteEncryptionSecret(userId: string): string {
+  if (typeof window === 'undefined') {
+    throw new Error('Note encryption is only available in the browser.');
+  }
+  const storageKey = `${NOTE_ENCRYPTION_SECRET_PREFIX}${userId}`;
+  const stored = window.localStorage.getItem(storageKey)?.trim();
+  if (stored) return stored;
+  const secret = randomBase64Secret();
+  window.localStorage.setItem(storageKey, secret);
+  return secret;
 }
 
 async function callMcpTokenFunction<T>(msAccessToken: string, body: Record<string, unknown>): Promise<T> {
@@ -339,11 +362,12 @@ const AccountSettings: React.FC = () => {
     try {
       const token = await getAccessToken();
       if (!token) throw new Error('Microsoft access token is unavailable. Please sign in again.');
+      const noteEncryptionSecret = getOrCreateNoteEncryptionSecret(user.id);
       const data = await callMcpTokenFunction<{
         token?: string;
         tokenRecord?: McpTokenRow;
         error?: string;
-      }>(token, { action: 'create', name: 'Claude Desktop' });
+      }>(token, { action: 'create', name: 'Claude Desktop', noteEncryptionSecret });
       if (data?.error) throw new Error(data.error);
       if (!data?.token || !data.tokenRecord) throw new Error('MCP key was not returned.');
       setNewMcpToken(data.token);
