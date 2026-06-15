@@ -1,6 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { decryptNotesForMcp } from '../lib/noteEncryption.js';
 import { clampLimit, errorResult, jsonResult } from '../lib/formatters.js';
 import { applyNoteAccessScope, fetchProject, getDataContext, getScopedUserId, hasMcpScope, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
 
@@ -66,7 +65,6 @@ export function registerProjectTools(server: McpServer): void {
       query = applyNoteAccessScope(query, userId);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
       return jsonResult({
         project: {
           id: project.id,
@@ -74,7 +72,7 @@ export function registerProjectTools(server: McpServer): void {
           noteIds: project.notes ?? [],
           createdAt: project.created_at ?? null,
         },
-        notes: notes.map(summarizeNote),
+        notes: ((data as NoteRow[]) ?? []).map(summarizeNote),
       });
     },
   );

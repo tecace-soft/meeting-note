@@ -69,13 +69,6 @@ function hashMcpToken(token: string, pepper: string): string {
   return createHash('sha256').update(`${pepper}:${token}`).digest('hex');
 }
 
-function getNoteEncryptionSecretFromToken(token: string): string | undefined {
-  const separatorIndex = token.indexOf('.');
-  if (separatorIndex < 0) return undefined;
-  const secret = token.slice(separatorIndex + 1).trim();
-  return secret || undefined;
-}
-
 async function resolveUserIdFromPersonalMcpToken(
   bearerToken: string | undefined,
   env: ReturnType<typeof getEnv>
@@ -112,7 +105,6 @@ async function resolveUserIdFromPersonalMcpToken(
     authMethod: 'personal-token',
     tokenId: row.id,
     scopes: parseMcpScopes(row.scopes),
-    noteEncryptionSecret: getNoteEncryptionSecretFromToken(bearerToken),
   };
 }
 

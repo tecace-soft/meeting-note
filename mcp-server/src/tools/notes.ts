@@ -2,7 +2,6 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { applyMeetingDateFilter, describeDateFilter, resolveDateFilter } from '../lib/dateFilters.js';
 import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
-import { decryptNotesForMcp } from '../lib/noteEncryption.js';
 import {
   fetchNote,
   getDataContext,
@@ -126,8 +125,7 @@ export function registerNoteTools(server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
-      return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: notes.map(summarizeNote) });
+      return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
     },
   );
 
@@ -155,10 +153,9 @@ export function registerNoteTools(server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
       return jsonResult({
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
-        notes: notes.map(summarizeNote),
+        notes: ((data as NoteRow[]) ?? []).map(summarizeNote),
       });
     },
   );
@@ -193,10 +190,9 @@ export function registerNoteTools(server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
       return jsonResult({
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
-        notes: notes.map((note) => ({
+        notes: ((data as NoteRow[]) ?? []).map((note) => ({
           ...summarizeNote(note),
           sharedBy: note.user_name?.trim() || 'Unknown user',
         })),
@@ -236,7 +232,7 @@ export function registerNoteTools(server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? [])
+      const notes = ((data as NoteRow[]) ?? [])
         .filter((note) => ownerNameMatches(note.user_name, ownerName))
         .slice(0, resolvedLimit);
       return jsonResult({
@@ -276,7 +272,7 @@ export function registerNoteTools(server: McpServer): void {
       dbQuery = applyMeetingDateFilter(dbQuery, dateFilter);
       const { data, error } = await dbQuery;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []).filter((note) => noteMatchesQuery(note, query)).slice(0, resolvedLimit);
+      const notes = ((data as NoteRow[]) ?? []).filter((note) => noteMatchesQuery(note, query)).slice(0, resolvedLimit);
       return jsonResult({ query, dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: notes.map(summarizeNote) });
     },
   );
@@ -306,8 +302,7 @@ export function registerNoteTools(server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
-      return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: notes.map(summarizeNote) });
+      return jsonResult({ dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: ((data as NoteRow[]) ?? []).map(summarizeNote) });
     },
   );
 
@@ -337,10 +332,9 @@ export function registerNoteTools(server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
       return jsonResult({
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
-        summaries: notes.map((note) => ({
+        summaries: ((data as NoteRow[]) ?? []).map((note) => ({
           ...summarizeNote(note),
           summary: truncateText(getNoteSummary(note) || 'No summary for this note.', clampCharacters(maxCharactersPerSummary, SUMMARY_DEFAULT_CHARS, SUMMARY_MAX_CHARS)),
         })),
@@ -376,10 +370,9 @@ export function registerNoteTools(server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-      const notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
       return jsonResult({
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
-        transcripts: notes.map((note) => {
+        transcripts: ((data as NoteRow[]) ?? []).map((note) => {
           const segments = normalizeTranscript(note.diarization);
           const base = summarizeNote(note);
           if (format === 'diarized') {
@@ -539,7 +532,7 @@ export function registerNoteTools(server: McpServer): void {
         query = applyMeetingDateFilter(query, dateFilter);
         const { data, error } = await query;
         if (error) return errorResult(error.message);
-        notes = decryptNotesForMcp((data as NoteRow[]) ?? []);
+        notes = ((data as NoteRow[]) ?? []);
       }
 
       const segments: Array<{

@@ -15,7 +15,6 @@ interface RequestBody {
   tokenId?: string;
   scopes?: string[];
   expiresInDays?: number;
-  noteEncryptionSecret?: string;
 }
 
 interface TokenRow {
@@ -65,12 +64,11 @@ function toHex(buffer: ArrayBuffer): string {
     .join('');
 }
 
-function randomToken(noteEncryptionSecret?: string): string {
+function randomToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   const value = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  const secret = noteEncryptionSecret?.trim();
-  return secret ? `mn_live_${value}.${secret}` : `mn_live_${value}`;
+  return `mn_live_${value}`;
 }
 
 async function hashToken(token: string, pepper: string): Promise<string> {
@@ -153,11 +151,10 @@ serve(async (req) => {
     }
 
     if (action === 'create') {
-      const token = randomToken(body.noteEncryptionSecret);
+      const token = randomToken();
       const tokenHash = await hashToken(token, tokenPepper);
       const name = body.name?.trim() || 'Claude Desktop';
-      const tokenPrefixSource = token.split('.')[0];
-      const tokenPrefix = `${tokenPrefixSource.slice(0, 12)}...${tokenPrefixSource.slice(-4)}`;
+      const tokenPrefix = `${token.slice(0, 12)}...${token.slice(-4)}`;
       const scopes = resolveScopes(body.scopes);
       const expiresAt = resolveExpiresAt(body.expiresInDays);
 
