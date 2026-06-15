@@ -31,8 +31,10 @@ export type NoteSensitivePayload = {
 };
 
 export type EncryptableNote = NoteSensitivePayload & {
+  user_id?: string | null;
   encrypted_payload?: unknown;
   encryption_version?: number | null;
+  decryption_error?: string | null;
 };
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -62,8 +64,13 @@ function randomBytes(length: number): Uint8Array {
   return bytes;
 }
 
-async function deriveKey(userId: string, salt: Uint8Array): Promise<CryptoKey> {
-  const userSecret = getOrCreateUserEncryptionSecret(userId);
+async function deriveKey(userId: string, salt: Uint8Array, options: { createSecret: boolean }): Promise<CryptoKey> {
+  const userSecret = options.createSecret
+    ? getOrCreateUserEncryptionSecret(userId)
+    : getExistingUserEncryptionSecret(userId);
+  if (!userSecret) {
+    throw new Error('No local note encryption secret is available for this user.');
+  }
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
     toArrayBuffer(base64ToBytes(userSecret)),
@@ -94,6 +101,12 @@ function getOrCreateUserEncryptionSecret(userId: string): string {
   return created;
 }
 
+function getExistingUserEncryptionSecret(userId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  const storageKey = `${USER_SECRET_STORAGE_PREFIX}${userId}`;
+  return window.localStorage.getItem(storageKey);
+}
+
 function isEncryptedPayload(value: unknown): value is EncryptedNotePayload {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const payload = value as Partial<EncryptedNotePayload>;
@@ -113,7 +126,7 @@ export async function encryptNoteSensitivePayload(
 ): Promise<EncryptedNotePayload> {
   const salt = randomBytes(SALT_BYTES);
   const iv = randomBytes(IV_BYTES);
-  const key = await deriveKey(userId, salt);
+  const key = await deriveKey(userId, salt, { createSecret: true });
   const plaintext = TEXT_ENCODER.encode(JSON.stringify(payload));
   const ciphertext = await crypto.subtle.encrypt({ name: ENCRYPTION_ALGORITHM, iv: toArrayBuffer(iv) }, key, plaintext);
   return {
@@ -135,7 +148,7 @@ export async function decryptNoteSensitivePayload(
   const salt = base64ToBytes(encryptedPayload.salt);
   const iv = base64ToBytes(encryptedPayload.iv);
   const ciphertext = base64ToBytes(encryptedPayload.ciphertext);
-  const key = await deriveKey(userId, salt);
+  const key = await deriveKey(userId, salt, { createSecret: false });
   const plaintext = await crypto.subtle.decrypt(
     { name: ENCRYPTION_ALGORITHM, iv: toArrayBuffer(iv) },
     key,
@@ -146,16 +159,27 @@ export async function decryptNoteSensitivePayload(
 
 export async function decryptNoteForDisplay<T extends EncryptableNote>(userId: string, note: T): Promise<T> {
   if (!note.encrypted_payload || !note.encryption_version) return note;
-  const decrypted = await decryptNoteSensitivePayload(userId, note.encrypted_payload);
-  if (!decrypted) return note;
-  return {
-    ...note,
-    summary: decrypted.summary ?? '',
-    summary_edit: decrypted.summary_edit ?? null,
-    summary_translations: decrypted.summary_translations ?? null,
-    transcription: decrypted.transcription ?? '',
-    diarization: decrypted.diarization ?? null,
-  };
+  if (note.user_id && note.user_id !== userId) {
+    return { ...note, decryption_error: 'Encrypted note belongs to another user.' };
+  }
+  try {
+    const decrypted = await decryptNoteSensitivePayload(userId, note.encrypted_payload);
+    if (!decrypted) return note;
+    return {
+      ...note,
+      summary: decrypted.summary ?? '',
+      summary_edit: decrypted.summary_edit ?? null,
+      summary_translations: decrypted.summary_translations ?? null,
+      transcription: decrypted.transcription ?? '',
+      diarization: decrypted.diarization ?? null,
+      decryption_error: null,
+    };
+  } catch (error) {
+    return {
+      ...note,
+      decryption_error: error instanceof Error ? error.message : 'Could not decrypt this note.',
+    };
+  }
 }
 
 export async function decryptNotesForDisplay<T extends EncryptableNote>(userId: string, notes: T[]): Promise<T[]> {
