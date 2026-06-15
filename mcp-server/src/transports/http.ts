@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { getMeetingNoteUserIdFromAzureToken } from '../lib/azureToken.js';
 import { getEnv } from '../lib/env.js';
-import { getDataContext, runWithScopedAuthContext, type McpScope, type RequestAuthContext } from '../lib/supabase.js';
+import { getDataContext, runWithScopedUserId } from '../lib/supabase.js';
 import { createMeetingNoteMcpServer } from '../server.js';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -51,18 +51,8 @@ function getJwtRole(token: string): string {
 }
 
 function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean {
-  if (!apiKey) return false;
+  if (!apiKey) return true;
   return req.headers.authorization === `Bearer ${apiKey}`;
-}
-
-function parseMcpScopes(value: unknown): McpScope[] {
-  const allowed = new Set<McpScope>(['notes:metadata', 'notes:summary', 'notes:transcript']);
-  const rawScopes = Array.isArray(value)
-    ? value
-    : typeof value === 'string'
-      ? value.split(/[,\s]+/)
-      : [];
-  return rawScopes.filter((scope): scope is McpScope => typeof scope === 'string' && allowed.has(scope as McpScope));
 }
 
 function hashMcpToken(token: string, pepper: string): string {
@@ -72,14 +62,14 @@ function hashMcpToken(token: string, pepper: string): string {
 async function resolveUserIdFromPersonalMcpToken(
   bearerToken: string | undefined,
   env: ReturnType<typeof getEnv>
-): Promise<RequestAuthContext | undefined> {
+): Promise<string | undefined> {
   if (!bearerToken || !env.mcpTokenPepper) return undefined;
 
   const tokenHash = hashMcpToken(bearerToken, env.mcpTokenPepper);
   const { supabase } = getDataContext();
   const { data, error } = await supabase
     .from('mcp_token')
-    .select('id, user_id, expires_at, scopes')
+    .select('id, user_id')
     .eq('token_hash', tokenHash)
     .is('revoked_at', null)
     .maybeSingle();
@@ -88,9 +78,8 @@ async function resolveUserIdFromPersonalMcpToken(
     process.stderr.write(`Failed to resolve personal MCP token: ${describeError(error)}\n`);
     return undefined;
   }
-  const row = data as { id?: string; user_id?: string; expires_at?: string | null; scopes?: unknown } | null;
+  const row = data as { id?: string; user_id?: string } | null;
   if (!row?.id || !row.user_id) return undefined;
-  if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) return undefined;
 
   void supabase
     .from('mcp_token')
@@ -100,12 +89,7 @@ async function resolveUserIdFromPersonalMcpToken(
       if (updateError) process.stderr.write(`Failed to update MCP token last_used_at: ${updateError.message}\n`);
     });
 
-  return {
-    userId: row.user_id,
-    authMethod: 'personal-token',
-    tokenId: row.id,
-    scopes: parseMcpScopes(row.scopes),
-  };
+  return row.user_id;
 }
 
 function getBearerToken(req: IncomingMessage): string | undefined {
@@ -163,15 +147,13 @@ async function getMicrosoftUserIdFromGraph(accessToken: string): Promise<string 
   return typeof data.id === 'string' && data.id.trim() ? data.id.trim() : undefined;
 }
 
-async function resolveChatGptAuthContext(
-  bearerToken: string | undefined,
-  env: ReturnType<typeof getEnv>
-): Promise<RequestAuthContext | undefined> {
-  if (!bearerToken) return undefined;
+async function resolveChatGptUserId(bearerToken: string | undefined, env: ReturnType<typeof getEnv>): Promise<string | undefined> {
+  if (!bearerToken) return env.meetingNoteUserId;
+
   const mappedUserId = env.mcpUserTokens.get(bearerToken);
   if (mappedUserId) {
     process.stderr.write('MCP ChatGPT auth resolved through MCP_USER_TOKENS\n');
-    return { userId: mappedUserId, authMethod: 'personal-token' };
+    return mappedUserId;
   }
 
   if (env.mcpOAuthResource && env.mcpAzureTenantId) {
@@ -184,7 +166,7 @@ async function resolveChatGptAuthContext(
       });
       if (azureUserId) {
         process.stderr.write('MCP ChatGPT auth resolved through Azure JWT oid\n');
-        return { userId: azureUserId, authMethod: 'oauth' };
+        return azureUserId;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -195,10 +177,10 @@ async function resolveChatGptAuthContext(
   const graphUserId = await getMicrosoftUserIdFromGraph(bearerToken);
   if (graphUserId) {
     process.stderr.write('MCP ChatGPT auth resolved through Microsoft Graph /me fallback\n');
-    return { userId: graphUserId, authMethod: 'oauth' };
+    return graphUserId;
   }
 
-  return undefined;
+  return env.meetingNoteUserId;
 }
 
 export async function startHttpServer(): Promise<void> {
@@ -233,28 +215,24 @@ export async function startHttpServer(): Promise<void> {
 
       const bearerToken = getBearerToken(req);
       const staticKeyAuthorized = isClaudeEndpoint && isAuthorized(req, env.mcpApiKey);
-      const personalTokenAuthContext = staticKeyAuthorized
+      const personalTokenUserId = staticKeyAuthorized
         ? undefined
         : await resolveUserIdFromPersonalMcpToken(bearerToken, env);
 
-      if (isClaudeEndpoint && !personalTokenAuthContext && !staticKeyAuthorized) {
+      if (isClaudeEndpoint && !personalTokenUserId && !staticKeyAuthorized) {
         sendJson(res, 401, { error: 'Unauthorized' });
         return;
       }
 
-      const devAuthContext: RequestAuthContext | undefined =
-        env.mcpAllowDevIdentity && env.meetingNoteUserId
-          ? { userId: env.meetingNoteUserId, authMethod: staticKeyAuthorized ? 'static-dev' : 'env-dev' }
-          : undefined;
-      const authContext = isChatGptEndpoint
-        ? personalTokenAuthContext ?? (await resolveChatGptAuthContext(bearerToken, env)) ?? devAuthContext
-        : personalTokenAuthContext ?? (staticKeyAuthorized ? devAuthContext : undefined);
+      const userId = isChatGptEndpoint
+        ? personalTokenUserId ?? (await resolveChatGptUserId(bearerToken, env))
+        : personalTokenUserId ?? getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
 
-      if (!authContext?.userId) {
+      if (!userId) {
         const body = {
           error: isChatGptEndpoint
-            ? 'A valid Microsoft OAuth bearer token or personal MCP bearer token is required.'
-            : 'A valid personal MCP bearer token is required.',
+            ? 'A valid Microsoft OAuth bearer token, ChatGPT bearer token, or MEETING_NOTE_USER_ID is required.'
+            : 'Missing meeting note user id.',
         };
 
         if (isChatGptEndpoint) {
@@ -268,7 +246,7 @@ export async function startHttpServer(): Promise<void> {
         return;
       }
 
-      await runWithScopedAuthContext(authContext, async () => {
+      await runWithScopedUserId(userId, async () => {
         const server = createMeetingNoteMcpServer();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         await server.connect(transport);

@@ -160,9 +160,12 @@ const AccountSettings: React.FC = () => {
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
+                '--header',
+                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
                 AUTH_HEADER: claudeAuthHeader,
+                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -170,7 +173,7 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [claudeAuthHeader]
+    [claudeAuthHeader, user?.id]
   );
   const claudeDesktopConfigWindows = useMemo(
     () =>
@@ -185,9 +188,12 @@ const AccountSettings: React.FC = () => {
                 MCP_CLAUDE_URL,
                 '--header',
                 'Authorization:${AUTH_HEADER}',
+                '--header',
+                'x-meeting-note-user-id:${MEETING_NOTE_USER_ID}',
               ],
               env: {
                 AUTH_HEADER: claudeAuthHeader,
+                MEETING_NOTE_USER_ID: user?.id ?? 'YOUR_MICROSOFT_USER_ID',
               },
             },
           },
@@ -195,7 +201,7 @@ const AccountSettings: React.FC = () => {
         null,
         2
       ),
-    [claudeAuthHeader]
+    [claudeAuthHeader, user?.id]
   );
   const claudeDesktopConfig = clientOs === 'windows' ? claudeDesktopConfigWindows : claudeDesktopConfigMac;
   const claudeDesktopConfigLabel =

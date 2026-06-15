@@ -13,8 +13,6 @@ interface RequestBody {
   action?: Action;
   name?: string;
   tokenId?: string;
-  scopes?: string[];
-  expiresInDays?: number;
 }
 
 interface TokenRow {
@@ -23,15 +21,8 @@ interface TokenRow {
   token_prefix: string;
   last_used_at: string | null;
   revoked_at: string | null;
-  expires_at: string | null;
-  scopes: string[] | null;
   created_at: string;
 }
-
-const DEFAULT_SCOPES = ['notes:metadata', 'notes:summary', 'notes:transcript'];
-const ALLOWED_SCOPES = new Set(DEFAULT_SCOPES);
-const DEFAULT_EXPIRY_DAYS = 90;
-const MAX_EXPIRY_DAYS = 365;
 
 async function getMicrosoftUserId(accessToken: string): Promise<{ userId: string | null; error?: string }> {
   const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
@@ -83,27 +74,8 @@ function publicToken(row: TokenRow) {
     tokenPrefix: row.token_prefix,
     lastUsedAt: row.last_used_at,
     revokedAt: row.revoked_at,
-    expiresAt: row.expires_at,
-    scopes: row.scopes ?? DEFAULT_SCOPES,
     createdAt: row.created_at,
   };
-}
-
-function resolveScopes(scopes: string[] | undefined): string[] {
-  if (!Array.isArray(scopes) || scopes.length === 0) return DEFAULT_SCOPES;
-  const uniqueScopes = Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean)));
-  if (uniqueScopes.some((scope) => !ALLOWED_SCOPES.has(scope))) {
-    throw new Error(`Unsupported MCP token scope. Allowed scopes: ${DEFAULT_SCOPES.join(', ')}`);
-  }
-  return uniqueScopes;
-}
-
-function resolveExpiresAt(expiresInDays: number | undefined): string {
-  const days = Number.isFinite(expiresInDays) ? Math.floor(expiresInDays as number) : DEFAULT_EXPIRY_DAYS;
-  if (days < 1 || days > MAX_EXPIRY_DAYS) {
-    throw new Error(`expiresInDays must be between 1 and ${MAX_EXPIRY_DAYS}.`);
-  }
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 serve(async (req) => {
@@ -143,7 +115,7 @@ serve(async (req) => {
     if (action === 'list') {
       const { data, error } = await adminClient
         .from('mcp_token')
-        .select('id, name, token_prefix, last_used_at, revoked_at, expires_at, scopes, created_at')
+        .select('id, name, token_prefix, last_used_at, revoked_at, created_at')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
       if (error) throw error;
@@ -155,8 +127,6 @@ serve(async (req) => {
       const tokenHash = await hashToken(token, tokenPepper);
       const name = body.name?.trim() || 'Claude Desktop';
       const tokenPrefix = `${token.slice(0, 12)}...${token.slice(-4)}`;
-      const scopes = resolveScopes(body.scopes);
-      const expiresAt = resolveExpiresAt(body.expiresInDays);
 
       const { data, error } = await adminClient
         .from('mcp_token')
@@ -165,10 +135,8 @@ serve(async (req) => {
           name,
           token_hash: tokenHash,
           token_prefix: tokenPrefix,
-          expires_at: expiresAt,
-          scopes,
         })
-        .select('id, name, token_prefix, last_used_at, revoked_at, expires_at, scopes, created_at')
+        .select('id, name, token_prefix, last_used_at, revoked_at, created_at')
         .single();
       if (error) throw error;
 

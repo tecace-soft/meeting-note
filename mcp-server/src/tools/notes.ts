@@ -8,25 +8,12 @@ import {
   getNoteSummary,
   getNoteTranscriptText,
   getScopedUserId,
-  hasMcpScope,
   applyNoteAccessScope,
   summarizeNote,
   toIdValue,
   type NoteRow,
 } from '../lib/supabase.js';
 import { formatTranscript, normalizeTranscript } from '../lib/transcript.js';
-
-const SUMMARY_DEFAULT_CHARS = 8000;
-const SUMMARY_MAX_CHARS = 20000;
-const TRANSCRIPT_DEFAULT_CHARS = 12000;
-const TRANSCRIPT_MAX_CHARS = 30000;
-const TRANSCRIPT_DEFAULT_SEGMENTS = 100;
-const TRANSCRIPT_MAX_SEGMENTS = 300;
-const BULK_TRANSCRIPT_DEFAULT_LIMIT = 3;
-const BULK_TRANSCRIPT_MAX_LIMIT = 10;
-const BULK_SUMMARY_DEFAULT_LIMIT = 10;
-const BULK_SUMMARY_MAX_LIMIT = 25;
-const BROAD_NOTE_SEARCH_LIMIT = 100;
 
 const dateFilterSchema = {
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD format.').optional(),
@@ -92,14 +79,6 @@ function speakerNameMatches(segmentSpeaker: string | null | undefined, speakerNa
   return requestedTokens.length > 0 && requestedTokens.every((token) => speakerTokens.has(token));
 }
 
-function requireScope(scope: 'notes:metadata' | 'notes:summary' | 'notes:transcript') {
-  return hasMcpScope(scope) ? null : errorResult(`This MCP token does not include the ${scope} scope.`);
-}
-
-function clampCharacters(value: number | undefined, fallback: number, max: number): number {
-  return clampLimit(value, fallback, max);
-}
-
 export function registerNoteTools(server: McpServer): void {
   server.registerTool(
     'list_recent_notes',
@@ -113,8 +92,6 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, date, startDate, endDate }) => {
-      const denied = requireScope('notes:metadata');
-      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 10, 50);
@@ -141,8 +118,6 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, date, startDate, endDate }) => {
-      const denied = requireScope('notes:metadata');
-      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       if (!userId) return errorResult('A scoped user id is required to list personal notes.');
@@ -172,8 +147,6 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, date, startDate, endDate }) => {
-      const denied = requireScope('notes:metadata');
-      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       if (!userId) return errorResult('A scoped user id is required to list shared notes.');
@@ -209,13 +182,11 @@ export function registerNoteTools(server: McpServer): void {
         ownerName: z.string().min(1),
         limit: z.number().int().min(1).max(50).optional(),
         projectId: z.string().optional(),
-        maxCharactersPerSummary: z.number().int().min(100).max(SUMMARY_MAX_CHARS).optional(),
+        maxCharactersPerSummary: z.number().int().min(100).max(50000).optional(),
         ...dateFilterSchema,
       },
     },
     async ({ ownerName, limit, projectId, maxCharactersPerSummary, date, startDate, endDate }) => {
-      const denied = requireScope('notes:summary');
-      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       if (!userId) return errorResult('A scoped user id is required to list shared notes by owner.');
@@ -227,7 +198,7 @@ export function registerNoteTools(server: McpServer): void {
         .contains('shared_users', [userId])
         .neq('user_id', userId)
         .order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
-        .limit(BROAD_NOTE_SEARCH_LIMIT);
+        .limit(200);
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
@@ -241,7 +212,7 @@ export function registerNoteTools(server: McpServer): void {
         notes: notes.map((note) => ({
           ...summarizeNote(note),
           sharedBy: note.user_name?.trim() || 'Unknown user',
-          summary: truncateText(getNoteSummary(note) || 'No summary for this note.', clampCharacters(maxCharactersPerSummary, SUMMARY_DEFAULT_CHARS, SUMMARY_MAX_CHARS)),
+          summary: truncateText(getNoteSummary(note) || 'No summary for this note.', maxCharactersPerSummary),
         })),
       });
     },
@@ -260,13 +231,11 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ query, projectId, limit, date, startDate, endDate }) => {
-      const denied = requireScope('notes:transcript');
-      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
-      let dbQuery = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(BROAD_NOTE_SEARCH_LIMIT);
+      let dbQuery = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(200);
       dbQuery = applyNoteAccessScope(dbQuery, userId);
       if (projectId) dbQuery = dbQuery.contains('projects', [toIdValue(projectId)]);
       dbQuery = applyMeetingDateFilter(dbQuery, dateFilter);
@@ -289,8 +258,6 @@ export function registerNoteTools(server: McpServer): void {
       },
     },
     async ({ limit, projectId, date, startDate, endDate }) => {
-      const denied = requireScope('notes:metadata');
-      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 25, 100);
@@ -312,18 +279,16 @@ export function registerNoteTools(server: McpServer): void {
       title: 'Get Summaries By Date',
       description: 'Retrieve note summaries for notes created on a single date or within a date range.',
       inputSchema: {
-        limit: z.number().int().min(1).max(BULK_SUMMARY_MAX_LIMIT).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
         projectId: z.string().optional(),
-        maxCharactersPerSummary: z.number().int().min(100).max(SUMMARY_MAX_CHARS).optional(),
+        maxCharactersPerSummary: z.number().int().min(100).max(50000).optional(),
         ...dateFilterSchema,
       },
     },
     async ({ limit, projectId, maxCharactersPerSummary, date, startDate, endDate }) => {
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
-      const denied = requireScope('notes:summary');
-      if (denied) return denied;
-      const resolvedLimit = clampLimit(limit, BULK_SUMMARY_DEFAULT_LIMIT, BULK_SUMMARY_MAX_LIMIT);
+      const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
@@ -336,7 +301,7 @@ export function registerNoteTools(server: McpServer): void {
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
         summaries: ((data as NoteRow[]) ?? []).map((note) => ({
           ...summarizeNote(note),
-          summary: truncateText(getNoteSummary(note) || 'No summary for this note.', clampCharacters(maxCharactersPerSummary, SUMMARY_DEFAULT_CHARS, SUMMARY_MAX_CHARS)),
+          summary: truncateText(getNoteSummary(note) || 'No summary for this note.', maxCharactersPerSummary),
         })),
       });
     },
@@ -348,20 +313,18 @@ export function registerNoteTools(server: McpServer): void {
       title: 'Get Transcripts By Date',
       description: 'Retrieve note transcripts for notes created on a single date or within a date range.',
       inputSchema: {
-        limit: z.number().int().min(1).max(BULK_TRANSCRIPT_MAX_LIMIT).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
         projectId: z.string().optional(),
         format: z.enum(['plain', 'diarized']).optional(),
-        maxCharactersPerTranscript: z.number().int().min(100).max(TRANSCRIPT_MAX_CHARS).optional(),
-        maxSegmentsPerTranscript: z.number().int().min(1).max(TRANSCRIPT_MAX_SEGMENTS).optional(),
+        maxCharactersPerTranscript: z.number().int().min(100).max(100000).optional(),
+        maxSegmentsPerTranscript: z.number().int().min(1).max(1000).optional(),
         ...dateFilterSchema,
       },
     },
     async ({ limit, projectId, format = 'plain', maxCharactersPerTranscript, maxSegmentsPerTranscript, date, startDate, endDate }) => {
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
-      const denied = requireScope('notes:transcript');
-      if (denied) return denied;
-      const resolvedLimit = clampLimit(limit, BULK_TRANSCRIPT_DEFAULT_LIMIT, BULK_TRANSCRIPT_MAX_LIMIT);
+      const resolvedLimit = clampLimit(limit, 25, 100);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select('*').order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
@@ -378,16 +341,13 @@ export function registerNoteTools(server: McpServer): void {
           if (format === 'diarized') {
             return {
               ...base,
-              segments: segments.slice(0, clampLimit(maxSegmentsPerTranscript, TRANSCRIPT_DEFAULT_SEGMENTS, TRANSCRIPT_MAX_SEGMENTS)),
+              segments: maxSegmentsPerTranscript ? segments.slice(0, maxSegmentsPerTranscript) : segments,
               totalSegments: segments.length,
             };
           }
           return {
             ...base,
-            transcript: truncateText(
-              getNoteTranscriptText(note) || formatTranscript(segments) || 'No transcript for this note.',
-              clampCharacters(maxCharactersPerTranscript, TRANSCRIPT_DEFAULT_CHARS, TRANSCRIPT_MAX_CHARS),
-            ),
+            transcript: truncateText(getNoteTranscriptText(note) || formatTranscript(segments) || 'No transcript for this note.', maxCharactersPerTranscript),
           };
         }),
       });
@@ -402,8 +362,6 @@ export function registerNoteTools(server: McpServer): void {
       inputSchema: { noteId: z.string().min(1) },
     },
     async ({ noteId }) => {
-      const denied = requireScope('notes:metadata');
-      if (denied) return denied;
       const note = await fetchNote(noteId);
       if (!note) return errorResult(`Note not found: ${noteId}`);
       return jsonResult({ note: summarizeNote(note) });
@@ -417,16 +375,14 @@ export function registerNoteTools(server: McpServer): void {
       description: 'Return the edited summary when present, otherwise the generated summary.',
       inputSchema: {
         noteId: z.string().min(1),
-        maxCharacters: z.number().int().min(100).max(SUMMARY_MAX_CHARS).optional(),
+        maxCharacters: z.number().int().min(100).max(50000).optional(),
       },
     },
     async ({ noteId, maxCharacters }) => {
-      const denied = requireScope('notes:summary');
-      if (denied) return denied;
       const note = await fetchNote(noteId);
       if (!note) return errorResult(`Note not found: ${noteId}`);
       const summary = getNoteSummary(note);
-      return jsonResult({ noteId, summary: truncateText(summary || 'No summary for this note.', clampCharacters(maxCharacters, SUMMARY_DEFAULT_CHARS, SUMMARY_MAX_CHARS)) });
+      return jsonResult({ noteId, summary: truncateText(summary || 'No summary for this note.', maxCharacters) });
     },
   );
 
@@ -438,22 +394,20 @@ export function registerNoteTools(server: McpServer): void {
       inputSchema: {
         noteId: z.string().min(1),
         format: z.enum(['plain', 'diarized']).optional(),
-        maxCharacters: z.number().int().min(100).max(TRANSCRIPT_MAX_CHARS).optional(),
-        maxSegments: z.number().int().min(1).max(TRANSCRIPT_MAX_SEGMENTS).optional(),
+        maxCharacters: z.number().int().min(100).max(100000).optional(),
+        maxSegments: z.number().int().min(1).max(1000).optional(),
       },
     },
     async ({ noteId, format = 'plain', maxCharacters, maxSegments }) => {
-      const denied = requireScope('notes:transcript');
-      if (denied) return denied;
       const note = await fetchNote(noteId);
       if (!note) return errorResult(`Note not found: ${noteId}`);
       const segments = normalizeTranscript(note.diarization);
       if (format === 'diarized') {
-        const limitedSegments = segments.slice(0, clampLimit(maxSegments, TRANSCRIPT_DEFAULT_SEGMENTS, TRANSCRIPT_MAX_SEGMENTS));
+        const limitedSegments = maxSegments ? segments.slice(0, maxSegments) : segments;
         return jsonResult({ noteId, segments: limitedSegments, totalSegments: segments.length });
       }
       const text = getNoteTranscriptText(note) || formatTranscript(segments);
-      return jsonResult({ noteId, transcript: truncateText(text || 'No transcript for this note.', clampCharacters(maxCharacters, TRANSCRIPT_DEFAULT_CHARS, TRANSCRIPT_MAX_CHARS)) });
+      return jsonResult({ noteId, transcript: truncateText(text || 'No transcript for this note.', maxCharacters) });
     },
   );
 
@@ -465,12 +419,10 @@ export function registerNoteTools(server: McpServer): void {
       inputSchema: {
         noteId: z.string().min(1),
         speakers: z.array(z.string().min(1)).min(1),
-        maxSegments: z.number().int().min(1).max(TRANSCRIPT_MAX_SEGMENTS).optional(),
+        maxSegments: z.number().int().min(1).max(1000).optional(),
       },
     },
     async ({ noteId, speakers, maxSegments }) => {
-      const denied = requireScope('notes:transcript');
-      if (denied) return denied;
       const note = await fetchNote(noteId);
       if (!note) return errorResult(`Note not found: ${noteId}`);
       const segments = normalizeTranscript(note.diarization).filter((segment) =>
@@ -479,7 +431,7 @@ export function registerNoteTools(server: McpServer): void {
       return jsonResult({
         noteId,
         speakers,
-        segments: segments.slice(0, clampLimit(maxSegments, TRANSCRIPT_DEFAULT_SEGMENTS, TRANSCRIPT_MAX_SEGMENTS)),
+        segments: maxSegments ? segments.slice(0, maxSegments) : segments,
         totalSegments: segments.length,
       });
     },
@@ -496,17 +448,15 @@ export function registerNoteTools(server: McpServer): void {
         noteId: z.string().min(1).optional(),
         noteScope: z.enum(['all', 'personal', 'shared']).optional(),
         projectId: z.string().optional(),
-        noteLimit: z.number().int().min(1).max(BROAD_NOTE_SEARCH_LIMIT).optional(),
-        maxSegments: z.number().int().min(1).max(TRANSCRIPT_MAX_SEGMENTS).optional(),
+        noteLimit: z.number().int().min(1).max(500).optional(),
+        maxSegments: z.number().int().min(1).max(2000).optional(),
         ...dateFilterSchema,
       },
     },
     async ({ speakerName, noteId, noteScope = 'all', projectId, noteLimit, maxSegments, date, startDate, endDate }) => {
       const userId = getScopedUserId();
-      const denied = requireScope('notes:transcript');
-      if (denied) return denied;
-      const resolvedNoteLimit = clampLimit(noteLimit, 50, BROAD_NOTE_SEARCH_LIMIT);
-      const resolvedSegmentLimit = clampLimit(maxSegments, TRANSCRIPT_DEFAULT_SEGMENTS, TRANSCRIPT_MAX_SEGMENTS);
+      const resolvedNoteLimit = clampLimit(noteLimit, 100, 500);
+      const resolvedSegmentLimit = clampLimit(maxSegments, 250, 2000);
 
       let notes: NoteRow[];
       let dateFilter = resolveDateFilter({ date, startDate, endDate });

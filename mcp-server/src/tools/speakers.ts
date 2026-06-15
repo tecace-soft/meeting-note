@@ -1,11 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
-import { fetchSpeakerByIdOrName, getDataContext, getScopedUserId, hasMcpScope, type SpeakerRow } from '../lib/supabase.js';
-
-function requireScope(scope: 'notes:metadata' | 'notes:summary') {
-  return hasMcpScope(scope) ? null : errorResult(`This MCP token does not include the ${scope} scope.`);
-}
+import { fetchSpeakerByIdOrName, getDataContext, getScopedUserId, type SpeakerRow } from '../lib/supabase.js';
 
 export function registerSpeakerTools(server: McpServer): void {
   server.registerTool(
@@ -19,8 +15,6 @@ export function registerSpeakerTools(server: McpServer): void {
       },
     },
     async ({ query, limit }) => {
-      const denied = requireScope('notes:metadata');
-      if (denied) return denied;
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
       const resolvedLimit = clampLimit(limit, 25, 100);
@@ -48,19 +42,17 @@ export function registerSpeakerTools(server: McpServer): void {
       inputSchema: {
         speakerId: z.string().optional(),
         speakerName: z.string().optional(),
-        maxCharacters: z.number().int().min(100).max(20000).optional(),
+        maxCharacters: z.number().int().min(100).max(50000).optional(),
       },
     },
     async ({ speakerId, speakerName, maxCharacters }) => {
-      const denied = requireScope('notes:summary');
-      if (denied) return denied;
       if (!speakerId && !speakerName) return errorResult('Provide speakerId or speakerName.');
       const speaker = await fetchSpeakerByIdOrName({ speakerId, speakerName });
       if (!speaker) return errorResult(`Speaker not found: ${speakerId ?? speakerName}`);
       return jsonResult({
         id: speaker.id,
         name: speaker.name,
-        profile: truncateText(speaker.profile?.trim() || 'No saved profile for this speaker.', clampLimit(maxCharacters, 8000, 20000)),
+        profile: truncateText(speaker.profile?.trim() || 'No saved profile for this speaker.', maxCharacters),
       });
     },
   );

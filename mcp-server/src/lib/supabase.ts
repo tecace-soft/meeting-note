@@ -41,17 +41,8 @@ export interface DataContext {
   userId?: string;
 }
 
-export type McpScope = 'notes:metadata' | 'notes:summary' | 'notes:transcript';
-
-export interface RequestAuthContext {
-  userId?: string;
-  authMethod?: 'personal-token' | 'oauth' | 'static-dev' | 'env-dev';
-  tokenId?: string;
-  scopes?: McpScope[];
-}
-
 let context: DataContext | null = null;
-const requestAuthStorage = new AsyncLocalStorage<RequestAuthContext>();
+const requestUserIdStorage = new AsyncLocalStorage<string | undefined>();
 
 export function getDataContext(): DataContext {
   if (context) return context;
@@ -66,31 +57,11 @@ export function getDataContext(): DataContext {
 }
 
 export function getScopedUserId(): string | undefined {
-  return requestAuthStorage.getStore()?.userId ?? getDataContext().userId;
-}
-
-export function getScopedAuthContext(): RequestAuthContext {
-  const userId = getScopedUserId();
-  return {
-    userId,
-    ...requestAuthStorage.getStore(),
-  };
-}
-
-export function hasMcpScope(scope: McpScope): boolean {
-  const scopes = getScopedAuthContext().scopes;
-  return !scopes || scopes.includes(scope);
+  return requestUserIdStorage.getStore() ?? getDataContext().userId;
 }
 
 export async function runWithScopedUserId<T>(userId: string | undefined, callback: () => Promise<T>): Promise<T> {
-  return runWithScopedAuthContext({ userId }, callback);
-}
-
-export async function runWithScopedAuthContext<T>(
-  authContext: RequestAuthContext,
-  callback: () => Promise<T>,
-): Promise<T> {
-  return requestAuthStorage.run(authContext, callback);
+  return requestUserIdStorage.run(userId, callback);
 }
 
 function applyUserScope<T>(query: T, userId: string | undefined): T {

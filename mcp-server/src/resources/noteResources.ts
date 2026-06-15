@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { jsonResource } from '../lib/formatters.js';
-import { fetchNote, getNoteSummary, hasMcpScope, summarizeNote } from '../lib/supabase.js';
+import { fetchNote, getNoteSummary, summarizeNote } from '../lib/supabase.js';
 
 function variableToString(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -16,9 +16,6 @@ export function registerNoteResources(server: McpServer): void {
       mimeType: 'application/json',
     },
     async (uri, variables) => {
-      if (!hasMcpScope('notes:summary')) {
-        return jsonResource(uri.href, { error: 'This MCP token does not include the notes:summary scope.' });
-      }
       const noteId = variableToString(variables.noteId);
       const note = await fetchNote(noteId);
       return jsonResource(
