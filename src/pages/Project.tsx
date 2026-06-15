@@ -32,6 +32,7 @@ import {
   normalizeTranscript,
 } from '../lib/transcriptSegments';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
+import { decryptNotesForDisplay } from '../lib/noteEncryption';
 
 interface ProjectRow {
   id: string;
@@ -54,6 +55,8 @@ interface NoteRow {
   meeting_at?: string | null;
   duration_seconds?: number | null;
   projects?: Array<string | number> | null;
+  encrypted_payload?: unknown;
+  encryption_version?: number | null;
 }
 
 function getNoteSummaryText(note: NoteRow, language: 'en' | 'ko'): string {
@@ -294,7 +297,7 @@ const Project: React.FC = () => {
           .order('created_at', { ascending: false });
 
         if (nErr) throw nErr;
-        setNotes((nData as NoteRow[]) || []);
+        setNotes(user?.id ? await decryptNotesForDisplay(user.id, ((nData as NoteRow[]) || [])) : ((nData as NoteRow[]) || []));
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'Failed to load project data.');
       } finally {
@@ -303,7 +306,7 @@ const Project: React.FC = () => {
     };
 
     void load();
-  }, [projectId, projectIdFilterValue]);
+  }, [projectId, projectIdFilterValue, user?.id]);
 
   useEffect(() => {
     setChatMessages([]);
@@ -687,7 +690,7 @@ const Project: React.FC = () => {
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
       if (error) throw error;
-      setPickerNotes((data as NoteRow[]) || []);
+      setPickerNotes(await decryptNotesForDisplay(user.id, ((data as NoteRow[]) || [])));
     } catch (err: unknown) {
       setAddNotesModalError(err instanceof Error ? err.message : 'Failed to load notes');
     } finally {

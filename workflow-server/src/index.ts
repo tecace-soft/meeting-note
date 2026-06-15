@@ -26,6 +26,7 @@ interface SummarizeAudioRequest {
   fileId?: unknown;
   speakerContext?: unknown;
   language?: unknown;
+  clientEncrypted?: unknown;
 }
 
 interface CustomSpellingRule {
@@ -176,6 +177,7 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
     instructions: typeof body.instructions === 'string' ? body.instructions : '',
     speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
     language: body.language === 'ko' ? 'ko' : 'en',
+    clientEncrypted: body.clientEncrypted === true,
   };
 }
 
@@ -236,6 +238,7 @@ interface SummarizeAudioInput {
   fileId: string | null;
   speakerContext: string;
   language: 'en' | 'ko';
+  clientEncrypted: boolean;
 }
 
 interface SummarizeAudioResult {
@@ -764,7 +767,6 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     summaryTranslations[alternateLanguage] = parsedAlternateSummary.summary;
   }
 
-  await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
   const noteName = buildNoteName({
     title: parsedSummary.title,
     tags: parsedSummary.tags,
@@ -772,21 +774,26 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     createdAt: meetingStartAt ? new Date(meetingStartAt) : undefined,
     timeZone: input.userTimeZone,
   });
-  await insertNote({
-    noteId: input.noteId,
-    userId: input.userId,
-    userName: input.userName,
-    downloadUrl: input.downloadUrl,
-    transcriptText,
-    summary: parsedSummary.summary,
-    summaryTranslations,
-    title: noteName,
-    tags: parsedSummary.tags,
-    segments,
-    meetingAt: meetingStartAt,
-    fileId: input.fileId,
-    audioDurationSeconds,
-  });
+  if (input.clientEncrypted) {
+    await updateWorkflowJob(jobId, { stage: 'waiting for encrypted save', progress: 92 });
+  } else {
+    await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
+    await insertNote({
+      noteId: input.noteId,
+      userId: input.userId,
+      userName: input.userName,
+      downloadUrl: input.downloadUrl,
+      transcriptText,
+      summary: parsedSummary.summary,
+      summaryTranslations,
+      title: noteName,
+      tags: parsedSummary.tags,
+      segments,
+      meetingAt: meetingStartAt,
+      fileId: input.fileId,
+      audioDurationSeconds,
+    });
+  }
 
   return { transcript: segments, summary: parsedSummary.summary, summaryTranslations, title: noteName, tags: parsedSummary.tags, audioDurationSeconds, meetingStartAt };
 }

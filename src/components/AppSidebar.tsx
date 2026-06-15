@@ -30,6 +30,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { normalizeTranscript } from '../lib/transcriptSegments';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
+import { decryptNotesForDisplay } from '../lib/noteEncryption';
 import { isAdminMicrosoftUser } from '../lib/adminAccess';
 import tecaceLogoNavy from '../assets/tecace-logo-navy.svg';
 import tecaceLogoWhite from '../assets/tecace-logo-white.svg';
@@ -91,6 +92,8 @@ interface SidebarNote {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+  encrypted_payload?: unknown;
+  encryption_version?: number | null;
 }
 
 function formatNoteModalDate(createdAt?: string | null): string {
@@ -313,7 +316,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           .order('created_at', { ascending: false });
 
         if (error) throw error;
-        if (!cancelled) setNotes((data as SidebarNote[]) || []);
+        const decryptedNotes = await decryptNotesForDisplay(user.id, ((data as SidebarNote[]) || []));
+        if (!cancelled) setNotes(decryptedNotes);
       } catch (err) {
         console.error('Sidebar: failed to load notes', err);
         if (!cancelled) setNotes([]);
