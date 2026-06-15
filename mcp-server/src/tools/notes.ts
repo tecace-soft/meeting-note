@@ -433,11 +433,7 @@ export function registerNoteTools(server: McpServer): void {
       const note = await fetchNote(noteId);
       if (!note) return errorResult(`Note not found: ${noteId}`);
       const summary = getNoteSummary(note);
-      return jsonResult({
-        noteId,
-        ...summarizeNote(note),
-        summary: truncateText(summary || 'No summary for this note.', clampCharacters(maxCharacters, SUMMARY_DEFAULT_CHARS, SUMMARY_MAX_CHARS)),
-      });
+      return jsonResult({ noteId, summary: truncateText(summary || 'No summary for this note.', clampCharacters(maxCharacters, SUMMARY_DEFAULT_CHARS, SUMMARY_MAX_CHARS)) });
     },
   );
 
@@ -464,11 +460,7 @@ export function registerNoteTools(server: McpServer): void {
         return jsonResult({ noteId, segments: limitedSegments, totalSegments: segments.length });
       }
       const text = getNoteTranscriptText(note) || formatTranscript(segments);
-      return jsonResult({
-        noteId,
-        ...summarizeNote(note),
-        transcript: truncateText(text || 'No transcript for this note.', clampCharacters(maxCharacters, TRANSCRIPT_DEFAULT_CHARS, TRANSCRIPT_MAX_CHARS)),
-      });
+      return jsonResult({ noteId, transcript: truncateText(text || 'No transcript for this note.', clampCharacters(maxCharacters, TRANSCRIPT_DEFAULT_CHARS, TRANSCRIPT_MAX_CHARS)) });
     },
   );
 

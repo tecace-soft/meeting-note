@@ -168,7 +168,6 @@ export function summarizeNote(note: NoteRow) {
     transcriptCharacters: transcriptText.length,
     isEncrypted: Boolean(note.encryption_version),
     decryptionAvailable: !note.decryption_error,
-    decryptionError: note.decryption_error ?? null,
   };
 }
 
