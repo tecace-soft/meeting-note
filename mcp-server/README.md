@@ -14,7 +14,7 @@ MCP_ALLOW_DEV_IDENTITY=false
 MCP_API_KEY=...          # optional local/dev static key, not a production identity source
 MCP_USER_TOKENS='{"opaque-user-token":"meeting-note-user-id"}' # optional multi-user token map
 MCP_PUBLIC_BASE_URL=https://meeting-note-mcp.onrender.com # recommended for OAuth metadata
-MCP_OAUTH_RESOURCE=api://<AZURE_APPLICATION_CLIENT_ID> # Azure JWT audience, not the protected-resource metadata URL
+MCP_OAUTH_RESOURCE=api://<AZURE_APPLICATION_CLIENT_ID>
 MCP_OAUTH_SCOPE=api://<AZURE_APPLICATION_CLIENT_ID>/access_as_user
 MCP_AZURE_TENANT_ID=<AZURE_TENANT_ID> # validates ChatGPT OAuth JWTs and reads oid as user_id
 PORT=3000               # HTTP only
@@ -95,7 +95,7 @@ api://<AZURE_APPLICATION_CLIENT_ID>/access_as_user offline_access
 In Azure, expose an API scope named `access_as_user`. The protected resource metadata must use the same Application ID URI as the scope resource:
 
 ```text
-MCP_OAUTH_RESOURCE=api://<AZURE_APPLICATION_CLIENT_ID> # Azure JWT audience, not the protected-resource metadata URL
+MCP_OAUTH_RESOURCE=api://<AZURE_APPLICATION_CLIENT_ID>
 MCP_OAUTH_SCOPE=api://<AZURE_APPLICATION_CLIENT_ID>/access_as_user
 MCP_AZURE_TENANT_ID=<AZURE_TENANT_ID>
 ```

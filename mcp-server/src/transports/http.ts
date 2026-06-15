@@ -134,7 +134,8 @@ function getRequestBaseUrl(req: IncomingMessage): string {
   return `${proto}://${host}`.replace(/\/$/, '');
 }
 
-function getProtectedResourceMetadata(baseUrl: string, scope?: string) {
+function getProtectedResourceMetadata(baseUrl: string, resource?: string, scope?: string) {
+  const resolvedResource = resource ?? `${baseUrl}/mcp-chatgpt`;
   const resolvedScope = scope ?? 'https://graph.microsoft.com/User.Read';
   const scopes = Array.from(
     new Set([
@@ -149,7 +150,7 @@ function getProtectedResourceMetadata(baseUrl: string, scope?: string) {
   );
 
   return {
-    resource: baseUrl,
+    resource: resolvedResource,
     authorization_servers: ['https://login.microsoftonline.com/common/v2.0'],
     scopes_supported: scopes,
     bearer_methods_supported: ['header'],
@@ -226,7 +227,7 @@ export async function startHttpServer(): Promise<void> {
         url.pathname === '/.well-known/oauth-protected-resource' ||
         url.pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt'
       ) {
-        sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, env.mcpOAuthScope));
+        sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, env.mcpOAuthResource, env.mcpOAuthScope));
         return;
       }
 
