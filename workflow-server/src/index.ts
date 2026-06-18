@@ -7,7 +7,7 @@ import { Agent, setGlobalDispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
-import { buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
+import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
 import { sendWorkflowAlert } from './alerts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,6 +34,14 @@ interface TranscriptionTestRequest {
   mimeType?: unknown;
   dataBase64?: unknown;
   model?: unknown;
+}
+
+interface RegenerateSummaryRequest {
+  noteId?: unknown;
+  diarization?: unknown;
+  previousSummary?: unknown;
+  speakerProfiles?: unknown;
+  instructions?: unknown;
 }
 
 type TranscriptionTestModel =
@@ -101,6 +109,7 @@ const env = {
   assemblyAiApiKey: process.env.ASSEMBLYAI_API_KEY ?? '',
   openAiApiKey: process.env.OPENAI_API_KEY ?? '',
   summaryModel: process.env.GEMINI_SUMMARY_MODEL ?? 'gemini-2.5-flash-lite',
+  regenerateSummaryModel: process.env.GEMINI_REGENERATE_SUMMARY_MODEL ?? 'gemini-3.1-flash-lite',
   transcriptionTestGeminiModel: process.env.GEMINI_TRANSCRIPTION_TEST_MODEL ?? 'gemini-2.5-flash',
   transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL ?? 'gpt-4o-transcribe',
   assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL ?? 'universal-3-pro',
@@ -263,6 +272,32 @@ function parseTranscriptionTestInput(body: TranscriptionTestRequest): {
     throw new Error('Test audio must be 75 MB or smaller for this page.');
   }
   return { fileName, mimeType, bytes, model };
+}
+
+function parseRegenerateSummaryInput(body: RegenerateSummaryRequest): {
+  noteId: string;
+  segments: TranscriptSegment[];
+  previousSummary: string;
+  speakerProfiles: unknown;
+  instructions: string;
+} {
+  const noteId = typeof body.noteId === 'string' && body.noteId.trim() ? body.noteId.trim() : '';
+  if (!noteId) throw new Error('noteId is required.');
+
+  const rawSegments = Array.isArray(body.diarization) ? body.diarization : [];
+  const segments = rawSegments
+    .filter((segment): segment is Record<string, unknown> => Boolean(segment) && typeof segment === 'object' && !Array.isArray(segment))
+    .map(normalizeTranscriptSegment)
+    .filter((segment): segment is TranscriptSegment => Boolean(segment));
+  if (segments.length === 0) throw new Error('diarization must include at least one transcript segment.');
+
+  return {
+    noteId,
+    segments,
+    previousSummary: typeof body.previousSummary === 'string' ? body.previousSummary.trim() : '',
+    speakerProfiles: body.speakerProfiles ?? [],
+    instructions: typeof body.instructions === 'string' ? body.instructions : '',
+  };
 }
 
 function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
@@ -1443,6 +1478,68 @@ async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId:
   if (row.status === 'completed') completedJobResults.delete(jobId);
 }
 
+async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  const input = parseRegenerateSummaryInput((await readBody(req, 12_000_000)) as RegenerateSummaryRequest);
+
+  const { data: noteRow, error: noteError } = await supabase
+    .from('note')
+    .select('id, user_id, shared_users')
+    .eq('id', input.noteId)
+    .maybeSingle();
+  if (noteError) throw noteError;
+  if (!noteRow) {
+    sendJson(res, 404, { error: 'Note not found.' });
+    return;
+  }
+  const note = noteRow as { user_id?: unknown; shared_users?: unknown };
+  const sharedUsers = Array.isArray(note.shared_users)
+    ? note.shared_users.map((value) => String(value))
+    : [];
+  if (note.user_id !== tokenUserId && !sharedUsers.includes(tokenUserId)) {
+    sendJson(res, 403, { error: 'You do not have access to regenerate this note.' });
+    return;
+  }
+
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+
+  const result = await callGeminiWithFallback({
+    stage: 'Summary regeneration',
+    model: env.regenerateSummaryModel,
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    responseMimeType: 'application/json',
+    maxOutputTokens: 16384,
+    parts: [{
+      text: buildRegenerateSummaryPrompt({
+        now: new Date().toISOString(),
+        instructions: input.instructions,
+        diarizedTranscript: formatTranscriptText(input.segments, 'original'),
+        previousSummary: input.previousSummary,
+        speakerProfiles: input.speakerProfiles,
+      }),
+    }],
+  });
+  const parsedSummary = parseSummary(result.text);
+
+  await recordGeminiUsage({
+    noteId: input.noteId,
+    userId: tokenUserId,
+    stage: 'summary-regeneration',
+    model: result.model,
+    inputType: 'text',
+    usageMetadata: result.usageMetadata,
+    latencyMs: result.latencyMs,
+  });
+
+  const { error: updateError } = await supabase
+    .from('note')
+    .update({ summary_edit: parsedSummary.summary })
+    .eq('id', input.noteId);
+  if (updateError) throw updateError;
+
+  sendJson(res, 200, parsedSummary);
+}
+
 async function runTranscriptionTest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== TRANSCRIPTION_MODEL_TEST_USER_ID) {
@@ -1482,6 +1579,7 @@ const server = createServer((req, res) => {
         selectedLanguageAffectsTranscription: false,
         codeSwitchingModel: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
         summaryModel: env.summaryModel,
+        regenerateSummaryModel: env.regenerateSummaryModel,
       });
       return;
     }
@@ -1491,6 +1589,10 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'POST' && req.url === '/transcription-test') {
       await runTranscriptionTest(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/regenerate-summary') {
+      await regenerateSummary(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {
