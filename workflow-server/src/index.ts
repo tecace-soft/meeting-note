@@ -5,9 +5,9 @@ import { createClient } from '@supabase/supabase-js';
 import { config as loadDotenv } from 'dotenv';
 import { Agent, setGlobalDispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
-import { callGemini, type GeminiUsageMetadata } from './gemini.js';
-import { buildNoteName, formatMeetingDateForPrompt, parseSummary, formatTranscriptText, type TranscriptSegment } from './parsers.js';
-import { buildSummaryPrompt } from './prompts.js';
+import { callGemini, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
+import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
+import { buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
 import { sendWorkflowAlert } from './alerts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,8 +25,62 @@ interface SummarizeAudioRequest {
   userTimeZone?: unknown;
   fileId?: unknown;
   speakerContext?: unknown;
+  attachments?: unknown;
   language?: unknown;
 }
+
+interface TranscriptionTestRequest {
+  fileName?: unknown;
+  mimeType?: unknown;
+  dataBase64?: unknown;
+  model?: unknown;
+}
+
+type TranscriptionTestModel =
+  | 'assembly_universal2_codeswitch'
+  | 'assembly_universal3pro_auto'
+  | 'gemini'
+  | 'openai';
+
+interface SummaryAttachmentInput {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+}
+
+const SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES = new Set([
+  'text/html',
+  'text/css',
+  'text/plain',
+  'text/xml',
+  'text/csv',
+  'text/rtf',
+  'text/javascript',
+  'application/json',
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/bmp',
+  'image/heic',
+  'image/heif',
+  'video/mp4',
+  'video/mpeg',
+  'video/quicktime',
+  'video/avi',
+  'video/x-flv',
+  'video/mpg',
+  'video/webm',
+  'video/wmv',
+  'video/3gpp',
+  'audio/wav',
+  'audio/mp3',
+  'audio/mpeg',
+  'audio/aiff',
+  'audio/aac',
+  'audio/ogg',
+  'audio/flac',
+]);
 
 interface CustomSpellingRule {
   from: string[];
@@ -45,7 +99,10 @@ const env = {
   serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
   geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
   assemblyAiApiKey: process.env.ASSEMBLYAI_API_KEY ?? '',
+  openAiApiKey: process.env.OPENAI_API_KEY ?? '',
   summaryModel: process.env.GEMINI_SUMMARY_MODEL ?? 'gemini-2.5-flash-lite',
+  transcriptionTestGeminiModel: process.env.GEMINI_TRANSCRIPTION_TEST_MODEL ?? 'gemini-2.5-flash',
+  transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL ?? 'gpt-4o-transcribe',
   assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL ?? 'universal-3-pro',
   assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD ?? '0.21'),
   frontendOrigin: process.env.APP_FRONTEND_ORIGIN ?? '*',
@@ -56,9 +113,15 @@ const env = {
 
 const ASSEMBLYAI_CODE_SWITCHING_MODELS = ['universal-2'] as const;
 const ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL = ASSEMBLYAI_CODE_SWITCHING_MODELS.join('+');
-const ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES = ['en', 'ko'] as const;
-const ASSEMBLYAI_ENGLISH_LANGUAGE_CODE = 'en';
-const ASSEMBLYAI_DEFAULT_SPEECH_MODELS = ['universal-3-pro', 'universal-2'] as const;
+const ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS = ['universal-2'] as const;
+const ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL = ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS.join('+');
+const TRANSCRIPTION_MODEL_TEST_USER_ID = 'd9eb0f3d-819e-4b45-8df6-e9f229de2447';
+const OPENAI_MULTILINGUAL_TRANSCRIPTION_PROMPT = [
+  'Transcribe the audio exactly as spoken in the original language or languages.',
+  'Preserve code-switching and mixed-language speech instead of translating everything into one language.',
+  'Use the native script for each spoken language when appropriate, but keep English words in English.',
+  'Do not infer, summarize, or normalize the conversation beyond transcription.',
+].join(' ');
 
 // Translation features are temporarily disabled to shorten processing time:
 // when false, AssemblyAI skips per-utterance translation and only one summary
@@ -76,15 +139,6 @@ const supabase = createClient(env.supabaseUrl || 'https://placeholder.supabase.c
 
 function normalizeOrigin(origin: string): string {
   return origin.trim().replace(/\/+$/, '');
-}
-
-function normalizeAssemblySpeechModels(value: string): string[] {
-  const models = value
-    .split(',')
-    .map((model) => model.trim())
-    .filter(Boolean)
-    .filter((model) => model !== 'universal');
-  return models.length > 0 ? models : [...ASSEMBLYAI_DEFAULT_SPEECH_MODELS];
 }
 
 function corsHeaders(): Record<string, string> {
@@ -113,12 +167,12 @@ function sendNoContent(res: ServerResponse): void {
   res.end();
 }
 
-function readBody(req: IncomingMessage): Promise<unknown> {
+function readBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => {
       chunks.push(chunk);
-      if (Buffer.concat(chunks).byteLength > 2_000_000) {
+      if (Buffer.concat(chunks).byteLength > maxBytes) {
         reject(new Error('Request body is too large.'));
         req.destroy();
       }
@@ -156,6 +210,61 @@ function requiredString(body: SummarizeAudioRequest, key: keyof SummarizeAudioRe
   throw new Error(`${String(key)} must be a string or number. Received ${typeof value}.`);
 }
 
+function parseSummaryAttachments(value: unknown): SummaryAttachmentInput[] {
+  if (!Array.isArray(value)) return [];
+  const attachments: SummaryAttachmentInput[] = [];
+  let totalBytes = 0;
+
+  for (const item of value.slice(0, 10)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const name = typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 240) : 'attachment';
+    const mimeType = typeof record.mimeType === 'string' && record.mimeType.trim()
+      ? record.mimeType.trim()
+      : 'application/octet-stream';
+    if (!SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES.has(mimeType)) continue;
+    const dataBase64 = typeof record.dataBase64 === 'string' ? record.dataBase64.trim() : '';
+    if (!dataBase64 || !/^[A-Za-z0-9+/=]+$/.test(dataBase64)) continue;
+    const estimatedBytes = Math.floor((dataBase64.length * 3) / 4);
+    totalBytes += estimatedBytes;
+    if (estimatedBytes > 25 * 1024 * 1024 || totalBytes > 50 * 1024 * 1024) break;
+    attachments.push({ name, mimeType, dataBase64 });
+  }
+
+  return attachments;
+}
+
+function parseTranscriptionTestInput(body: TranscriptionTestRequest): {
+  fileName: string;
+  mimeType: string;
+  bytes: Uint8Array;
+  model: TranscriptionTestModel;
+} {
+  const fileName = typeof body.fileName === 'string' && body.fileName.trim()
+    ? body.fileName.trim().slice(0, 240)
+    : 'audio-test';
+  const mimeType = typeof body.mimeType === 'string' && body.mimeType.trim()
+    ? body.mimeType.trim()
+    : 'application/octet-stream';
+  const dataBase64 = typeof body.dataBase64 === 'string' ? body.dataBase64.trim() : '';
+  if (!dataBase64 || !/^[A-Za-z0-9+/=]+$/.test(dataBase64)) {
+    throw new Error('dataBase64 is required.');
+  }
+  const model = body.model === 'assembly_universal2_codeswitch' ||
+    body.model === 'assembly_universal3pro_auto' ||
+    body.model === 'gemini' ||
+    body.model === 'openai'
+    ? body.model
+    : null;
+  if (!model) throw new Error('model is required.');
+  const bytes = Uint8Array.from(Buffer.from(dataBase64, 'base64'));
+  if (bytes.byteLength === 0) throw new Error('Audio file is empty.');
+  if (bytes.byteLength > 75 * 1024 * 1024) {
+    throw new Error('Test audio must be 75 MB or smaller for this page.');
+  }
+  return { fileName, mimeType, bytes, model };
+}
+
 function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
   const meetingAt = typeof body.meetingAt === 'string' && body.meetingAt.trim()
     ? new Date(body.meetingAt)
@@ -175,6 +284,7 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
     fileId: typeof body.fileId === 'string' && body.fileId.trim() ? body.fileId.trim() : null,
     instructions: typeof body.instructions === 'string' ? body.instructions : '',
     speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
+    attachments: parseSummaryAttachments(body.attachments),
     language: body.language === 'ko' ? 'ko' : 'en',
   };
 }
@@ -216,6 +326,20 @@ function fetchErrorMessage(stage: string, error: unknown): string {
   return `${stage} failed: ${message}.${causeMessage}`;
 }
 
+function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase().replace('_', '-');
+  if (normalized === 'en' || normalized.startsWith('en-')) return 'en';
+  if (normalized === 'ko' || normalized.startsWith('ko-')) return 'ko';
+  return null;
+}
+
+function getOppositeTranscriptLanguage(language: 'en' | 'ko' | null): 'en' | 'ko' | null {
+  if (language === 'en') return 'ko';
+  if (language === 'ko') return 'en';
+  return null;
+}
+
 interface GeminiWorkflowCallResult {
   text: string;
   model: string;
@@ -235,6 +359,7 @@ interface SummarizeAudioInput {
   userTimeZone: string | null;
   fileId: string | null;
   speakerContext: string;
+  attachments: SummaryAttachmentInput[];
   language: 'en' | 'ko';
 }
 
@@ -242,6 +367,9 @@ interface SummarizeAudioResult {
   transcript: TranscriptSegment[];
   summary: string;
   summaryTranslations?: Record<'en' | 'ko', string>;
+  transcriptionLanguage?: 'en' | 'ko' | null;
+  transcriptionTranslations?: Partial<Record<'en' | 'ko', string>>;
+  diarizationTranslations?: Partial<Record<'en' | 'ko', TranscriptSegment[]>>;
   title: string;
   tags: string[];
   audioDurationSeconds: number | null;
@@ -383,6 +511,42 @@ async function loadTranscriptionSettings(): Promise<TranscriptionSettings> {
   };
 }
 
+async function buildGeminiAttachmentParts(attachments: SummaryAttachmentInput[]): Promise<Parameters<typeof callGemini>[0]['parts']> {
+  if (attachments.length === 0) return [];
+
+  const uploaded = [];
+  for (const attachment of attachments) {
+    const bytes = Uint8Array.from(Buffer.from(attachment.dataBase64, 'base64'));
+    if (bytes.byteLength === 0) continue;
+    uploaded.push(await uploadGeminiFile({
+      apiKey: env.geminiApiKey,
+      displayName: attachment.name,
+      mimeType: attachment.mimeType,
+      bytes,
+    }));
+  }
+
+  if (uploaded.length === 0) return [];
+
+  return [
+    {
+      text: `ATTACHED FILE CONTEXT
+The user attached ${uploaded.length} file${uploaded.length === 1 ? '' : 's'} from the meeting. Use these files as supporting context only.
+- Extract visible or readable content from attached PDFs, text/CSV/JSON/HTML files, images, audio, and video when relevant to the transcript.
+- Do not invent decisions, dates, participants, or action items from attachments unless they are explicitly visible/readable in a file or supported by the transcript.
+- If attachment content clarifies a transcript topic, incorporate it naturally into the summary.
+- If an attachment is unreadable or irrelevant, ignore it.
+`,
+    },
+    ...uploaded.map((file) => ({
+      fileData: {
+        mimeType: file.mimeType,
+        fileUri: file.fileUri,
+      },
+    })),
+  ];
+}
+
 async function recordGeminiUsage(input: {
   noteId: string;
   userId: string;
@@ -456,17 +620,22 @@ async function insertNote(input: {
   userName: string;
   downloadUrl: string;
   transcriptText: string;
+  transcriptionLanguage: 'en' | 'ko' | null;
+  transcriptionTranslations: Partial<Record<'en' | 'ko', string>>;
   summary: string;
   summaryTranslations: Record<'en' | 'ko', string>;
   title: string;
   tags: string[];
   segments: TranscriptSegment[];
+  diarizationTranslations: Partial<Record<'en' | 'ko', TranscriptSegment[]>>;
   meetingAt: string | null;
   fileId: string | null;
   audioDurationSeconds: number | null;
 }): Promise<void> {
   const notePayload = {
     transcription: input.transcriptText,
+    transcription_language: input.transcriptionLanguage,
+    transcription_translations: input.transcriptionTranslations,
     summary: input.summary,
     summary_translations: input.summaryTranslations,
     user_id: input.userId,
@@ -476,11 +645,31 @@ async function insertNote(input: {
     name: input.title,
     tags: input.tags,
     diarization: input.segments,
+    diarization_translations: input.diarizationTranslations,
     meeting_at: input.meetingAt,
     audio_file_id: input.fileId,
     duration_seconds: input.audioDurationSeconds,
   };
   const { error } = await supabase.from('note').insert(notePayload);
+  if (
+    error?.code === 'PGRST204' &&
+    (
+      error.message.includes("'transcription_language'") ||
+      error.message.includes("'transcription_translations'") ||
+      error.message.includes("'diarization_translations'")
+    )
+  ) {
+    const {
+      transcription_language: _transcriptionLanguage,
+      transcription_translations: _transcriptionTranslations,
+      diarization_translations: _diarizationTranslations,
+      ...payloadWithoutTranslations
+    } = notePayload;
+    const { error: retryError } = await supabase.from('note').insert(payloadWithoutTranslations);
+    if (retryError) throw retryError;
+    console.warn('Inserted note without transcript translation columns because the PostgREST schema cache is missing them.');
+    return;
+  }
   if (error?.code === 'PGRST204' && error.message.includes("'duration_seconds'")) {
     const { duration_seconds: _durationSeconds, ...payloadWithoutDuration } = notePayload;
     const { error: retryError } = await supabase.from('note').insert(payloadWithoutDuration);
@@ -496,36 +685,14 @@ async function transcribeWithAssembly(input: {
   noteId: string;
   userId: string;
   settings: TranscriptionSettings;
-  language: 'en' | 'ko';
-}): Promise<{ segments: TranscriptSegment[]; latencyMs: number; audioDurationSeconds: number | null }> {
+}): Promise<{ segments: TranscriptSegment[]; latencyMs: number; audioDurationSeconds: number | null; detectedLanguage: 'en' | 'ko' | null }> {
   if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
   const startedAt = performance.now();
-  const useCodeSwitching = input.language === 'ko';
-  const speechModels = normalizeAssemblySpeechModels(input.settings.speechModel || env.assemblyAiSpeechModel);
-  const transcriptionModelLabel = useCodeSwitching
-    ? ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL
-    : speechModels.join('+');
   const submitBody: Record<string, unknown> = {
     audio_url: input.downloadUrl,
     speaker_labels: true,
+    speech_models: [...ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS],
   };
-  if (useCodeSwitching) {
-    submitBody.speech_models = [...ASSEMBLYAI_CODE_SWITCHING_MODELS];
-    submitBody.language_codes = [...ASSEMBLYAI_CODE_SWITCHING_LANGUAGE_CODES];
-  } else {
-    submitBody.speech_models = speechModels;
-    submitBody.language_code = ASSEMBLYAI_ENGLISH_LANGUAGE_CODE;
-  }
-  if (TRANSLATION_ENABLED) {
-    submitBody.speech_understanding = {
-      request: {
-        translation: {
-          target_languages: [input.language],
-          match_original_utterance: true,
-        },
-      },
-    };
-  }
   if (input.settings.keytermsPrompt.length > 0) {
     submitBody.keyterms_prompt = input.settings.keytermsPrompt;
   }
@@ -534,12 +701,10 @@ async function transcribeWithAssembly(input: {
   }
   console.log('AssemblyAI transcript submit config:', JSON.stringify({
     speech_models: submitBody.speech_models,
-    language_code: submitBody.language_code,
-    language_codes: submitBody.language_codes,
-    language_detection: submitBody.language_detection,
-    language_detection_options: submitBody.language_detection_options,
-    translationTargets: [input.language],
-    translationMatchOriginalUtterance: true,
+    languageSettings: 'none',
+    selectedLanguageAffectsTranscription: false,
+    translationTargets: [],
+    translationMatchOriginalUtterance: false,
     hasKeytermsPrompt: Array.isArray(submitBody.keyterms_prompt) && submitBody.keyterms_prompt.length > 0,
     customSpellingCount: Array.isArray(submitBody.custom_spelling) ? submitBody.custom_spelling.length : 0,
   }));
@@ -637,12 +802,365 @@ async function transcribeWithAssembly(input: {
   await recordAssemblyUsage({
     noteId: input.noteId,
     userId: input.userId,
-    model: transcriptionModelLabel,
+    model: ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL,
     latencyMs,
     transcriptId: created.id.trim(),
     audioDurationSeconds: audioDurationSeconds ?? 0,
   });
-  return { segments, latencyMs, audioDurationSeconds };
+  return { segments, latencyMs, audioDurationSeconds, detectedLanguage: normalizeDetectedTranscriptLanguage(transcript.language_code) };
+}
+
+async function uploadAssemblyAudio(bytes: Uint8Array): Promise<string> {
+  const response = await fetch('https://api.assemblyai.com/v2/upload', {
+    method: 'POST',
+    headers: { Authorization: env.assemblyAiApiKey },
+    body: bytes as unknown as BodyInit,
+  });
+  const raw = await response.text();
+  let parsed: { upload_url?: unknown };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    throw new Error(`AssemblyAI upload returned invalid JSON (${response.status}): ${raw.slice(0, 500)}`);
+  }
+  if (!response.ok || typeof parsed.upload_url !== 'string') {
+    throw new Error(`AssemblyAI upload failed (${response.status}): ${raw.slice(0, 800)}`);
+  }
+  return parsed.upload_url;
+}
+
+async function transcribeAssemblyForTest(input: {
+  bytes: Uint8Array;
+  model: Extract<TranscriptionTestModel, 'assembly_universal2_codeswitch' | 'assembly_universal3pro_auto'>;
+}): Promise<{ text: string; segments: TranscriptSegment[]; raw: unknown; config: Record<string, unknown>; latencyMs: number }> {
+  if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
+  const startedAt = performance.now();
+  const audioUrl = await uploadAssemblyAudio(input.bytes);
+  const config = input.model === 'assembly_universal2_codeswitch'
+    ? {
+        audio_url: audioUrl,
+        speaker_labels: true,
+        speech_models: ['universal-2'],
+      }
+    : {
+        audio_url: audioUrl,
+        speaker_labels: true,
+        speech_models: ['universal-3-pro'],
+      };
+
+  const createResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
+    method: 'POST',
+    headers: {
+      Authorization: env.assemblyAiApiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(config),
+  });
+  const createRaw = await createResponse.text();
+  let created: { id?: unknown };
+  try {
+    created = JSON.parse(createRaw) as typeof created;
+  } catch {
+    throw new Error(`AssemblyAI transcript submit returned invalid JSON (${createResponse.status}): ${createRaw.slice(0, 500)}`);
+  }
+  if (!createResponse.ok || typeof created.id !== 'string') {
+    throw new Error(`AssemblyAI transcript submit failed (${createResponse.status}): ${createRaw.slice(0, 800)}`);
+  }
+
+  let transcript: Record<string, unknown> = {};
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await delay(2500);
+    const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(created.id)}`, {
+      headers: { Authorization: env.assemblyAiApiKey },
+    });
+    const pollRaw = await pollResponse.text();
+    if (!pollResponse.ok) throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+    transcript = JSON.parse(pollRaw) as Record<string, unknown>;
+    if (transcript.status === 'completed') break;
+    if (transcript.status === 'error') throw new Error(typeof transcript.error === 'string' ? transcript.error : 'AssemblyAI transcription failed.');
+  }
+  if (transcript.status !== 'completed') throw new Error('AssemblyAI transcription timed out.');
+
+  const utterances = Array.isArray(transcript.utterances) ? transcript.utterances : [];
+  const segments = utterances.length > 0
+    ? utterances.map((utterance) => {
+        const record = utterance && typeof utterance === 'object' && !Array.isArray(utterance) ? utterance as Record<string, unknown> : {};
+        const label = typeof record.speaker === 'string' || typeof record.speaker === 'number' ? String(record.speaker) : '?';
+        return {
+          speaker: `Speaker ${label}`,
+          text: typeof record.text === 'string' ? record.text.trim() : '',
+          start: typeof record.start === 'number' ? record.start / 1000 : undefined,
+          end: typeof record.end === 'number' ? record.end / 1000 : undefined,
+        };
+      }).filter((segment) => segment.text)
+    : [{
+        speaker: 'Unknown Speaker',
+        text: typeof transcript.text === 'string' ? transcript.text.trim() : '',
+      }].filter((segment) => segment.text);
+
+  return {
+    text: typeof transcript.text === 'string' ? transcript.text.trim() : formatTranscriptText(segments),
+    segments,
+    raw: transcript,
+    config: {
+      ...config,
+      audio_url: '<assemblyai-upload-url>',
+      detected_language: transcript.language_code ?? null,
+    },
+    latencyMs: Math.round(performance.now() - startedAt),
+  };
+}
+
+function normalizeTranscriptSegment(segment: Record<string, unknown>): TranscriptSegment | null {
+  const text = typeof segment.text === 'string' ? segment.text.trim() : '';
+  if (!text) return null;
+  const speaker = typeof segment.speaker === 'string' && segment.speaker.trim()
+    ? segment.speaker.trim()
+    : 'Unknown Speaker';
+  const start = typeof segment.start === 'number' && Number.isFinite(segment.start) ? segment.start : undefined;
+  const end = typeof segment.end === 'number' && Number.isFinite(segment.end) ? segment.end : undefined;
+  return {
+    speaker,
+    text,
+    ...(start !== undefined ? { start } : {}),
+    ...(end !== undefined ? { end } : {}),
+  };
+}
+
+function recoverCompleteDiarizedSegments(raw: string): TranscriptSegment[] {
+  const stripped = stripJsonCodeFences(raw);
+  const segmentsKeyIndex = stripped.indexOf('"segments"');
+  const arrayStart = stripped.indexOf('[', segmentsKeyIndex >= 0 ? segmentsKeyIndex : 0);
+  if (arrayStart < 0) return [];
+
+  const recovered: TranscriptSegment[] = [];
+  let objectStart = -1;
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = arrayStart + 1; index < stripped.length; index += 1) {
+    const char = stripped[index];
+
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === '\\') {
+        escaping = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') {
+      if (depth === 0) objectStart = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === '}') {
+      if (depth === 0) continue;
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        const objectText = stripped.slice(objectStart, index + 1);
+        try {
+          const parsed = JSON.parse(objectText) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const segment = normalizeTranscriptSegment(parsed as Record<string, unknown>);
+            if (segment) recovered.push(segment);
+          }
+        } catch {
+          // Ignore malformed objects and keep scanning for the next complete one.
+        }
+        objectStart = -1;
+      }
+    }
+  }
+
+  return recovered;
+}
+
+function parseDiarizedSegmentsWithRecovery(raw: string): { segments: TranscriptSegment[]; recovered: boolean } {
+  try {
+    return { segments: parseDiarizedSegments(raw), recovered: false };
+  } catch (error) {
+    const recovered = recoverCompleteDiarizedSegments(raw);
+    if (recovered.length > 0) return { segments: recovered, recovered: true };
+    throw error;
+  }
+}
+
+async function translateTranscriptSegments(input: {
+  segments: TranscriptSegment[];
+  targetLanguage: 'en' | 'ko';
+  noteId: string;
+  userId: string;
+}): Promise<TranscriptSegment[]> {
+  const result = await callGeminiWithFallback({
+    stage: `Transcript translation (${input.targetLanguage})`,
+    model: env.summaryModel,
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    responseMimeType: 'application/json',
+    maxOutputTokens: 32768,
+    parts: [{
+      text: buildTranscriptTranslationPrompt({
+        targetLanguage: input.targetLanguage,
+        segments: input.segments.map((segment) => ({
+          speaker: segment.speaker,
+          text: segment.text,
+          ...(segment.start !== undefined ? { start: segment.start } : {}),
+          ...(segment.end !== undefined ? { end: segment.end } : {}),
+        })),
+      }),
+    }],
+  });
+  const parsed = parseDiarizedSegmentsWithRecovery(result.text);
+  await recordGeminiUsage({
+    noteId: input.noteId,
+    userId: input.userId,
+    stage: `transcript-translation-${input.targetLanguage}`,
+    model: result.model,
+    inputType: 'text',
+    usageMetadata: result.usageMetadata,
+    latencyMs: result.latencyMs,
+  });
+  return parsed.segments;
+}
+
+async function transcribeGeminiForTest(input: {
+  bytes: Uint8Array;
+  fileName: string;
+  mimeType: string;
+}): Promise<{ text: string; segments: TranscriptSegment[]; raw: unknown; config: Record<string, unknown>; latencyMs: number }> {
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+  const startedAt = performance.now();
+  const file = await uploadGeminiFile({
+    apiKey: env.geminiApiKey,
+    displayName: input.fileName,
+    mimeType: input.mimeType,
+    bytes: input.bytes,
+  });
+  const result = await callGeminiWithFallback({
+    stage: 'Transcription test',
+    model: env.transcriptionTestGeminiModel,
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+    responseMimeType: 'application/json',
+    maxOutputTokens: 16384,
+    parts: [
+      {
+        text: `Transcribe this meeting audio for language capability testing.
+Preserve the original spoken language exactly, including code-switching between Korean and English.
+Identify speakers if possible. If speaker identity is uncertain, use Speaker 1, Speaker 2, etc.
+Return only JSON:
+{
+  "segments": [
+    {
+      "speaker": "Speaker 1",
+      "text": "verbatim transcript text",
+      "start": 0,
+      "end": 1.2
+    }
+  ]
+}`,
+      },
+      {
+        fileData: {
+          mimeType: file.mimeType,
+          fileUri: file.fileUri,
+        },
+      },
+    ],
+  });
+  let segments: TranscriptSegment[];
+  let repairedText: string | null = null;
+  let parseMode = 'strict-json';
+  try {
+    const parsed = parseDiarizedSegmentsWithRecovery(result.text);
+    segments = parsed.segments;
+    parseMode = parsed.recovered ? 'recovered-original-json' : 'strict-json';
+  } catch (originalParseError) {
+    try {
+      const repair = await callGeminiWithFallback({
+        stage: 'Transcription test JSON repair',
+        model: env.transcriptionTestGeminiModel,
+        fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+        responseMimeType: 'application/json',
+        maxOutputTokens: 16384,
+        parts: [{ text: buildTranscriptRepairPrompt(result.text) }],
+      });
+      repairedText = repair.text;
+      const parsedRepair = parseDiarizedSegmentsWithRecovery(repair.text);
+      segments = parsedRepair.segments;
+      parseMode = parsedRepair.recovered ? 'recovered-repair-json' : 'repaired-json';
+    } catch (repairParseError) {
+      const originalMessage = originalParseError instanceof Error ? originalParseError.message : String(originalParseError);
+      const repairMessage = repairParseError instanceof Error ? repairParseError.message : String(repairParseError);
+      throw new Error(`Gemini returned malformed transcript JSON and recovery failed. Original parse: ${originalMessage}. Repair parse: ${repairMessage}`);
+    }
+  }
+  return {
+    text: formatTranscriptText(segments),
+    segments,
+    raw: { text: result.text, repairedText, parseMode, usageMetadata: result.usageMetadata },
+    config: { model: result.model, mimeType: file.mimeType, parseMode },
+    latencyMs: Math.round(performance.now() - startedAt),
+  };
+}
+
+async function transcribeOpenAiForTest(input: {
+  bytes: Uint8Array;
+  fileName: string;
+  mimeType: string;
+}): Promise<{ text: string; segments: TranscriptSegment[]; raw: unknown; config: Record<string, unknown>; latencyMs: number }> {
+  if (!env.openAiApiKey) throw new Error('OPENAI_API_KEY is missing.');
+  const startedAt = performance.now();
+  const form = new FormData();
+  form.append('model', env.transcriptionTestOpenAiModel);
+  const fileBytes = new Uint8Array(input.bytes);
+  form.append('file', new Blob([fileBytes.buffer], { type: input.mimeType }), input.fileName);
+  form.append('response_format', 'json');
+  const supportsPrompt = !env.transcriptionTestOpenAiModel.includes('diarize');
+  if (supportsPrompt) {
+    form.append('prompt', OPENAI_MULTILINGUAL_TRANSCRIPTION_PROMPT);
+  }
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.openAiApiKey}` },
+    body: form,
+  });
+  const rawText = await response.text();
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(rawText) as Record<string, unknown>;
+  } catch {
+    throw new Error(`OpenAI transcription returned invalid JSON (${response.status}): ${rawText.slice(0, 500)}`);
+  }
+  if (!response.ok) {
+    const errorMessage = raw.error && typeof raw.error === 'object' && !Array.isArray(raw.error)
+      ? (raw.error as { message?: unknown }).message
+      : null;
+    throw new Error(`OpenAI transcription failed (${response.status}): ${typeof errorMessage === 'string' ? errorMessage : rawText.slice(0, 800)}`);
+  }
+  const text = typeof raw.text === 'string' ? raw.text.trim() : '';
+  const segments = text ? [{ speaker: 'Transcript', text }] : [];
+  return {
+    text,
+    segments,
+    raw,
+    config: {
+      model: env.transcriptionTestOpenAiModel,
+      response_format: 'json',
+      language_mode: 'auto multilingual/code-switching',
+      prompt: supportsPrompt ? OPENAI_MULTILINGUAL_TRANSCRIPTION_PROMPT : 'not sent; diarization model does not support prompts',
+    },
+    latencyMs: Math.round(performance.now() - startedAt),
+  };
 }
 
 async function updateWorkflowJob(jobId: string | null, patch: {
@@ -668,22 +1186,45 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   await updateWorkflowJob(jobId, { status: 'processing', stage: 'loading inputs', progress: 10 });
   const summaryRules = await loadSummaryPrompt(input.promptId, input.userId);
   const transcriptionSettings = await loadTranscriptionSettings();
-  console.log(`Processing audio ${input.fileName} with AssemblyAI ${input.language === 'ko' ? `Korean-English code switching models ${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}` : `English models ${normalizeAssemblySpeechModels(transcriptionSettings.speechModel || env.assemblyAiSpeechModel).join('+')}`}`);
+  console.log(`Processing audio ${input.fileName} with AssemblyAI ${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL} and no explicit language settings. Selected summary language: ${input.language}`);
 
   await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
-  const { segments, audioDurationSeconds } = await transcribeWithAssembly({
+  const { segments, audioDurationSeconds, detectedLanguage } = await transcribeWithAssembly({
     downloadUrl: input.downloadUrl,
     noteId: input.noteId,
     userId: input.userId,
     settings: transcriptionSettings,
-    language: input.language,
   });
   if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
   const transcriptText = formatTranscriptText(segments, 'original');
+  const translationLanguage = getOppositeTranscriptLanguage(detectedLanguage);
+  const diarizationTranslations: Partial<Record<'en' | 'ko', TranscriptSegment[]>> = {};
+  const transcriptionTranslations: Partial<Record<'en' | 'ko', string>> = {};
+  if (translationLanguage) {
+    await updateWorkflowJob(jobId, {
+      stage: `translating transcript to ${translationLanguage === 'ko' ? 'Korean' : 'English'}`,
+      progress: 58,
+    });
+    try {
+      const translatedSegments = await translateTranscriptSegments({
+        segments,
+        targetLanguage: translationLanguage,
+        noteId: input.noteId,
+        userId: input.userId,
+      });
+      if (translatedSegments.length > 0) {
+        diarizationTranslations[translationLanguage] = translatedSegments;
+        transcriptionTranslations[translationLanguage] = formatTranscriptText(translatedSegments, 'original');
+      }
+    } catch (translationError) {
+      console.warn(`Transcript translation to ${translationLanguage} failed:`, translationError);
+    }
+  }
   const meetingStartAt = inferMeetingStartAt(input.meetingAt, audioDurationSeconds);
   const meetingDateForPrompt = meetingStartAt
     ? formatMeetingDateForPrompt(new Date(meetingStartAt), input.userTimeZone)
     : null;
+  const attachmentParts = await buildGeminiAttachmentParts(input.attachments);
 
   await updateWorkflowJob(jobId, { stage: 'generating summary', progress: 75 });
   const summaryRaw = await callGeminiWithFallback({
@@ -706,6 +1247,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
           outputLanguage: input.language,
         }),
       },
+      ...attachmentParts,
     ],
   });
   await recordGeminiUsage({
@@ -749,6 +1291,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
             outputLanguage: alternateLanguage,
           }),
         },
+        ...attachmentParts,
       ],
     });
     await recordGeminiUsage({
@@ -778,21 +1321,35 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     userName: input.userName,
     downloadUrl: input.downloadUrl,
     transcriptText,
+    transcriptionLanguage: detectedLanguage,
+    transcriptionTranslations,
     summary: parsedSummary.summary,
     summaryTranslations,
     title: noteName,
     tags: parsedSummary.tags,
     segments,
+    diarizationTranslations,
     meetingAt: meetingStartAt,
     fileId: input.fileId,
     audioDurationSeconds,
   });
 
-  return { transcript: segments, summary: parsedSummary.summary, summaryTranslations, title: noteName, tags: parsedSummary.tags, audioDurationSeconds, meetingStartAt };
+  return {
+    transcript: segments,
+    summary: parsedSummary.summary,
+    summaryTranslations,
+    transcriptionLanguage: detectedLanguage,
+    transcriptionTranslations,
+    diarizationTranslations,
+    title: noteName,
+    tags: parsedSummary.tags,
+    audioDurationSeconds,
+    meetingStartAt,
+  };
 }
 
 async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const input = parseSummarizeInput((await readBody(req)) as SummarizeAudioRequest);
+  const input = parseSummarizeInput((await readBody(req, 110_000_000)) as SummarizeAudioRequest);
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
 
@@ -801,7 +1358,7 @@ async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promis
 }
 
 async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const input = parseSummarizeInput((await readBody(req)) as SummarizeAudioRequest);
+  const input = parseSummarizeInput((await readBody(req, 110_000_000)) as SummarizeAudioRequest);
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
 
@@ -886,6 +1443,28 @@ async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId:
   if (row.status === 'completed') completedJobResults.delete(jobId);
 }
 
+async function runTranscriptionTest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  if (tokenUserId !== TRANSCRIPTION_MODEL_TEST_USER_ID) {
+    sendJson(res, 403, { error: 'Transcription model testing is not available for this user.' });
+    return;
+  }
+  const input = parseTranscriptionTestInput((await readBody(req, 110_000_000)) as TranscriptionTestRequest);
+  const result = input.model === 'assembly_universal2_codeswitch' || input.model === 'assembly_universal3pro_auto'
+    ? await transcribeAssemblyForTest({ bytes: input.bytes, model: input.model })
+    : input.model === 'gemini'
+      ? await transcribeGeminiForTest({ bytes: input.bytes, fileName: input.fileName, mimeType: input.mimeType })
+      : await transcribeOpenAiForTest({ bytes: input.bytes, fileName: input.fileName, mimeType: input.mimeType });
+
+  sendJson(res, 200, {
+    model: input.model,
+    fileName: input.fileName,
+    mimeType: input.mimeType,
+    sizeBytes: input.bytes.byteLength,
+    ...result,
+  });
+}
+
 const server = createServer((req, res) => {
   void (async () => {
     if (req.method === 'OPTIONS') {
@@ -898,8 +1477,9 @@ const server = createServer((req, res) => {
         ok: true,
         service: 'meeting-note-workflow-server',
         transcriptionProvider: 'assemblyai',
-        transcriptionModel: env.assemblyAiSpeechModel,
-        transcriptionLanguageMode: 'english-default; ko-en-code-switching-when-korean-summary-requested',
+        transcriptionModel: ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL,
+        transcriptionLanguageMode: 'no explicit AssemblyAI language settings',
+        selectedLanguageAffectsTranscription: false,
         codeSwitchingModel: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
         summaryModel: env.summaryModel,
       });
@@ -907,6 +1487,10 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'POST' && req.url === '/summarize-audio') {
       await summarizeAudio(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/transcription-test') {
+      await runTranscriptionTest(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {
@@ -955,5 +1539,5 @@ process.on('uncaughtException', (error) => {
 
 server.listen(env.port, () => {
   console.log(`Meeting Note workflow server listening on :${env.port}`);
-  console.log(`Workflow env: transcription=assemblyai:${env.assemblyAiSpeechModel}:english-default/${ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL}:ko-en-code-switching, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
+  console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
 });

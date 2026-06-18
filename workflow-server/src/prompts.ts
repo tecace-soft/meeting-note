@@ -193,3 +193,34 @@ Malformed input:
 ${rawOutput.slice(0, 120000)}
 '''`;
 }
+
+export function buildTranscriptTranslationPrompt(input: {
+  targetLanguage: 'en' | 'ko';
+  segments: Array<{ speaker: string; text: string; start?: number; end?: number }>;
+}): string {
+  const targetLanguageName = input.targetLanguage === 'ko' ? 'Korean' : 'English';
+  return `Translate this diarized meeting transcript into ${targetLanguageName}.
+
+Return ONLY valid JSON in this exact schema:
+{
+  "segments": [
+    {
+      "speaker": "Speaker 1",
+      "text": "translated utterance",
+      "start": 0,
+      "end": 1.2
+    }
+  ]
+}
+
+Rules:
+- Translate every segment's text into ${targetLanguageName}.
+- Preserve the exact same segment count, order, speaker labels, start times, and end times.
+- Do not summarize, merge, split, omit, or add transcript content.
+- Preserve proper nouns, product names, acronyms, code identifiers, and company names unless there is a standard translation.
+- Keep bracketed uncertainty and non-speech markers like [unclear], [laughter], and [crosstalk].
+- Do not include markdown code fences.
+
+Source diarized transcript JSON:
+${JSON.stringify({ segments: input.segments }).slice(0, 180000)}`;
+}

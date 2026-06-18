@@ -138,11 +138,10 @@ export async function uploadGeminiFile(input: {
     uploadResponse = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
-        'Content-Length': String(input.bytes.byteLength),
         'X-Goog-Upload-Offset': '0',
         'X-Goog-Upload-Command': 'upload, finalize',
       },
-      body: input.bytes as unknown as BodyInit,
+      body: Buffer.from(input.bytes),
     });
   } catch (error) {
     throw new Error(fetchErrorMessage('Gemini file upload finalize', error));
@@ -187,7 +186,6 @@ export async function uploadGeminiFileStream(input: {
     uploadResponse = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
-        'Content-Length': String(input.contentLength),
         'X-Goog-Upload-Offset': '0',
         'X-Goog-Upload-Command': 'upload, finalize',
       },
