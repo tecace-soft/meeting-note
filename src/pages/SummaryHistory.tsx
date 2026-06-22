@@ -42,12 +42,25 @@ import {
   getSegmentText,
   hasUsableDiarization,
   normalizeTranscript,
+  persistNoteDiarization,
+  type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
+import {
+  getAvailableTranscriptLanguages,
+  getDisplayTranscriptSegments,
+  getDisplayTranscriptText,
+  getTranscriptLanguageLabel,
+  updateTranslationMap,
+} from '../lib/transcriptTranslationDisplay';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
+import { getNoteImageCounts } from '../lib/noteImages';
 import { getOutlookCalendarEvents, getTeamsChats, sendChatMessage, type OutlookCalendarEvent, type TeamsChat } from '../services/graphService';
 import ShareNoteModal from '../components/ShareNoteModal';
+import NoteImageAttachments from '../components/NoteImageAttachments';
+
+const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
 
 interface Note {
   id: string;
@@ -60,7 +73,10 @@ interface Note {
   summary_edit?: string | null;
   summary_translations?: Record<string, string> | null;
   transcription?: string | null;
+  transcription_language?: string | null;
+  transcription_translations?: Record<string, string> | null;
   diarization?: unknown;
+  diarization_translations?: Partial<Record<'en' | 'ko', TranscriptSegment[]>> | null;
   audio_file?: string | null;
   audio_file_id?: string | null;
   shared_users?: unknown;
@@ -158,6 +174,7 @@ type HistoryViewMode = 'list' | 'calendar';
 type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
 type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
 type NoteSortKey = 'meeting_desc' | 'meeting_asc' | 'created_desc' | 'created_asc' | 'title_asc' | 'title_desc';
+type NoteDetailTab = 'summary' | 'transcription' | 'images';
 
 interface SegmentPlaybackState {
   noteId: string;
@@ -424,7 +441,7 @@ const SummaryHistory: React.FC = () => {
   const chatId = searchParams.get('chat_id');
   
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
-  const { appLanguage, transcriptLanguage, t } = useLanguage();
+  const { appLanguage, t } = useLanguage();
   
   const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null);
   const [chatLoading, setChatLoading] = useState(true);
@@ -465,6 +482,9 @@ const SummaryHistory: React.FC = () => {
   const [noteMenuPos, setNoteMenuPos] = useState<{ top: number; right: number } | null>(null);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renameNoteDraft, setRenameNoteDraft] = useState('');
+  const detailTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const [editingDetailTitleNoteId, setEditingDetailTitleNoteId] = useState<string | null>(null);
+  const [detailTitleDraft, setDetailTitleDraft] = useState('');
   const [deleteNoteTarget, setDeleteNoteTarget] = useState<Note | null>(null);
   const [isDeleteNoteOpen, setIsDeleteNoteOpen] = useState(false);
   const [deletingNote, setDeletingNote] = useState(false);
@@ -477,8 +497,10 @@ const SummaryHistory: React.FC = () => {
   const [addToProjectError, setAddToProjectError] = useState<string | null>(null);
 
   // Per-note expanded tab state
-  const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, 'summary' | 'transcription'>>({});
+  const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, NoteDetailTab>>({});
+  const [noteImageCounts, setNoteImageCounts] = useState<Record<string, number>>({});
   const [noteSpeakerFilters, setNoteSpeakerFilters] = useState<Record<string, string[]>>({});
+  const [noteTranscriptLanguage, setNoteTranscriptLanguage] = useState<Record<string, TranscriptLanguage>>({});
 
   // Forward to Teams state
   const [forwardModalNoteId, setForwardModalNoteId] = useState<string | null>(null);
@@ -768,6 +790,41 @@ const SummaryHistory: React.FC = () => {
     return 'Untitled note';
   };
 
+  const startDetailTitleEdit = (note: Note, selectAll = false) => {
+    setEditingDetailTitleNoteId(note.id);
+    setDetailTitleDraft(getNoteDisplayTitle(note));
+    window.requestAnimationFrame(() => {
+      detailTitleInputRef.current?.focus();
+      if (selectAll) detailTitleInputRef.current?.select();
+    });
+  };
+
+  const saveDetailTitleEdit = async (note: Note) => {
+    if (editingDetailTitleNoteId !== note.id || !user?.id) return;
+    const name = detailTitleDraft.trim();
+    if (!name || name === getNoteDisplayTitle(note)) {
+      setEditingDetailTitleNoteId(null);
+      setDetailTitleDraft('');
+      return;
+    }
+
+    try {
+      setNoteListActionError(null);
+      const { error } = await supabase
+        .from('note')
+        .update({ name })
+        .eq('id', note.id)
+        .eq('user_id', user.id);
+      if (error) throw error;
+      setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, name } : n)));
+    } catch (err: unknown) {
+      setNoteListActionError(err instanceof Error ? err.message : 'Failed to rename note');
+    } finally {
+      setEditingDetailTitleNoteId(null);
+      setDetailTitleDraft('');
+    }
+  };
+
   const getNoteTags = (note: Note): string[] => {
     const fromTag = normalizeTagList(note.tag);
     if (fromTag.length) return fromTag;
@@ -813,6 +870,13 @@ const SummaryHistory: React.FC = () => {
     return name || 'Unknown user';
   };
 
+  const handleNoteImagesChange = (noteId: string, imageCount: number) => {
+    setNoteImageCounts((prev) => ({ ...prev, [noteId]: imageCount }));
+    if (imageCount === 0) {
+      setNoteExpandedTab((prev) => (prev[noteId] === 'images' ? { ...prev, [noteId]: 'summary' } : prev));
+    }
+  };
+
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(notesTotalCount / NOTES_PAGE_SIZE)),
     [notesTotalCount]
@@ -826,6 +890,33 @@ const SummaryHistory: React.FC = () => {
   const notesRangeStart = notesTotalCount === 0 ? 0 : (notesPage - 1) * NOTES_PAGE_SIZE + 1;
   const notesRangeEnd = Math.min(notesPage * NOTES_PAGE_SIZE, notesTotalCount);
   const selectedNote = notes.find((n) => n.id === expandedNoteId) ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    const noteIds = notes.map((note) => note.id);
+    if (noteIds.length === 0) {
+      setNoteImageCounts({});
+      return;
+    }
+
+    getNoteImageCounts(noteIds)
+      .then((counts) => {
+        if (cancelled) return;
+        setNoteImageCounts(counts);
+        setNoteExpandedTab((prev) => {
+          const next = { ...prev };
+          for (const [noteId, tab] of Object.entries(next)) {
+            if (tab === 'images' && !counts[noteId]) next[noteId] = 'summary';
+          }
+          return next;
+        });
+      })
+      .catch((error) => console.error('Failed to load note image counts:', error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notes]);
+
   useEffect(() => {
     if (!selectedNote) setNoteDetailExpanded(false);
   }, [selectedNote]);
@@ -1201,6 +1292,72 @@ const SummaryHistory: React.FC = () => {
     </button>
   );
 
+  const getSelectedTranscriptLanguage = (note: Note): TranscriptLanguage => {
+    const selected = noteTranscriptLanguage[note.id] ?? 'original';
+    return getAvailableTranscriptLanguages(note).includes(selected) ? selected : 'original';
+  };
+
+  const persistDisplayedTranscript = async (note: Note, language: TranscriptLanguage, next: TranscriptSegment[]) => {
+    if (language === 'original') {
+      await persistNoteDiarization(note.id, next);
+      return;
+    }
+    const nextTranslations = updateTranslationMap(note.diarization_translations, language, next);
+    const { data, error } = await supabase
+      .from('note')
+      .update({
+        diarization_translations: nextTranslations,
+        transcription_translations: {
+          ...(note.transcription_translations ?? {}),
+          [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+        },
+      })
+      .eq('id', note.id)
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('Transcript translation save did not update the note.');
+  };
+
+  const updateDisplayedTranscript = (note: Note, language: TranscriptLanguage, next: TranscriptSegment[]) => {
+    setNotes((prev) =>
+      prev.map((item) => {
+        if (item.id !== note.id) return item;
+        if (language === 'original') return { ...item, diarization: next };
+        return {
+          ...item,
+          diarization_translations: updateTranslationMap(item.diarization_translations, language, next),
+          transcription_translations: {
+            ...(item.transcription_translations ?? {}),
+            [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+          },
+        };
+      })
+    );
+  };
+
+  const renderTranscriptLanguageToggle = (note: Note) => {
+    const languages = getAvailableTranscriptLanguages(note);
+    if (languages.length <= 1) return null;
+    const selected = getSelectedTranscriptLanguage(note);
+    return (
+      <div className="transcript-language-toggle" role="radiogroup" aria-label="Transcript language">
+        {languages.map((language) => (
+          <button
+            key={language}
+            type="button"
+            role="radio"
+            aria-checked={selected === language}
+            className={`transcript-language-toggle-option ${selected === language ? 'transcript-language-toggle-option-active' : ''}`}
+            onClick={() => setNoteTranscriptLanguage((prev) => ({ ...prev, [note.id]: language }))}
+          >
+            {getTranscriptLanguageLabel(language)}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   const renderNoteDetailHeader = (
     note: Note,
     activeTab: string,
@@ -1217,9 +1374,46 @@ const SummaryHistory: React.FC = () => {
         {renderNoteDetailExpandButton()}
       </div>
       <div className="min-w-0 pr-10">
-        <h3 className="truncate text-lg font-semibold leading-tight" style={{ color: 'var(--text)' }}>
-          {getNoteDisplayTitle(note)}
-        </h3>
+        <div className="editable-note-title-row">
+          <input
+            ref={detailTitleInputRef}
+            value={editingDetailTitleNoteId === note.id ? detailTitleDraft : getNoteDisplayTitle(note)}
+            onFocus={() => {
+              if (editingDetailTitleNoteId !== note.id) {
+                setEditingDetailTitleNoteId(note.id);
+                setDetailTitleDraft(getNoteDisplayTitle(note));
+              }
+            }}
+            onChange={(event) => setDetailTitleDraft(event.target.value)}
+            onBlur={() => void saveDetailTitleEdit(note)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                event.currentTarget.blur();
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                setEditingDetailTitleNoteId(null);
+                setDetailTitleDraft('');
+                event.currentTarget.blur();
+              }
+            }}
+            className="editable-note-title-input"
+            style={{ color: 'var(--text)' }}
+            aria-label="Edit note title"
+            maxLength={200}
+          />
+          <button
+            type="button"
+            className="editable-note-title-icon"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => startDetailTitleEdit(note, true)}
+            aria-label="Edit note title"
+            title="Edit note title"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <EditPencilLine01 className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
         <p className="mt-1.5 text-xs font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--text-muted)' }}>
           Meeting {formatDate(note.meeting_at || note.created_at)}
           {getNoteDurationMeta(note) ? (
@@ -1254,8 +1448,32 @@ const SummaryHistory: React.FC = () => {
               {t('transcription')}
             </button>
           )}
+          {(noteImageCounts[note.id] ?? 0) > 0 ? (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'images'}
+              onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'images' }))}
+              className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+              style={{ color: activeTab === 'images' ? 'var(--text)' : 'var(--text-secondary)' }}
+            >
+              Attachments
+            </button>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center justify-end gap-2 pb-2.5">
+          {activeTab === 'images' && (noteImageCounts[note.id] ?? 0) > 0 ? (
+            <NoteImageAttachments
+              mode="saved"
+              noteId={note.id}
+              userId={note.user_id === user?.id ? user?.id ?? null : null}
+              compact
+              showCountButton={false}
+              showTitle={false}
+              showGallery={false}
+              onImagesChange={(images) => handleNoteImagesChange(note.id, images.length)}
+            />
+          ) : null}
           {activeTab === 'summary' ? (
             <>
               <button
@@ -1292,14 +1510,12 @@ const SummaryHistory: React.FC = () => {
                 </button>
               )}
             </>
-          ) : hasTranscription ? (
+          ) : activeTab === 'transcription' && hasTranscription ? (
             <button
               type="button"
               onClick={() =>
                 void handleCopyText(
-                  showDiarized
-                    ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${getSegmentText(s, transcriptLanguage)}`).join('\n\n')
-                    : plainTx || '',
+                  getDisplayTranscriptText(note, getSelectedTranscriptLanguage(note)),
                   `transcription-${note.id}`
                 )
               }
@@ -1545,12 +1761,19 @@ const SummaryHistory: React.FC = () => {
       setDeletingNote(true);
       setDeleteNoteError(null);
       setNoteListActionError(null);
-      const { error: deleteError } = await supabase
-        .from('note')
-        .delete()
-        .eq('id', deleteNoteTarget.id)
-        .eq('user_id', user.id);
-      if (deleteError) throw deleteError;
+      if (isSharedWithCurrentUser(deleteNoteTarget)) {
+        const { error: removeShareError } = await supabase.rpc('remove_current_user_from_note_shared_users', {
+          p_note_id: deleteNoteTarget.id,
+        });
+        if (removeShareError) throw removeShareError;
+      } else {
+        const { error: deleteError } = await supabase
+          .from('note')
+          .delete()
+          .eq('id', deleteNoteTarget.id)
+          .eq('user_id', user.id);
+        if (deleteError) throw deleteError;
+      }
 
       const removedId = deleteNoteTarget.id;
       const newTotal = Math.max(0, notesTotalCount - 1);
@@ -1569,6 +1792,7 @@ const SummaryHistory: React.FC = () => {
       if (expandedNoteId === removedId) setExpandedNoteId(null);
       if (editingNoteId === removedId) setEditingNoteId(null);
       if (renamingNoteId === removedId) setRenamingNoteId(null);
+      if (editingDetailTitleNoteId === removedId) setEditingDetailTitleNoteId(null);
       setIsDeleteNoteOpen(false);
       setDeleteNoteTarget(null);
     } catch (err: unknown) {
@@ -1702,8 +1926,6 @@ const SummaryHistory: React.FC = () => {
     }
   };
 
-  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook/532f465d-d198-4f59-ba75-20c39d41a079';
-
   const handleRegenerateNoteSummary = async (note: Note) => {
     if (!user?.id) return;
     const diarRaw = getNoteDiarizationRaw(note);
@@ -1716,6 +1938,11 @@ const SummaryHistory: React.FC = () => {
     setRegenerateNoteError((prev) => { const n = { ...prev }; delete n[note.id]; return n; });
 
     try {
+      if (!WORKFLOW_API_URL) {
+        throw new Error('Workflow API URL is not configured.');
+      }
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not acquire Microsoft access token.');
       const uniqueSpeakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
       const { data: speakerRows } = await supabase
         .from('speaker').select('name, profile').eq('user_id', user.id).in('name', uniqueSpeakers);
@@ -1727,18 +1954,25 @@ const SummaryHistory: React.FC = () => {
           profile: (() => { try { return JSON.parse(s.profile!); } catch { return s.profile; } })(),
         }));
 
-      const response = await fetch(REGENERATE_WEBHOOK, {
+      const response = await fetch(`${WORKFLOW_API_URL}/regenerate-summary`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           noteId: note.id,
           diarization: segments,
           previousSummary: getLocalizedSummary(note, appLanguage),
           speakerProfiles,
+          instructions: '',
         }),
       });
 
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(detail?.error || `Request failed: ${response.status}`);
+      }
       const result = await response.json();
       const newSummary = typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
       if (!newSummary) throw new Error('No summary returned from webhook');
@@ -2287,9 +2521,10 @@ const SummaryHistory: React.FC = () => {
                   <section className="card flex min-h-[34rem] min-w-0 flex-col rounded-lg">
                     {(() => {
                       const note = selectedNote;
-                      const diarRaw = getNoteDiarizationRaw(note);
-                      const showDiarized = hasUsableDiarization(diarRaw);
-                      const plainTx = note.transcription?.trim();
+                      const selectedTranscriptLanguage = getSelectedTranscriptLanguage(note);
+                      const diarRaw = getDisplayTranscriptSegments(note, selectedTranscriptLanguage);
+                      const showDiarized = diarRaw.length > 0;
+                      const plainTx = getDisplayTranscriptText(note, selectedTranscriptLanguage);
                       const hasTranscription = showDiarized || Boolean(plainTx);
                       const activeTab = noteExpandedTab[note.id] ?? 'summary';
                       return (
@@ -2328,17 +2563,19 @@ const SummaryHistory: React.FC = () => {
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                   {showDiarized ? (
                                     <TranscriptSpeakerFilterControls
-                                      speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
+                                      speakers={getTranscriptSpeakerFilters(diarRaw)}
                                       selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
                                       onSelectedSpeakersChange={(next) => setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))}
                                     />
                                   ) : <span />}
+                                  {renderTranscriptLanguageToggle(note)}
                                 </div>
                                 {showDiarized ? (
                                   <div className="min-h-0 flex-1">
                                     <TranscriptDiarizedEditor
-                                      segments={normalizeTranscript(diarRaw)}
-                                      onSegmentsChange={(next) => setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n)))}
+                                      segments={diarRaw}
+                                      onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
+                                      onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       noteId={note.id}
                                       scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
                                       selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
@@ -2353,16 +2590,29 @@ const SummaryHistory: React.FC = () => {
                                       }
                                       canPlaySegment={isPlayableSegment}
                                       onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
-                                      transcriptLanguage={transcriptLanguage}
+                                      transcriptLanguage="original"
                                     />
                                   </div>
                                 ) : (
                                   <div className={`whitespace-pre-wrap ${NOTE_DETAIL_SCROLL_BODY}`} style={{ backgroundColor: 'transparent', color: 'var(--text-secondary)' }}>
-                                    {plainTx}
+                                    {plainTx || ''}
                                   </div>
                                 )}
                               </div>
                             )}
+                            {activeTab === 'images' && (noteImageCounts[note.id] ?? 0) > 0 ? (
+                              <div className="min-h-0 flex flex-1 flex-col">
+                                <NoteImageAttachments
+                                  key={`${note.id}-${noteImageCounts[note.id] ?? 0}`}
+                                  mode="saved"
+                                  noteId={note.id}
+                                  userId={note.user_id === user?.id ? user?.id ?? null : null}
+                                  showCountButton={false}
+                                  showToolbar={false}
+                                  onImagesChange={(images) => handleNoteImagesChange(note.id, images.length)}
+                                />
+                              </div>
+                            ) : null}
                           </div>
                           <div className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5" style={{ borderColor: 'var(--border)' }}>
                             <button type="button" onClick={() => navigate(`/save-summary?note_id=${note.id}`)} className={RESULT_ACTION_BTN_CLASS} title={t('saveToOneDrive')} aria-label={t('saveToOneDrive')}>
@@ -2569,12 +2819,6 @@ const SummaryHistory: React.FC = () => {
                                 <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden />
                                 <span className="min-w-0 break-words">
                                   {formatDate(note.created_at)}
-                                  {getNoteDurationMeta(note) ? (
-                                    <>
-                                      <span className="mx-1.5" aria-hidden>•</span>
-                                      {getNoteDurationMeta(note)}
-                                    </>
-                                  ) : null}
                                 </span>
                               </div>
                               <div
@@ -2696,12 +2940,6 @@ const SummaryHistory: React.FC = () => {
                                     <Calendar className="h-3 w-3 shrink-0" aria-hidden />
                                     <span className="min-w-0 truncate">
                                       {formatDate(note.created_at)}
-                                      {getNoteDurationMeta(note) ? (
-                                        <>
-                                          <span className="mx-1" aria-hidden>•</span>
-                                          {getNoteDurationMeta(note)}
-                                        </>
-                                      ) : null}
                                     </span>
                                   </div>
                                   <p
@@ -2756,9 +2994,10 @@ const SummaryHistory: React.FC = () => {
                               <div className="collapse-content">
                               {isSelected
                                 ? (() => {
-                                  const diarRaw = getNoteDiarizationRaw(note);
-                                  const showDiarized = hasUsableDiarization(diarRaw);
-                                  const plainTx = note.transcription?.trim();
+                                  const selectedTranscriptLanguage = getSelectedTranscriptLanguage(note);
+                                  const diarRaw = getDisplayTranscriptSegments(note, selectedTranscriptLanguage);
+                                  const showDiarized = diarRaw.length > 0;
+                                  const plainTx = getDisplayTranscriptText(note, selectedTranscriptLanguage);
                                   const hasTranscription = showDiarized || Boolean(plainTx);
                                   const activeTab = noteExpandedTab[note.id] ?? 'summary';
                                   return (
@@ -2826,23 +3065,21 @@ const SummaryHistory: React.FC = () => {
                                               {showDiarized ? (
                                               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                                   <TranscriptSpeakerFilterControls
-                                                    speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
+                                                    speakers={getTranscriptSpeakerFilters(diarRaw)}
                                                     selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
                                                     onSelectedSpeakersChange={(next) =>
                                                       setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
                                                     }
                                                   />
+                                                  {renderTranscriptLanguageToggle(note)}
                                               </div>
                                               ) : null}
                                               {showDiarized ? (
                                                 <div className="min-h-0 flex-1">
                                                   <TranscriptDiarizedEditor
-                                                    segments={normalizeTranscript(diarRaw)}
-                                                    onSegmentsChange={(next) =>
-                                                      setNotes((prev) =>
-                                                        prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
-                                                      )
-                                                    }
+                                                    segments={diarRaw}
+                                                    onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
+                                                    onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                                     noteId={note.id}
                                                     scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
                                                     selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
@@ -2859,7 +3096,7 @@ const SummaryHistory: React.FC = () => {
                                                     }
                                                     canPlaySegment={isPlayableSegment}
                                                     onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
-                                                    transcriptLanguage={transcriptLanguage}
+                                                    transcriptLanguage="original"
                                                   />
                                                 </div>
                                               ) : (
@@ -2870,11 +3107,24 @@ const SummaryHistory: React.FC = () => {
                                                     color: 'var(--text-secondary)',
                                                   }}
                                                 >
-                                                  {plainTx}
+                                                  {plainTx || ''}
                                                 </div>
                                               )}
                                             </div>
                                           )}
+                                          {activeTab === 'images' && (noteImageCounts[note.id] ?? 0) > 0 ? (
+                                            <div className="min-h-0 flex flex-1 flex-col">
+                                              <NoteImageAttachments
+                                                key={`${note.id}-${noteImageCounts[note.id] ?? 0}`}
+                                                mode="saved"
+                                                noteId={note.id}
+                                                userId={note.user_id === user?.id ? user?.id ?? null : null}
+                                                showCountButton={false}
+                                                showToolbar={false}
+                                                onImagesChange={(images) => handleNoteImagesChange(note.id, images.length)}
+                                              />
+                                            </div>
+                                          ) : null}
                                         </div>
                                         <div
                                           className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
@@ -3047,9 +3297,10 @@ const SummaryHistory: React.FC = () => {
                   {(
                     (() => {
                       const note = selectedNote;
-                      const diarRaw = getNoteDiarizationRaw(note);
-                      const showDiarized = hasUsableDiarization(diarRaw);
-                      const plainTx = note.transcription?.trim();
+                      const selectedTranscriptLanguage = getSelectedTranscriptLanguage(note);
+                      const diarRaw = getDisplayTranscriptSegments(note, selectedTranscriptLanguage);
+                      const showDiarized = diarRaw.length > 0;
+                      const plainTx = getDisplayTranscriptText(note, selectedTranscriptLanguage);
                       const hasTranscription = showDiarized || Boolean(plainTx);
                       const activeTab = noteExpandedTab[note.id] ?? 'summary';
                       return (
@@ -3112,23 +3363,21 @@ const SummaryHistory: React.FC = () => {
                                 {showDiarized ? (
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                     <TranscriptSpeakerFilterControls
-                                      speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
+                                      speakers={getTranscriptSpeakerFilters(diarRaw)}
                                       selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
                                       onSelectedSpeakersChange={(next) =>
                                         setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
                                       }
                                     />
+                                    {renderTranscriptLanguageToggle(note)}
                                 </div>
                                 ) : null}
                                 {showDiarized ? (
                                   <div className="min-h-0 flex-1">
                                     <TranscriptDiarizedEditor
-                                      segments={normalizeTranscript(diarRaw)}
-                                      onSegmentsChange={(next) =>
-                                        setNotes((prev) =>
-                                          prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
-                                        )
-                                      }
+                                      segments={diarRaw}
+                                      onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
+                                      onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       noteId={note.id}
                                       scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
                                       selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
@@ -3145,7 +3394,7 @@ const SummaryHistory: React.FC = () => {
                                       }
                                       canPlaySegment={isPlayableSegment}
                                       onPlaySegment={(segment, index) => void handlePlayTranscriptSegment(note, segment, index)}
-                                      transcriptLanguage={transcriptLanguage}
+                                      transcriptLanguage="original"
                                     />
                                   </div>
                                 ) : (
@@ -3156,11 +3405,24 @@ const SummaryHistory: React.FC = () => {
                                       color: 'var(--text-secondary)',
                                     }}
                                   >
-                                    {plainTx}
+                                    {plainTx || ''}
                                   </div>
                                 )}
                               </div>
                             )}
+                            {activeTab === 'images' && (noteImageCounts[note.id] ?? 0) > 0 ? (
+                              <div className="min-h-0 flex flex-1 flex-col">
+                                <NoteImageAttachments
+                                  key={`${note.id}-${noteImageCounts[note.id] ?? 0}`}
+                                  mode="saved"
+                                  noteId={note.id}
+                                  userId={note.user_id === user?.id ? user?.id ?? null : null}
+                                  showCountButton={false}
+                                  showToolbar={false}
+                                  onImagesChange={(images) => handleNoteImagesChange(note.id, images.length)}
+                                />
+                              </div>
+                            ) : null}
                           </div>
                           <div
                             className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5"
@@ -3300,14 +3562,26 @@ const SummaryHistory: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-              {t('deleteNote')}?
+              {deleteNoteTarget && isSharedWithCurrentUser(deleteNoteTarget) ? 'Remove shared note?' : `${t('deleteNote')}?`}
             </h3>
             <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              This will permanently delete{' '}
-              <span className="font-medium" style={{ color: 'var(--text)' }}>
-                {deleteNoteTarget?.name?.trim() || 'Untitled note'}
-              </span>
-              .
+              {deleteNoteTarget && isSharedWithCurrentUser(deleteNoteTarget) ? (
+                <>
+                  This will remove{' '}
+                  <span className="font-medium" style={{ color: 'var(--text)' }}>
+                    {deleteNoteTarget?.name?.trim() || 'Untitled note'}
+                  </span>{' '}
+                  from your shared notes. The owner and other shared users will still have access.
+                </>
+              ) : (
+                <>
+                  This will permanently delete{' '}
+                  <span className="font-medium" style={{ color: 'var(--text)' }}>
+                    {deleteNoteTarget?.name?.trim() || 'Untitled note'}
+                  </span>
+                  .
+                </>
+              )}
             </p>
             {deleteNoteError ? (
               <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
@@ -3337,7 +3611,7 @@ const SummaryHistory: React.FC = () => {
                 disabled={deletingNote}
               >
                 {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                {t('delete')}
+                {deleteNoteTarget && isSharedWithCurrentUser(deleteNoteTarget) ? 'Remove' : t('delete')}
               </button>
             </div>
           </div>

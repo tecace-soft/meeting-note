@@ -22,6 +22,7 @@ import {
 } from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import NoteImageAttachments from '../components/NoteImageAttachments';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
@@ -30,8 +31,19 @@ import {
   getNoteDiarizationRaw,
   hasUsableDiarization,
   normalizeTranscript,
+  persistNoteDiarization,
+  type TranscriptLanguage,
+  type TranscriptSegment,
 } from '../lib/transcriptSegments';
+import {
+  getAvailableTranscriptLanguages,
+  getDisplayTranscriptSegments,
+  getDisplayTranscriptText,
+  getTranscriptLanguageLabel,
+  updateTranslationMap,
+} from '../lib/transcriptTranslationDisplay';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
+import { getNoteImageCounts } from '../lib/noteImages';
 
 interface ProjectRow {
   id: string;
@@ -42,19 +54,26 @@ interface ProjectRow {
 interface NoteRow {
   id: string;
   name?: string | null;
+  user_id?: string | null;
   user_name?: string | null;
   summary?: string | null;
   summary_edit?: string | null;
   summary_translations?: Record<string, string> | null;
   transcription?: string | null;
+  transcription_language?: string | null;
+  transcription_translations?: Record<string, string> | null;
   diarization?: unknown;
+  diarization_translations?: Partial<Record<'en' | 'ko', TranscriptSegment[]>> | null;
   tag?: unknown;
   tags?: unknown;
   created_at?: string | null;
   meeting_at?: string | null;
   duration_seconds?: number | null;
   projects?: Array<string | number> | null;
+  shared_users?: unknown;
 }
+
+type NoteDetailTab = 'summary' | 'transcription' | 'images';
 
 function getNoteSummaryText(note: NoteRow, language: 'en' | 'ko'): string {
   return (note.summary_edit?.trim() || note.summary_translations?.[language]?.trim() || note.summary?.trim() || '').trim();
@@ -85,6 +104,26 @@ function formatNoteModalDate(createdAt?: string | null): string {
   } catch {
     return 'Unknown date';
   }
+}
+
+function getNoteSharedUserIds(note: NoteRow): string[] {
+  const raw = note.shared_users;
+  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      return getNoteSharedUserIds({ ...note, shared_users: JSON.parse(trimmed) as unknown });
+    } catch {
+      return trimmed.split(',').map((id) => id.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function isSharedWithUser(note: NoteRow | null, userId?: string | null): boolean {
+  if (!note || !userId) return false;
+  return note.user_id !== userId && getNoteSharedUserIds(note).includes(userId);
 }
 
 /** Fixed scroll height for plain transcription (no diarization). */
@@ -203,8 +242,10 @@ const Project: React.FC = () => {
   const [project, setProject] = useState<ProjectRow | null>(null);
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
-  const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, 'summary' | 'transcription'>>({});
+  const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, NoteDetailTab>>({});
+  const [noteImageCounts, setNoteImageCounts] = useState<Record<string, number>>({});
   const [noteSpeakerFilters, setNoteSpeakerFilters] = useState<Record<string, string[]>>({});
+  const [noteTranscriptLanguage, setNoteTranscriptLanguage] = useState<Record<string, TranscriptLanguage>>({});
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
@@ -304,6 +345,33 @@ const Project: React.FC = () => {
 
     void load();
   }, [projectId, projectIdFilterValue]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const noteIds = notes.map((note) => note.id);
+    if (noteIds.length === 0) {
+      setNoteImageCounts({});
+      return;
+    }
+
+    getNoteImageCounts(noteIds)
+      .then((counts) => {
+        if (cancelled) return;
+        setNoteImageCounts(counts);
+        setNoteExpandedTab((prev) => {
+          const next = { ...prev };
+          for (const [noteId, tab] of Object.entries(next)) {
+            if (tab === 'images' && !counts[noteId]) next[noteId] = 'summary';
+          }
+          return next;
+        });
+      })
+      .catch((error) => console.error('Failed to load project note image counts:', error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notes]);
 
   useEffect(() => {
     setChatMessages([]);
@@ -424,6 +492,13 @@ const Project: React.FC = () => {
     );
     if (participants.length === 0) return 'None';
     return participants.join(', ');
+  };
+
+  const handleNoteImagesChange = (noteId: string, imageCount: number) => {
+    setNoteImageCounts((prev) => ({ ...prev, [noteId]: imageCount }));
+    if (imageCount === 0) {
+      setNoteExpandedTab((prev) => (prev[noteId] === 'images' ? { ...prev, [noteId]: 'summary' } : prev));
+    }
   };
 
   const toIdValue = (id: string): string | number => {
@@ -760,15 +835,26 @@ const Project: React.FC = () => {
   };
 
   const handleConfirmDeleteNote = async () => {
-    if (!deleteNoteTarget) return;
+    if (!deleteNoteTarget || !user?.id) return;
     try {
       setDeletingNote(true);
       setDeleteNoteError(null);
       setNoteActionError(null);
-      const { error: deleteError } = await supabase.from('note').delete().eq('id', deleteNoteTarget.id);
-      if (deleteError) throw deleteError;
+      if (isSharedWithUser(deleteNoteTarget, user.id)) {
+        const { error: removeShareError } = await supabase.rpc('remove_current_user_from_note_shared_users', {
+          p_note_id: deleteNoteTarget.id,
+        });
+        if (removeShareError) throw removeShareError;
+      } else {
+        const { error: deleteError } = await supabase
+          .from('note')
+          .delete()
+          .eq('id', deleteNoteTarget.id)
+          .eq('user_id', user.id);
+        if (deleteError) throw deleteError;
 
-      await removeNoteFromProjectNotes(deleteNoteTarget.id);
+        await removeNoteFromProjectNotes(deleteNoteTarget.id);
+      }
       setNotes((prev) => prev.filter((n) => n.id !== deleteNoteTarget.id));
       if (expandedNoteId === deleteNoteTarget.id) setExpandedNoteId(null);
       if (editingNoteId === deleteNoteTarget.id) setEditingNoteId(null);
@@ -794,6 +880,72 @@ const Project: React.FC = () => {
     } catch (err) {
       console.error('Failed to copy text:', err);
     }
+  };
+
+  const getSelectedTranscriptLanguage = (note: NoteRow): TranscriptLanguage => {
+    const selected = noteTranscriptLanguage[note.id] ?? 'original';
+    return getAvailableTranscriptLanguages(note).includes(selected) ? selected : 'original';
+  };
+
+  const persistDisplayedTranscript = async (note: NoteRow, language: TranscriptLanguage, next: TranscriptSegment[]) => {
+    if (language === 'original') {
+      await persistNoteDiarization(note.id, next);
+      return;
+    }
+    const nextTranslations = updateTranslationMap(note.diarization_translations, language, next);
+    const { data, error } = await supabase
+      .from('note')
+      .update({
+        diarization_translations: nextTranslations,
+        transcription_translations: {
+          ...(note.transcription_translations ?? {}),
+          [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+        },
+      })
+      .eq('id', note.id)
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('Transcript translation save did not update the note.');
+  };
+
+  const updateDisplayedTranscript = (note: NoteRow, language: TranscriptLanguage, next: TranscriptSegment[]) => {
+    setNotes((prev) =>
+      prev.map((item) => {
+        if (item.id !== note.id) return item;
+        if (language === 'original') return { ...item, diarization: next };
+        return {
+          ...item,
+          diarization_translations: updateTranslationMap(item.diarization_translations, language, next),
+          transcription_translations: {
+            ...(item.transcription_translations ?? {}),
+            [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+          },
+        };
+      })
+    );
+  };
+
+  const renderTranscriptLanguageToggle = (note: NoteRow) => {
+    const languages = getAvailableTranscriptLanguages(note);
+    if (languages.length <= 1) return null;
+    const selected = getSelectedTranscriptLanguage(note);
+    return (
+      <div className="transcript-language-toggle" role="radiogroup" aria-label="Transcript language">
+        {languages.map((language) => (
+          <button
+            key={language}
+            type="button"
+            role="radio"
+            aria-checked={selected === language}
+            className={`transcript-language-toggle-option ${selected === language ? 'transcript-language-toggle-option-active' : ''}`}
+            onClick={() => setNoteTranscriptLanguage((prev) => ({ ...prev, [note.id]: language }))}
+          >
+            {getTranscriptLanguageLabel(language)}
+          </button>
+        ))}
+      </div>
+    );
   };
 
   if (loading) {
@@ -1184,9 +1336,10 @@ const Project: React.FC = () => {
                           <div className={`collapse-container collapse-container--instant ${isSelected ? 'expanded' : 'collapsed'}`}>
                             <div className="collapse-content">
                               {(() => {
-                                const diarRaw = getNoteDiarizationRaw(note);
-                                const showDiarized = hasUsableDiarization(diarRaw);
-                                const plainTx = note.transcription?.trim();
+                                const selectedTranscriptLanguage = getSelectedTranscriptLanguage(note);
+                                const diarRaw = getDisplayTranscriptSegments(note, selectedTranscriptLanguage);
+                                const showDiarized = diarRaw.length > 0;
+                                const plainTx = getDisplayTranscriptText(note, selectedTranscriptLanguage);
                                 const hasTranscription = showDiarized || Boolean(plainTx);
                                 const activeTab = noteExpandedTab[note.id] ?? 'summary';
 
@@ -1220,8 +1373,23 @@ const Project: React.FC = () => {
                                             {t('transcription')}
                                           </button>
                                         ) : null}
+                                        {(noteImageCounts[note.id] ?? 0) > 0 ? (
+                                          <button
+                                            type="button"
+                                            role="tab"
+                                            aria-selected={activeTab === 'images'}
+                                            onClick={() => setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'images' }))}
+                                            className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+                                            style={{
+                                              color: activeTab === 'images' ? 'var(--text)' : 'var(--text-secondary)',
+                                            }}
+                                          >
+                                            Attachments
+                                          </button>
+                                        ) : null}
                                       </div>
-                                      <div className="flex shrink-0 items-center gap-2 pb-2">
+                                      <div className="flex shrink-0 flex-col items-end gap-2 pb-2">
+                                        <div className="flex items-center gap-2">
                                         {activeTab === 'summary' ? (
                                           <>
                                             {editingNoteId === note.id ? (
@@ -1248,44 +1416,38 @@ const Project: React.FC = () => {
                                             )}
                                           </>
                                         ) : null}
-                                        {activeTab === 'transcription' && showDiarized ? (
-                                          <TranscriptSpeakerFilterControls
-                                            speakers={getTranscriptSpeakerFilters(normalizeTranscript(diarRaw))}
-                                            selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
-                                            onSelectedSpeakersChange={(next) =>
-                                              setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
+                                        {activeTab !== 'images' ? (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              void handleCopyText(
+                                                activeTab === 'summary'
+                                                  ? noteEditDraft || getNoteSummaryText(note, appLanguage)
+                                                  : showDiarized
+                                                    ? diarRaw.map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
+                                                    : plainTx || '',
+                                                activeTab === 'summary'
+                                                  ? `project-summary-${note.id}`
+                                                  : `project-transcription-${note.id}`
+                                              )
                                             }
-                                          />
+                                            className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                                            style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
+                                            title={activeTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                                            aria-label={activeTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                                          >
+                                            {copiedKey ===
+                                            (activeTab === 'summary'
+                                              ? `project-summary-${note.id}`
+                                              : `project-transcription-${note.id}`) ? (
+                                              <Check className="h-3 w-3" />
+                                            ) : (
+                                              <Copy className="h-3 w-3" />
+                                            )}
+                                            Copy
+                                          </button>
                                         ) : null}
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            void handleCopyText(
-                                              activeTab === 'summary'
-                                                ? noteEditDraft || getNoteSummaryText(note, appLanguage)
-                                                : showDiarized
-                                                  ? normalizeTranscript(diarRaw).map((s) => `${s.speaker}: ${s.text}`).join('\n\n')
-                                                  : plainTx || '',
-                                              activeTab === 'summary'
-                                                ? `project-summary-${note.id}`
-                                                : `project-transcription-${note.id}`
-                                            )
-                                          }
-                                          className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                                          style={{ backgroundColor: 'var(--bg)', color: 'var(--text-secondary)' }}
-                                          title={activeTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
-                                          aria-label={activeTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
-                                        >
-                                          {copiedKey ===
-                                          (activeTab === 'summary'
-                                            ? `project-summary-${note.id}`
-                                            : `project-transcription-${note.id}`) ? (
-                                            <Check className="h-3 w-3" />
-                                          ) : (
-                                            <Copy className="h-3 w-3" />
-                                          )}
-                                          Copy
-                                        </button>
+                                        </div>
                                       </div>
                                     </div>
 
@@ -1322,14 +1484,23 @@ const Project: React.FC = () => {
 
                                       {activeTab === 'transcription' && hasTranscription ? (
                                         <>
+                                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                            {showDiarized ? (
+                                              <TranscriptSpeakerFilterControls
+                                                speakers={getTranscriptSpeakerFilters(diarRaw)}
+                                                selectedSpeakers={noteSpeakerFilters[note.id] ?? []}
+                                                onSelectedSpeakersChange={(next) =>
+                                                  setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))
+                                                }
+                                              />
+                                            ) : <span />}
+                                            {renderTranscriptLanguageToggle(note)}
+                                          </div>
                                           {showDiarized ? (
                                             <TranscriptDiarizedEditor
-                                              segments={normalizeTranscript(diarRaw)}
-                                              onSegmentsChange={(next) =>
-                                                setNotes((prev) =>
-                                                  prev.map((n) => (n.id === note.id ? { ...n, diarization: next } : n))
-                                                )
-                                              }
+                                              segments={diarRaw}
+                                              onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
+                                              onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                               noteId={note.id}
                                               scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
                                               selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
@@ -1345,10 +1516,21 @@ const Project: React.FC = () => {
                                                 color: 'var(--text-secondary)',
                                               }}
                                             >
-                                              {plainTx}
+                                              {plainTx || ''}
                                             </div>
                                           )}
                                         </>
+                                      ) : null}
+                                      {activeTab === 'images' && (noteImageCounts[note.id] ?? 0) > 0 ? (
+                                        <div className="min-h-0">
+                                          <NoteImageAttachments
+                                            mode="saved"
+                                            noteId={note.id}
+                                            userId={note.user_id === user?.id ? user?.id ?? null : null}
+                                            showCountButton={false}
+                                            onImagesChange={(images) => handleNoteImagesChange(note.id, images.length)}
+                                          />
+                                        </div>
                                       ) : null}
                                     </div>
                                   </div>
@@ -1679,10 +1861,26 @@ const Project: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
           <div className="w-full max-w-sm rounded-lg border p-4 sm:p-5" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
             <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-              {t('deleteNote')}?
+              {isSharedWithUser(deleteNoteTarget, user?.id) ? 'Remove shared note?' : `${t('deleteNote')}?`}
             </h3>
             <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              This will permanently delete `{deleteNoteTarget?.name?.trim() || 'Untitled note'}`.
+              {isSharedWithUser(deleteNoteTarget, user?.id) ? (
+                <>
+                  This will remove{' '}
+                  <span className="font-medium" style={{ color: 'var(--text)' }}>
+                    {deleteNoteTarget?.name?.trim() || 'Untitled note'}
+                  </span>{' '}
+                  from your shared notes. The owner and other shared users will still have access.
+                </>
+              ) : (
+                <>
+                  This will permanently delete{' '}
+                  <span className="font-medium" style={{ color: 'var(--text)' }}>
+                    {deleteNoteTarget?.name?.trim() || 'Untitled note'}
+                  </span>
+                  .
+                </>
+              )}
             </p>
             {deleteNoteError ? (
               <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
@@ -1712,7 +1910,7 @@ const Project: React.FC = () => {
                 disabled={deletingNote}
               >
                 {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                {t('delete')}
+                {isSharedWithUser(deleteNoteTarget, user?.id) ? 'Remove' : t('delete')}
               </button>
             </div>
           </div>

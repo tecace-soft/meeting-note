@@ -42,6 +42,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
+import NoteImageAttachments from '../components/NoteImageAttachments';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
@@ -49,11 +50,26 @@ import TranscriptDiarizedEditor, {
 import {
   getSegmentText,
   normalizeTranscript,
+  persistNoteDiarization,
   type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
+import {
+  getAvailableTranscriptLanguages,
+  getDisplayTranscriptSegments,
+  getDisplayTranscriptText,
+  getTranscriptLanguageLabel,
+  updateTranslationMap,
+  type TranscriptTextTranslationMap,
+  type TranscriptTranslationMap,
+} from '../lib/transcriptTranslationDisplay';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta } from '../lib/noteDuration';
+import {
+  uploadNoteImage,
+  type NoteImage,
+  type PendingNoteImage,
+} from '../lib/noteImages';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 import ShareNoteModal from '../components/ShareNoteModal';
 import { useRecorder } from '../context/RecorderContext';
@@ -161,11 +177,26 @@ interface WorkflowJobStatus {
     transcript?: unknown;
     summary?: unknown;
     summaryTranslations?: Record<string, string>;
+    transcriptionLanguage?: 'en' | 'ko' | null;
+    transcriptionTranslations?: TranscriptTextTranslationMap;
+    diarizationTranslations?: TranscriptTranslationMap;
     title?: unknown;
     tags?: unknown;
     audioDurationSeconds?: unknown;
   } | null;
   error?: string | null;
+}
+
+interface SummaryResultState {
+  transcript: TranscriptSegment[];
+  summary: string;
+  summaryTranslations?: Record<string, string>;
+  transcription_language?: string | null;
+  transcription_translations?: TranscriptTextTranslationMap | null;
+  diarization_translations?: TranscriptTranslationMap | null;
+  title?: string | null;
+  meetingAt?: string | null;
+  audioDurationSeconds?: number | null;
 }
 
 async function invokeGenerateProfile(body: {
@@ -194,6 +225,18 @@ async function invokeGenerateProfile(body: {
     throw new Error(parsed.error || raw || `HTTP ${response.status}`);
   }
   return parsed;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      resolve(result.includes(',') ? result.split(',')[1] ?? '' : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('Could not read attachment.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 const TranscriptionSummary: React.FC = () => {
@@ -231,6 +274,7 @@ const TranscriptionSummary: React.FC = () => {
   const [chatsLoading, setChatsLoading] = useState(true);
   const [chatsError, setChatsError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [pendingNoteImages, setPendingNoteImages] = useState<PendingNoteImage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [summaryPromptRows, setSummaryPromptRows] = useState<{ id: string; name: string; prompt: string }[]>([]);
   const [selectedSummaryPromptId, setSelectedSummaryPromptId] = useState<string | null>(null);
@@ -239,7 +283,7 @@ const TranscriptionSummary: React.FC = () => {
   const [optionalInstructions, setOptionalInstructions] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summaryProgress, setSummaryProgress] = useState<{ stage: string; progress: number } | null>(null);
-  const [summaryResult, setSummaryResult] = useState<{ transcript: TranscriptSegment[]; summary: string; summaryTranslations?: Record<string, string>; audioDurationSeconds?: number | null } | null>(null);
+  const [summaryResult, setSummaryResult] = useState<SummaryResultState | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const resultAudioRef = useRef<HTMLAudioElement | null>(null);
   const resultPlaybackStopAtRef = useRef<number | null>(null);
@@ -252,6 +296,9 @@ const TranscriptionSummary: React.FC = () => {
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
+  const generatedTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const [isEditingGeneratedTitle, setIsEditingGeneratedTitle] = useState(false);
+  const [generatedTitleDraft, setGeneratedTitleDraft] = useState('');
   const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [isForwardTeamsModalOpen, setIsForwardTeamsModalOpen] = useState(false);
@@ -265,8 +312,10 @@ const TranscriptionSummary: React.FC = () => {
   const [isSaveAllConfirmOpen, setIsSaveAllConfirmOpen] = useState(false);
   const [saveAllStatus, setSaveAllStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [saveAllErrorDetails, setSaveAllErrorDetails] = useState<string[]>([]);
-  const [resultsTab, setResultsTab] = useState<'summary' | 'transcription'>('summary');
+  const [resultsTab, setResultsTab] = useState<'summary' | 'transcription' | 'images'>('summary');
+  const [generatedNoteImageCount, setGeneratedNoteImageCount] = useState(0);
   const [transcriptSpeakerFilters, setTranscriptSpeakerFilters] = useState<string[]>([]);
+  const [generatedTranscriptLanguage, setGeneratedTranscriptLanguage] = useState<TranscriptLanguage>('original');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Recording and recent audio states
@@ -767,6 +816,59 @@ const TranscriptionSummary: React.FC = () => {
     clearRecording();
   };
 
+  const handlePendingImagesAdd = useCallback((images: PendingNoteImage[]) => {
+    setPendingNoteImages((prev) => [...prev, ...images]);
+  }, []);
+
+  const handlePendingImageRemove = useCallback((imageId: string) => {
+    setPendingNoteImages((prev) => {
+      const removed = prev.find((image) => image.id === imageId);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((image) => image.id !== imageId);
+    });
+  }, []);
+
+  const uploadPendingNoteImages = async (noteId: string): Promise<NoteImage[]> => {
+    if (!user?.id) return [];
+    const validPendingImages = pendingNoteImages.filter((image) => image.status !== 'error');
+    if (validPendingImages.length === 0) return [];
+
+    const uploadedImages: NoteImage[] = [];
+    for (const pendingImage of validPendingImages) {
+      setPendingNoteImages((prev) =>
+        prev.map((image) => (image.id === pendingImage.id ? { ...image, status: 'uploading', error: null } : image))
+      );
+      try {
+        const uploaded = await uploadNoteImage({
+          file: pendingImage.file,
+          noteId,
+          userId: user.id,
+          name: pendingImage.name,
+          width: pendingImage.width ?? null,
+          height: pendingImage.height ?? null,
+        });
+        uploadedImages.push(uploaded);
+        setPendingNoteImages((prev) =>
+          prev.map((image) =>
+            image.id === pendingImage.id
+              ? { ...image, status: 'uploaded', storagePath: uploaded.storage_path, noteImage: uploaded }
+              : image
+          )
+        );
+      } catch (err) {
+        setPendingNoteImages((prev) =>
+          prev.map((image) =>
+            image.id === pendingImage.id
+              ? { ...image, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
+              : image
+          )
+        );
+        throw err;
+      }
+    }
+    return uploadedImages;
+  };
+
   const hasCompletedFiles = uploadedFiles.some(f => f.status === 'completed');
   const showPromptSection = isRecording || recordedAudioUrl || uploadedFiles.length > 0;
   const summaryFlowActive =
@@ -919,6 +1021,10 @@ const TranscriptionSummary: React.FC = () => {
     setIsSummarizing(true);
     setSummaryProgress({ stage: 'starting', progress: 0 });
     setSummaryResult(null);
+    setGeneratedTranscriptLanguage('original');
+    setIsEditingGeneratedTitle(false);
+    setGeneratedTitleDraft('');
+    setGeneratedNoteImageCount(0);
     setSummaryError(null);
     
     try {
@@ -935,6 +1041,14 @@ const TranscriptionSummary: React.FC = () => {
         ? await createAudioSignedUrl(file.storagePath, file.bucket || AUDIO_BUCKET)
         : file.publicUrl;
       if (!downloadUrl) throw new Error('Could not create a signed audio URL.');
+      const validPendingAttachments = pendingNoteImages.filter((attachment) => attachment.status !== 'error');
+      const summaryAttachments = await Promise.all(
+        validPendingAttachments.map(async (attachment) => ({
+          name: attachment.name,
+          mimeType: attachment.mimeType || attachment.file.type || 'application/octet-stream',
+          dataBase64: await fileToBase64(attachment.file),
+        }))
+      );
 
       const requestBody = {
         downloadUrl,
@@ -948,6 +1062,7 @@ const TranscriptionSummary: React.FC = () => {
         userName: user?.displayName || '',
         noteId,
         language: appLanguage,
+        attachments: summaryAttachments,
       };
 
       const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs`, {
@@ -974,17 +1089,43 @@ const TranscriptionSummary: React.FC = () => {
       const summaryText =
         summaryTranslations?.[appLanguage]?.trim() ||
         (typeof result.summary === 'string' ? result.summary : String(result.summary ?? ''));
+      const noteTitle = typeof result.title === 'string' && result.title.trim()
+        ? result.title.trim()
+        : 'Untitled note';
+      const meetingAt = new Date().toISOString();
       const transcript = normalizeTranscript(result.transcript);
+      const transcriptionTranslations = result.transcriptionTranslations && typeof result.transcriptionTranslations === 'object'
+        ? result.transcriptionTranslations
+        : undefined;
+      const diarizationTranslations = result.diarizationTranslations && typeof result.diarizationTranslations === 'object'
+        ? result.diarizationTranslations
+        : undefined;
       const audioDurationSeconds =
         typeof result.audioDurationSeconds === 'number' && Number.isFinite(result.audioDurationSeconds)
           ? result.audioDurationSeconds
           : null;
+      try {
+        const uploadedImages = await uploadPendingNoteImages(noteId);
+        setGeneratedNoteImageCount(uploadedImages.length);
+        if (uploadedImages.length > 0) {
+          pendingNoteImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+          setPendingNoteImages([]);
+        }
+      } catch (imageError) {
+        console.error('Failed to save note attachments:', imageError);
+      }
       setSummaryResult({
         summary: summaryText,
         summaryTranslations,
+        transcription_language: result.transcriptionLanguage ?? null,
+        transcription_translations: transcriptionTranslations,
+        diarization_translations: diarizationTranslations,
+        title: noteTitle,
+        meetingAt,
         transcript,
         audioDurationSeconds,
       });
+      setGeneratedTitleDraft(noteTitle);
       setEditedSummary(summaryText);
       setResultsTab('summary');
       
@@ -1069,6 +1210,42 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
+  const getGeneratedTitle = (): string => summaryResult?.title?.trim() || 'Untitled note';
+
+  const startGeneratedTitleEdit = (selectAll = false) => {
+    setIsEditingGeneratedTitle(true);
+    setGeneratedTitleDraft(getGeneratedTitle());
+    window.requestAnimationFrame(() => {
+      generatedTitleInputRef.current?.focus();
+      if (selectAll) generatedTitleInputRef.current?.select();
+    });
+  };
+
+  const saveGeneratedTitleEdit = async () => {
+    if (!summaryResult || !currentNoteId) return;
+    const name = generatedTitleDraft.trim();
+    if (!name || name === getGeneratedTitle()) {
+      setIsEditingGeneratedTitle(false);
+      setGeneratedTitleDraft('');
+      return;
+    }
+
+    try {
+      setSummaryEditError(null);
+      const { error } = await supabase
+        .from('note')
+        .update({ name })
+        .eq('id', currentNoteId);
+      if (error) throw error;
+      setSummaryResult((prev) => (prev ? { ...prev, title: name } : prev));
+    } catch (err: unknown) {
+      setSummaryEditError(err instanceof Error ? err.message : 'Failed to save note title');
+    } finally {
+      setIsEditingGeneratedTitle(false);
+      setGeneratedTitleDraft('');
+    }
+  };
+
   const handleToggleEditSummary = async () => {
     if (!isEditingSummary) {
       setIsEditingSummary(true);
@@ -1121,6 +1298,76 @@ const TranscriptionSummary: React.FC = () => {
 
   const formatTranscriptText = (segments: TranscriptSegment[], language: TranscriptLanguage = transcriptLanguage): string =>
     segments.map((s) => `${s.speaker}: ${getSegmentText(s, language)}`).join('\n\n');
+
+  const getGeneratedTranscriptLanguage = (): TranscriptLanguage => {
+    if (!summaryResult) return 'original';
+    return getAvailableTranscriptLanguages(summaryResult).includes(generatedTranscriptLanguage)
+      ? generatedTranscriptLanguage
+      : 'original';
+  };
+
+  const getGeneratedTranscriptSegments = (): TranscriptSegment[] => {
+    if (!summaryResult) return [];
+    return getDisplayTranscriptSegments(summaryResult, getGeneratedTranscriptLanguage());
+  };
+
+  const persistGeneratedTranscript = async (language: TranscriptLanguage, next: TranscriptSegment[]) => {
+    if (!currentNoteId) return;
+    if (language === 'original') {
+      await persistNoteDiarization(currentNoteId, next);
+      return;
+    }
+    const nextTranslations = updateTranslationMap(summaryResult?.diarization_translations, language, next);
+    const { error } = await supabase
+      .from('note')
+      .update({
+        diarization_translations: nextTranslations,
+        transcription_translations: {
+          ...(summaryResult?.transcription_translations ?? {}),
+          [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+        },
+      })
+      .eq('id', currentNoteId);
+    if (error) throw error;
+  };
+
+  const updateGeneratedTranscript = (language: TranscriptLanguage, next: TranscriptSegment[]) => {
+    setSummaryResult((prev) => {
+      if (!prev) return prev;
+      if (language === 'original') return { ...prev, transcript: next };
+      return {
+        ...prev,
+        diarization_translations: updateTranslationMap(prev.diarization_translations, language, next),
+        transcription_translations: {
+          ...(prev.transcription_translations ?? {}),
+          [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+        },
+      };
+    });
+  };
+
+  const renderGeneratedTranscriptLanguageToggle = () => {
+    if (!summaryResult) return null;
+    const languages = getAvailableTranscriptLanguages(summaryResult);
+    if (languages.length <= 1) return null;
+    const selected = getGeneratedTranscriptLanguage();
+    return (
+      <div className="transcript-language-toggle" role="radiogroup" aria-label="Transcript language">
+        {languages.map((language) => (
+          <button
+            key={language}
+            type="button"
+            role="radio"
+            aria-checked={selected === language}
+            className={`transcript-language-toggle-option ${selected === language ? 'transcript-language-toggle-option-active' : ''}`}
+            onClick={() => setGeneratedTranscriptLanguage(language)}
+          >
+            {getTranscriptLanguageLabel(language)}
+          </button>
+        ))}
+      </div>
+    );
+  };
 
   const handleGenerateProfile = async () => {
     if (!summaryResult || !user?.id) return;
@@ -1255,13 +1502,16 @@ const TranscriptionSummary: React.FC = () => {
     setSaveAllStatus('error');
   };
 
-  const REGENERATE_WEBHOOK = 'https://n8n.srv1153481.hstgr.cloud/webhook/532f465d-d198-4f59-ba75-20c39d41a079';
-
   const handleRegenerateSummary = async () => {
     if (!summaryResult || !currentNoteId || !user?.id) return;
     setIsRegenerating(true);
     setRegenerateError(null);
     try {
+      if (!WORKFLOW_API_URL) {
+        throw new Error('Workflow API URL is not configured.');
+      }
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not acquire Microsoft access token.');
       const uniqueSpeakers = [...new Set(summaryResult.transcript.map((s) => s.speaker).filter(Boolean))];
       const { data: speakerRows } = await supabase
         .from('speaker')
@@ -1276,18 +1526,25 @@ const TranscriptionSummary: React.FC = () => {
           profile: (() => { try { return JSON.parse(s.profile!); } catch { return s.profile; } })(),
         }));
 
-      const response = await fetch(REGENERATE_WEBHOOK, {
+      const response = await fetch(`${WORKFLOW_API_URL}/regenerate-summary`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           noteId: currentNoteId,
           diarization: summaryResult.transcript,
           previousSummary: editedSummary,
           speakerProfiles,
+          instructions: optionalInstructions,
         }),
       });
 
-      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(detail?.error || `Request failed: ${response.status}`);
+      }
 
       const result = await response.json();
       const newSummary = typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
@@ -1790,6 +2047,15 @@ const TranscriptionSummary: React.FC = () => {
                           ))
                         )}
                       </select>
+                      <NoteImageAttachments
+                        mode="pending"
+                        pendingImages={pendingNoteImages}
+                        disabled={isSummarizing}
+                        compact
+                        onPendingImagesAdd={handlePendingImagesAdd}
+                        onPendingImageRemove={handlePendingImageRemove}
+                        className="min-w-0 self-end md:flex-none"
+                      />
                       <button
                         type="button"
                         onClick={() => void handleSummarize()}
@@ -1808,12 +2074,12 @@ const TranscriptionSummary: React.FC = () => {
                         {isSummarizing ? (
                           <>
                             <Loading className="h-4 w-4 shrink-0 animate-spin" />
-                            {t('summarize')}
+                            Generate
                           </>
                         ) : (
                           <>
-                            <PaperPlane className="h-4 w-4 shrink-0" />
-                            {t('summarize')}
+                            <Play className="h-4 w-4 shrink-0" />
+                            Generate
                           </>
                         )}
                       </button>
@@ -1860,11 +2126,57 @@ const TranscriptionSummary: React.FC = () => {
 
                 {summaryResult && !isSummarizing && (
                   <div className="flex flex-1 min-h-0 flex-col px-4 pt-4 md:px-6 md:pt-5">
-                    {formatDurationMeta(summaryResult.audioDurationSeconds) ? (
-                      <p className="mb-2 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                        {formatDurationMeta(summaryResult.audioDurationSeconds)}
+                    <div className="mb-5 min-w-0">
+                      <div className="editable-note-title-row">
+                        <input
+                          ref={generatedTitleInputRef}
+                          value={isEditingGeneratedTitle ? generatedTitleDraft : getGeneratedTitle()}
+                          onFocus={() => {
+                            if (!isEditingGeneratedTitle) {
+                              setIsEditingGeneratedTitle(true);
+                              setGeneratedTitleDraft(getGeneratedTitle());
+                            }
+                          }}
+                          onChange={(event) => setGeneratedTitleDraft(event.target.value)}
+                          onBlur={() => void saveGeneratedTitleEdit()}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              event.currentTarget.blur();
+                            } else if (event.key === 'Escape') {
+                              event.preventDefault();
+                              setIsEditingGeneratedTitle(false);
+                              setGeneratedTitleDraft('');
+                              event.currentTarget.blur();
+                            }
+                          }}
+                          className="editable-note-title-input"
+                          style={{ color: 'var(--text)' }}
+                          aria-label="Edit note title"
+                          maxLength={200}
+                        />
+                        <button
+                          type="button"
+                          className="editable-note-title-icon"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => startGeneratedTitleEdit(true)}
+                          aria-label="Edit note title"
+                          title="Edit note title"
+                          style={{ color: 'var(--text-secondary)' }}
+                        >
+                          <EditPencilLine01 className="h-4 w-4" aria-hidden />
+                        </button>
+                      </div>
+                      <p className="mt-1.5 text-xs font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--text-muted)' }}>
+                        Meeting {formatExactDateTime(summaryResult.meetingAt ?? new Date().toISOString())}
+                        {formatDurationMeta(summaryResult.audioDurationSeconds) ? (
+                          <>
+                            <span className="mx-2" aria-hidden>•</span>
+                            {formatDurationMeta(summaryResult.audioDurationSeconds)}
+                          </>
+                        ) : null}
                       </p>
-                    ) : null}
+                    </div>
                     {summaryResult.transcript.length > 0 ? (
                       <div
                         className="results-header flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"
@@ -1900,6 +2212,20 @@ const TranscriptionSummary: React.FC = () => {
                           >
                             {t('transcription')}
                           </button>
+                          {generatedNoteImageCount > 0 ? (
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={resultsTab === 'images'}
+                              onClick={() => setResultsTab('images')}
+                              className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+                              style={{
+                                color: resultsTab === 'images' ? 'var(--text)' : 'var(--text-secondary)',
+                              }}
+                            >
+                              Attachments
+                            </button>
+                          ) : null}
                         </div>
                         <div className="flex shrink-0 items-center gap-2 pb-2">
                           {resultsTab === 'summary' ? (
@@ -1924,26 +2250,30 @@ const TranscriptionSummary: React.FC = () => {
                               )}
                             </button>
                           ) : null}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void handleCopyText(
-                                resultsTab === 'summary' ? editedSummary : formatTranscriptText(summaryResult.transcript),
-                                resultsTab === 'summary' ? 'summary-result' : 'transcription-result'
-                              )
-                            }
-                            className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
-                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                            title={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
-                            aria-label={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
-                          >
-                            {copiedKey === (resultsTab === 'summary' ? 'summary-result' : 'transcription-result') ? (
-                              <Check className="h-3 w-3" aria-hidden />
-                            ) : (
-                              <Copy className="h-3 w-3" aria-hidden />
-                            )}
-                            {t('copy')}
-                          </button>
+                          {resultsTab !== 'images' ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleCopyText(
+                                  resultsTab === 'summary'
+                                    ? editedSummary
+                                    : getDisplayTranscriptText(summaryResult, getGeneratedTranscriptLanguage()),
+                                  resultsTab === 'summary' ? 'summary-result' : 'transcription-result'
+                                )
+                              }
+                              className="summary-toolbar-btn flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
+                              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                              title={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                              aria-label={resultsTab === 'summary' ? 'Copy summary' : 'Copy transcription'}
+                            >
+                              {copiedKey === (resultsTab === 'summary' ? 'summary-result' : 'transcription-result') ? (
+                                <Check className="h-3 w-3" aria-hidden />
+                              ) : (
+                                <Copy className="h-3 w-3" aria-hidden />
+                              )}
+                              {t('copy')}
+                            </button>
+                          ) : null}
                           <button
                             onClick={() => setShowDiscardModal(true)}
                             className="summary-toolbar-btn summary-toolbar-btn-danger flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-all"
@@ -1959,10 +2289,33 @@ const TranscriptionSummary: React.FC = () => {
                       </div>
                     ) : (
                       <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
-                        <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                          {t('summary')}
-                        </h3>
+                        <div className="-mb-px results-tabs flex min-w-0 gap-1 sm:gap-5" role="tablist">
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={resultsTab === 'summary'}
+                            onClick={() => setResultsTab('summary')}
+                            className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+                            style={{ color: resultsTab === 'summary' ? 'var(--text)' : 'var(--text-secondary)' }}
+                          >
+                            {t('summary')}
+                          </button>
+                          {generatedNoteImageCount > 0 ? (
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={resultsTab === 'images'}
+                              onClick={() => setResultsTab('images')}
+                              className="results-tab px-1 pb-2.5 pt-1 text-sm font-medium transition-colors sm:px-1"
+                              style={{ color: resultsTab === 'images' ? 'var(--text)' : 'var(--text-secondary)' }}
+                            >
+                              Attachments
+                            </button>
+                          ) : null}
+                        </div>
                         <div className="flex items-center gap-2">
+                          {resultsTab === 'summary' ? (
+                            <>
                           <button
                             type="button"
                             onClick={() => void handleCopyText(editedSummary, 'summary-result')}
@@ -2005,11 +2358,13 @@ const TranscriptionSummary: React.FC = () => {
                               </>
                             )}
                           </button>
+                            </>
+                          ) : null}
                         </div>
                       </div>
                     )}
 
-                    {(summaryResult.transcript.length === 0 || resultsTab === 'summary') && (
+                    {(summaryResult.transcript.length === 0 || resultsTab === 'summary') && resultsTab !== 'images' && (
                       <div className="flex flex-1 min-h-0 flex-col pt-4">
                         {isEditingSummary ? (
                           <textarea
@@ -2047,16 +2402,20 @@ const TranscriptionSummary: React.FC = () => {
                         <div className="mb-3 shrink-0">
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <TranscriptSpeakerFilterControls
-                              speakers={getTranscriptSpeakerFilters(summaryResult.transcript)}
+                              speakers={getTranscriptSpeakerFilters(getGeneratedTranscriptSegments())}
                               selectedSpeakers={transcriptSpeakerFilters}
                               onSelectedSpeakersChange={setTranscriptSpeakerFilters}
                             />
+                            {renderGeneratedTranscriptLanguageToggle()}
                           </div>
                         </div>
                         <TranscriptDiarizedEditor
-                          segments={summaryResult.transcript}
+                          segments={getGeneratedTranscriptSegments()}
                           onSegmentsChange={(next) =>
-                            setSummaryResult((prev) => (prev ? { ...prev, transcript: next } : prev))
+                            updateGeneratedTranscript(getGeneratedTranscriptLanguage(), next)
+                          }
+                          onPersistSegments={(next) =>
+                            persistGeneratedTranscript(getGeneratedTranscriptLanguage(), next)
                           }
                           noteId={currentNoteId}
                           scrollContainerClassName="flex-1 min-h-0"
@@ -2074,7 +2433,22 @@ const TranscriptionSummary: React.FC = () => {
                           }
                           canPlaySegment={isPlayableSegment}
                           onPlaySegment={(segment, index) => void handlePlayResultTranscriptSegment(segment, index)}
-                          transcriptLanguage={transcriptLanguage}
+                          transcriptLanguage="original"
+                        />
+                      </div>
+                    ) : null}
+
+                    {currentNoteId && resultsTab === 'images' && generatedNoteImageCount > 0 ? (
+                      <div className="flex flex-1 min-h-0 flex-col pt-4">
+                        <NoteImageAttachments
+                          mode="saved"
+                          noteId={currentNoteId}
+                          userId={user?.id}
+                          showCountButton={false}
+                          onImagesChange={(images) => {
+                            setGeneratedNoteImageCount(images.length);
+                            if (images.length === 0) setResultsTab('summary');
+                          }}
                         />
                       </div>
                     ) : null}
@@ -2795,10 +3169,13 @@ const TranscriptionSummary: React.FC = () => {
                 onClick={() => {
                   stopResultSegmentPlayback();
                   setSummaryResult(null);
+                  setGeneratedTranscriptLanguage('original');
                   setSummaryError(null);
                   setSummaryEditError(null);
                   setEditedSummary('');
                   setIsEditingSummary(false);
+                  setIsEditingGeneratedTitle(false);
+                  setGeneratedTitleDraft('');
                   setCurrentNoteId(null);
                   setResultsTab('summary');
                   setIsForwardTeamsModalOpen(false);

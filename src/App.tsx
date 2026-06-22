@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { PublicClientApplication } from '@azure/msal-browser';
 import { MsalProvider } from '@azure/msal-react';
 import { ThemeProvider as AppThemeProvider } from './theme/ThemeProvider';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { LanguageProvider } from './context/LanguageContext';
 import { msalConfig } from './config/msalConfig';
 import Login from './pages/Login';
@@ -14,9 +14,23 @@ import Project from './pages/Project';
 import AccountSettings from './pages/AccountSettings';
 import AdminAnalytics from './pages/AdminAnalytics';
 import AdminControls from './pages/AdminControls';
+import TranscriptionModelTest from './pages/TranscriptionModelTest';
 import AppShell from './components/AppShell';
+import { canAccessTranscriptionModelTest } from './lib/adminAccess';
 
 const msalInstance = new PublicClientApplication(msalConfig);
+
+const ModelTestRoute: React.FC = () => {
+  const { user, isLoading } = useAuth();
+  if (isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center" style={{ color: 'var(--text-secondary)' }}>
+        <p className="text-sm">Loading…</p>
+      </div>
+    );
+  }
+  return canAccessTranscriptionModelTest(user?.id) ? <TranscriptionModelTest /> : <Navigate to="/history" replace />;
+};
 
 const App: React.FC = () => {
   const [msalReady, setMsalReady] = useState(false);
@@ -58,6 +72,7 @@ const App: React.FC = () => {
                     <Route path="/account-settings" element={<AccountSettings />} />
                     <Route path="/admin-analytics" element={<AdminAnalytics />} />
                     <Route path="/admin-controls" element={<AdminControls />} />
+                    <Route path="/transcription-model-test" element={<ModelTestRoute />} />
                   </Route>
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

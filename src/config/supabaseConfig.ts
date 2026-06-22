@@ -70,4 +70,5 @@ export const supabase = createClient(
 );
 
 export const AUDIO_BUCKET = 'meeting-recordings';
+export const NOTE_IMAGE_BUCKET = 'meeting-note-images';
 

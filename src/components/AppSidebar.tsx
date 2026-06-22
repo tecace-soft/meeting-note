@@ -30,7 +30,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
 import { normalizeTranscript } from '../lib/transcriptSegments';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
-import { isAdminMicrosoftUser } from '../lib/adminAccess';
+import { canAccessTranscriptionModelTest, isAdminMicrosoftUser } from '../lib/adminAccess';
 import tecaceLogoNavy from '../assets/tecace-logo-navy.svg';
 import tecaceLogoWhite from '../assets/tecace-logo-white.svg';
 
@@ -181,13 +181,18 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     (location.pathname === '/history' || location.pathname === '/summary-history' || location.pathname === '/project');
 
   const summaryHistorySectionActive = location.pathname === '/history' || location.pathname === '/summary-history';
-  const visibleNavItems = isAdminMicrosoftUser(user?.id)
-    ? [
-        ...navItems,
-        { to: '/admin-controls', labelKey: 'adminControls' as TranslationKey, icon: Settings, end: false as const },
-        { to: '/admin-analytics', labelKey: 'adminAnalytics' as TranslationKey, icon: ChartBarVertical01, end: false as const },
-      ]
-    : [...navItems];
+  const visibleNavItems = [
+    ...navItems,
+    ...(isAdminMicrosoftUser(user?.id)
+      ? [
+          { to: '/admin-controls', labelKey: 'adminControls' as TranslationKey, icon: Settings, end: false as const },
+          { to: '/admin-analytics', labelKey: 'adminAnalytics' as TranslationKey, icon: ChartBarVertical01, end: false as const },
+        ]
+      : []),
+    ...(canAccessTranscriptionModelTest(user?.id)
+      ? [{ to: '/transcription-model-test', label: 'Model Test', icon: FileDocument, end: false as const }]
+      : []),
+  ];
 
   const getNavItemLabel = (item: { label?: string; labelKey?: TranslationKey }): string =>
     item.labelKey ? t(item.labelKey) : item.label ?? '';

@@ -117,6 +117,7 @@ export interface TranscriptDiarizedEditorProps {
   canPlaySegment?: (segment: TranscriptSegment, index: number) => boolean;
   onPlaySegment?: (segment: TranscriptSegment, index: number) => void;
   transcriptLanguage?: TranscriptLanguage;
+  onPersistSegments?: (next: TranscriptSegment[]) => Promise<void>;
 }
 
 export function getTranscriptSpeakerFilters(segments: TranscriptSegment[]): string[] {
@@ -215,6 +216,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   canPlaySegment,
   onPlaySegment,
   transcriptLanguage = 'original',
+  onPersistSegments,
 }) => {
   const scopeGroupId = useId();
   const { user, getAccessToken } = useAuth();
@@ -337,7 +339,11 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       setSegmentEditError(null);
     try {
       if (noteId) {
-        await persistNoteDiarization(noteId, nextTranscript);
+        if (onPersistSegments) {
+          await onPersistSegments(nextTranscript);
+        } else {
+          await persistNoteDiarization(noteId, nextTranscript);
+        }
       }
       startTransition(() => {
         onSegmentsChange(nextTranscript);
@@ -351,7 +357,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     } finally {
       setSegmentEditSavingIndex(null);
     }
-  }, [editingSegment, noteId, onSegmentsChange, segments, t, transcriptLanguage]);
+  }, [editingSegment, noteId, onPersistSegments, onSegmentsChange, segments, t, transcriptLanguage]);
 
   const scheduleSegmentTextAutosave = useCallback(() => {
     if (segmentEditSaveTimeoutRef.current != null) {
@@ -606,7 +612,11 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       );
 
       if (noteId) {
-        await persistNoteDiarization(noteId, nextTranscript);
+        if (onPersistSegments) {
+          await onPersistSegments(nextTranscript);
+        } else {
+          await persistNoteDiarization(noteId, nextTranscript);
+        }
       }
 
       const selectedSpeaker =
@@ -694,7 +704,11 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       );
 
       if (noteId) {
-        await persistNoteDiarization(noteId, nextTranscript);
+        if (onPersistSegments) {
+          await onPersistSegments(nextTranscript);
+        } else {
+          await persistNoteDiarization(noteId, nextTranscript);
+        }
       }
       await shareCurrentNoteWithMicrosoftUser(speakerRow.microsoft_id);
 
