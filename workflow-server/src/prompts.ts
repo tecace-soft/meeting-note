@@ -105,6 +105,7 @@ export function buildSummaryPrompt(input: {
   speakerContext?: string;
   globalSummaryContext?: string;
   outputLanguage?: 'en' | 'ko';
+  hasAttachments?: boolean;
 }): string {
   const speakerContext = input.speakerContext?.trim()
     ? `\nSPEAKER CONTEXT\n'''\n${input.speakerContext.trim()}\n'''\n`
@@ -117,6 +118,23 @@ export function buildSummaryPrompt(input: {
     ? `Meeting date is ${input.meetingDate}`
     : 'Meeting date is unknown; do not assume it is today unless the transcript says so.';
   const outputLanguageName = input.outputLanguage === 'ko' ? 'Korean' : 'English';
+  const attachmentSectionHeading = input.outputLanguage === 'ko' ? '## 첨부 파일' : '## Attached Files';
+  const attachmentInstructions = input.hasAttachments
+    ? `
+ATTACHED FILE REQUIREMENTS
+- Attached files were provided with this meeting. You must inspect them and account for them in the summary.
+- Use the File Transcript as the primary source of truth, but use attached file content as meeting context when it clarifies topics, names, slide/document content, requirements, numbers, dates, project details, risks, decisions, or action items.
+- The summary markdown MUST include this exact dedicated section heading: ${attachmentSectionHeading}
+- This attached-files section is required even when the files appear unrelated or unreadable.
+- If attachment content is relevant, weave it into the appropriate topic, decision, action item, or context section.
+- In the dedicated attached-files section, briefly describe each attached file and explain its relationship to the meeting transcript using specific examples.
+- For each relevant attachment, include concrete details such as visible/readable terms, slide titles, document headings, filenames, numbers, dates, requirements, screenshots, labels, or other file content, then state which meeting topic or transcript discussion it supports.
+- Avoid generic statements like "the attachment provides context" unless followed by the specific file detail and the specific meeting topic it relates to.
+- If no relationship can be found between an attachment and the transcript, say so explicitly in the dedicated attached-files section.
+- If an attachment cannot be interpreted, say that it could not be read or interpreted in the dedicated attached-files section.
+- Do not invent facts from attachments. Only use information that is visible, readable, or directly supported by the transcript.
+`
+    : '';
 
   return `OUTPUT LANGUAGE - HIGHEST PRIORITY
 - The summary field MUST be written entirely in ${outputLanguageName}.
@@ -134,6 +152,7 @@ Below in quotes are non-negotiable instructions sent by the user for your summar
 
 JSON RESPONSE STRUCTURE
 Your response must contain three fields: title, summary, and tags. Title should be a concise but descriptive (NO MORE THAN 6 WORDS) title based on the contents of the meeting. It must be in English. Tags should be an array of single word text values that can be used to describe/categorize the meeting. Summary must be generated in ${outputLanguageName} using the SUMMARIZATION RULES below. Most importantly your output must follow this JSON format:
+${input.hasAttachments ? `\nBecause attached files were provided, the summary markdown MUST include a dedicated section with this exact heading: ${attachmentSectionHeading}\n` : ''}
 
 {
   "title": <concise descriptive title>,
@@ -150,10 +169,12 @@ Your response must contain three fields: title, summary, and tags. Title should 
 
 SUMMARIZATION RULES
 ${input.summaryRules}
+${attachmentInstructions}
 ${globalSummaryContext}
 ${speakerContext}
 GROUNDING RULES
-- Base the summary only on the File Transcript.
+- Base the summary on the File Transcript and, when attached files are provided, the readable/visible content of those attached files.
+- The File Transcript remains the primary source of truth. Attached files are supporting context, but they must be inspected and accounted for when provided.
 - Global summary context may guide terminology, preferred style, company background, and recurring project/product names, but it must not add facts that are absent from the File Transcript.
 - If the summary needs to mention or reason about the meeting date, use the Meeting date above, not Today's date.
 - Today's date is only the date this summary is being generated.
