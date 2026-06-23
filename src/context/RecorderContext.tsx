@@ -1,4 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useAuth } from './AuthContext';
+import { RECORDING_DRAFT_BUCKET, supabase } from '../config/supabaseConfig';
 
 interface RecordingFormat {
   mimeType: string;
@@ -6,13 +8,21 @@ interface RecordingFormat {
 }
 
 type WakeLockState = 'active' | 'unavailable' | 'denied' | 'released';
+type RecordingRecoverabilityStatus = 'protected' | 'local-only' | 'unprotected';
 
 interface RecoverableRecordingSession {
   id: string;
+  draftId?: string | null;
+  userId?: string | null;
   fileName: string;
   mimeType: string;
   startedAt: number;
+  lastChunkAt?: number | null;
   chunkCount: number;
+  totalBytes?: number;
+  cloudChunkCount?: number;
+  cloudBacked?: boolean;
+  partial?: boolean;
 }
 
 interface RecorderContextValue {
@@ -27,11 +37,13 @@ interface RecorderContextValue {
   playbackCurrentTime: number;
   wakeLockState: WakeLockState;
   wakeLockWarning: string | null;
+  recoverabilityStatus: RecordingRecoverabilityStatus;
+  recoveryWarning: string | null;
   recoverableSession: RecoverableRecordingSession | null;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   discardRecording: () => void;
-  clearRecording: () => void;
+  clearRecording: (options?: { discardDraft?: boolean }) => void;
   recoverRecording: () => Promise<void>;
   togglePlayback: () => void;
   seekPlaybackRatio: (ratio: number) => void;
@@ -53,7 +65,7 @@ const DB_VERSION = 1;
 const SESSION_STORE = 'session';
 const CHUNK_STORE = 'chunks';
 const ACTIVE_SESSION_ID = 'active';
-const RECORDING_TIMESLICE_MS = 10000;
+const RECORDING_TIMESLICE_MS = 2000;
 
 const RecorderContext = createContext<RecorderContextValue | null>(null);
 
@@ -124,7 +136,7 @@ function saveChunk(sessionId: string, index: number, blob: Blob): Promise<IDBVal
   );
 }
 
-async function getChunks(sessionId: string): Promise<Blob[]> {
+async function getChunkRows(sessionId: string): Promise<Array<{ sessionId: string; index: number; blob: Blob }>> {
   const db = await openRecorderDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(CHUNK_STORE, 'readonly');
@@ -134,7 +146,7 @@ async function getChunks(sessionId: string): Promise<Blob[]> {
       const rows = (request.result as Array<{ sessionId: string; index: number; blob: Blob }>)
         .filter((row) => row.sessionId === sessionId)
         .sort((a, b) => a.index - b.index);
-      resolve(rows.map((row) => row.blob));
+      resolve(rows);
     };
     request.onerror = () => reject(request.error ?? new Error('Could not read recorder chunks.'));
     tx.oncomplete = () => db.close();
@@ -143,6 +155,11 @@ async function getChunks(sessionId: string): Promise<Blob[]> {
       reject(tx.error ?? new Error('Could not read recorder chunks.'));
     };
   });
+}
+
+async function getChunks(sessionId: string): Promise<Blob[]> {
+  const rows = await getChunkRows(sessionId);
+  return rows.map((row) => row.blob);
 }
 
 async function clearPersistedRecording(): Promise<void> {
@@ -163,7 +180,179 @@ async function clearPersistedRecording(): Promise<void> {
   }).catch(() => undefined);
 }
 
+function getDraftChunkPath(userId: string, draftId: string, index: number, extension: string): string {
+  return `${userId}/${draftId}/chunks/${String(index).padStart(6, '0')}.${extension}`;
+}
+
+function getRecoveredDurationFallback(session: RecoverableRecordingSession): number {
+  if (session.lastChunkAt && session.lastChunkAt > session.startedAt) {
+    return Math.max(0, Math.round((session.lastChunkAt - session.startedAt) / 1000));
+  }
+  return Math.max(0, Math.round((session.chunkCount * RECORDING_TIMESLICE_MS) / 1000));
+}
+
+function getAudioBlobDurationSeconds(blob: Blob): Promise<number | null> {
+  if (typeof Audio === 'undefined' || typeof URL === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio();
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      audio.removeAttribute('src');
+    };
+    audio.onloadedmetadata = () => {
+      const duration = Number.isFinite(audio.duration) && audio.duration > 0
+        ? Math.round(audio.duration)
+        : null;
+      cleanup();
+      resolve(duration);
+    };
+    audio.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+    audio.src = url;
+  });
+}
+
+function getExtensionFromMimeType(mimeType: string): string {
+  if (mimeType.includes('mp4') || mimeType.includes('aac')) return 'm4a';
+  if (mimeType.includes('webm')) return 'webm';
+  return 'bin';
+}
+
+async function upsertCloudDraft(session: RecoverableRecordingSession): Promise<void> {
+  if (!session.userId || !session.draftId) return;
+  const { error } = await supabase.from('recording_draft').upsert({
+    id: session.draftId,
+    user_id: session.userId,
+    file_name: session.fileName,
+    mime_type: session.mimeType,
+    started_at: new Date(session.startedAt).toISOString(),
+    last_chunk_at: session.lastChunkAt ? new Date(session.lastChunkAt).toISOString() : null,
+    chunk_count: session.chunkCount,
+    total_bytes: session.totalBytes ?? 0,
+    status: 'active',
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+}
+
+async function uploadCloudDraftChunk(params: {
+  userId: string;
+  draftId: string;
+  mimeType: string;
+  index: number;
+  blob: Blob;
+}): Promise<void> {
+  const storagePath = getDraftChunkPath(
+    params.userId,
+    params.draftId,
+    params.index,
+    getExtensionFromMimeType(params.mimeType)
+  );
+  const { error: uploadError } = await supabase.storage
+    .from(RECORDING_DRAFT_BUCKET)
+    .upload(storagePath, params.blob, {
+      cacheControl: '86400',
+      contentType: params.mimeType,
+      upsert: true,
+    });
+  if (uploadError) throw uploadError;
+
+  const { error: chunkError } = await supabase.from('recording_draft_chunk').upsert({
+    draft_id: params.draftId,
+    user_id: params.userId,
+    chunk_index: params.index,
+    bucket: RECORDING_DRAFT_BUCKET,
+    storage_path: storagePath,
+    mime_type: params.mimeType,
+    size_bytes: params.blob.size,
+  }, { onConflict: 'draft_id,chunk_index' });
+  if (chunkError) throw chunkError;
+}
+
+async function getLatestCloudDraft(userId: string): Promise<RecoverableRecordingSession | null> {
+  const { data, error } = await supabase
+    .from('recording_draft')
+    .select('id, user_id, file_name, mime_type, started_at, last_chunk_at, chunk_count, total_bytes')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .gt('chunk_count', 0)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as {
+    id: string;
+    user_id: string;
+    file_name: string;
+    mime_type: string;
+    started_at: string;
+    last_chunk_at?: string | null;
+    chunk_count?: number | null;
+    total_bytes?: number | null;
+  };
+  return {
+    id: ACTIVE_SESSION_ID,
+    draftId: row.id,
+    userId: row.user_id,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    startedAt: new Date(row.started_at).getTime(),
+    lastChunkAt: row.last_chunk_at ? new Date(row.last_chunk_at).getTime() : null,
+    chunkCount: row.chunk_count ?? 0,
+    totalBytes: row.total_bytes ?? 0,
+    cloudChunkCount: row.chunk_count ?? 0,
+    cloudBacked: true,
+    partial: true,
+  };
+}
+
+async function getCloudDraftChunks(session: RecoverableRecordingSession): Promise<Blob[]> {
+  if (!session.userId || !session.draftId) return [];
+  const { data, error } = await supabase
+    .from('recording_draft_chunk')
+    .select('bucket, storage_path')
+    .eq('draft_id', session.draftId)
+    .eq('user_id', session.userId)
+    .order('chunk_index', { ascending: true });
+  if (error) throw error;
+  const rows = (data ?? []) as Array<{ bucket: string; storage_path: string }>;
+  const blobs: Blob[] = [];
+  for (const row of rows) {
+    const { data: signed, error: signedError } = await supabase.storage
+      .from(row.bucket || RECORDING_DRAFT_BUCKET)
+      .createSignedUrl(row.storage_path, 60 * 10);
+    if (signedError || !signed?.signedUrl) throw signedError ?? new Error('Could not create draft chunk URL.');
+    const response = await fetch(signed.signedUrl);
+    if (!response.ok) throw new Error(`Could not download draft chunk: ${response.status}`);
+    blobs.push(await response.blob());
+  }
+  return blobs;
+}
+
+async function deleteCloudDraft(session: RecoverableRecordingSession | null): Promise<void> {
+  if (!session?.userId || !session.draftId) return;
+  const { data } = await supabase
+    .from('recording_draft_chunk')
+    .select('bucket, storage_path')
+    .eq('draft_id', session.draftId)
+    .eq('user_id', session.userId);
+  const rows = (data ?? []) as Array<{ bucket: string; storage_path: string }>;
+  const pathsByBucket = rows.reduce<Record<string, string[]>>((acc, row) => {
+    const bucket = row.bucket || RECORDING_DRAFT_BUCKET;
+    acc[bucket] = [...(acc[bucket] ?? []), row.storage_path];
+    return acc;
+  }, {});
+  await Promise.all(
+    Object.entries(pathsByBucket).map(([bucket, paths]) => supabase.storage.from(bucket).remove(paths))
+  );
+  await supabase.from('recording_draft').delete().eq('id', session.draftId).eq('user_id', session.userId);
+}
+
 export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
@@ -175,6 +364,8 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
   const [wakeLockState, setWakeLockState] = useState<WakeLockState>('released');
   const [wakeLockWarning, setWakeLockWarning] = useState<string | null>(null);
+  const [recoverabilityStatus, setRecoverabilityStatus] = useState<RecordingRecoverabilityStatus>('local-only');
+  const [recoveryWarning, setRecoveryWarning] = useState<string | null>(null);
   const [recoverableSession, setRecoverableSession] = useState<RecoverableRecordingSession | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -186,8 +377,10 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const keepScreenAwakeRef = useRef(false);
   const wakeLockKeepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingSessionRef = useRef<RecoverableRecordingSession | null>(null);
+  const recordedSessionRef = useRef<RecoverableRecordingSession | null>(null);
   const chunkIndexRef = useRef(0);
   const stopResolveRef = useRef<(() => void) | null>(null);
+  const cloudDraftFailuresRef = useRef(0);
 
   const clearPlayback = useCallback(() => {
     if (audioPlayerRef.current) {
@@ -253,6 +446,40 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
+  const updateRecoveryStatus = useCallback((next: {
+    indexedDbOk?: boolean;
+    cloudOk?: boolean;
+    message?: string | null;
+  }) => {
+    if (next.cloudOk) {
+      setRecoverabilityStatus('protected');
+      setRecoveryWarning(null);
+      return;
+    }
+    if (next.indexedDbOk) {
+      setRecoverabilityStatus('local-only');
+      setRecoveryWarning(next.message ?? 'Recording is saved on this device. Cloud backup is not available right now.');
+      return;
+    }
+    setRecoverabilityStatus('unprotected');
+    setRecoveryWarning(next.message ?? 'Recording recovery is degraded. Keep this page open until recording is complete.');
+  }, []);
+
+  const flushRecorderData = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+    try {
+      recorder.requestData();
+    } catch {
+      /* Some browsers throw if requestData races with stop. */
+    }
+  }, []);
+
+  const clearDraftBackups = useCallback((session: RecoverableRecordingSession | null) => {
+    void clearPersistedRecording();
+    void deleteCloudDraft(session);
+  }, []);
+
   const finalizeRecording = useCallback(async (fallbackMimeType?: string) => {
     const session = recordingSessionRef.current;
     const persistedChunks = session ? await getChunks(session.id).catch(() => []) : [];
@@ -268,8 +495,11 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setRecordedBlob(audioBlob);
       setRecordedMimeType(mimeType);
       setRecordedFileName(session?.fileName ?? recordedFileName);
+      recordedSessionRef.current = session;
+      void getAudioBlobDurationSeconds(audioBlob).then((duration) => {
+        if (duration != null) setRecordingTime(duration);
+      });
       setRecoverableSession(null);
-      await clearPersistedRecording();
     }
     recordingSessionRef.current = null;
     audioChunksRef.current = [];
@@ -288,6 +518,10 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const startRecording = useCallback(async () => {
     try {
+      if (recoverableSession) {
+        alert('Recover or discard the interrupted recording before starting a new one.');
+        return;
+      }
       clearPlayback();
       startScreenWakeLockKeepAlive();
       await clearPersistedRecording();
@@ -295,16 +529,46 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       streamRef.current = stream;
       const recordingFormat = getPreferredRecordingFormat();
       const fileName = formatRecordingFileName(recordingFormat.extension);
+      const draftId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null;
       const session: RecoverableRecordingSession = {
         id: ACTIVE_SESSION_ID,
+        draftId,
+        userId: user?.id ?? null,
         fileName,
         mimeType: recordingFormat.mimeType,
         startedAt: Date.now(),
+        lastChunkAt: null,
         chunkCount: 0,
+        totalBytes: 0,
+        cloudChunkCount: 0,
+        cloudBacked: false,
       };
       recordingSessionRef.current = session;
+      recordedSessionRef.current = null;
       setRecoverableSession(null);
-      await saveSession(session).catch(() => undefined);
+      cloudDraftFailuresRef.current = 0;
+      const indexedDbOk = await saveSession(session).then(() => true).catch(() => false);
+      if (!indexedDbOk) {
+        updateRecoveryStatus({
+          indexedDbOk: false,
+          cloudOk: false,
+          message: 'This browser could not save recording chunks locally. Keep this page open until recording is complete.',
+        });
+      } else if (user?.id && draftId) {
+        await upsertCloudDraft(session)
+          .then(() => updateRecoveryStatus({ indexedDbOk: true, cloudOk: true }))
+          .catch(() => updateRecoveryStatus({
+            indexedDbOk: true,
+            cloudOk: false,
+            message: 'Recording is saved on this device, but cloud backup is not available right now.',
+          }));
+      } else {
+        updateRecoveryStatus({
+          indexedDbOk: true,
+          cloudOk: false,
+          message: 'Recording is saved on this device only. Sign in is required for cloud backup.',
+        });
+      }
 
       const mediaRecorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
       mediaRecorderRef.current = mediaRecorder;
@@ -315,10 +579,57 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (event.data.size <= 0) return;
         const index = chunkIndexRef.current++;
         audioChunksRef.current.push(event.data);
-        const nextSession = { ...session, chunkCount: index + 1 };
+        const previousTotalBytes = recordingSessionRef.current?.totalBytes ?? 0;
+        const nextSession = {
+          ...(recordingSessionRef.current ?? session),
+          lastChunkAt: Date.now(),
+          chunkCount: index + 1,
+          totalBytes: previousTotalBytes + event.data.size,
+        };
         recordingSessionRef.current = nextSession;
-        void saveSession(nextSession).catch(() => undefined);
-        void saveChunk(session.id, index, event.data).catch(() => undefined);
+        void saveSession(nextSession).catch(() => {
+          updateRecoveryStatus({
+            indexedDbOk: false,
+            cloudOk: Boolean(nextSession.cloudBacked),
+            message: 'This browser stopped saving local recording chunks. Keep this page open until recording is complete.',
+          });
+        });
+        void saveChunk(session.id, index, event.data).catch(() => {
+          updateRecoveryStatus({
+            indexedDbOk: false,
+            cloudOk: Boolean(nextSession.cloudBacked),
+            message: 'This browser stopped saving local recording chunks. Keep this page open until recording is complete.',
+          });
+        });
+        if (nextSession.userId && nextSession.draftId) {
+          void uploadCloudDraftChunk({
+            userId: nextSession.userId,
+            draftId: nextSession.draftId,
+            mimeType: nextSession.mimeType,
+            index,
+            blob: event.data,
+          })
+            .then(async () => {
+              const cloudBackedSession = {
+                ...(recordingSessionRef.current ?? nextSession),
+                cloudBacked: true,
+                cloudChunkCount: Math.max(recordingSessionRef.current?.cloudChunkCount ?? 0, index + 1),
+              };
+              recordingSessionRef.current = cloudBackedSession;
+              await upsertCloudDraft(cloudBackedSession);
+              updateRecoveryStatus({ indexedDbOk: true, cloudOk: true });
+            })
+            .catch(() => {
+              cloudDraftFailuresRef.current += 1;
+              if (cloudDraftFailuresRef.current <= 2) {
+                updateRecoveryStatus({
+                  indexedDbOk: true,
+                  cloudOk: false,
+                  message: 'Recording is saved on this device, but cloud backup is currently failing.',
+                });
+              }
+            });
+        }
       };
       mediaRecorder.onstop = () => {
         void finalizeRecording(mediaRecorder.mimeType || recordingFormat.mimeType);
@@ -354,7 +665,7 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       console.error('Error starting recording:', error);
       alert('Could not access microphone. Please ensure you have granted microphone permissions.');
     }
-  }, [clearPlayback, finalizeRecording, releaseScreenWakeLock, startScreenWakeLockKeepAlive]);
+  }, [clearPlayback, finalizeRecording, recoverableSession, releaseScreenWakeLock, startScreenWakeLockKeepAlive, updateRecoveryStatus, user?.id]);
 
   const stopRecording = useCallback(async () => {
     const recorder = mediaRecorderRef.current;
@@ -365,13 +676,18 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const stopped = new Promise<void>((resolve) => {
       stopResolveRef.current = resolve;
     });
-    recorder.requestData();
+    try {
+      recorder.requestData();
+    } catch {
+      /* requestData can race with browser/device-driven stop. */
+    }
     recorder.stop();
     await stopped;
   }, [finalizeRecording]);
 
-  const clearRecording = useCallback(() => {
+  const clearRecording = useCallback((options?: { discardDraft?: boolean }) => {
     clearPlayback();
+    const sessionToDelete = recordedSessionRef.current ?? recoverableSession ?? recordingSessionRef.current;
     setRecordedAudioUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return null;
@@ -380,13 +696,20 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setRecordedFileName('Recording.m4a');
     setRecordedMimeType('audio/mp4');
     setRecordingTime(0);
-  }, [clearPlayback]);
+    recordedSessionRef.current = null;
+    if (options?.discardDraft) {
+      clearDraftBackups(sessionToDelete);
+      setRecoverableSession(null);
+    }
+  }, [clearDraftBackups, clearPlayback, recoverableSession]);
 
   const discardRecording = useCallback(() => {
+    const sessionToDelete = recordingSessionRef.current ?? recordedSessionRef.current ?? recoverableSession;
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.onstop = null;
       mediaRecorderRef.current.stop();
     }
+    mediaRecorderRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     setIsRecording(false);
@@ -395,18 +718,20 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       recordingIntervalRef.current = null;
     }
     recordingSessionRef.current = null;
+    mediaRecorderRef.current = null;
     audioChunksRef.current = [];
     chunkIndexRef.current = 0;
-    void clearPersistedRecording();
+    clearDraftBackups(sessionToDelete);
     void releaseScreenWakeLock();
     setRecoverableSession(null);
     clearRecording();
-  }, [clearRecording, releaseScreenWakeLock]);
+  }, [clearDraftBackups, clearRecording, recoverableSession, releaseScreenWakeLock]);
 
   const recoverRecording = useCallback(async () => {
     const session = recoverableSession ?? await getSession().catch(() => undefined);
     if (!session) return;
-    const chunks = await getChunks(session.id).catch(() => []);
+    const localChunks = await getChunks(session.id).catch(() => []);
+    const chunks = localChunks.length > 0 ? localChunks : await getCloudDraftChunks(session).catch(() => []);
     if (chunks.length === 0) return;
     const blob = new Blob(chunks, { type: session.mimeType });
     setRecordedAudioUrl((prev) => {
@@ -416,9 +741,12 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setRecordedBlob(blob);
     setRecordedFileName(session.fileName);
     setRecordedMimeType(session.mimeType);
-    setRecordingTime(Math.max(0, Math.round((Date.now() - session.startedAt) / 1000)));
+    setRecordingTime(getRecoveredDurationFallback(session));
+    void getAudioBlobDurationSeconds(blob).then((duration) => {
+      if (duration != null) setRecordingTime(duration);
+    });
+    recordedSessionRef.current = { ...session, partial: true };
     setRecoverableSession(null);
-    await clearPersistedRecording();
   }, [recoverableSession]);
 
   const togglePlayback = useCallback(() => {
@@ -457,30 +785,63 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   useEffect(() => {
-    void getSession().then((session) => {
-      if (session?.chunkCount) setRecoverableSession(session);
-    }).catch(() => undefined);
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      const localSession = await getSession().catch(() => undefined);
+      if (cancelled) return;
+      if (localSession?.chunkCount) {
+        setRecoverableSession(localSession);
+        return;
+      }
+      if (!user?.id) return;
+      const cloudSession = await getLatestCloudDraft(user.id).catch(() => null);
+      if (!cancelled && cloudSession?.chunkCount) setRecoverableSession(cloudSession);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const handleVisibilityChange = () => {
+      if (isRecording) flushRecorderData();
       if (document.visibilityState === 'visible' && isRecording) {
         startScreenWakeLockKeepAlive();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isRecording, startScreenWakeLockKeepAlive]);
+  }, [flushRecorderData, isRecording, startScreenWakeLockKeepAlive]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePageHide = () => {
+      if (isRecording) flushRecorderData();
+    };
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isRecording) return;
+      flushRecorderData();
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [flushRecorderData, isRecording]);
 
   useEffect(() => {
     return () => {
       if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
       if (wakeLockKeepAliveIntervalRef.current) clearInterval(wakeLockKeepAliveIntervalRef.current);
+      flushRecorderData();
       streamRef.current?.getTracks().forEach((track) => track.stop());
       if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
     };
-  }, [recordedAudioUrl]);
+  }, [flushRecorderData, recordedAudioUrl]);
 
   return (
     <RecorderContext.Provider
@@ -496,6 +857,8 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         playbackCurrentTime,
         wakeLockState,
         wakeLockWarning,
+        recoverabilityStatus,
+        recoveryWarning,
         recoverableSession,
         startRecording,
         stopRecording,

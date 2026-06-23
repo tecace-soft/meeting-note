@@ -16,6 +16,8 @@ const FloatingRecorderWidget: React.FC = () => {
     isRecording,
     recordingTime,
     wakeLockWarning,
+    recoverabilityStatus,
+    recoveryWarning,
     stopRecording,
     discardRecording,
   } = useRecorder();
@@ -65,7 +67,11 @@ const FloatingRecorderWidget: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={discardRecording}
+          onClick={() => {
+            if (window.confirm('This will permanently discard the saved recording backup. Continue?')) {
+              discardRecording();
+            }
+          }}
           className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
           style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
           aria-label="Discard recording"
@@ -77,6 +83,11 @@ const FloatingRecorderWidget: React.FC = () => {
       {wakeLockWarning ? (
         <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
           {wakeLockWarning}
+        </p>
+      ) : null}
+      {recoveryWarning || recoverabilityStatus === 'protected' ? (
+        <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+          {recoveryWarning ?? 'Recovery protected'}
         </p>
       ) : null}
     </div>
