@@ -254,6 +254,8 @@ const TranscriptionSummary: React.FC = () => {
     playbackProgress,
     playbackCurrentTime,
     wakeLockWarning,
+    recoverabilityStatus,
+    recoveryWarning,
     recoverableSession,
     startRecording,
     stopRecording,
@@ -354,6 +356,10 @@ const TranscriptionSummary: React.FC = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const confirmDiscardRecording = useCallback((): boolean => {
+    return window.confirm('This will permanently discard the saved recording backup. Continue?');
+  }, []);
+
   const useRecording = () => {
     if (!recordedBlob) return;
 
@@ -371,8 +377,9 @@ const TranscriptionSummary: React.FC = () => {
     };
     
     setUploadedFiles([newFile]);
-    uploadToSupabase(newFile.id, audioFile, 'recording');
-    clearRecording();
+    void uploadToSupabase(newFile.id, audioFile, 'recording').then((ok) => {
+      if (ok) clearRecording({ discardDraft: true });
+    });
   };
 
   const seekPlayback = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -703,11 +710,11 @@ const TranscriptionSummary: React.FC = () => {
     setUploadedFiles((prev) => [...prev, ...newUploadedFiles]);
 
     newUploadedFiles.forEach((meta, i) => {
-      uploadToSupabase(meta.id, audioFiles[i], 'upload');
+      void uploadToSupabase(meta.id, audioFiles[i], 'upload');
     });
   };
 
-  const uploadToSupabase = async (fileId: string, file: File, source: 'upload' | 'recording') => {
+  const uploadToSupabase = async (fileId: string, file: File, source: 'upload' | 'recording'): Promise<boolean> => {
     setUploadedFiles((prev) =>
       prev.map((f) => (f.id === fileId ? { ...f, status: 'uploading', progress: 0 } : f))
     );
@@ -771,6 +778,7 @@ const TranscriptionSummary: React.FC = () => {
         audioFileId = await saveAudioFileRecord(file, filePath, source);
       } catch (recordError) {
         console.error('Failed to save audio file metadata:', recordError);
+        if (source === 'recording') throw recordError;
       }
 
       setUploadedFiles((prev) =>
@@ -789,6 +797,7 @@ const TranscriptionSummary: React.FC = () => {
             : f
         )
       );
+      return true;
     } catch (error: any) {
       console.error('Upload error:', error);
       setUploadedFiles((prev) =>
@@ -802,6 +811,7 @@ const TranscriptionSummary: React.FC = () => {
             : f
         )
       );
+      return false;
     } finally {
       uploadProgressGateRef.current.delete(fileId);
       activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
@@ -813,7 +823,7 @@ const TranscriptionSummary: React.FC = () => {
 
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
-    clearRecording();
+    clearRecording({ discardDraft: true });
   };
 
   const handlePendingImagesAdd = useCallback((images: PendingNoteImage[]) => {
@@ -1617,6 +1627,19 @@ const TranscriptionSummary: React.FC = () => {
                 {wakeLockWarning}
               </div>
             ) : null}
+            {(recoveryWarning || (isRecording && recoverabilityStatus === 'protected')) ? (
+              <div
+                className="mb-4 rounded-lg border px-4 py-3 text-sm"
+                style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {recoveryWarning ??
+                  'Recording recovery is protected with local chunks and cloud draft backup.'}
+              </div>
+            ) : null}
             {recoverableSession && !isRecording && !recordedAudioUrl ? (
               <div className="card mb-4 rounded-lg p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1625,7 +1648,7 @@ const TranscriptionSummary: React.FC = () => {
                       {appLanguage === 'ko' ? '중단된 녹음 복구' : 'Recover interrupted recording'}
                     </p>
                     <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                      {appLanguage === 'ko' ? '이 기기에 이전 녹음의 오디오 조각이 저장되어 있습니다.' : 'A previous recording has saved audio chunks on this device.'}
+                      {appLanguage === 'ko' ? '복구할 수 있는 이전 녹음 백업이 있습니다.' : 'A previous recording backup is available for recovery.'}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -1639,7 +1662,9 @@ const TranscriptionSummary: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={discardRecording}
+                      onClick={() => {
+                        if (confirmDiscardRecording()) discardRecording();
+                      }}
                       className="rounded-lg px-4 py-2 text-sm font-medium"
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                     >
@@ -1799,7 +1824,9 @@ const TranscriptionSummary: React.FC = () => {
                       </a>
                     ) : null}
                     <button
-                      onClick={clearRecording}
+                      onClick={() => {
+                        if (confirmDiscardRecording()) clearRecording({ discardDraft: true });
+                      }}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                     >

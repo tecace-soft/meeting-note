@@ -10,6 +10,7 @@ import AppSidebar, {
 } from './AppSidebar';
 import { useIsMdUp } from '../hooks/useIsMdUp';
 import FloatingRecorderWidget from './FloatingRecorderWidget';
+import RecordingNavigationGuard from './RecordingNavigationGuard';
 import { RecorderProvider } from '../context/RecorderContext';
 
 function readInitialCollapsed(): boolean {
@@ -87,6 +88,7 @@ const AppShell: React.FC = () => {
         </div>
 
         <FloatingRecorderWidget />
+        <RecordingNavigationGuard />
 
         {mobileOverlay && collapsed ? (
           <div
