@@ -16,6 +16,8 @@ interface RequestBody {
 
 /** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 interface GeminiGenerateContentResponse {
   candidates?: {
@@ -93,6 +95,50 @@ async function callGeminiGenerateContent(
     };
   }
   return { rawText };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseFallbackModels(primaryModel: string): string[] {
+  const configured = Deno.env.get('GEMINI_FALLBACK_MODELS')
+    ?.split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+  const fallbackModels = configured?.length ? configured : DEFAULT_GEMINI_FALLBACK_MODELS;
+  return [primaryModel, ...fallbackModels].filter((model, index, models) => model && models.indexOf(model) === index);
+}
+
+async function callGeminiWithRetryAndFallback(
+  apiKey: string,
+  primaryModel: string,
+  systemPrompt: string,
+  userPrompt: string
+): Promise<{ rawText: string; error?: string; status?: number; model?: string }> {
+  const models = parseFallbackModels(primaryModel);
+  let lastResult: { rawText: string; error?: string; status?: number } | null = null;
+
+  for (const model of models) {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const result = await callGeminiGenerateContent(apiKey, model, systemPrompt, userPrompt);
+      if (!result.error) return { ...result, model };
+
+      lastResult = result;
+      const retryable = typeof result.status === 'number' && RETRYABLE_GEMINI_STATUSES.has(result.status);
+      if (!retryable) break;
+      if (attempt < maxAttempts) {
+        await sleep(700 * attempt + Math.floor(Math.random() * 300));
+      }
+    }
+  }
+
+  return {
+    rawText: '',
+    error: lastResult?.error ?? 'Gemini profile generation failed after retries and fallback models.',
+    status: lastResult?.status ?? 502,
+  };
 }
 
 interface SpeakerOntology {
@@ -471,7 +517,7 @@ serve(async (req) => {
       ? buildUpdateProfilePrompt(speakerName, resolvedSpeakerId, existingOntologyJson, transcriptText, currentDate)
       : buildNewProfilePrompt(speakerName, resolvedSpeakerId, transcriptText, currentDate);
 
-    const geminiResult = await callGeminiGenerateContent(apiKey, model, systemPrompt, userPrompt);
+    const geminiResult = await callGeminiWithRetryAndFallback(apiKey, model, systemPrompt, userPrompt);
     if (geminiResult.error) {
       return new Response(JSON.stringify({ error: geminiResult.error }), {
         status: geminiResult.status ?? 502,
@@ -480,7 +526,7 @@ serve(async (req) => {
     }
     const ontology = parseOntologyResponse(geminiResult.rawText, speakerName, resolvedSpeakerId);
 
-    return new Response(JSON.stringify({ profile: JSON.stringify(ontology) }), {
+    return new Response(JSON.stringify({ profile: JSON.stringify(ontology), model: geminiResult.model ?? model }), {
       headers: { ...CORS, 'Content-Type': 'application/json' },
     });
   } catch (err) {
