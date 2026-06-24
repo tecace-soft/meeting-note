@@ -1,10 +1,24 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { getMeetingNoteUserIdFromAzureToken } from '../lib/azureToken.js';
+import { sendMcpAlert } from '../lib/alerts.js';
 import { getEnv } from '../lib/env.js';
+import { logError, logEvent } from '../lib/logger.js';
 import { getDataContext, runWithScopedUserId } from '../lib/supabase.js';
 import { createMeetingNoteMcpServer } from '../server.js';
+
+const startedAt = new Date();
+const metrics = {
+  totalRequests: 0,
+  activeRequests: 0,
+  completedRequests: 0,
+  failedRequests: 0,
+  unauthorizedRequests: 0,
+  disconnectedRequests: 0,
+  healthChecks: 0,
+  healthFailures: 0,
+};
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -37,6 +51,26 @@ function getErrorMessage(error: unknown): string {
     if (typeof message === 'string' && message.trim()) return message;
   }
   return 'Unknown server error';
+}
+
+function hashForLog(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
+function getClientIp(req: IncomingMessage): string | undefined {
+  const forwardedFor = getHeaderValue(req, 'x-forwarded-for');
+  return forwardedFor?.split(',')[0]?.trim() || req.socket.remoteAddress || undefined;
+}
+
+function getRequestMetadata(req: IncomingMessage, requestId: string, url?: URL): Record<string, unknown> {
+  return {
+    requestId,
+    method: req.method,
+    path: url?.pathname ?? req.url,
+    userAgent: getHeaderValue(req, 'user-agent'),
+    clientIp: getClientIp(req),
+  };
 }
 
 function getJwtRole(token: string): string {
@@ -183,15 +217,154 @@ async function resolveChatGptUserId(bearerToken: string | undefined, env: Return
   return env.meetingNoteUserId;
 }
 
+async function checkSupabaseHealth(): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const { supabase } = getDataContext();
+    const { error } = await supabase
+      .from('mcp_token')
+      .select('id', { count: 'exact', head: true })
+      .limit(1);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: getErrorMessage(error) };
+  }
+}
+
+function healthPayload(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ok: true,
+    service: 'meeting-note-mcp',
+    startedAt: startedAt.toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+    memory: process.memoryUsage(),
+    metrics,
+    ...extra,
+  };
+}
+
+function startDiagnostics(env: ReturnType<typeof getEnv>): void {
+  let lastDisconnectAlertCount = 0;
+
+  setInterval(() => {
+    logEvent('info', 'mcp_heartbeat', healthPayload());
+  }, env.mcpHeartbeatLogIntervalMs).unref();
+
+  setInterval(() => {
+    void (async () => {
+      const result = await checkSupabaseHealth();
+      metrics.healthChecks += 1;
+      if (result.ok) {
+        logEvent('debug', 'mcp_dependency_health_ok', { dependency: 'supabase' });
+      } else {
+        metrics.healthFailures += 1;
+        logEvent('error', 'mcp_dependency_health_failed', {
+          dependency: 'supabase',
+          error: result.error,
+        });
+        await sendMcpAlert({
+          title: 'MCP dependency health check failed',
+          severity: 'critical',
+          message: 'The MCP server is running, but its Supabase health check failed.',
+          context: {
+            dependency: 'supabase',
+            error: result.error,
+            metrics,
+            uptimeSeconds: Math.round(process.uptime()),
+          },
+          dedupeKey: 'mcp-supabase-health',
+        });
+      }
+
+      const disconnectsSinceLastAlert = metrics.disconnectedRequests - lastDisconnectAlertCount;
+      if (disconnectsSinceLastAlert >= env.mcpDisconnectAlertThreshold) {
+        lastDisconnectAlertCount = metrics.disconnectedRequests;
+        logEvent('warn', 'mcp_disconnect_threshold_exceeded', {
+          disconnectsSinceLastAlert,
+          threshold: env.mcpDisconnectAlertThreshold,
+          metrics,
+        });
+        await sendMcpAlert({
+          title: 'MCP repeated client disconnects detected',
+          severity: 'warning',
+          message: `${disconnectsSinceLastAlert} MCP request disconnects were observed since the previous disconnect alert.`,
+          context: {
+            disconnectsSinceLastAlert,
+            threshold: env.mcpDisconnectAlertThreshold,
+            metrics,
+            uptimeSeconds: Math.round(process.uptime()),
+          },
+          dedupeKey: 'mcp-disconnect-threshold',
+        });
+      }
+    })();
+  }, env.mcpHealthCheckIntervalMs).unref();
+}
+
 export async function startHttpServer(): Promise<void> {
   const env = getEnv();
+  startDiagnostics(env);
 
   const httpServer = createServer(async (req, res) => {
+    const requestId = randomUUID();
+    const requestStartedAt = performance.now();
+    metrics.totalRequests += 1;
+    metrics.activeRequests += 1;
+    let requestUrl: URL | undefined;
+    let completed = false;
+
+    req.on('aborted', () => {
+      metrics.disconnectedRequests += 1;
+      logEvent('warn', 'mcp_request_aborted', getRequestMetadata(req, requestId, requestUrl));
+    });
+
+    res.on('close', () => {
+      if (!completed && !res.writableEnded) {
+        completed = true;
+        metrics.activeRequests = Math.max(0, metrics.activeRequests - 1);
+        metrics.disconnectedRequests += 1;
+        logEvent('warn', 'mcp_response_closed_before_finish', getRequestMetadata(req, requestId, requestUrl));
+      }
+    });
+
+    res.on('finish', () => {
+      completed = true;
+      metrics.activeRequests = Math.max(0, metrics.activeRequests - 1);
+      metrics.completedRequests += 1;
+      const durationMs = Math.round(performance.now() - requestStartedAt);
+      const statusCode = res.statusCode;
+      if (statusCode >= 500) metrics.failedRequests += 1;
+      if (statusCode === 401 || statusCode === 403) metrics.unauthorizedRequests += 1;
+      logEvent(statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info', 'mcp_request_finished', {
+        ...getRequestMetadata(req, requestId, requestUrl),
+        statusCode,
+        durationMs,
+      });
+    });
+
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+      requestUrl = url;
+      logEvent('info', 'mcp_request_started', getRequestMetadata(req, requestId, url));
 
       if (url.pathname === '/health') {
-        sendJson(res, 200, { ok: true, service: 'meeting-note-mcp' });
+        const deep = url.searchParams.get('deep') === '1';
+        const dependency = deep ? await checkSupabaseHealth() : { ok: true as const };
+        if (!dependency.ok) {
+          metrics.healthFailures += 1;
+          sendJson(res, 503, healthPayload({
+            ok: false,
+            dependency: {
+              supabase: dependency,
+            },
+          }));
+          return;
+        }
+        sendJson(res, 200, healthPayload({
+          dependency: {
+            supabase: deep ? dependency : { ok: 'not_checked' },
+          },
+        }));
         return;
       }
 
@@ -220,6 +393,12 @@ export async function startHttpServer(): Promise<void> {
         : await resolveUserIdFromPersonalMcpToken(bearerToken, env);
 
       if (isClaudeEndpoint && !personalTokenUserId && !staticKeyAuthorized) {
+        logEvent('warn', 'mcp_unauthorized_request', {
+          ...getRequestMetadata(req, requestId, url),
+          endpoint: url.pathname,
+          hasBearerToken: Boolean(bearerToken),
+          staticKeyConfigured: Boolean(env.mcpApiKey),
+        });
         sendJson(res, 401, { error: 'Unauthorized' });
         return;
       }
@@ -229,6 +408,11 @@ export async function startHttpServer(): Promise<void> {
         : personalTokenUserId ?? getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
 
       if (!userId) {
+        logEvent('warn', 'mcp_missing_user_scope', {
+          ...getRequestMetadata(req, requestId, url),
+          endpoint: url.pathname,
+          hasBearerToken: Boolean(bearerToken),
+        });
         const body = {
           error: isChatGptEndpoint
             ? 'A valid Microsoft OAuth bearer token, ChatGPT bearer token, or MEETING_NOTE_USER_ID is required.'
@@ -247,29 +431,84 @@ export async function startHttpServer(): Promise<void> {
       }
 
       await runWithScopedUserId(userId, async () => {
+        logEvent('info', 'mcp_request_user_resolved', {
+          ...getRequestMetadata(req, requestId, url),
+          endpoint: url.pathname,
+          userHash: hashForLog(userId),
+          authMode: personalTokenUserId ? 'personal-token' : staticKeyAuthorized ? 'static-key' : isChatGptEndpoint ? 'chatgpt-oauth' : 'fallback',
+        });
         const server = createMeetingNoteMcpServer();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         await server.connect(transport);
         res.on('finish', () => {
           void server.close().catch((closeError) => {
-            const closeMessage = closeError instanceof Error ? closeError.message : String(closeError);
-            process.stderr.write(`Failed to close MCP request server: ${closeMessage}\n`);
+            logError('mcp_request_server_close_failed', closeError, getRequestMetadata(req, requestId, url));
           });
         });
         await transport.handleRequest(req, res);
       });
     } catch (error) {
       const message = getErrorMessage(error);
-      process.stderr.write(`MCP HTTP request failed: ${describeError(error)}\n`);
+      logError('mcp_http_request_failed', error, getRequestMetadata(req, requestId, requestUrl));
+      void sendMcpAlert({
+        title: 'MCP HTTP request failed',
+        severity: 'warning',
+        message,
+        error,
+        context: {
+          ...getRequestMetadata(req, requestId, requestUrl),
+          metrics,
+        },
+        dedupeKey: 'mcp-http-request-failed',
+      });
       if (!res.headersSent) sendJson(res, 500, { error: message });
       else res.end();
     }
   });
 
+  httpServer.on('clientError', (error, socket) => {
+    metrics.failedRequests += 1;
+    logError('mcp_http_client_error', error, {
+      remoteAddress: socket.remoteAddress,
+      remotePort: socket.remotePort,
+    });
+    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+  });
+
+  httpServer.on('error', (error) => {
+    logError('mcp_http_server_error', error, { port: env.port });
+    void sendMcpAlert({
+      title: 'MCP HTTP server error',
+      severity: 'critical',
+      error,
+      context: {
+        port: env.port,
+        metrics,
+      },
+      dedupeKey: 'mcp-http-server-error',
+    });
+  });
+
   httpServer.listen(env.port, () => {
-    process.stderr.write(`Meeting Note MCP HTTP server listening on port ${env.port}\n`);
-    process.stderr.write(
-      `Meeting Note MCP diagnostics: supabase key role=${getJwtRole(env.supabaseServiceRoleKey)}, static auth=${env.mcpApiKey ? 'configured' : 'not configured'}, personal token lookup=${env.mcpTokenPepper ? 'enabled' : 'disabled'}\n`
-    );
+    logEvent('info', 'mcp_http_server_started', {
+      port: env.port,
+      supabaseKeyRole: getJwtRole(env.supabaseServiceRoleKey),
+      staticAuth: env.mcpApiKey ? 'configured' : 'not_configured',
+      personalTokenLookup: env.mcpTokenPepper ? 'enabled' : 'disabled',
+      healthCheckIntervalMs: env.mcpHealthCheckIntervalMs,
+      heartbeatLogIntervalMs: env.mcpHeartbeatLogIntervalMs,
+    });
+    void sendMcpAlert({
+      title: 'MCP server started',
+      severity: 'info',
+      message: `Meeting Note MCP HTTP server started on port ${env.port}.`,
+      context: {
+        port: env.port,
+        supabaseKeyRole: getJwtRole(env.supabaseServiceRoleKey),
+        staticAuth: env.mcpApiKey ? 'configured' : 'not_configured',
+        personalTokenLookup: env.mcpTokenPepper ? 'enabled' : 'disabled',
+      },
+      dedupeKey: 'mcp-server-started',
+    });
   });
 }

@@ -45,6 +45,7 @@ npm run start:http
 Endpoints:
 
 - `GET /health`
+- `GET /health?deep=1` checks Supabase connectivity as well as process health
 - `POST /mcp`
 - `GET /mcp`
 - `POST /mcp-chatgpt`
@@ -65,6 +66,38 @@ x-meeting-note-user-id: <note/speaker/project user_id>
 ```
 
 If this header is absent, the server falls back to `MEETING_NOTE_USER_ID`. For hosted use, prefer the header so one Render deployment can serve different user scopes without redeploying.
+
+## Render diagnostics and alerts
+
+The HTTP server writes structured JSON logs to stdout/stderr so Render logs can be filtered by `event`, `level`, `requestId`, `path`, and `statusCode`.
+
+Useful events include:
+
+- `mcp_http_server_started`
+- `mcp_heartbeat`
+- `mcp_request_started`
+- `mcp_request_finished`
+- `mcp_response_closed_before_finish`
+- `mcp_request_aborted`
+- `mcp_http_request_failed`
+- `mcp_dependency_health_failed`
+- `mcp_uncaught_exception`
+- `mcp_unhandled_rejection`
+- `mcp_shutdown_signal`
+
+Email alerts use Resend over HTTPS. Configure these in Render:
+
+```text
+RESEND_API_KEY=<resend-api-key>
+MCP_ALERT_TO=you@example.com
+MCP_ALERT_FROM="Meeting Note MCP Alerts <alerts@your-domain.com>"
+MCP_ALERT_COOLDOWN_MS=900000
+MCP_HEALTH_CHECK_INTERVAL_MS=60000
+MCP_HEARTBEAT_LOG_INTERVAL_MS=300000
+MCP_DISCONNECT_ALERT_THRESHOLD=5
+```
+
+The server can alert while it is still alive: startup, shutdown signals, fatal process errors, request failures, and failed Supabase health checks. A process cannot send email after it is already fully dead, so use an external uptime check against `GET /health?deep=1` for true “not running” alerts.
 
 ## ChatGPT web setup
 
