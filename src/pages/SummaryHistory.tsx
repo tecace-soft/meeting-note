@@ -101,6 +101,15 @@ interface ChatInfo {
   members: { displayName: string; email: string }[];
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
+}
+
 /** Mobile keeps fixed panel height; desktop fills available detail pane height. */
 const NOTE_PANEL_SCROLL_CLASS =
   'h-96 max-h-96 min-h-0 overflow-y-auto custom-scrollbar rounded-lg md:h-full md:max-h-none';
@@ -175,6 +184,10 @@ type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
 type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
 type NoteSortKey = 'meeting_desc' | 'meeting_asc' | 'created_desc' | 'created_asc' | 'title_asc' | 'title_desc';
 type NoteDetailTab = 'summary' | 'transcription' | 'images';
+
+const NOTE_ACTION_MENU_WIDTH_PX = 190;
+const NOTE_ACTION_MENU_GAP_PX = 6;
+const NOTE_ACTION_MENU_VIEWPORT_PADDING_PX = 8;
 
 interface SegmentPlaybackState {
   noteId: string;
@@ -479,7 +492,12 @@ const SummaryHistory: React.FC = () => {
     desktop: null,
   });
   const [openNoteMenuId, setOpenNoteMenuId] = useState<string | null>(null);
-  const [noteMenuPos, setNoteMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const [noteMenuPos, setNoteMenuPos] = useState<{
+    top: number;
+    right: number;
+    placement: 'above' | 'below';
+    maxHeight: number;
+  } | null>(null);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renameNoteDraft, setRenameNoteDraft] = useState('');
   const detailTitleInputRef = useRef<HTMLInputElement | null>(null);
@@ -542,9 +560,53 @@ const SummaryHistory: React.FC = () => {
       setOpenNoteMenuId(null);
       setNoteMenuPos(null);
     };
+    const closeMenu = () => {
+      setOpenNoteMenuId(null);
+      setNoteMenuPos(null);
+    };
     document.addEventListener('mousedown', onDocMouseDown);
-    return () => document.removeEventListener('mousedown', onDocMouseDown);
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      window.removeEventListener('resize', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+    };
   }, [openNoteMenuId]);
+
+  const getNoteActionMenuPosition = (anchor: HTMLElement): {
+    top: number;
+    right: number;
+    placement: 'above' | 'below';
+    maxHeight: number;
+  } => {
+    const rect = anchor.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
+    const spaceBelow = viewportHeight - rect.bottom - NOTE_ACTION_MENU_VIEWPORT_PADDING_PX;
+    const spaceAbove = rect.top - NOTE_ACTION_MENU_VIEWPORT_PADDING_PX;
+    const shouldOpenAbove = spaceBelow < spaceAbove;
+    const placement = shouldOpenAbove ? 'above' : 'below';
+
+    const top = shouldOpenAbove
+      ? Math.max(rect.top - NOTE_ACTION_MENU_GAP_PX, NOTE_ACTION_MENU_VIEWPORT_PADDING_PX)
+      : rect.bottom + NOTE_ACTION_MENU_GAP_PX;
+    const maxHeight = Math.max(
+      160,
+      shouldOpenAbove
+        ? spaceAbove - NOTE_ACTION_MENU_GAP_PX
+        : spaceBelow - NOTE_ACTION_MENU_GAP_PX
+    );
+    const right = Math.max(
+      NOTE_ACTION_MENU_VIEWPORT_PADDING_PX,
+      Math.min(
+        viewportWidth - rect.right,
+        viewportWidth - NOTE_ACTION_MENU_WIDTH_PX - NOTE_ACTION_MENU_VIEWPORT_PADDING_PX
+      )
+    );
+
+    return { top, right, placement, maxHeight };
+  };
 
   // Fetch chat info from Graph API
   useEffect(() => {
@@ -1891,26 +1953,18 @@ const SummaryHistory: React.FC = () => {
     setAddToProjectSavingId(project.id);
     setAddToProjectError(null);
     try {
-      const nextNoteProjects = Array.from(
-        new Set([...existingNoteProjects.map((id) => String(id)), String(projectIdValue)])
-      ).map(toProjectIdValue);
-      const { error: noteUpdateError } = await supabase
-        .from('note')
-        .update({ projects: nextNoteProjects })
-        .eq('id', addToProjectNote.id)
-        .eq('user_id', user.id);
-      if (noteUpdateError) throw noteUpdateError;
-
       const existingProjectNotes = Array.isArray(project.notes) ? project.notes : [];
       const nextProjectNotes = Array.from(
         new Set([...existingProjectNotes.map((id) => String(id)), addToProjectNote.id])
       ).map(toProjectIdValue);
-      const { error: projectUpdateError } = await supabase
-        .from('project')
-        .update({ notes: nextProjectNotes })
-        .eq('id', project.id)
-        .eq('user_id', user.id);
-      if (projectUpdateError) throw projectUpdateError;
+      const nextNoteProjects = Array.from(
+        new Set([...existingNoteProjects.map((id) => String(id)), String(projectIdValue)])
+      ).map(toProjectIdValue);
+      const { error: addProjectError } = await supabase.rpc('add_accessible_note_to_project', {
+        p_note_id: addToProjectNote.id,
+        p_project_id: project.id,
+      });
+      if (addProjectError) throw addProjectError;
 
       setNotes((prev) =>
         prev.map((note) => (note.id === addToProjectNote.id ? { ...note, projects: nextNoteProjects } : note))
@@ -1921,7 +1975,7 @@ const SummaryHistory: React.FC = () => {
       setAddToProjectNote(null);
       setAddToProjectSavingId(null);
     } catch (err: unknown) {
-      setAddToProjectError(err instanceof Error ? err.message : 'Failed to add note to project');
+      setAddToProjectError(getErrorMessage(err, 'Failed to add note to project'));
       setAddToProjectSavingId(null);
     }
   };
@@ -2769,8 +2823,7 @@ const SummaryHistory: React.FC = () => {
                                           setOpenNoteMenuId(null);
                                           setNoteMenuPos(null);
                                         } else {
-                                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                          setNoteMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                                          setNoteMenuPos(getNoteActionMenuPosition(e.currentTarget as HTMLElement));
                                           setOpenNoteMenuId(note.id);
                                         }
                                       }}
@@ -2974,8 +3027,7 @@ const SummaryHistory: React.FC = () => {
                                         setOpenNoteMenuId(null);
                                         setNoteMenuPos(null);
                                       } else {
-                                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                        setNoteMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                                        setNoteMenuPos(getNoteActionMenuPosition(e.currentTarget as HTMLElement));
                                         setOpenNoteMenuId(note.id);
                                       }
                                     }}
@@ -4033,6 +4085,9 @@ const SummaryHistory: React.FC = () => {
             style={{
               top: noteMenuPos.top,
               right: noteMenuPos.right,
+              maxHeight: noteMenuPos.maxHeight,
+              overflowY: 'auto',
+              transform: noteMenuPos.placement === 'above' ? 'translateY(-100%)' : undefined,
               backgroundColor: 'var(--card)',
               borderColor: 'var(--border)',
             }}
@@ -4064,10 +4119,9 @@ const SummaryHistory: React.FC = () => {
             </button>
             <button
               type="button"
-              disabled={!user?.id || menuNote.user_id !== user.id}
+              disabled={!user?.id}
               onClick={() => { void handleOpenAddToProject(menuNote); }}
               className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm disabled:opacity-40"
-              title={menuNote.user_id !== user?.id ? (appLanguage === 'ko' ? '공유받은 회의록은 프로젝트에 추가할 수 없습니다.' : 'Shared notes cannot be added to projects.') : undefined}
             >
               <FileAdd className="h-4 w-4 shrink-0" aria-hidden />
               {t('addToProject')}

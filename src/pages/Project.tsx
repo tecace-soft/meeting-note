@@ -47,8 +47,10 @@ import { getNoteImageCounts } from '../lib/noteImages';
 
 interface ProjectRow {
   id: string;
+  user_id?: string | null;
   name: string;
   notes?: Array<string | number> | null;
+  shared_users?: string[] | null;
 }
 
 interface NoteRow {
@@ -155,6 +157,15 @@ interface ChatRow {
   response?: string | null;
   repsonse?: string | null;
   created_at?: string | null;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
 }
 
 function extractWebhookResponse(payload: unknown): string {
@@ -321,7 +332,7 @@ const Project: React.FC = () => {
 
         const { data: pData, error: pErr } = await supabase
           .from('project')
-          .select('id, name, notes')
+          .select('id, user_id, name, notes, shared_users')
           .eq('id', projectId)
           .single();
 
@@ -504,36 +515,6 @@ const Project: React.FC = () => {
   const toIdValue = (id: string): string | number => {
     const asNumber = Number(id);
     return Number.isNaN(asNumber) ? id : asNumber;
-  };
-
-  const removeNoteFromProjectNotes = async (noteId: string) => {
-    if (!projectId || !project) return;
-    const next = (project.notes || []).filter((id) => String(id) !== noteId);
-    const { error: projectUpdateError } = await supabase
-      .from('project')
-      .update({ notes: next })
-      .eq('id', projectId);
-    if (projectUpdateError) throw projectUpdateError;
-    setProject((prev) => (prev ? { ...prev, notes: next } : prev));
-  };
-
-  const addNoteIdsToProjectNotes = async (noteIds: string[]) => {
-    if (!projectId || !project) return;
-    const existing = (project.notes || []).map(String);
-    const mergedIds = [...existing];
-    for (const id of noteIds) {
-      if (!mergedIds.includes(id)) mergedIds.push(id);
-    }
-    const next = mergedIds.map((id) => {
-      const n = Number(id);
-      return Number.isNaN(n) ? id : n;
-    });
-    const { error: projectUpdateError } = await supabase
-      .from('project')
-      .update({ notes: next })
-      .eq('id', projectId);
-    if (projectUpdateError) throw projectUpdateError;
-    setProject((prev) => (prev ? { ...prev, notes: next } : prev));
   };
 
   const notesAvailableToAdd = useMemo(() => {
@@ -729,15 +710,19 @@ const Project: React.FC = () => {
     try {
       setOpenNoteMenuId(null);
       setNoteActionError(null);
-      const noteProjectId = toIdValue(projectId);
-      const nextProjects = (note.projects || []).filter((pid) => String(pid) !== String(noteProjectId));
-      const { error: noteUpdateError } = await supabase
-        .from('note')
-        .update({ projects: nextProjects })
-        .eq('id', note.id);
-      if (noteUpdateError) throw noteUpdateError;
-
-      await removeNoteFromProjectNotes(note.id);
+      const { error: removeError } = await supabase.rpc('remove_note_from_owned_project', {
+        p_note_id: note.id,
+        p_project_id: projectId,
+      });
+      if (removeError) throw removeError;
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              notes: (prev.notes || []).filter((id) => String(id) !== note.id),
+            }
+          : prev
+      );
       setNotes((prev) => prev.filter((n) => n.id !== note.id));
       if (expandedNoteId === note.id) setExpandedNoteId(null);
       if (editingNoteId === note.id) setEditingNoteId(null);
@@ -759,7 +744,7 @@ const Project: React.FC = () => {
       const { data, error } = await supabase
         .from('note')
         .select('*')
-        .eq('user_id', user.id)
+        .or(`user_id.eq.${user.id},shared_users.cs.{${user.id}}`)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setPickerNotes((data as NoteRow[]) || []);
@@ -803,11 +788,23 @@ const Project: React.FC = () => {
           const asNumber = Number(p);
           return Number.isNaN(asNumber) ? p : asNumber;
         });
-        const { error } = await supabase.from('note').update({ projects: nextProjects }).eq('id', noteId);
+        const { error } = await supabase.rpc('add_accessible_note_to_project', {
+          p_note_id: noteId,
+          p_project_id: projectId,
+        });
         if (error) throw error;
         mergedLocalNotes.push({ ...note, projects: nextProjects });
       }
-      await addNoteIdsToProjectNotes(selectedNoteIdsToAdd);
+      setProject((prev) => {
+        if (!prev) return prev;
+        const merged = Array.from(
+          new Set([...(prev.notes || []).map((id) => String(id)), ...selectedNoteIdsToAdd])
+        ).map((id) => {
+          const n = Number(id);
+          return Number.isNaN(n) ? id : n;
+        });
+        return { ...prev, notes: merged };
+      });
       setNotes((prev) => {
         const existingIds = new Set(prev.map((n) => n.id));
         const newOnes = mergedLocalNotes.filter((n) => !existingIds.has(n.id));
@@ -821,7 +818,7 @@ const Project: React.FC = () => {
       setSelectedNoteIdsToAdd([]);
       setAddModalExpandedNoteId(null);
     } catch (err: unknown) {
-      setAddNotesModalError(err instanceof Error ? err.message : 'Failed to add notes to project');
+      setAddNotesModalError(getErrorMessage(err, 'Failed to add notes to project'));
     } finally {
       setAddNotesSaving(false);
     }
@@ -853,7 +850,14 @@ const Project: React.FC = () => {
           .eq('user_id', user.id);
         if (deleteError) throw deleteError;
 
-        await removeNoteFromProjectNotes(deleteNoteTarget.id);
+        setProject((prev) =>
+          prev
+            ? {
+                ...prev,
+                notes: (prev.notes || []).filter((id) => String(id) !== deleteNoteTarget.id),
+              }
+            : prev
+        );
       }
       setNotes((prev) => prev.filter((n) => n.id !== deleteNoteTarget.id));
       if (expandedNoteId === deleteNoteTarget.id) setExpandedNoteId(null);
@@ -947,6 +951,8 @@ const Project: React.FC = () => {
       </div>
     );
   };
+
+  const canEditProject = Boolean(project?.user_id && user?.id && project.user_id === user.id);
 
   if (loading) {
     return (
@@ -1161,7 +1167,7 @@ const Project: React.FC = () => {
                           <span className="summary-note-row-rail" aria-hidden />
                           <div
                             onClick={() => setExpandedNoteId(isSelected ? null : note.id)}
-                            className="summary-note-row-content grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-stretch gap-x-3 gap-y-0 px-3 py-2.5 transition-all sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:px-4 sm:py-3.5"
+                            className="summary-note-row-content flex cursor-pointer flex-col gap-3 px-3 py-2.5 transition-all sm:grid sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:items-stretch sm:gap-x-3 sm:gap-y-0 sm:px-4 sm:py-3.5"
                           >
                             <div className="hidden min-h-0 w-[2.5rem] shrink-0 items-center justify-center self-stretch sm:flex">
                               <div
@@ -1240,27 +1246,17 @@ const Project: React.FC = () => {
                                 </>
                               )}
                             </div>
-                            <div className="flex min-h-0 shrink-0 items-center justify-end gap-2 self-stretch sm:gap-3">
-                              <div className="flex min-h-0 min-w-0 max-w-[13rem] flex-col items-end justify-center text-right">
+                            <div className="flex min-h-0 shrink-0 items-center justify-between gap-2 self-stretch sm:justify-end sm:gap-3">
+                              <div className="flex min-h-0 min-w-0 flex-row items-center gap-2 text-left sm:max-w-[10rem] sm:flex-col sm:items-end sm:justify-center sm:text-right">
                                 <div
-                                  className="flex min-w-0 items-center gap-1 text-sm"
+                                  className="flex min-w-0 items-center gap-1 text-xs sm:text-sm"
                                   style={{ color: 'var(--text-secondary)' }}
                                   title={formatDate(note.created_at)}
                                 >
                                   <Calendar className="h-3 w-3 shrink-0" aria-hidden />
-                                  <span className="min-w-0 truncate">Created {formatDate(note.created_at)}</span>
+                                  <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
                                 </div>
-                                {note.meeting_at ? (
-                                  <div
-                                    className="mt-1 flex min-w-0 items-center gap-1 text-sm"
-                                    style={{ color: 'var(--text-secondary)' }}
-                                    title={formatDate(note.meeting_at)}
-                                  >
-                                    <Calendar className="h-3 w-3 shrink-0" aria-hidden />
-                                    <span className="min-w-0 truncate">Meeting {formatDate(note.meeting_at)}</span>
-                                  </div>
-                                ) : null}
-                                {getNoteDurationMeta(note) ? (
+                                {false ? (
                                   <div
                                     className="mt-1 flex min-w-0 items-center gap-1 text-sm"
                                     style={{ color: 'var(--text-secondary)' }}
@@ -1270,13 +1266,6 @@ const Project: React.FC = () => {
                                     <span className="min-w-0 truncate">{getNoteDurationMeta(note)}</span>
                                   </div>
                                 ) : null}
-                                <p
-                                  className="mt-1 truncate text-sm leading-snug"
-                                  style={{ color: 'var(--text-secondary)' }}
-                                  title={getNoteParticipantsLabel(note)}
-                                >
-                                  {getNoteParticipantsLabel(note)}
-                                </p>
                               </div>
                               <div
                                 className="relative flex h-10 w-10 shrink-0 items-center justify-center"
@@ -1297,36 +1286,44 @@ const Project: React.FC = () => {
                                     className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border p-2 shadow-lg"
                                     style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
                                   >
-                                    <button
-                                      type="button"
-                                      onClick={() => handleStartRenameNote(note)}
-                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      style={{ color: 'var(--text)' }}
-                                    >
-                                      <EditPencilLine01 className="h-4 w-4" aria-hidden />
-                                      Rename Note
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        void handleRemoveFromProject(note);
-                                      }}
-                                      className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      style={{ color: 'var(--text)' }}
-                                    >
-                                      <FolderRemove className="h-4 w-4" aria-hidden />
-                                      {t('removeFromProject')}
-                                    </button>
-                                    <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenDeleteNote(note)}
-                                      className="chat-menu-item chat-menu-item-danger flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                      style={{ color: 'var(--error)' }}
-                                    >
-                                      <TrashFull className="h-4 w-4" aria-hidden />
-                                      {t('deleteNote')}
-                                    </button>
+                                    {canEditProject ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleStartRenameNote(note)}
+                                          className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                          style={{ color: 'var(--text)' }}
+                                        >
+                                          <EditPencilLine01 className="h-4 w-4" aria-hidden />
+                                          Rename Note
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            void handleRemoveFromProject(note);
+                                          }}
+                                          className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                          style={{ color: 'var(--text)' }}
+                                        >
+                                          <FolderRemove className="h-4 w-4" aria-hidden />
+                                          {t('removeFromProject')}
+                                        </button>
+                                        <div className="my-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenDeleteNote(note)}
+                                          className="chat-menu-item chat-menu-item-danger flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                          style={{ color: 'var(--error)' }}
+                                        >
+                                          <TrashFull className="h-4 w-4" aria-hidden />
+                                          {t('deleteNote')}
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <div className="px-2 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                        Shared project
+                                      </div>
+                                    )}
                                   </div>
                                 ) : null}
                               </div>
@@ -1545,16 +1542,18 @@ const Project: React.FC = () => {
                   )}
                 </div>
                   <div className="flex shrink-0 justify-start pt-3">
-                    <button
-                      type="button"
-                      onClick={() => void openAddNotesModal()}
-                      disabled={!projectId || !user?.id}
-                      className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                    >
-                      <FileAdd className="h-4 w-4 shrink-0" aria-hidden />
-                      Add notes
-                    </button>
+                    {canEditProject ? (
+                      <button
+                        type="button"
+                        onClick={() => void openAddNotesModal()}
+                        disabled={!projectId || !user?.id}
+                        className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                      >
+                        <FileAdd className="h-4 w-4 shrink-0" aria-hidden />
+                        Add notes
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               ) : (

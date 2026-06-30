@@ -19,6 +19,7 @@ import {
   Moon,
   MoreHorizontal,
   Settings,
+  ShareAndroid,
   Sun,
   TrashFull,
   UserAdd,
@@ -31,6 +32,7 @@ import { supabase } from '../config/supabaseConfig';
 import { normalizeTranscript } from '../lib/transcriptSegments';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { canAccessTranscriptionModelTest, isAdminMicrosoftUser } from '../lib/adminAccess';
+import ShareProjectModal from './ShareProjectModal';
 import tecaceLogoNavy from '../assets/tecace-logo-navy.svg';
 import tecaceLogoWhite from '../assets/tecace-logo-white.svg';
 
@@ -79,6 +81,8 @@ export function writeMobileSidebarCollapsed(collapsed: boolean): void {
 interface SidebarProject {
   id: string;
   name: string;
+  user_id?: string | null;
+  shared_users?: string[] | null;
 }
 
 interface SidebarNote {
@@ -91,6 +95,15 @@ interface SidebarNote {
   summary_edit?: string | null;
   transcription?: string | null;
   diarization?: unknown;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
 }
 
 function formatNoteModalDate(createdAt?: string | null): string {
@@ -174,6 +187,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [deleteProjectError, setDeleteProjectError] = useState<string | null>(null);
+  const [shareProjectTarget, setShareProjectTarget] = useState<SidebarProject | null>(null);
 
   const showProjectNav =
     !collapsed &&
@@ -279,8 +293,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         setProjectsLoading(true);
         const { data, error } = await supabase
           .from('project')
-          .select('id, name')
-          .eq('user_id', user.id)
+          .select('id, name, user_id, shared_users')
+          .or(`user_id.eq.${user.id},shared_users.cs.{${user.id}}`)
           .order('name', { ascending: true });
 
         if (error) throw error;
@@ -314,7 +328,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         const { data, error } = await supabase
           .from('note')
           .select('*')
-          .eq('user_id', user.id)
+          .or(`user_id.eq.${user.id},shared_users.cs.{${user.id}}`)
           .order('created_at', { ascending: false });
 
         if (error) throw error;
@@ -365,7 +379,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         .insert({
           name: projectName,
           user_id: user.id,
-          notes: selectedNoteIds,
         })
         .select('id, name')
         .single();
@@ -373,31 +386,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       if (insertError || !createdProject) throw insertError || new Error('Failed to create project');
 
       if (selectedNoteIds.length > 0) {
-        const { data: selectedNotes, error: notesFetchError } = await supabase
-          .from('note')
-          .select('id, projects')
-          .in('id', selectedNoteIds)
-          .eq('user_id', user.id);
-
-        if (notesFetchError) throw notesFetchError;
-
-        const createdProjectId = createdProject.id as string | number;
-        const updates = ((selectedNotes as SidebarNote[]) || []).map((note) => {
-          const existing = Array.isArray(note.projects) ? note.projects : [];
-          const nextProjects = Array.from(
-            new Set([...existing.map((p) => String(p)), String(createdProjectId)])
-          ).map((p) => {
-            const asNumber = Number(p);
-            return Number.isNaN(asNumber) ? p : asNumber;
-          });
-
-          return supabase
-            .from('note')
-            .update({ projects: nextProjects })
-            .eq('id', note.id)
-            .eq('user_id', user.id);
-        });
-
+        const createdProjectId = String(createdProject.id);
+        const updates = selectedNoteIds.map((noteId) =>
+          supabase.rpc('add_accessible_note_to_project', {
+            p_note_id: noteId,
+            p_project_id: createdProjectId,
+          })
+        );
         const results = await Promise.all(updates);
         const failed = results.find((r) => r.error);
         if (failed?.error) throw failed.error;
@@ -412,7 +407,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       setCreateModalExpandedNoteId(null);
     } catch (err: unknown) {
       console.error('Sidebar: failed to create project', err);
-      setCreateProjectError(err instanceof Error ? err.message : 'Failed to create project');
+      setCreateProjectError(getErrorMessage(err, 'Failed to create project'));
     } finally {
       setCreatingProject(false);
     }
@@ -469,17 +464,25 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     setIsDeleteProjectOpen(true);
   };
 
+  const handleOpenShareProject = (project: SidebarProject) => {
+    setOpenProjectMenuId(null);
+    setShareProjectTarget(project);
+  };
+
+  const handleProjectShared = (projectId: string, sharedUserIds: string[]) => {
+    setProjects((prev) =>
+      prev.map((project) => (project.id === projectId ? { ...project, shared_users: sharedUserIds } : project))
+    );
+  };
+
   const handleConfirmDeleteProject = async () => {
     if (!user?.id || !deleteProjectId) return;
     setDeleteProjectError(null);
     setDeletingProject(true);
     try {
-      await removeProjectIdFromNotes(deleteProjectId);
-      const { error } = await supabase
-        .from('project')
-        .delete()
-        .eq('id', deleteProjectId)
-        .eq('user_id', user.id);
+      const { error } = await supabase.rpc('delete_owned_project', {
+        p_project_id: deleteProjectId,
+      });
       if (error) throw error;
 
       setProjects((prev) => prev.filter((p) => p.id !== deleteProjectId));
@@ -495,7 +498,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       setIsDeleteProjectOpen(false);
       setDeleteProjectId(null);
     } catch (err: unknown) {
-      setDeleteProjectError(err instanceof Error ? err.message : 'Failed to delete project');
+      setDeleteProjectError(getErrorMessage(err, 'Failed to delete project'));
     } finally {
       setDeletingProject(false);
     }
@@ -641,6 +644,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                       projects.map((p) => (
                         <div key={p.id} className="relative" ref={openProjectMenuId === p.id ? projectMenuRef : undefined}>
                           <div className="flex items-center gap-1">
+                            {p.user_id !== user?.id ? (
+                              <span className="sr-only">Shared project</span>
+                            ) : null}
                             {renameProjectId === p.id ? (
                               <div
                                 className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-1 pr-1 text-xs font-medium"
@@ -712,41 +718,58 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                               className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl p-2 app-surface-elevated"
                               style={{ backgroundColor: 'var(--surface)' }}
                             >
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpenProjectMenuId(null);
-                                  navigate(`/project?id=${encodeURIComponent(p.id)}&addNotes=1`);
-                                  if (mobileOverlay) onMobileOverlayNavigate?.();
-                                }}
-                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                style={{ color: 'var(--text)' }}
-                              >
-                                <FileAdd className="h-4 w-4" aria-hidden />
-                                Add notes
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleOpenRenameProject(p)}
-                                className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                style={{ color: 'var(--text)' }}
-                              >
-                                <EditPencilLine01 className="h-4 w-4" aria-hidden />
-                                Rename project
-                              </button>
-                              <div
-                                className="my-1 h-px"
-                                style={{ backgroundColor: 'var(--border)' }}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleOpenDeleteProject(p.id)}
-                                className="chat-menu-item chat-menu-item-danger flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-                                style={{ color: 'var(--error)' }}
-                              >
-                                <TrashFull className="h-4 w-4" aria-hidden />
-                                {t('deleteProject')}
-                              </button>
+                              {p.user_id === user?.id ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenProjectMenuId(null);
+                                      navigate(`/project?id=${encodeURIComponent(p.id)}&addNotes=1`);
+                                      if (mobileOverlay) onMobileOverlayNavigate?.();
+                                    }}
+                                    className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    <FileAdd className="h-4 w-4" aria-hidden />
+                                    Add notes
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenShareProject(p)}
+                                    className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    <ShareAndroid className="h-4 w-4" aria-hidden />
+                                    Share project
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenRenameProject(p)}
+                                    className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                    style={{ color: 'var(--text)' }}
+                                  >
+                                    <EditPencilLine01 className="h-4 w-4" aria-hidden />
+                                    Rename project
+                                  </button>
+                                  <div
+                                    className="my-1 h-px"
+                                    style={{ backgroundColor: 'var(--border)' }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenDeleteProject(p.id)}
+                                    className="chat-menu-item chat-menu-item-danger flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                                    style={{ color: 'var(--error)' }}
+                                  >
+                                    <TrashFull className="h-4 w-4" aria-hidden />
+                                    {t('deleteProject')}
+                                  </button>
+                                </>
+                              ) : (
+                                <div className="px-2 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                  Shared with you
+                                </div>
+                              )}
                             </div>
                           ) : null}
                         </div>
@@ -1157,6 +1180,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           </div>
         </div>
       )}
+      <ShareProjectModal
+        isOpen={Boolean(shareProjectTarget)}
+        projectId={shareProjectTarget?.id ?? null}
+        projectTitle={shareProjectTarget?.name}
+        existingSharedUserIds={shareProjectTarget?.shared_users ?? []}
+        onClose={() => setShareProjectTarget(null)}
+        onShared={handleProjectShared}
+      />
     </aside>
   );
 };
