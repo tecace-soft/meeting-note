@@ -1931,7 +1931,6 @@ const SummaryHistory: React.FC = () => {
       const { data, error } = await supabase
         .from('project')
         .select('id, name, notes')
-        .eq('user_id', user.id)
         .order('name', { ascending: true });
       if (error) throw error;
       setProjectOptions((data as ProjectOption[]) || []);

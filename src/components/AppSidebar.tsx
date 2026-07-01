@@ -294,7 +294,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         const { data, error } = await supabase
           .from('project')
           .select('id, name, user_id, shared_users')
-          .or(`user_id.eq.${user.id},shared_users.cs.{${user.id}}`)
           .order('name', { ascending: true });
 
         if (error) throw error;
