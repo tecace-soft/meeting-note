@@ -13,6 +13,10 @@ export interface MeetingNoteEnv {
   mcpOAuthScope?: string;
   mcpAzureTenantId?: string;
   mcpTokenPepper?: string;
+  mcpAdminClientId?: string;
+  mcpAdminTenantId?: string;
+  mcpAdminEmails: Set<string>;
+  mcpAdminMicrosoftIds: Set<string>;
   mcpHealthCheckIntervalMs: number;
   mcpHeartbeatLogIntervalMs: number;
   mcpDisconnectAlertThreshold: number;
@@ -55,6 +59,15 @@ function parseUserTokenMap(raw: string | undefined): Map<string, string> {
   return tokenMap;
 }
 
+function parseSet(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? '')
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
 export function getEnv(): MeetingNoteEnv {
   const rawPort = process.env.PORT?.trim();
   const port = rawPort ? Number(rawPort) : 3000;
@@ -86,6 +99,10 @@ export function getEnv(): MeetingNoteEnv {
     mcpOAuthScope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
     mcpAzureTenantId: process.env.MCP_AZURE_TENANT_ID?.trim() || undefined,
     mcpTokenPepper: process.env.MCP_TOKEN_PEPPER?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,
+    mcpAdminClientId: process.env.MCP_ADMIN_CLIENT_ID?.trim() || process.env.VITE_MSAL_CLIENT_ID?.trim() || undefined,
+    mcpAdminTenantId: process.env.MCP_ADMIN_TENANT_ID?.trim() || process.env.MCP_AZURE_TENANT_ID?.trim() || 'common',
+    mcpAdminEmails: parseSet(process.env.MCP_ADMIN_EMAILS),
+    mcpAdminMicrosoftIds: parseSet(process.env.MCP_ADMIN_MICROSOFT_IDS),
     mcpHealthCheckIntervalMs,
     mcpHeartbeatLogIntervalMs,
     mcpDisconnectAlertThreshold,

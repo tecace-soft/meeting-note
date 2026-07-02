@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
 import { fetchSpeakerByIdOrName, getDataContext, getScopedUserId, type SpeakerRow } from '../lib/supabase.js';
 
+function optionalInt(min: number, max: number) {
+  return z.preprocess((value) => (value === '' ? undefined : value), z.coerce.number().int().min(min).max(max).optional());
+}
+
 export function registerSpeakerTools(server: McpServer): void {
   server.registerTool(
     'list_speakers',
@@ -11,7 +15,7 @@ export function registerSpeakerTools(server: McpServer): void {
       description: 'List saved speakers and whether each speaker has a saved profile.',
       inputSchema: {
         query: z.string().optional(),
-        limit: z.number().int().min(1).max(100).optional(),
+        limit: optionalInt(1, 100),
       },
     },
     async ({ query, limit }) => {
@@ -42,7 +46,7 @@ export function registerSpeakerTools(server: McpServer): void {
       inputSchema: {
         speakerId: z.string().optional(),
         speakerName: z.string().optional(),
-        maxCharacters: z.number().int().min(100).max(50000).optional(),
+        maxCharacters: optionalInt(100, 50000),
       },
     },
     async ({ speakerId, speakerName, maxCharacters }) => {

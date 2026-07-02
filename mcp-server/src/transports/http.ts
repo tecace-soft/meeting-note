@@ -1,10 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
+import { Socket } from 'node:net';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { handleAdminRequest } from '../admin/dashboard.js';
 import { getMeetingNoteUserIdFromAzureToken } from '../lib/azureToken.js';
 import { sendMcpAlert } from '../lib/alerts.js';
 import { getEnv } from '../lib/env.js';
 import { logError, logEvent } from '../lib/logger.js';
+import { finishMcpSession, inferPlatform, runWithMcpTrackingContext, startMcpSession, type McpTrackingContext } from '../lib/mcpTracking.js';
 import { getDataContext, runWithScopedUserId } from '../lib/supabase.js';
 import { createMeetingNoteMcpServer } from '../server.js';
 
@@ -311,11 +314,21 @@ export async function startHttpServer(): Promise<void> {
     metrics.totalRequests += 1;
     metrics.activeRequests += 1;
     let requestUrl: URL | undefined;
+    let trackingContext: McpTrackingContext | undefined;
     let completed = false;
+    let trackingFinished = false;
 
     req.on('aborted', () => {
       metrics.disconnectedRequests += 1;
       logEvent('warn', 'mcp_request_aborted', getRequestMetadata(req, requestId, requestUrl));
+      if (!trackingFinished) {
+        trackingFinished = true;
+        void finishMcpSession(trackingContext, {
+          status: 'aborted',
+          durationMs: Math.round(performance.now() - requestStartedAt),
+          errorMessage: 'Request aborted by client.',
+        });
+      }
     });
 
     res.on('close', () => {
@@ -340,12 +353,24 @@ export async function startHttpServer(): Promise<void> {
         statusCode,
         durationMs,
       });
+      if (!trackingFinished) {
+        trackingFinished = true;
+        void finishMcpSession(trackingContext, {
+          status: statusCode >= 500 ? 'failed' : 'completed',
+          statusCode,
+          durationMs,
+        });
+      }
     });
 
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
       requestUrl = url;
       logEvent('info', 'mcp_request_started', getRequestMetadata(req, requestId, url));
+
+      if (await handleAdminRequest(req, res, url)) {
+        return;
+      }
 
       if (url.pathname === '/health') {
         const deep = url.searchParams.get('deep') === '1';
@@ -431,24 +456,47 @@ export async function startHttpServer(): Promise<void> {
       }
 
       await runWithScopedUserId(userId, async () => {
+        const authMode = personalTokenUserId ? 'personal-token' : staticKeyAuthorized ? 'static-key' : isChatGptEndpoint ? 'chatgpt-oauth' : 'fallback';
         logEvent('info', 'mcp_request_user_resolved', {
           ...getRequestMetadata(req, requestId, url),
           endpoint: url.pathname,
           userHash: hashForLog(userId),
-          authMode: personalTokenUserId ? 'personal-token' : staticKeyAuthorized ? 'static-key' : isChatGptEndpoint ? 'chatgpt-oauth' : 'fallback',
+          authMode,
         });
-        const server = createMeetingNoteMcpServer();
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-        await server.connect(transport);
-        res.on('finish', () => {
-          void server.close().catch((closeError) => {
-            logError('mcp_request_server_close_failed', closeError, getRequestMetadata(req, requestId, url));
+        trackingContext = await startMcpSession({
+          requestId,
+          userId,
+          endpoint: url.pathname,
+          platform: inferPlatform(getHeaderValue(req, 'user-agent'), url.pathname),
+          authMode,
+          method: req.method,
+          path: url.pathname,
+          userAgent: getHeaderValue(req, 'user-agent'),
+          clientIp: getClientIp(req),
+        });
+        await runWithMcpTrackingContext(trackingContext, async () => {
+          const server = createMeetingNoteMcpServer();
+          const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+          await server.connect(transport);
+          res.on('finish', () => {
+            void server.close().catch((closeError) => {
+              logError('mcp_request_server_close_failed', closeError, getRequestMetadata(req, requestId, url));
+            });
           });
+          await transport.handleRequest(req, res);
         });
-        await transport.handleRequest(req, res);
       });
     } catch (error) {
       const message = getErrorMessage(error);
+      if (!trackingFinished) {
+        trackingFinished = true;
+        void finishMcpSession(trackingContext, {
+          status: 'failed',
+          statusCode: res.statusCode >= 400 ? res.statusCode : 500,
+          durationMs: Math.round(performance.now() - requestStartedAt),
+          errorMessage: message,
+        });
+      }
       logError('mcp_http_request_failed', error, getRequestMetadata(req, requestId, requestUrl));
       void sendMcpAlert({
         title: 'MCP HTTP request failed',
@@ -469,8 +517,8 @@ export async function startHttpServer(): Promise<void> {
   httpServer.on('clientError', (error, socket) => {
     metrics.failedRequests += 1;
     logError('mcp_http_client_error', error, {
-      remoteAddress: socket.remoteAddress,
-      remotePort: socket.remotePort,
+      remoteAddress: socket instanceof Socket ? socket.remoteAddress : undefined,
+      remotePort: socket instanceof Socket ? socket.remotePort : undefined,
     });
     socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
   });

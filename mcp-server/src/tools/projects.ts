@@ -1,7 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult } from '../lib/formatters.js';
-import { applyNoteAccessScope, fetchProject, getDataContext, getScopedUserId, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
+import { applyNoteAccessScope, fetchProject, getDataContext, getScopedUserId, NOTE_SUMMARY_SELECT, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
+
+function optionalInt(min: number, max: number) {
+  return z.preprocess((value) => (value === '' ? undefined : value), z.coerce.number().int().min(min).max(max).optional());
+}
 
 export function registerProjectTools(server: McpServer): void {
   server.registerTool(
@@ -10,7 +14,7 @@ export function registerProjectTools(server: McpServer): void {
       title: 'List Projects',
       description: 'List projects with basic metadata and note counts when available.',
       inputSchema: {
-        limit: z.number().int().min(1).max(100).optional(),
+        limit: optionalInt(1, 100),
       },
     },
     async ({ limit }) => {
@@ -39,7 +43,7 @@ export function registerProjectTools(server: McpServer): void {
       description: 'Get a project with recent notes, summaries, speakers, and transcript availability.',
       inputSchema: {
         projectId: z.string().min(1),
-        noteLimit: z.number().int().min(1).max(50).optional(),
+        noteLimit: optionalInt(1, 50),
       },
     },
     async ({ projectId, noteLimit }) => {
@@ -50,7 +54,7 @@ export function registerProjectTools(server: McpServer): void {
       const limit = clampLimit(noteLimit, 20, 50);
       let query = supabase
         .from('note')
-        .select('*')
+        .select(NOTE_SUMMARY_SELECT)
         .contains('projects', [toIdValue(projectId)])
         .order('created_at', { ascending: false })
         .limit(limit);
