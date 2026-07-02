@@ -473,6 +473,13 @@ function dashboardHtml(): string {
     }
     function tools(items) { return '<div class="tools">' + (items || []).map((item) => '<span class="tool-token">' + escapeHtml(item) + '</span>').join('') + '</div>'; }
     function formatTokens(value) { return value == null ? 'N/A' : fmt.format(value); }
+    function isMeaningfulSession(session) {
+      return Boolean(
+        (session.query && String(session.query).trim()) ||
+        (session.response && String(session.response).trim()) ||
+        (session.toolCalls && session.toolCalls.length)
+      );
+    }
 
     async function getToken() {
       const response = await msalClient.acquireTokenSilent({ scopes, account });
@@ -488,6 +495,7 @@ function dashboardHtml(): string {
     function render(data) {
       const summary = data.summary || {};
       const sessions = data.sessions || [];
+      const meaningfulSessions = sessions.filter(isMeaningfulSession);
       const toolCalls = data.toolCalls || [];
       const dailyUsage = data.dailyUsage || [];
       const platformUsage = data.platformUsage || [];
@@ -500,11 +508,11 @@ function dashboardHtml(): string {
       text('metric-users', fmt.format(summary.uniqueUsers || 0));
       text('metric-tools', fmt.format(summary.totalToolCalls || 0));
       text('metric-tokens', formatTokens(summary.estimatedTokens));
-      text('session-count', sessions.length + ' sessions');
-      document.getElementById('recent-sessions').innerHTML = sessions.length ? sessions.slice(0, 6).map((s) => row([
+      text('session-count', meaningfulSessions.length + ' sessions');
+      document.getElementById('recent-sessions').innerHTML = meaningfulSessions.length ? meaningfulSessions.slice(0, 6).map((s) => row([
         escapeHtml(s.user), '<span class="label">' + escapeHtml(s.platform) + '</span>', '<div class="query">' + escapeHtml(s.query) + '</div>', tools(s.toolCalls), statusPill(s.status)
-      ])).join('') : emptyRow(5, 'No tracked MCP sessions yet.');
-      document.getElementById('session-table').innerHTML = sessions.length ? sessions.map((s) => row([
+      ])).join('') : emptyRow(5, 'No tracked user/tool sessions yet.');
+      document.getElementById('session-table').innerHTML = meaningfulSessions.length ? meaningfulSessions.map((s) => row([
         escapeHtml(s.startedAt ? new Date(s.startedAt).toLocaleString() : ''), escapeHtml(s.user), '<div class="query">' + escapeHtml(s.query) + '</div>', '<div class="query muted">' + escapeHtml(s.response) + '</div>', escapeHtml((s.latencyMs || 0) + ' ms')
       ])).join('') : emptyRow(5, 'No query/response records available.');
       document.getElementById('tool-table').innerHTML = toolCalls.length ? toolCalls.map((t) => row([
