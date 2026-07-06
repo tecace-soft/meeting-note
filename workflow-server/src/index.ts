@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createWriteStream } from 'node:fs';
+import { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
 import { config as loadDotenv } from 'dotenv';
 import { Agent, setGlobalDispatcher } from 'undici';
@@ -55,6 +60,79 @@ interface SummaryAttachmentInput {
   mimeType: string;
   dataBase64: string;
 }
+
+interface AndroidUploadFile {
+  fieldName: string;
+  originalName: string;
+  mimeType: string;
+  tempPath: string;
+  sizeBytes: number;
+}
+
+interface AndroidRecordingUpload {
+  file: AndroidUploadFile;
+  fields: Record<string, string>;
+}
+
+class HttpError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const AUDIO_BUCKET = 'meeting-recordings';
+const ANDROID_AUDIO_MAX_BYTES = 100 * 1024 * 1024;
+const DEFAULT_SUMMARY_PROMPT_NAME = 'Default';
+const ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS = [
+  '3ga',
+  '8svx',
+  'aac',
+  'ac3',
+  'aif',
+  'aiff',
+  'alac',
+  'amr',
+  'ape',
+  'au',
+  'dss',
+  'flac',
+  'flv',
+  'm4a',
+  'm4b',
+  'm4p',
+  'm4r',
+  'mp3',
+  'mp4',
+  'mpeg',
+  'mpg',
+  'oga',
+  'ogg',
+  'opus',
+  'qcp',
+  'ra',
+  'ram',
+  'sln',
+  'spx',
+  'wav',
+  'webm',
+  'wma',
+] as const;
+const ASSEMBLYAI_AUDIO_EXTENSION_RE = new RegExp(
+  `\\.(${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS.join('|')})$`,
+  'i'
+);
+const DEFAULT_SUMMARY_PROMPT = `You are an Insightful Meeting Notes Writer and Transcript extractor. From a meeting voice file (and meta info), transcribe and produce actionable, structured notes.
+This meeting is generally related to TecAce business unless the transcript clearly indicates otherwise.
+TecAce is a technology consulting and software development company specializing in AI solutions, cloud infrastructure/operation, and device optimization.
+Organize content by topics, never by speaker. Use speaker attributions only within each topic when helpful.
+Clearly summarize all schedule/timeline discussions in a dedicated Schedule Summary section if relevant.
+The summary output must be in markdown format and include tables where useful.
+Use the requested output language.
+Focus on meeting purpose, key topics, decisions, risks/issues, responsibilities, action items, timelines, and management-level insights when useful.
+Do not hallucinate. Base the notes on the transcript and provided context.`;
 
 const SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES = new Set([
   'text/html',
@@ -196,6 +274,144 @@ function readBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<unknown> 
       }
     });
     req.on('error', reject);
+  });
+}
+
+function getHttpStatus(error: unknown): number {
+  if (error instanceof HttpError) return error.status;
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('Missing bearer token') || message.includes('Microsoft Graph /me rejected')) return 401;
+  if (message.includes('too large') || message.includes('exceeds')) return 413;
+  if (message.includes('required') || message.includes('must be') || message.includes('Unsupported') || message.includes('token') || message.includes('userId')) return 400;
+  return 500;
+}
+
+function sanitizeUploadFileName(value: string, fallback: string): string {
+  const base = value.split(/[\\/]/).pop() || fallback;
+  const ascii = Array.from(base)
+    .filter((char) => char.charCodeAt(0) <= 0x7f)
+    .join('');
+  const cleaned = ascii
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '')
+    .replace(/_+/g, '_')
+    .slice(0, 180);
+  return cleaned || fallback;
+}
+
+function parseOptionalDate(value: string | undefined): string | null {
+  if (!value?.trim()) return null;
+  const date = new Date(value.trim());
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function isSupportedAndroidAudio(file: AndroidUploadFile): boolean {
+  const mimeType = file.mimeType.toLowerCase();
+  const name = file.originalName.toLowerCase();
+  return mimeType.startsWith('audio/') || ASSEMBLYAI_AUDIO_EXTENSION_RE.test(name);
+}
+
+function parseAndroidMultipartUpload(req: IncomingMessage): Promise<AndroidRecordingUpload> {
+  const contentType = req.headers['content-type'];
+  if (!contentType?.toLowerCase().includes('multipart/form-data')) {
+    return Promise.reject(new HttpError(400, 'Content-Type must be multipart/form-data.'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const fields: Record<string, string> = {};
+    let uploadFile: AndroidUploadFile | null = null;
+    let pendingWrites = 0;
+    let finished = false;
+    let failed = false;
+
+    const fail = (error: unknown) => {
+      if (failed) return;
+      failed = true;
+      reject(error);
+    };
+
+    const maybeResolve = () => {
+      if (!finished || pendingWrites > 0 || failed) return;
+      if (!uploadFile) {
+        fail(new HttpError(400, 'Missing required multipart file field "audio".'));
+        return;
+      }
+      resolve({ file: uploadFile, fields });
+    };
+
+    const busboy = Busboy({
+      headers: req.headers,
+      limits: {
+        files: 1,
+        fileSize: ANDROID_AUDIO_MAX_BYTES,
+        fields: 20,
+        fieldSize: 20_000,
+      },
+    });
+
+    busboy.on('field', (name, value) => {
+      if (typeof name === 'string') fields[name] = String(value ?? '').slice(0, 20_000);
+    });
+
+    busboy.on('file', (fieldName, file, info) => {
+      if (fieldName !== 'audio') {
+        file.resume();
+        fail(new HttpError(400, 'Only one multipart file field named "audio" is supported.'));
+        return;
+      }
+      if (uploadFile) {
+        file.resume();
+        fail(new HttpError(400, 'Only one audio file can be uploaded per request.'));
+        return;
+      }
+
+      const originalName = info.filename?.trim() || 'android-recording.ogg';
+      const mimeType = info.mimeType?.trim() || 'application/octet-stream';
+      const ext = originalName.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'audio';
+      const tempPath = join(tmpdir(), `meeting-note-android-${randomUUID()}.${ext}`);
+      const output = createWriteStream(tempPath);
+      let sizeBytes = 0;
+      let limited = false;
+
+      pendingWrites += 1;
+      file.on('data', (chunk: Buffer) => {
+        sizeBytes += chunk.byteLength;
+      });
+      file.on('limit', () => {
+        limited = true;
+        void unlink(tempPath).catch(() => undefined);
+        fail(new HttpError(413, 'Audio file exceeds the 100 MB maximum size.'));
+      });
+      file.on('error', fail);
+      output.on('error', (error) => {
+        void unlink(tempPath).catch(() => undefined);
+        fail(error);
+      });
+      output.on('finish', () => {
+        pendingWrites -= 1;
+        if (!limited && !failed) {
+          uploadFile = {
+            fieldName,
+            originalName,
+            mimeType,
+            tempPath,
+            sizeBytes,
+          };
+        }
+        maybeResolve();
+      });
+      file.pipe(output);
+    });
+
+    busboy.on('filesLimit', () => fail(new HttpError(400, 'Only one audio file can be uploaded per request.')));
+    busboy.on('fieldsLimit', () => fail(new HttpError(400, 'Too many multipart fields.')));
+    busboy.on('error', fail);
+    busboy.on('finish', () => {
+      finished = true;
+      maybeResolve();
+    });
+
+    req.pipe(busboy);
   });
 }
 
@@ -387,6 +603,7 @@ interface SummarizeAudioInput {
   fileName: string;
   instructions: string;
   promptId: string;
+  summaryRulesOverride?: string;
   userId: string;
   userName: string;
   noteId: string;
@@ -479,6 +696,77 @@ async function loadSummaryPrompt(promptId: string, userId: string): Promise<stri
     throw new Error('Selected summary prompt was not found for this user.');
   }
   return prompt.trim();
+}
+
+async function resolveSummaryPromptForAndroid(input: { promptId?: string; userId: string }): Promise<{
+  promptId: string;
+  summaryRulesOverride?: string;
+}> {
+  if (input.promptId?.trim()) {
+    await loadSummaryPrompt(input.promptId.trim(), input.userId);
+    return { promptId: input.promptId.trim() };
+  }
+  return {
+    promptId: 'android-default',
+    summaryRulesOverride: DEFAULT_SUMMARY_PROMPT,
+  };
+}
+
+async function createAudioSignedUrl(storagePath: string): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from(AUDIO_BUCKET)
+    .createSignedUrl(storagePath, 60 * 60 * 6);
+  if (error || !data?.signedUrl) {
+    throw error ?? new Error('Could not create a signed audio URL.');
+  }
+  return data.signedUrl;
+}
+
+async function uploadAndroidAudioToStorage(input: {
+  userId: string;
+  noteId: string;
+  fileName: string;
+  mimeType: string;
+  tempPath: string;
+}): Promise<{ storagePath: string; signedUrl: string }> {
+  const bytes = await readFile(input.tempPath);
+  const storagePath = `android/${input.userId}/${input.noteId}/${input.fileName}`;
+  const { error } = await supabase.storage
+    .from(AUDIO_BUCKET)
+    .upload(storagePath, bytes, {
+      cacheControl: '3600',
+      contentType: input.mimeType || 'audio/ogg',
+      upsert: false,
+    });
+  if (error) throw error;
+  return {
+    storagePath,
+    signedUrl: await createAudioSignedUrl(storagePath),
+  };
+}
+
+async function createAndroidAudioFileRecord(input: {
+  id: string;
+  userId: string;
+  fileName: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  recordedAt: string | null;
+}): Promise<void> {
+  const { error } = await supabase.from('file').insert({
+    id: input.id,
+    user_id: input.userId,
+    name: input.fileName,
+    bucket: AUDIO_BUCKET,
+    storage_path: input.storagePath,
+    public_url: '',
+    mime_type: input.mimeType || 'audio/ogg',
+    size_bytes: input.sizeBytes,
+    source: 'android_recording',
+    recorded_at: input.recordedAt,
+  });
+  if (error) throw error;
 }
 
 function normalizeKeytermsPrompt(value: unknown): string[] {
@@ -1316,7 +1604,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   if (!env.assemblyAiApiKey) throw new Error('AssemblyAI API key is missing.');
 
   await updateWorkflowJob(jobId, { status: 'processing', stage: 'loading inputs', progress: 10 });
-  const summaryRules = await loadSummaryPrompt(input.promptId, input.userId);
+  const summaryRules = input.summaryRulesOverride?.trim() || await loadSummaryPrompt(input.promptId, input.userId);
   const transcriptionSettings = await loadTranscriptionSettings();
   console.log(`Processing audio ${input.fileName} with AssemblyAI ${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL} and no explicit language settings. Selected summary language: ${input.language}`);
 
@@ -1539,6 +1827,105 @@ async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Pr
   sendJson(res, 202, { jobId, status: 'queued', stage: 'queued', progress: 0 });
 }
 
+async function createAndroidRecordingJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+    const upload = await parseAndroidMultipartUpload(req);
+
+  try {
+    if (!isSupportedAndroidAudio(upload.file)) {
+      throw new HttpError(400, `Unsupported audio file. Upload an audio file supported by AssemblyAI: ${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS.join(', ')}.`);
+    }
+    if (upload.file.sizeBytes <= 0) {
+      throw new HttpError(400, 'Uploaded audio file is empty.');
+    }
+    if (upload.file.sizeBytes > ANDROID_AUDIO_MAX_BYTES) {
+      throw new HttpError(413, 'Audio file exceeds the 100 MB maximum size.');
+    }
+
+    const noteId = randomUUID();
+    const fileId = randomUUID();
+    const submittedFileName = upload.fields.fileName?.trim() || upload.file.originalName || 'android-recording.ogg';
+    const submittedHasSupportedExt = ASSEMBLYAI_AUDIO_EXTENSION_RE.test(submittedFileName);
+    const originalExt = upload.file.originalName.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+    const fallbackExt = originalExt && ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS.includes(originalExt as typeof ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS[number])
+      ? originalExt
+      : 'ogg';
+    const safeFileName = sanitizeUploadFileName(
+      submittedHasSupportedExt ? submittedFileName : `${submittedFileName}.${fallbackExt}`,
+      `android-recording.${fallbackExt}`
+    );
+    const recordedAt = parseOptionalDate(upload.fields.recordingEndedAt);
+    const summaryPrompt = await resolveSummaryPromptForAndroid({
+      promptId: upload.fields.promptId,
+      userId: tokenUserId,
+    });
+    const { storagePath, signedUrl } = await uploadAndroidAudioToStorage({
+      userId: tokenUserId,
+      noteId,
+      fileName: safeFileName,
+      mimeType: upload.file.mimeType || 'audio/ogg',
+      tempPath: upload.file.tempPath,
+    });
+    await createAndroidAudioFileRecord({
+      id: fileId,
+      userId: tokenUserId,
+      fileName: safeFileName,
+      storagePath,
+      mimeType: upload.file.mimeType || 'audio/ogg',
+      sizeBytes: upload.file.sizeBytes,
+      recordedAt,
+    });
+
+    const input: SummarizeAudioInput = {
+      downloadUrl: signedUrl,
+      fileName: safeFileName,
+      promptId: summaryPrompt.promptId,
+      summaryRulesOverride: summaryPrompt.summaryRulesOverride,
+      userId: tokenUserId,
+      userName: '',
+      noteId,
+      meetingAt: recordedAt,
+      userTimeZone: upload.fields.userTimeZone?.trim() || null,
+      fileId,
+      instructions: upload.fields.instructions ?? '',
+      speakerContext: '',
+      attachments: [],
+      language: upload.fields.language === 'ko' ? 'ko' : 'en',
+    };
+    const { data, error } = await supabase.from('workflow_job').insert({
+      user_id: tokenUserId,
+      note_id: noteId,
+      type: 'summarize_audio',
+      status: 'queued',
+      stage: 'queued',
+      progress: 0,
+      request: {
+        ...input,
+        source: 'android_recording',
+        storagePath,
+        originalFileName: upload.file.originalName,
+        mimeType: upload.file.mimeType,
+        sizeBytes: upload.file.sizeBytes,
+      },
+    }).select('id').single();
+    if (error) throw error;
+    const jobId = (data as { id?: unknown }).id;
+    if (typeof jobId !== 'string' || !jobId.trim()) throw new Error('Could not create workflow job.');
+
+    void processSummarizeJob(jobId.trim(), input);
+    sendJson(res, 202, {
+      jobId,
+      noteId,
+      fileId,
+      status: 'queued',
+      stage: 'queued',
+      progress: 0,
+    });
+  } finally {
+    await unlink(upload.file.tempPath).catch(() => undefined);
+  }
+}
+
 async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): Promise<void> {
   try {
     const result = await runSummarizeAudio(input, jobId);
@@ -1724,6 +2111,10 @@ const server = createServer((req, res) => {
       await createSummarizeJob(req, res);
       return;
     }
+    if (req.method === 'POST' && req.url === '/android/recordings/jobs') {
+      await createAndroidRecordingJob(req, res);
+      return;
+    }
     const jobMatch = url.pathname.match(/^\/summarize-audio\/jobs\/([^/]+)$/);
     if (req.method === 'GET' && jobMatch?.[1]) {
       await getSummarizeJob(req, res, decodeURIComponent(jobMatch[1]));
@@ -1732,17 +2123,20 @@ const server = createServer((req, res) => {
     sendJson(res, 404, { error: 'Not found' });
   })().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
+    const status = getHttpStatus(error);
     console.error('Workflow request failed:', error);
-    void sendWorkflowAlert({
-      title: 'Workflow request failed',
-      error,
-      context: {
-        method: req.method,
-        url: req.url,
-        status: message.includes('required') || message.includes('token') || message.includes('userId') ? 400 : 500,
-      },
-    });
-    sendJson(res, message.includes('required') || message.includes('token') || message.includes('userId') ? 400 : 500, { error: message });
+    if (status >= 500) {
+      void sendWorkflowAlert({
+        title: 'Workflow request failed',
+        error,
+        context: {
+          method: req.method,
+          url: req.url,
+          status,
+        },
+      });
+    }
+    sendJson(res, status, { error: message });
   });
 });
 

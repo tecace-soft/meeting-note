@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",
+    "@types/busboy": "^1.5.4",
+    "busboy": "^1.6.0",
     "dotenv": "^17.4.2",
     "undici": "^7.26.0"
   },
