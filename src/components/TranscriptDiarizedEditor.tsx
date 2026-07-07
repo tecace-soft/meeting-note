@@ -118,6 +118,7 @@ export interface TranscriptDiarizedEditorProps {
   onPlaySegment?: (segment: TranscriptSegment, index: number) => void;
   transcriptLanguage?: TranscriptLanguage;
   onPersistSegments?: (next: TranscriptSegment[]) => Promise<void>;
+  onNoteShared?: (sharedUserIds: string[]) => void;
 }
 
 export function getTranscriptSpeakerFilters(segments: TranscriptSegment[]): string[] {
@@ -217,6 +218,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   onPlaySegment,
   transcriptLanguage = 'original',
   onPersistSegments,
+  onNoteShared,
 }) => {
   const scopeGroupId = useId();
   const { user, getAccessToken } = useAuth();
@@ -556,19 +558,24 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     if (fetchError) throw fetchError;
 
     const noteRow = data as { user_id?: string | null; shared_users?: unknown } | null;
-    if (!noteRow || noteRow.user_id === targetUserId) return;
+    if (!noteRow) return;
 
     const rawSharedUsers = noteRow.shared_users;
     const sharedUsers = Array.isArray(rawSharedUsers)
       ? rawSharedUsers.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
       : [];
-    if (sharedUsers.includes(targetUserId)) return;
+    if (noteRow.user_id === targetUserId || sharedUsers.includes(targetUserId)) {
+      onNoteShared?.(sharedUsers);
+      return;
+    }
 
+    const nextSharedUsers = [...sharedUsers, targetUserId];
     const { error: updateError } = await supabase
       .from('note')
-      .update({ shared_users: [...sharedUsers, targetUserId] })
+      .update({ shared_users: nextSharedUsers })
       .eq('id', noteId);
     if (updateError) throw updateError;
+    onNoteShared?.(nextSharedUsers);
   };
 
   const handleApplySpeakerChange = async () => {

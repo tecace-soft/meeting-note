@@ -305,6 +305,7 @@ const TranscriptionSummary: React.FC = () => {
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [isForwardTeamsModalOpen, setIsForwardTeamsModalOpen] = useState(false);
   const [isShareNoteModalOpen, setIsShareNoteModalOpen] = useState(false);
+  const [generatedSharedUserIds, setGeneratedSharedUserIds] = useState<string[]>([]);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
@@ -1031,6 +1032,7 @@ const TranscriptionSummary: React.FC = () => {
     setIsSummarizing(true);
     setSummaryProgress({ stage: 'starting', progress: 0 });
     setSummaryResult(null);
+    setGeneratedSharedUserIds([]);
     setGeneratedTranscriptLanguage('original');
     setIsEditingGeneratedTitle(false);
     setGeneratedTitleDraft('');
@@ -1135,6 +1137,7 @@ const TranscriptionSummary: React.FC = () => {
         transcript,
         audioDurationSeconds,
       });
+      setGeneratedSharedUserIds([]);
       setGeneratedTitleDraft(noteTitle);
       setEditedSummary(summaryText);
       setResultsTab('summary');
@@ -2460,7 +2463,8 @@ const TranscriptionSummary: React.FC = () => {
                           }
                           canPlaySegment={isPlayableSegment}
                           onPlaySegment={(segment, index) => void handlePlayResultTranscriptSegment(segment, index)}
-                          transcriptLanguage="original"
+                          transcriptLanguage={getGeneratedTranscriptLanguage()}
+                          onNoteShared={setGeneratedSharedUserIds}
                         />
                       </div>
                     ) : null}
@@ -2828,9 +2832,10 @@ const TranscriptionSummary: React.FC = () => {
       <ShareNoteModal
         isOpen={isShareNoteModalOpen}
         noteId={currentNoteId}
-        noteTitle="Current summary"
-        existingSharedUserIds={[]}
+        noteTitle={summaryResult?.title ?? 'Current summary'}
+        existingSharedUserIds={generatedSharedUserIds}
         onClose={() => setIsShareNoteModalOpen(false)}
+        onShared={(_noteId, sharedUserIds) => setGeneratedSharedUserIds(sharedUserIds)}
       />
 
       {/* Sync Profile Modal */}
