@@ -1,0 +1,738 @@
+// RadioListTile is still appropriate for this compact picker; Flutter's newer
+// RadioGroup migration can happen alongside a broader SDK pass.
+// ignore_for_file: deprecated_member_use
+
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+
+import '../../../shared/widgets/widgets.dart';
+import '../../auth/providers/auth_provider.dart';
+import '../../settings/data/settings_repository.dart';
+import '../data/notes_repository.dart';
+import '../models/meeting_note.dart';
+
+class NewNoteScreen extends ConsumerStatefulWidget {
+  const NewNoteScreen({super.key, this.audioPath});
+
+  final String? audioPath;
+
+  @override
+  ConsumerState<NewNoteScreen> createState() => _NewNoteScreenState();
+}
+
+class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
+  late final TextEditingController _title;
+  final _instructions = TextEditingController();
+  SummaryPrompt? _prompt;
+  late String? _audioPath;
+  String? _attachmentPath;
+  bool _loadingPrompts = true;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _title = TextEditingController(
+      text: 'Meeting ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
+    );
+    _audioPath = widget.audioPath;
+    Future.microtask(_loadDefaultPrompt);
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _instructions.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final audioName = _fileName(_audioPath) ?? 'No audio selected';
+    final attachmentName = _fileName(_attachmentPath);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF3F4F8),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 33, 24, 0),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _goBackToRecord,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'Back',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w400,
+                          color: Color(0xFF4B5565),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  const Text(
+                    'New Meeting Note',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827),
+                    ),
+                  ),
+                  const Spacer(),
+                  const SizedBox(width: 38),
+                ],
+              ),
+              const SizedBox(height: 30),
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    _AudioSourceCard(
+                      name: audioName,
+                      meta: _audioMetaLine(_audioPath),
+                      onRemove: () => setState(() => _audioPath = null),
+                    ),
+                    const SizedBox(height: 24),
+                    const _FieldLabel('Title'),
+                    const SizedBox(height: 8),
+                    _FigmaTextField(
+                      controller: _title,
+                      minHeight: 51,
+                    ),
+                    const SizedBox(height: 23),
+                    const _FieldLabel('Instructions (optional)'),
+                    const SizedBox(height: 8),
+                    _FigmaTextField(
+                      controller: _instructions,
+                      minHeight: 84,
+                      maxLines: 3,
+                      hintText: 'e.g. Focus on action items, summarize in Korean',
+                    ),
+                    const SizedBox(height: 23),
+                    const _FieldLabel('Summary prompt'),
+                    const SizedBox(height: 8),
+                    _SummaryPromptButton(
+                      label: _prompt?.name ??
+                          (_loadingPrompts
+                              ? 'Loading prompts...'
+                              : 'Choose summary prompt'),
+                      onTap: _pickPrompt,
+                    ),
+                    const SizedBox(height: 26),
+                    const _FieldLabel('Attachments'),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _AttachmentButton(
+                            label: '+ File',
+                            onTap: _pickAttachment,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _AttachmentButton(
+                            label: '+ Camera',
+                            icon: Icons.camera_alt_outlined,
+                            onTap: _pickCameraImage,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (attachmentName != null) ...[
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: _AttachmentButton(
+                          label: attachmentName,
+                          muted: true,
+                          onTap: () => setState(() => _attachmentPath = null),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 55),
+                    PrimaryButton(
+                      label: 'Generate Summary',
+                      loading: _submitting,
+                      onPressed: _audioPath == null ? null : _submit,
+                    ),
+                    const SizedBox(height: 19),
+                    const Text(
+                      "We'll notify you when it's ready",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w300,
+                        color: Color(0xFFB6BFCC),
+                      ),
+                    ),
+                    const SizedBox(height: 34),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickPrompt() async {
+    late final List<SummaryPrompt> prompts;
+    try {
+      prompts = await _loadPromptsFresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load prompts: $error')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    if (prompts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No summary prompts found for this account.'),
+        ),
+      );
+      return;
+    }
+    final currentPrompt = _prompt ?? _preferredPrompt(prompts);
+    final selected = await showModalBottomSheet<SummaryPrompt>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          children: [
+            for (final p in prompts)
+              RadioListTile<String>(
+                value: p.id,
+                groupValue: currentPrompt.id,
+                onChanged: (_) => Navigator.pop(context, p),
+                title: Text(p.name),
+                subtitle: p.description != null ? Text(p.description!) : null,
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) setState(() => _prompt = selected);
+  }
+
+  Future<void> _loadDefaultPrompt() async {
+    try {
+      final prompts = await _loadPromptsFresh();
+      if (!mounted || prompts.isEmpty || _prompt != null) return;
+      setState(() => _prompt = _preferredPrompt(prompts));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load prompts: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingPrompts = false);
+    }
+  }
+
+  Future<List<SummaryPrompt>> _loadPromptsFresh() async {
+    ref.invalidate(promptsProvider);
+    final rows = await ref.read(settingsRepositoryProvider).summaryPrompts();
+    return rows
+        .map(
+          (row) => SummaryPrompt(
+            id: row.id,
+            name: row.name,
+            description: _previewPrompt(row.prompt),
+          ),
+        )
+        .toList();
+  }
+
+  SummaryPrompt _preferredPrompt(List<SummaryPrompt> prompts) {
+    for (final prompt in prompts) {
+      if (prompt.name.trim().toLowerCase() == 'default') return prompt;
+    }
+    return prompts.first;
+  }
+
+  Future<SummaryPrompt?> _selectedPromptForSubmit() async {
+    if (_prompt != null) return _prompt;
+    final prompts = await _loadPromptsFresh();
+    if (prompts.isEmpty) return null;
+    final prompt = _preferredPrompt(prompts);
+    if (mounted) setState(() => _prompt = prompt);
+    return prompt;
+  }
+
+  Future<void> _showAudioOptions() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.upload_file_rounded),
+                title: const Text('Choose audio file'),
+                subtitle: const Text('Pick an audio file from this device'),
+                onTap: () => Navigator.pop(context, 'pick'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.edit_rounded),
+                title: const Text('Enter local file path'),
+                subtitle: const Text('Useful for emulator testing'),
+                onTap: () => Navigator.pop(context, 'manual'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || selected == null) return;
+    if (selected == 'pick') {
+      final path = await _pickAudioFile();
+      if (path != null) setState(() => _audioPath = path);
+      return;
+    }
+    if (selected == 'manual') {
+      final path = await _showManualPathDialog();
+      if (path != null) setState(() => _audioPath = path);
+      return;
+    }
+    setState(() => _audioPath = selected);
+  }
+
+  Future<String?> _pickAudioFile() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: [
+          'm4a',
+          'mp3',
+          'wav',
+          'aac',
+          'ogg',
+          'flac',
+          'mp4',
+          'webm',
+        ],
+      );
+      return result?.files.single.path;
+    } catch (error) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not choose audio: $error')),
+      );
+      return null;
+    }
+  }
+
+  Future<String?> _showManualPathDialog() {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Audio file path'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '/sdcard/Download/meeting.m4a',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final path = controller.text.trim();
+              Navigator.pop(context, path.isEmpty ? null : path);
+            },
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    ).whenComplete(controller.dispose);
+  }
+
+  Future<void> _pickAttachment() async {
+    try {
+      final result = await FilePicker.pickFiles();
+      final path = result?.files.single.path;
+      if (path != null) setState(() => _attachmentPath = path);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not attach file: $error')),
+      );
+    }
+  }
+
+  Future<void> _pickCameraImage() async {
+    try {
+      final image = await ImagePicker().pickImage(source: ImageSource.camera);
+      if (image != null) setState(() => _attachmentPath = image.path);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open camera: $error')),
+      );
+    }
+  }
+
+  Future<void> _submit() async {
+    final audioPath = _audioPath;
+    if (audioPath == null) return;
+
+    setState(() => _submitting = true);
+    try {
+      final selectedPrompt = await _selectedPromptForSubmit();
+      if (selectedPrompt == null) {
+        throw StateError(
+          'Could not load summary prompts for this account. Open Settings > Summary Prompts and confirm at least one prompt exists.',
+        );
+      }
+      final user = ref.read(authControllerProvider).user;
+      final jobId = await ref.read(notesRepositoryProvider).createNote(
+            audioPath: audioPath,
+            title: _title.text.trim(),
+            instructions: _instructions.text.trim().isEmpty
+                ? null
+                : _instructions.text.trim(),
+            promptId: selectedPrompt.id,
+            userName: user?.displayName,
+          );
+      if (mounted) context.pushReplacement('/processing/$jobId');
+    } catch (e) {
+      if (mounted) {
+        setState(() => _submitting = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to submit: $e')));
+      }
+    }
+  }
+
+  void _goBackToRecord() {
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go('/record');
+    }
+  }
+
+  String? _fileName(String? path) {
+    if (path == null || path.isEmpty) return null;
+    return path.split(RegExp(r'[\\/]')).last;
+  }
+
+  String _audioMetaLine(String? path) {
+    if (path == null || path.isEmpty) return 'Select an audio file';
+    final size = _fileSizeLabel(path);
+    return size == null ? 'Audio source' : 'Audio source - $size';
+  }
+
+  String? _fileSizeLabel(String path) {
+    try {
+      final bytes = File(path).lengthSync();
+      if (bytes <= 0) return null;
+      final mb = bytes / (1024 * 1024);
+      if (mb >= 0.1) return '${mb.toStringAsFixed(1)} MB';
+      return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _previewPrompt(String value) {
+    final compact = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (compact.length <= 96) return compact;
+    return '${compact.substring(0, 96)}...';
+  }
+}
+
+class _AudioSourceCard extends StatelessWidget {
+  const _AudioSourceCard({
+    required this.name,
+    required this.meta,
+    required this.onRemove,
+  });
+
+  final String name;
+  final String meta;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 75,
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(21),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 35,
+            height: 35,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [Color(0xFF4D9FFF), Color(0xFF2F80ED)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: const Center(
+              child: Text(
+                '31m',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  meta,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w300,
+                    color: Color(0xFF9BA6B7),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          GestureDetector(
+            onTap: onRemove,
+            child: const Text(
+              'Remove',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w300,
+                color: Color(0xFFADB6C6),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w400,
+        color: Color(0xFF667085),
+      ),
+    );
+  }
+}
+
+class _FigmaTextField extends StatelessWidget {
+  const _FigmaTextField({
+    required this.controller,
+    required this.minHeight,
+    this.maxLines = 1,
+    this.hintText,
+  });
+
+  final TextEditingController controller;
+  final double minHeight;
+  final int maxLines;
+  final String? hintText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(minHeight: minHeight),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE4E8F0)),
+      ),
+      child: TextField(
+        controller: controller,
+        maxLines: maxLines,
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w400,
+          color: Color(0xFF111827),
+        ),
+        decoration: InputDecoration(
+          hintText: hintText,
+          hintStyle: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w300,
+            color: Color(0xFFBAC3D0),
+          ),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        ),
+      ),
+    );
+  }
+}
+
+class _SummaryPromptButton extends StatelessWidget {
+  const _SummaryPromptButton({
+    required this.label,
+    required this.onTap,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFE4E8F0)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400,
+                  color: Color(0xFF111827),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Text(
+              'Change',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF2F80FF),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttachmentButton extends StatelessWidget {
+  const _AttachmentButton({
+    required this.label,
+    required this.onTap,
+    this.muted = false,
+    this.icon,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final bool muted;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        height: 39,
+        constraints: const BoxConstraints(minWidth: 96),
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        decoration: BoxDecoration(
+          color: muted ? const Color(0xFFF1F3F7) : Colors.white,
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                Icon(
+                  icon,
+                  size: 16,
+                  color: muted ? const Color(0xFF667085) : const Color(0xFF111827),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w400,
+                    color: muted
+                        ? const Color(0xFF667085)
+                        : const Color(0xFF111827),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

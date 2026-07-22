@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#ffffff"/>
+  <defs>
+    <linearGradient id="diamond" x1="140" y1="180" x2="880" y2="840" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#28c7f4"/>
+      <stop offset="0.45" stop-color="#0298dc"/>
+      <stop offset="1" stop-color="#0054a8"/>
+    </linearGradient>
+    <linearGradient id="diamondShadow" x1="170" y1="650" x2="450" y2="930" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9fe4ff"/>
+      <stop offset="1" stop-color="#4fb2ec"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="250" y1="480" x2="755" y2="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#003c99"/>
+      <stop offset="0.42" stop-color="#035fbc"/>
+      <stop offset="0.72" stop-color="#10c4e8"/>
+      <stop offset="1" stop-color="#004ea3"/>
+    </linearGradient>
+    <linearGradient id="stem" x1="515" y1="520" x2="650" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#025bad"/>
+      <stop offset="1" stop-color="#008ee5"/>
+    </linearGradient>
+  </defs>
+  <path d="M152 662 512 302l360 360-360 360z" fill="url(#diamondShadow)" opacity=".65"/>
+  <path d="M154 458 458 154c30-30 78-30 108 0l304 304c30 30 30 78 0 108L566 870c-30 30-78 30-108 0L154 566c-30-30-30-78 0-108zm72 55 286 286 286-286-286-286z" fill="url(#diamond)"/>
+  <path d="M500 500c-92-43-180-46-260-9 146-93 265-93 378-27 61 35 129 33 204-2-81 67-158 88-238 55-28-12-56-20-84-17z" fill="url(#wave)"/>
+  <path d="M516 510h112l-33 292-95 88z" fill="url(#stem)"/>
+  <path d="M629 510 704 485 630 802z" fill="#003f91" opacity=".42"/>
+</svg>

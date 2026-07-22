@@ -1,0 +1,191 @@
+/* ==========================================================================
+   TecAce Design System — token subset for the Meeting Note product page.
+   Values transcribed verbatim from the TecAce Design System
+   (claude.ai/design project 64e6deb6). Light is default; dark via
+   :root[data-theme="dark"]. Only the tokens this page uses are included.
+   ========================================================================== */
+
+/* ---- Webfonts: Pretendard (UI) + Poppins (display/numeric) ---- */
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css");
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap");
+
+:root {
+  /* ---- Type faces ---- */
+  --font-sans: "Pretendard", "Pretendard JP", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Poppins", "Pretendard", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ---- Weight ramp ---- */
+  --fw-thin: 100; --fw-extralight: 200; --fw-regular: 400;
+  --fw-medium: 500; --fw-semibold: 600; --fw-bold: 700;
+
+  /* ---- Type size tokens ---- */
+  --fs-display-1: 56px; --fs-display-2: 40px; --fs-display-3: 36px;
+  --fs-title-1: 32px; --fs-title-2: 28px; --fs-title-3: 24px;
+  --fs-heading-1: 22px; --fs-heading-2: 20px;
+  --fs-headline-1: 18px; --fs-headline-2: 17px;
+  --fs-body-1: 16px; --fs-body-2: 15px;
+  --fs-label-1: 14px; --fs-label-2: 13px;
+  --fs-caption-1: 12px; --fs-caption-2: 11px;
+
+  /* ---- Core palette ---- */
+  --common-0: rgb(0,0,0);
+  --common-100: rgb(255,255,255);
+
+  --blue-40: rgb(11,85,204);
+  --blue-45: rgb(14,100,230);
+  --blue-50: rgb(17,109,255);
+  --blue-55: rgb(51,131,255);
+  --blue-60: rgb(85,153,255);
+  --blue-80: rgb(187,216,255);
+  --blue-90: rgb(221,236,255);
+  --blue-95: rgb(238,246,255);
+  --blue-99: rgb(248,252,255);
+
+  --cyan-40: rgb(0,148,178);
+  --cyan-50: rgb(0,185,220);
+  --cyan-60: rgb(40,205,235);
+  --cyan-95: rgb(227,250,255);
+
+  --violet-45: rgb(78,84,210);
+  --violet-50-2: rgb(101,65,242);
+  --violet-60-2: rgb(125,94,247);
+  --violet-95: rgb(240,236,254);
+
+  --purple-40: rgb(90,40,192);
+  --purple-50: rgb(112,56,225);
+  --purple-95: rgb(242,233,254);
+
+  --green-40: rgb(0,156,72);
+  --green-50: rgb(10,190,92);
+  --green-95: rgb(217,255,230);
+
+  --orange-40: rgb(195,108,0);
+  --orange-50: rgb(225,138,15);
+
+  --cool-neutral-5: rgb(12,17,38);
+  --cool-neutral-10: rgb(23,23,25);
+  --cool-neutral-15: rgb(27,28,30);
+  --cool-neutral-17: rgb(38,53,112);
+  --cool-neutral-99: rgb(247,247,248);
+
+  /* ---- Semantic: brand ---- */
+  --primary-normal: rgb(51,102,255);
+  --primary-strong: var(--blue-45);
+  --primary-heavy: var(--blue-40);
+
+  /* ---- Semantic: label (text) ---- */
+  --label-strong: var(--common-0);
+  --label-normal: rgb(23,23,23);
+  --label-neutral: rgba(46,47,51,0.88);
+  --label-alternative: rgba(55,56,60,0.61);
+  --label-assistive: rgba(55,56,60,0.28);
+
+  /* ---- Semantic: background ---- */
+  --background-normal-normal: rgb(255,255,255);
+  --background-normal-alternative: var(--cool-neutral-99);
+  --background-elevated-normal: var(--common-100);
+
+  /* ---- Semantic: line + fill ---- */
+  --line-normal-alternative: rgba(112,115,124,0.08);
+  --line-normal-neutral: rgba(112,115,124,0.16);
+  --line-normal-normal: rgba(112,115,124,0.22);
+  --line-normal-strong: rgba(112,115,124,0.52);
+  --fill-alternative: rgba(112,115,124,0.05);
+  --fill-normal: rgba(112,115,124,0.08);
+  --fill-strong: rgba(112,115,124,0.16);
+
+  /* ---- Semantic: inverse / status ---- */
+  --inverse-background: var(--cool-neutral-15);
+  --inverse-label: var(--cool-neutral-99);
+  --status-positive: var(--green-50);
+  --static-white: rgb(255,255,255);
+
+  /* ---- Radius (large / desktop mode) ---- */
+  --radius-sm: 12px;
+  --radius: 16px;
+  --radius-lg: 20px;
+  --radius-pill: 1000px;
+
+  /* ---- Spacing rhythm (4-based) ---- */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-12: 48px; --sp-16: 64px;
+
+  /* ---- Page-level helpers ---- */
+  --page-max: 1120px;
+  --shadow-card: 0 1px 2px rgba(23,23,25,0.04), 0 8px 24px rgba(23,23,25,0.06);
+  --shadow-float: 0 20px 60px rgba(23,23,25,0.18);
+}
+
+:root[data-theme="dark"] {
+  --blue-95: rgb(234,242,254);
+
+  --primary-normal: rgb(91,132,255);
+  --primary-strong: var(--blue-55);
+  --primary-heavy: var(--blue-50);
+
+  --label-strong: var(--common-100);
+  --label-normal: rgb(247,247,247);
+  --label-neutral: rgba(194,196,200,0.88);
+  --label-alternative: rgba(174,176,182,0.61);
+  --label-assistive: rgba(174,176,182,0.28);
+
+  --background-normal-normal: rgb(27,28,30);
+  --background-normal-alternative: var(--cool-neutral-5);
+  --background-elevated-normal: var(--cool-neutral-17);
+
+  --line-normal-alternative: rgba(112,115,124,0.22);
+  --line-normal-neutral: rgba(112,115,124,0.28);
+  --line-normal-normal: rgba(112,115,124,0.32);
+  --line-normal-strong: rgba(194,196,200,0.52);
+  --fill-alternative: rgba(112,115,124,0.12);
+  --fill-normal: rgba(112,115,124,0.22);
+  --fill-strong: rgba(112,115,124,0.28);
+
+  --inverse-background: var(--common-100);
+  --inverse-label: var(--cool-neutral-10);
+
+  --blue-95: rgba(51,131,255,0.12);
+  --blue-99: rgba(51,131,255,0.06);
+  --cyan-95: rgba(0,185,220,0.12);
+  --violet-95: rgba(101,65,242,0.14);
+  --purple-95: rgba(112,56,225,0.14);
+  --green-95: rgba(10,190,92,0.14);
+
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+  --shadow-float: 0 20px 60px rgba(0,0,0,0.55);
+}
+
+/* Respect OS preference when no explicit theme is set. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --primary-normal: rgb(91,132,255);
+    --primary-strong: var(--blue-55);
+    --primary-heavy: var(--blue-50);
+    --label-strong: var(--common-100);
+    --label-normal: rgb(247,247,247);
+    --label-neutral: rgba(194,196,200,0.88);
+    --label-alternative: rgba(174,176,182,0.61);
+    --label-assistive: rgba(174,176,182,0.28);
+    --background-normal-normal: rgb(27,28,30);
+    --background-normal-alternative: var(--cool-neutral-5);
+    --background-elevated-normal: var(--cool-neutral-17);
+    --line-normal-alternative: rgba(112,115,124,0.22);
+    --line-normal-neutral: rgba(112,115,124,0.28);
+    --line-normal-normal: rgba(112,115,124,0.32);
+    --line-normal-strong: rgba(194,196,200,0.52);
+    --fill-alternative: rgba(112,115,124,0.12);
+    --fill-normal: rgba(112,115,124,0.22);
+    --fill-strong: rgba(112,115,124,0.28);
+    --inverse-background: var(--common-100);
+    --inverse-label: var(--cool-neutral-10);
+    --blue-95: rgba(51,131,255,0.12);
+    --blue-99: rgba(51,131,255,0.06);
+    --cyan-95: rgba(0,185,220,0.12);
+    --violet-95: rgba(101,65,242,0.14);
+    --purple-95: rgba(112,56,225,0.14);
+    --green-95: rgba(10,190,92,0.14);
+    --shadow-card: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+    --shadow-float: 0 20px 60px rgba(0,0,0,0.55);
+  }
+}
