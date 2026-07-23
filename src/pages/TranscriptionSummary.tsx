@@ -187,6 +187,46 @@ interface WorkflowJobStatus {
   error?: string | null;
 }
 
+// A summarize job runs on the backend for minutes; persist its id so a page
+// refresh (or navigating away and back) can resume polling instead of losing
+// the in-flight summary entirely.
+const ACTIVE_SUMMARY_JOB_STORAGE_KEY = 'meeting-note:active-summary-job';
+
+interface PersistedSummaryJob {
+  jobId: string;
+  noteId: string;
+}
+
+function readActiveSummaryJob(): PersistedSummaryJob | null {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_SUMMARY_JOB_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedSummaryJob>;
+    if (typeof parsed.jobId === 'string' && parsed.jobId && typeof parsed.noteId === 'string' && parsed.noteId) {
+      return { jobId: parsed.jobId, noteId: parsed.noteId };
+    }
+  } catch {
+    /* corrupt or unavailable storage: treat as no active job */
+  }
+  return null;
+}
+
+function persistActiveSummaryJob(job: PersistedSummaryJob): void {
+  try {
+    window.localStorage.setItem(ACTIVE_SUMMARY_JOB_STORAGE_KEY, JSON.stringify(job));
+  } catch {
+    /* storage unavailable (private mode/quota): resume-on-refresh just won't work */
+  }
+}
+
+function clearActiveSummaryJob(): void {
+  try {
+    window.localStorage.removeItem(ACTIVE_SUMMARY_JOB_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 interface SummaryResultState {
   transcript: TranscriptSegment[];
   summary: string;
@@ -287,6 +327,14 @@ const TranscriptionSummary: React.FC = () => {
   const [summaryProgress, setSummaryProgress] = useState<{ stage: string; progress: number } | null>(null);
   const [summaryResult, setSummaryResult] = useState<SummaryResultState | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  // Aborts the active summary-job poll loop on unmount so it stops calling
+  // setState after the page is gone; the job keeps running on the backend and
+  // is resumed from localStorage on the next mount.
+  const summaryJobAbortRef = useRef<AbortController | null>(null);
+  const resumedSummaryJobRef = useRef(false);
+  // Always points at the latest runSummaryJob so the resume effect can call it
+  // without listing an every-render-changing function in its dependency array.
+  const runSummaryJobRef = useRef<((jobId: string, noteId: string, token: string) => Promise<void>) | null>(null);
   const resultAudioRef = useRef<HTMLAudioElement | null>(null);
   const resultPlaybackStopAtRef = useRef<number | null>(null);
   const [resultSegmentPlayback, setResultSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
@@ -891,10 +939,14 @@ const TranscriptionSummary: React.FC = () => {
   const waitForWorkflowJob = async (
     jobId: string,
     initialToken: string,
-    getToken: () => Promise<string | null>
+    getToken: () => Promise<string | null>,
+    signal?: AbortSignal
   ): Promise<WorkflowJobStatus> => {
     const startedAt = Date.now();
     const POLL_INTERVAL_MS = 2500;
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw new DOMException('Polling aborted.', 'AbortError');
+    };
     // Transcription/summarization can run for many minutes; a single network
     // blip, a gateway 5xx, or an expired token must NOT fail a job that is still
     // running on the backend. Tolerate a few consecutive poll failures (with a
@@ -904,12 +956,14 @@ const TranscriptionSummary: React.FC = () => {
     let token = initialToken;
     let consecutiveFailures = 0;
     while (Date.now() - startedAt < 60 * 60 * 1000) {
+      throwIfAborted();
       let status: WorkflowJobStatus;
       try {
         const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs/${encodeURIComponent(jobId)}`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
+          signal,
         });
         if (!response.ok) {
           const detail = await response.json().catch(() => null) as { error?: string } | null;
@@ -918,6 +972,10 @@ const TranscriptionSummary: React.FC = () => {
         status = (await response.json()) as WorkflowJobStatus;
         consecutiveFailures = 0;
       } catch (error) {
+        // Abort (unmount/new run) is not a poll failure — stop immediately.
+        if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+          throw new DOMException('Polling aborted.', 'AbortError');
+        }
         consecutiveFailures += 1;
         if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
           throw error instanceof Error ? error : new Error('Workflow polling failed.');
@@ -1045,6 +1103,87 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
+  const applySummaryResult = async (completedJob: WorkflowJobStatus, noteId: string) => {
+    const result = completedJob.result ?? {};
+    const summaryTranslations = result.summaryTranslations && typeof result.summaryTranslations === 'object'
+      ? result.summaryTranslations
+      : undefined;
+    const summaryText =
+      summaryTranslations?.[appLanguage]?.trim() ||
+      (typeof result.summary === 'string' ? result.summary : String(result.summary ?? ''));
+    const noteTitle = typeof result.title === 'string' && result.title.trim()
+      ? result.title.trim()
+      : 'Untitled note';
+    const meetingAt = new Date().toISOString();
+    const transcript = normalizeTranscript(result.transcript);
+    const transcriptionTranslations = result.transcriptionTranslations && typeof result.transcriptionTranslations === 'object'
+      ? result.transcriptionTranslations
+      : undefined;
+    const diarizationTranslations = result.diarizationTranslations && typeof result.diarizationTranslations === 'object'
+      ? result.diarizationTranslations
+      : undefined;
+    const audioDurationSeconds =
+      typeof result.audioDurationSeconds === 'number' && Number.isFinite(result.audioDurationSeconds)
+        ? result.audioDurationSeconds
+        : null;
+    try {
+      // On a resumed job, pendingNoteImages was lost to the refresh, so this is
+      // a no-op; on a fresh run it uploads the staged attachments.
+      const uploadedImages = await uploadPendingNoteImages(noteId);
+      setGeneratedNoteImageCount(uploadedImages.length);
+      if (uploadedImages.length > 0) {
+        pendingNoteImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+        setPendingNoteImages([]);
+      }
+    } catch (imageError) {
+      console.error('Failed to save note attachments:', imageError);
+    }
+    setSummaryResult({
+      summary: summaryText,
+      summaryTranslations,
+      transcription_language: result.transcriptionLanguage ?? null,
+      transcription_translations: transcriptionTranslations,
+      diarization_translations: diarizationTranslations,
+      title: noteTitle,
+      meetingAt,
+      transcript,
+      audioDurationSeconds,
+    });
+    setGeneratedSharedUserIds([]);
+    setGeneratedTitleDraft(noteTitle);
+    setEditedSummary(summaryText);
+    setResultsTab('summary');
+  };
+
+  // Poll a created job to completion and apply its result. Persists the job id
+  // so a refresh/navigation can resume it, and aborts cleanly on unmount (the
+  // job keeps running on the backend; a later mount resumes from localStorage).
+  const runSummaryJob = async (jobId: string, noteId: string, token: string) => {
+    const controller = new AbortController();
+    summaryJobAbortRef.current?.abort();
+    summaryJobAbortRef.current = controller;
+    persistActiveSummaryJob({ jobId, noteId });
+    try {
+      const completedJob = await waitForWorkflowJob(jobId, token, getAccessToken, controller.signal);
+      await applySummaryResult(completedJob, noteId);
+      clearActiveSummaryJob();
+    } catch (error: any) {
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        // Unmount/navigation: keep the persisted job so a later mount resumes it.
+        return;
+      }
+      console.error('Error summarizing:', error);
+      setSummaryError(error.message || 'Failed to generate summary');
+      clearActiveSummaryJob();
+    } finally {
+      if (summaryJobAbortRef.current === controller) summaryJobAbortRef.current = null;
+      if (!controller.signal.aborted) {
+        setIsSummarizing(false);
+        setSummaryProgress(null);
+      }
+    }
+  };
+
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
     const selectedPrompt = summaryPromptRows.find((row) => row.id === selectedSummaryPromptId) ?? summaryPromptRows[0] ?? null;
@@ -1066,17 +1205,21 @@ const TranscriptionSummary: React.FC = () => {
     setGeneratedTitleDraft('');
     setGeneratedNoteImageCount(0);
     setSummaryError(null);
-    
+
+    let jobId: string;
+    let noteId: string;
+    let token: string;
     try {
       const file = completedFiles[0];
-      const noteId = generateNoteId();
+      noteId = generateNoteId();
       setCurrentNoteId(noteId);
 
       if (!WORKFLOW_API_URL) {
         throw new Error('Workflow API URL is not configured.');
       }
-      const token = await getAccessToken();
-      if (!token) throw new Error('Could not acquire Microsoft access token.');
+      const acquiredToken = await getAccessToken();
+      if (!acquiredToken) throw new Error('Could not acquire Microsoft access token.');
+      token = acquiredToken;
       const downloadUrl = file.storagePath
         ? await createAudioSignedUrl(file.storagePath, file.bucket || AUDIO_BUCKET)
         : file.publicUrl;
@@ -1121,63 +1264,53 @@ const TranscriptionSummary: React.FC = () => {
 
       const createdJob = (await response.json()) as { jobId?: string };
       if (!createdJob.jobId) throw new Error('Workflow did not return a job id.');
-      const completedJob = await waitForWorkflowJob(createdJob.jobId, token, getAccessToken);
-      const result = completedJob.result ?? {};
-      const summaryTranslations = result.summaryTranslations && typeof result.summaryTranslations === 'object'
-        ? result.summaryTranslations
-        : undefined;
-      const summaryText =
-        summaryTranslations?.[appLanguage]?.trim() ||
-        (typeof result.summary === 'string' ? result.summary : String(result.summary ?? ''));
-      const noteTitle = typeof result.title === 'string' && result.title.trim()
-        ? result.title.trim()
-        : 'Untitled note';
-      const meetingAt = new Date().toISOString();
-      const transcript = normalizeTranscript(result.transcript);
-      const transcriptionTranslations = result.transcriptionTranslations && typeof result.transcriptionTranslations === 'object'
-        ? result.transcriptionTranslations
-        : undefined;
-      const diarizationTranslations = result.diarizationTranslations && typeof result.diarizationTranslations === 'object'
-        ? result.diarizationTranslations
-        : undefined;
-      const audioDurationSeconds =
-        typeof result.audioDurationSeconds === 'number' && Number.isFinite(result.audioDurationSeconds)
-          ? result.audioDurationSeconds
-          : null;
-      try {
-        const uploadedImages = await uploadPendingNoteImages(noteId);
-        setGeneratedNoteImageCount(uploadedImages.length);
-        if (uploadedImages.length > 0) {
-          pendingNoteImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-          setPendingNoteImages([]);
-        }
-      } catch (imageError) {
-        console.error('Failed to save note attachments:', imageError);
-      }
-      setSummaryResult({
-        summary: summaryText,
-        summaryTranslations,
-        transcription_language: result.transcriptionLanguage ?? null,
-        transcription_translations: transcriptionTranslations,
-        diarization_translations: diarizationTranslations,
-        title: noteTitle,
-        meetingAt,
-        transcript,
-        audioDurationSeconds,
-      });
-      setGeneratedSharedUserIds([]);
-      setGeneratedTitleDraft(noteTitle);
-      setEditedSummary(summaryText);
-      setResultsTab('summary');
-      
+      jobId = createdJob.jobId;
     } catch (error: any) {
       console.error('Error summarizing:', error);
       setSummaryError(error.message || 'Failed to generate summary');
-    } finally {
       setIsSummarizing(false);
       setSummaryProgress(null);
+      return;
     }
+
+    await runSummaryJob(jobId, noteId, token);
   };
+
+  runSummaryJobRef.current = runSummaryJob;
+
+  // Abort the active poll loop on unmount so it stops updating state; the backend
+  // job keeps running and is resumed from localStorage on the next mount.
+  useEffect(() => {
+    return () => {
+      summaryJobAbortRef.current?.abort();
+    };
+  }, []);
+
+  // Resume an in-flight summary job after a page refresh or navigating back.
+  // Runs once per mount, after auth is ready; the ref guard prevents re-entry on
+  // subsequent renders.
+  useEffect(() => {
+    if (resumedSummaryJobRef.current) return;
+    if (!isAuthenticated || !user?.id) return;
+    const persisted = readActiveSummaryJob();
+    if (!persisted) return;
+    resumedSummaryJobRef.current = true;
+    setIsSummarizing(true);
+    setSummaryProgress({ stage: 'resuming', progress: 0 });
+    setSummaryError(null);
+    setCurrentNoteId(persisted.noteId);
+    void (async () => {
+      const token = await getAccessToken();
+      if (!token) {
+        setSummaryError('Could not resume the previous summary. Please try again.');
+        setIsSummarizing(false);
+        setSummaryProgress(null);
+        clearActiveSummaryJob();
+        return;
+      }
+      await runSummaryJobRef.current?.(persisted.jobId, persisted.noteId, token);
+    })();
+  }, [isAuthenticated, user?.id, getAccessToken]);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
