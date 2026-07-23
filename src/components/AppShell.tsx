@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
+import ErrorBoundary from './ErrorBoundary';
 import { WindowSidebar } from 'react-coolicons';
 import { IconButton } from '../ui/wantedCompat';
 import AppSidebar, {
@@ -27,6 +28,7 @@ function readInitialCollapsed(): boolean {
 
 const AppShell: React.FC = () => {
   const isMdUp = useIsMdUp();
+  const location = useLocation();
   const [collapsed, setCollapsed] = useState(readInitialCollapsed);
   const mobileOverlay = !isMdUp;
 
@@ -84,7 +86,9 @@ const AppShell: React.FC = () => {
           onMobileOverlayNavigate={onMobileOverlayNavigate}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <Outlet />
+          <ErrorBoundary key={location.pathname} label={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </div>
 
         <FloatingRecorderWidget />

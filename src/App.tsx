@@ -34,14 +34,51 @@ const ModelTestRoute: React.FC = () => {
 
 const App: React.FC = () => {
   const [msalReady, setMsalReady] = useState(false);
+  const [initError, setInitError] = useState<Error | null>(null);
 
   useEffect(() => {
+    setInitError(null);
     void msalInstance
       .initialize()
       .then(() => msalInstance.handleRedirectPromise())
-      .catch((e) => console.error('MSAL init or redirect handling failed:', e))
-      .finally(() => setMsalReady(true));
+      .then(() => setMsalReady(true))
+      .catch((e) => {
+        console.error('MSAL init or redirect handling failed:', e);
+        setInitError(e instanceof Error ? e : new Error(String(e)));
+      });
   }, []);
+
+  if (initError) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center p-6"
+        style={{ backgroundColor: 'var(--bg, #0f172a)', color: 'var(--text, #e2e8f0)' }}
+      >
+        <div
+          className="max-w-md w-full rounded-lg p-6 text-center"
+          style={{ backgroundColor: 'var(--bg-secondary, #1e293b)', border: '1px solid var(--border, #334155)' }}
+        >
+          <p className="text-base font-semibold mb-2">Sign-in could not start</p>
+          <p className="text-sm mb-4" style={{ color: 'var(--text-secondary, #94a3b8)' }}>
+            Authentication failed to initialize. This is usually a temporary network or configuration issue.
+          </p>
+          <p
+            className="text-xs mb-4 break-words rounded px-3 py-2 text-left"
+            style={{ backgroundColor: 'var(--bg, #0f172a)', color: 'var(--text-secondary, #94a3b8)' }}
+          >
+            {initError.message}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="text-sm rounded px-4 py-2"
+            style={{ backgroundColor: 'var(--accent, #2563eb)', color: '#fff' }}
+          >
+            Reload app
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!msalReady) {
     return (

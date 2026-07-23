@@ -888,20 +888,48 @@ const TranscriptionSummary: React.FC = () => {
     showPromptSection &&
     (!isNarrowViewport || !summaryFlowActive);
 
-  const waitForWorkflowJob = async (jobId: string, token: string): Promise<WorkflowJobStatus> => {
+  const waitForWorkflowJob = async (
+    jobId: string,
+    initialToken: string,
+    getToken: () => Promise<string | null>
+  ): Promise<WorkflowJobStatus> => {
     const startedAt = Date.now();
+    const POLL_INTERVAL_MS = 2500;
+    // Transcription/summarization can run for many minutes; a single network
+    // blip, a gateway 5xx, or an expired token must NOT fail a job that is still
+    // running on the backend. Tolerate a few consecutive poll failures (with a
+    // token refresh + backoff) before giving up. Terminal states reported by the
+    // backend (completed/failed) are handled outside the catch and are final.
+    const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+    let token = initialToken;
+    let consecutiveFailures = 0;
     while (Date.now() - startedAt < 60 * 60 * 1000) {
-      const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs/${encodeURIComponent(jobId)}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (!response.ok) {
-        const detail = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(detail?.error || `Workflow status request failed: ${response.status}`);
+      let status: WorkflowJobStatus;
+      try {
+        const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs/${encodeURIComponent(jobId)}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!response.ok) {
+          const detail = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(detail?.error || `Workflow status request failed: ${response.status}`);
+        }
+        status = (await response.json()) as WorkflowJobStatus;
+        consecutiveFailures = 0;
+      } catch (error) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          throw error instanceof Error ? error : new Error('Workflow polling failed.');
+        }
+        // Refresh the token in case the reused one expired mid-job, then back off.
+        const refreshed = await getToken().catch(() => null);
+        if (refreshed) token = refreshed;
+        const backoff = Math.min(POLL_INTERVAL_MS * 2 ** (consecutiveFailures - 1), 20000);
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+        continue;
       }
 
-      const status = (await response.json()) as WorkflowJobStatus;
       setSummaryProgress({
         stage: status.stage || status.status,
         progress: typeof status.progress === 'number' ? status.progress : 0,
@@ -909,7 +937,7 @@ const TranscriptionSummary: React.FC = () => {
 
       if (status.status === 'completed') return status;
       if (status.status === 'failed') throw new Error(status.error || 'Workflow job failed.');
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
     throw new Error('Workflow job timed out.');
   };
@@ -1093,7 +1121,7 @@ const TranscriptionSummary: React.FC = () => {
 
       const createdJob = (await response.json()) as { jobId?: string };
       if (!createdJob.jobId) throw new Error('Workflow did not return a job id.');
-      const completedJob = await waitForWorkflowJob(createdJob.jobId, token);
+      const completedJob = await waitForWorkflowJob(createdJob.jobId, token, getAccessToken);
       const result = completedJob.result ?? {};
       const summaryTranslations = result.summaryTranslations && typeof result.summaryTranslations === 'object'
         ? result.summaryTranslations

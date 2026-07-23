@@ -381,6 +381,9 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const chunkIndexRef = useRef(0);
   const stopResolveRef = useRef<(() => void) | null>(null);
   const cloudDraftFailuresRef = useRef(0);
+  // Tracks the latest recordedAudioUrl so the unmount-only teardown can revoke
+  // it without listing recordedAudioUrl as an effect dependency (see below).
+  const recordedAudioUrlRef = useRef<string | null>(null);
 
   const clearPlayback = useCallback(() => {
     if (audioPlayerRef.current) {
@@ -833,15 +836,35 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   }, [flushRecorderData, isRecording]);
 
+  // Keep the ref in sync with the latest recorded URL. This effect only reads
+  // state into a ref; it performs no teardown, so re-running it is harmless.
+  useEffect(() => {
+    recordedAudioUrlRef.current = recordedAudioUrl;
+  }, [recordedAudioUrl]);
+
+  // Unmount-only teardown. Empty deps are intentional: this must run ONLY when
+  // the provider unmounts, never when recordedAudioUrl changes. Starting a
+  // second recording sets recordedAudioUrl back to null, and if this cleanup
+  // re-ran then, it would stop the newly created stream and clear the new
+  // recording timer (they share the same refs), killing the fresh recording.
+  // Object URLs are already revoked at every replacement site (finalize/start/
+  // clear/recover), so only the currently-held URL needs revoking on unmount.
   useEffect(() => {
     return () => {
       if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
       if (wakeLockKeepAliveIntervalRef.current) clearInterval(wakeLockKeepAliveIntervalRef.current);
-      flushRecorderData();
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.requestData();
+        } catch {
+          /* requestData can race with a browser/device-driven stop. */
+        }
+      }
       streamRef.current?.getTracks().forEach((track) => track.stop());
-      if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+      if (recordedAudioUrlRef.current) URL.revokeObjectURL(recordedAudioUrlRef.current);
     };
-  }, [flushRecorderData, recordedAudioUrl]);
+  }, []);
 
   return (
     <RecorderContext.Provider
