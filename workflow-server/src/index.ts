@@ -1583,19 +1583,41 @@ async function transcribeOpenAiForTest(input: {
   };
 }
 
+// While a job is running, bump its updated_at on this cadence so the boot-time
+// orphan sweep (failOrphanedJobs) can distinguish a live job on another
+// instance from one stranded by a crashed/redeployed process.
+const JOB_HEARTBEAT_INTERVAL_MS = 60_000;
+// A queued/processing job whose updated_at is older than this is considered
+// orphaned. Must exceed the heartbeat interval by a safe margin so a genuinely
+// live job (heartbeating every minute) is never swept.
+const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
+// How often to re-scan for orphans. A boot-only scan would miss a job orphaned
+// moments before boot (not yet past the staleness threshold), stranding it
+// forever; a periodic scan cleans it once it crosses the threshold.
+const ORPHANED_JOB_SWEEP_INTERVAL_MS = 2 * 60_000;
+
 async function updateWorkflowJob(jobId: string | null, patch: {
   status?: WorkflowJobRow['status'];
   stage?: string;
   progress?: number;
   result?: unknown;
   error?: string | null;
-}): Promise<void> {
-  if (!jobId) return;
-  const { error } = await supabase.from('workflow_job').update({
-    ...patch,
-    updated_at: new Date().toISOString(),
-  }).eq('id', jobId);
-  if (error) console.warn(`Could not update workflow job ${jobId}: ${error.message}`);
+}, options?: { retries?: number }): Promise<boolean> {
+  if (!jobId) return false;
+  const retries = Math.max(0, options?.retries ?? 0);
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const { error } = await supabase.from('workflow_job').update({
+      ...patch,
+      updated_at: new Date().toISOString(),
+    }).eq('id', jobId);
+    if (!error) return true;
+    if (attempt < retries) {
+      await delay(Math.min(1000 * 2 ** attempt, 8000));
+      continue;
+    }
+    console.warn(`Could not update workflow job ${jobId}: ${error.message}`);
+  }
+  return false;
 }
 
 async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | null = null): Promise<SummarizeAudioResult> {
@@ -1818,6 +1840,7 @@ async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Pr
     stage: 'queued',
     progress: 0,
     request: input,
+    updated_at: new Date().toISOString(),
   }).select('id').single();
   if (error) throw error;
   const jobId = (data as { id?: unknown }).id;
@@ -1907,6 +1930,7 @@ async function createAndroidRecordingJob(req: IncomingMessage, res: ServerRespon
         mimeType: upload.file.mimeType,
         sizeBytes: upload.file.sizeBytes,
       },
+      updated_at: new Date().toISOString(),
     }).select('id').single();
     if (error) throw error;
     const jobId = (data as { id?: unknown }).id;
@@ -1927,15 +1951,23 @@ async function createAndroidRecordingJob(req: IncomingMessage, res: ServerRespon
 }
 
 async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): Promise<void> {
+  // Keep updated_at fresh across long silent stages (e.g. the multi-minute
+  // AssemblyAI poll) so a concurrent boot sweep never mistakes this live job
+  // for an orphan.
+  const heartbeat = setInterval(() => {
+    void updateWorkflowJob(jobId, {});
+  }, JOB_HEARTBEAT_INTERVAL_MS);
   try {
     const result = await runSummarizeAudio(input, jobId);
+    // Terminal writes retry: a transient DB blip here would otherwise strand the
+    // job at 'processing' forever and the client would poll until it times out.
     await updateWorkflowJob(jobId, {
       status: 'completed',
       stage: 'completed',
       progress: 100,
       result,
       error: null,
-    });
+    }, { retries: 4 });
     completedJobResults.set(jobId, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1957,7 +1989,9 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
       stage: 'failed',
       progress: 100,
       error: message,
-    });
+    }, { retries: 4 });
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -2158,7 +2192,45 @@ process.on('uncaughtException', (error) => {
   });
 });
 
+// Jobs run in-process via fire-and-forget, so a crash/redeploy leaves their
+// rows stuck at 'queued'/'processing' forever and clients poll for the full
+// hour. On boot, fail such rows that have gone stale (older than the orphan
+// threshold) so clients get a prompt, retryable error. The staleness guard
+// (backed by the per-job heartbeat) prevents sweeping a live job owned by an
+// overlapping instance during a zero-downtime deploy.
+async function failOrphanedJobs(): Promise<void> {
+  if (!env.supabaseUrl || !env.serviceRoleKey) return;
+  const cutoff = new Date(Date.now() - ORPHANED_JOB_THRESHOLD_MS).toISOString();
+  const { data, error } = await supabase
+    .from('workflow_job')
+    .select('id')
+    .in('status', ['queued', 'processing'])
+    .lt('updated_at', cutoff);
+  if (error) {
+    console.warn(`Could not scan for orphaned workflow jobs: ${error.message}`);
+    return;
+  }
+  const ids = ((data ?? []) as Array<{ id: string }>).map((row) => row.id);
+  if (ids.length === 0) return;
+  const { error: updateError } = await supabase
+    .from('workflow_job')
+    .update({
+      status: 'failed',
+      stage: 'failed',
+      error: 'Server restarted while this job was running. Please try again.',
+      updated_at: new Date().toISOString(),
+    })
+    .in('id', ids);
+  if (updateError) {
+    console.warn(`Could not fail ${ids.length} orphaned workflow job(s): ${updateError.message}`);
+    return;
+  }
+  console.log(`Marked ${ids.length} orphaned workflow job(s) as failed on boot.`);
+}
+
 server.listen(env.port, () => {
   console.log(`Meeting Note workflow server listening on :${env.port}`);
   console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
+  void failOrphanedJobs();
+  setInterval(() => void failOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
 });
