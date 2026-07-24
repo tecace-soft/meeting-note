@@ -15,6 +15,7 @@
     "inspect": "npx @modelcontextprotocol/inspector node build/index.js"
   },
   "dependencies": {
+    "@azure/msal-browser": "^3.28.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@supabase/supabase-js": "^2.106.0",
     "dotenv": "^17.4.2",

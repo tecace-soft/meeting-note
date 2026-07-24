@@ -17,6 +17,7 @@ export interface NoteRow {
   projects?: Array<string | number> | null;
   chat_id?: string | null;
   created_at?: string | null;
+  meeting_at?: string | null;
 }
 
 export interface SpeakerRow {
@@ -39,6 +40,10 @@ export interface DataContext {
   supabase: SupabaseClient;
   userId?: string;
 }
+
+export const NOTE_METADATA_SELECT = 'id, user_id, name, user_name, tags, projects, chat_id, created_at, meeting_at';
+export const NOTE_SUMMARY_SELECT = `${NOTE_METADATA_SELECT}, summary, summary_edit`;
+export const NOTE_TRANSCRIPT_SELECT = `${NOTE_SUMMARY_SELECT}, transcription, diarization`;
 
 let context: DataContext | null = null;
 const requestUserIdStorage = new AsyncLocalStorage<string | undefined>();
@@ -115,12 +120,14 @@ export function getNoteTags(note: NoteRow): string[] {
 }
 
 export function summarizeNote(note: NoteRow) {
-  const segments = normalizeTranscript(note.diarization);
-  const transcriptText = getNoteTranscriptText(note);
+  const hasDiarizationField = Object.prototype.hasOwnProperty.call(note, 'diarization');
+  const segments = hasDiarizationField ? normalizeTranscript(note.diarization) : [];
+  const transcriptText = note.transcription?.trim() ?? (hasDiarizationField ? getNoteTranscriptText(note) : '');
   return {
     id: note.id,
     title: getNoteTitle(note),
     createdAt: note.created_at ?? null,
+    meetingAt: note.meeting_at ?? null,
     tags: getNoteTags(note),
     projects: note.projects ?? [],
     chatId: note.chat_id ?? null,
@@ -132,10 +139,10 @@ export function summarizeNote(note: NoteRow) {
   };
 }
 
-export async function fetchNote(noteId: string): Promise<NoteRow | null> {
+export async function fetchNote(noteId: string, select = NOTE_TRANSCRIPT_SELECT): Promise<NoteRow | null> {
   const { supabase } = getDataContext();
   const userId = getScopedUserId();
-  let query = supabase.from('note').select('*').eq('id', noteId).limit(1);
+  let query = supabase.from('note').select(select).eq('id', noteId).limit(1);
   query = applyNoteAccessScope(query, userId);
   const { data, error } = await query.maybeSingle();
   if (error) throw error;

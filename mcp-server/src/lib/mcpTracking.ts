@@ -1,16 +1,24 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash } from 'node:crypto';
 import { getDataContext } from './supabase.js';
-import { logError } from './logger.js';
 
-export interface McpTrackingContext {
+export interface McpToolCallRecord {
+  id: string;
   sessionId: string;
-  requestId: string;
+  time: string;
+  tool: string;
   userId?: string;
-  userHash?: string;
+  userIntent?: string;
+  reasonForToolChoice?: string;
+  expectedAnswerType?: string;
+  input: unknown;
+  outputPreview?: string;
+  outcome: 'success' | 'error';
+  durationMs: number;
+  errorMessage?: string;
 }
 
-export interface McpSessionStartInput {
+export interface McpTrackingContext {
+  id: string;
   requestId: string;
   userId?: string;
   endpoint?: string;
@@ -20,192 +28,282 @@ export interface McpSessionStartInput {
   path?: string;
   userAgent?: string;
   clientIp?: string;
-}
-
-export interface McpSessionFinishInput {
-  status: 'completed' | 'failed' | 'aborted';
+  startedAt: string;
+  status?: 'completed' | 'failed' | 'aborted';
   statusCode?: number;
   durationMs?: number;
   errorMessage?: string;
+  finalAnswer?: string;
+  finalAnswerLoggedAt?: string;
+  toolCalls: McpToolCallRecord[];
 }
 
-export interface McpToolCallInput {
-  toolName: string;
-  argumentsValue?: unknown;
-  resultValue?: unknown;
-  isError: boolean;
-  errorMessage?: string;
-  durationMs: number;
-  startedAt: Date;
+const trackingContext = new AsyncLocalStorage<McpTrackingContext>();
+const sessions: McpTrackingContext[] = [];
+const MAX_SESSIONS = 500;
+
+function randomId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-const trackingStorage = new AsyncLocalStorage<McpTrackingContext | undefined>();
-const MAX_PREVIEW_CHARS = 12_000;
+function pushSession(context: McpTrackingContext): void {
+  const existingIndex = sessions.findIndex((session) => session.id === context.id);
+  if (existingIndex >= 0) sessions.splice(existingIndex, 1);
+  sessions.unshift({ ...context, toolCalls: [...context.toolCalls] });
+  if (sessions.length > MAX_SESSIONS) sessions.length = MAX_SESSIONS;
+}
 
-export function getMcpTrackingContext(): McpTrackingContext | undefined {
-  return trackingStorage.getStore();
+function logTrackingPersistenceError(action: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`MCP tracking persistence failed during ${action}: ${message}\n`);
+}
+
+function toJsonValue(value: unknown): unknown {
+  if (value == null) return {};
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return { value: String(value) };
+  }
+}
+
+async function persistSessionStart(context: McpTrackingContext): Promise<void> {
+  try {
+    const { supabase } = getDataContext();
+    const { error } = await supabase.from('mcp_session').upsert({
+      id: context.id,
+      request_id: context.requestId,
+      user_id: context.userId ?? null,
+      endpoint: context.endpoint ?? null,
+      platform: context.platform ?? null,
+      auth_mode: context.authMode ?? null,
+      method: context.method ?? null,
+      path: context.path ?? null,
+      user_agent: context.userAgent ?? null,
+      client_ip: context.clientIp ?? null,
+      started_at: context.startedAt,
+      status: 'active',
+      tool_names: [],
+      tool_call_count: 0,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) throw error;
+  } catch (error) {
+    logTrackingPersistenceError('session start', error);
+  }
+}
+
+async function persistSessionUpdate(context: McpTrackingContext): Promise<void> {
+  try {
+    const { supabase } = getDataContext();
+    const { error } = await supabase
+      .from('mcp_session')
+      .update({
+        status: context.status ?? 'active',
+        status_code: context.statusCode ?? null,
+        duration_ms: context.durationMs ?? null,
+        error_message: context.errorMessage ?? null,
+        finished_at: context.status ? new Date().toISOString() : null,
+        final_answer: context.finalAnswer ?? null,
+        final_answer_logged_at: context.finalAnswerLoggedAt ?? null,
+        tool_names: context.toolCalls.map((call) => call.tool),
+        tool_call_count: context.toolCalls.length,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', context.id);
+    if (error) throw error;
+  } catch (error) {
+    logTrackingPersistenceError('session update', error);
+  }
+}
+
+async function persistToolCall(call: McpToolCallRecord): Promise<void> {
+  try {
+    const { supabase } = getDataContext();
+    const { error } = await supabase.from('mcp_tool_call').insert({
+      id: call.id,
+      session_id: call.sessionId,
+      request_id: trackingContext.getStore()?.requestId ?? null,
+      user_id: call.userId ?? null,
+      time: call.time,
+      tool: call.tool,
+      user_intent: call.userIntent ?? null,
+      reason_for_tool_choice: call.reasonForToolChoice ?? null,
+      expected_answer_type: call.expectedAnswerType ?? null,
+      input: toJsonValue(call.input),
+      output_preview: call.outputPreview ?? null,
+      outcome: call.outcome,
+      duration_ms: call.durationMs,
+      error_message: call.errorMessage ?? null,
+    });
+    if (error) throw error;
+  } catch (error) {
+    logTrackingPersistenceError('tool call insert', error);
+  }
+}
+
+export function inferPlatform(userAgent?: string, endpoint?: string): string {
+  const agent = (userAgent ?? '').toLowerCase();
+  if (endpoint?.includes('chatgpt') || agent.includes('chatgpt')) return 'ChatGPT';
+  if (agent.includes('claude')) return 'Claude';
+  if (agent.includes('curl')) return 'curl';
+  if (agent.includes('insomnia') || agent.includes('postman')) return 'API test';
+  return 'unknown';
+}
+
+export async function startMcpSession(input: Omit<Partial<McpTrackingContext>, 'id' | 'startedAt' | 'toolCalls'> & { requestId: string }): Promise<McpTrackingContext> {
+  const context = {
+    id: randomId('mcp-session'),
+    requestId: input.requestId,
+    userId: input.userId,
+    endpoint: input.endpoint,
+    platform: input.platform,
+    authMode: input.authMode,
+    method: input.method,
+    path: input.path,
+    userAgent: input.userAgent,
+    clientIp: input.clientIp,
+    startedAt: new Date().toISOString(),
+    toolCalls: [],
+  };
+  await persistSessionStart(context);
+  return context;
+}
+
+export async function finishMcpSession(
+  context: McpTrackingContext | undefined,
+  result: {
+    status: 'completed' | 'failed' | 'aborted';
+    statusCode?: number;
+    durationMs?: number;
+    errorMessage?: string;
+  }
+): Promise<void> {
+  if (!context) return;
+  context.status = result.status;
+  context.statusCode = result.statusCode;
+  context.durationMs = result.durationMs;
+  context.errorMessage = result.errorMessage;
+  pushSession(context);
+  await persistSessionUpdate(context);
 }
 
 export async function runWithMcpTrackingContext<T>(
   context: McpTrackingContext | undefined,
   callback: () => Promise<T>
 ): Promise<T> {
-  return trackingStorage.run(context, callback);
+  if (!context) return callback();
+  return trackingContext.run(context, callback);
 }
 
-export function hashForTracking(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+export function getMcpTrackingContext(): McpTrackingContext | undefined {
+  return trackingContext.getStore();
 }
 
-export function inferPlatform(userAgent: string | undefined, endpoint: string | undefined): string {
-  const lower = userAgent?.toLowerCase() ?? '';
-  if (endpoint === '/mcp-chatgpt' || lower.includes('chatgpt') || lower.includes('openai')) return 'chatgpt';
-  if (lower.includes('claude') || lower.includes('anthropic')) return 'claude';
-  if (lower.includes('inspector')) return 'mcp-inspector';
-  if (lower.includes('cursor')) return 'cursor';
-  return 'unknown';
-}
-
-function redactSensitive(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactSensitive);
-  if (!value || typeof value !== 'object') return value;
-  const redacted: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (/token|authorization|password|secret|key/i.test(key)) {
-      redacted[key] = '[redacted]';
-    } else {
-      redacted[key] = redactSensitive(item);
-    }
-  }
-  return redacted;
-}
-
-function truncate(value: string): string {
-  return value.length > MAX_PREVIEW_CHARS ? `${value.slice(0, MAX_PREVIEW_CHARS)}\n\n[truncated]` : value;
-}
-
-function safeJsonPreview(value: unknown): unknown {
-  const redacted = redactSensitive(value);
-  try {
-    const serialized = JSON.stringify(redacted);
-    if (serialized.length <= MAX_PREVIEW_CHARS) return redacted;
-    return { preview: truncate(serialized) };
-  } catch {
-    return { preview: truncate(String(redacted)) };
-  }
-}
-
-function resultPreview(result: unknown): { text: string | null; contentType: string | null } {
-  const content = (result as { content?: unknown } | undefined)?.content;
-  if (Array.isArray(content)) {
-    const firstText = content
-      .map((item) => {
-        if (!item || typeof item !== 'object') return '';
-        const record = item as Record<string, unknown>;
-        return typeof record.text === 'string' ? record.text : '';
-      })
-      .filter(Boolean)
-      .join('\n\n');
-    return {
-      text: firstText ? truncate(firstText) : truncate(JSON.stringify(safeJsonPreview(result))),
-      contentType: 'mcp-content',
-    };
-  }
-  try {
-    return { text: truncate(JSON.stringify(safeJsonPreview(result))), contentType: 'json' };
-  } catch {
-    return { text: truncate(String(result)), contentType: 'text' };
-  }
-}
-
-export async function startMcpSession(input: McpSessionStartInput): Promise<McpTrackingContext | undefined> {
-  try {
-    const { supabase } = getDataContext();
-    const userHash = hashForTracking(input.userId);
-    const { data, error } = await supabase
-      .from('mcp_session')
-      .insert({
-        request_id: input.requestId,
-        user_id: input.userId ?? null,
-        user_hash: userHash ?? null,
-        endpoint: input.endpoint ?? null,
-        platform: input.platform ?? inferPlatform(input.userAgent, input.endpoint),
-        auth_mode: input.authMode ?? null,
-        method: input.method ?? null,
-        path: input.path ?? null,
-        user_agent: input.userAgent ?? null,
-        client_ip: input.clientIp ?? null,
-      })
-      .select('id')
-      .single();
-
-    if (error) throw error;
-    const sessionId = (data as { id?: string } | null)?.id;
-    if (!sessionId) return undefined;
-    return {
-      sessionId,
-      requestId: input.requestId,
-      userId: input.userId,
-      userHash,
-    };
-  } catch (error) {
-    logError('mcp_tracking_session_start_failed', error, { requestId: input.requestId });
-    return undefined;
-  }
-}
-
-export async function finishMcpSession(
-  context: McpTrackingContext | undefined,
-  input: McpSessionFinishInput
-): Promise<void> {
+export function recordMcpToolCall(call: Omit<McpToolCallRecord, 'id' | 'sessionId' | 'time' | 'userId'>): void {
+  const context = trackingContext.getStore();
   if (!context) return;
-  try {
-    const { supabase } = getDataContext();
-    const { error } = await supabase
-      .from('mcp_session')
-      .update({
-        status: input.status,
-        status_code: input.statusCode ?? null,
-        duration_ms: input.durationMs ?? null,
-        error_message: input.errorMessage ?? null,
-        completed_at: new Date().toISOString(),
-      })
-      .eq('id', context.sessionId);
-    if (error) throw error;
-  } catch (error) {
-    logError('mcp_tracking_session_finish_failed', error, { requestId: context.requestId });
-  }
+  const record = {
+    id: randomId('mcp-tool'),
+    sessionId: context.id,
+    time: new Date().toISOString(),
+    userId: context.userId,
+    ...call,
+  };
+  context.toolCalls.push(record);
+  void persistToolCall(record);
+  void persistSessionUpdate(context);
 }
 
-export async function recordMcpToolCall(input: McpToolCallInput): Promise<void> {
-  const context = getMcpTrackingContext();
+export function recordMcpFinalAnswer(answer: string): void {
+  const context = trackingContext.getStore();
   if (!context) return;
-  try {
-    const { supabase } = getDataContext();
-    const preview = resultPreview(input.resultValue);
-    const { error } = await supabase
-      .from('mcp_tool_call')
-      .insert({
-        session_id: context.sessionId,
-        request_id: context.requestId,
-        user_id: context.userId ?? null,
-        user_hash: context.userHash ?? null,
-        tool_name: input.toolName,
-        arguments_preview: safeJsonPreview(input.argumentsValue),
-        result_preview: input.errorMessage ? truncate(input.errorMessage) : preview.text,
-        result_content_type: preview.contentType,
-        is_error: input.isError,
-        error_message: input.errorMessage ?? null,
-        duration_ms: input.durationMs,
-        started_at: input.startedAt.toISOString(),
-        completed_at: new Date().toISOString(),
-      });
-    if (error) throw error;
-  } catch (error) {
-    logError('mcp_tracking_tool_call_failed', error, {
-      requestId: context.requestId,
-      toolName: input.toolName,
-    });
+  context.finalAnswer = answer;
+  context.finalAnswerLoggedAt = new Date().toISOString();
+  void persistSessionUpdate(context);
+}
+
+export function getMcpDashboardData() {
+  const completedSessions = sessions.filter((session) => session.status === 'completed');
+  const failedSessions = sessions.filter((session) => session.status === 'failed');
+  const toolCalls = sessions.flatMap((session) => session.toolCalls);
+  const uniqueUsers = new Set(sessions.map((session) => session.userId).filter(Boolean)).size;
+  const avgLatencyMs = completedSessions.length
+    ? Math.round(completedSessions.reduce((sum, session) => sum + (session.durationMs ?? 0), 0) / completedSessions.length)
+    : 0;
+
+  const dailyMap = new Map<string, { date: string; users: Set<string>; requests: number; toolCalls: number; failures: number }>();
+  for (const session of sessions) {
+    const date = session.startedAt.slice(0, 10);
+    const row = dailyMap.get(date) ?? { date, users: new Set<string>(), requests: 0, toolCalls: 0, failures: 0 };
+    if (session.userId) row.users.add(session.userId);
+    row.requests += 1;
+    row.toolCalls += session.toolCalls.length;
+    if (session.status === 'failed') row.failures += 1;
+    dailyMap.set(date, row);
   }
+
+  const platformMap = new Map<string, { platform: string; users: Set<string>; requests: number; toolCalls: number }>();
+  for (const session of sessions) {
+    const platform = session.platform ?? 'unknown';
+    const row = platformMap.get(platform) ?? { platform, users: new Set<string>(), requests: 0, toolCalls: 0 };
+    if (session.userId) row.users.add(session.userId);
+    row.requests += 1;
+    row.toolCalls += session.toolCalls.length;
+    platformMap.set(platform, row);
+  }
+
+  return {
+    summary: {
+      totalRequests: sessions.length,
+      completedRequests: completedSessions.length,
+      failedRequests: failedSessions.length,
+      uniqueUsers,
+      totalToolCalls: toolCalls.length,
+      avgLatencyMs,
+      estimatedTokens: null,
+    },
+    dailyUsage: [...dailyMap.values()].map((row) => ({
+      date: row.date,
+      users: row.users.size,
+      requests: row.requests,
+      toolCalls: row.toolCalls,
+      tokens: null,
+      failures: row.failures,
+    })),
+    platformUsage: [...platformMap.values()].map((row) => ({
+      platform: row.platform,
+      users: row.users.size,
+      requests: row.requests,
+      toolCalls: row.toolCalls,
+    })),
+    sessions: sessions.map((session) => ({
+      id: session.id,
+      startedAt: session.startedAt,
+      user: session.userId ?? 'Unknown',
+      platform: session.platform ?? 'unknown',
+      status: session.status ?? 'active',
+      query: session.toolCalls[0]?.userIntent ?? '',
+      response: session.finalAnswer ?? session.toolCalls.at(-1)?.outputPreview ?? '',
+      toolCalls: session.toolCalls.map((call) => call.tool),
+      latencyMs: session.durationMs ?? null,
+      tokens: null,
+      endpoint: session.endpoint,
+      authMode: session.authMode,
+      errorMessage: session.errorMessage,
+    })),
+    toolCalls: toolCalls.map((call) => ({
+      time: call.time,
+      tool: call.tool,
+      user: call.userId ?? 'Unknown',
+      userIntent: call.userIntent,
+      reasonForToolChoice: call.reasonForToolChoice,
+      expectedAnswerType: call.expectedAnswerType,
+      input: call.input,
+      outputPreview: call.outputPreview,
+      outcome: call.outcome,
+      durationMs: call.durationMs,
+      notes: call.errorMessage ?? call.reasonForToolChoice ?? '',
+    })),
+  };
 }

@@ -50,14 +50,31 @@ export function resolveDateFilter(input: DateFilterInput): ResolvedDateFilter {
   };
 }
 
-export function applyCreatedAtFilter<T extends { gte: (column: string, value: string) => T; lt: (column: string, value: string) => T }>(
+/**
+ * Filter notes by meeting date. Uses `meeting_at` when present, and falls back to
+ * `created_at` for notes whose `meeting_at` is null (mirrors the app's calendar query).
+ * Emits a single PostgREST `.or(...)` combining both branches; if no bounds are set the
+ * query is returned unchanged (so optional-date tools keep their "no date arg = no filter").
+ */
+export function applyMeetingDateFilter<T extends { or: (filters: string) => T }>(
   query: T,
   filter: ResolvedDateFilter,
 ): T {
-  let next = query;
-  if (filter.startIso) next = next.gte('created_at', filter.startIso);
-  if (filter.endIso) next = next.lt('created_at', filter.endIso);
-  return next;
+  const meetingBounds: string[] = [];
+  const createdBounds: string[] = [];
+  if (filter.startIso) {
+    meetingBounds.push(`meeting_at.gte.${filter.startIso}`);
+    createdBounds.push(`created_at.gte.${filter.startIso}`);
+  }
+  if (filter.endIso) {
+    meetingBounds.push(`meeting_at.lt.${filter.endIso}`);
+    createdBounds.push(`created_at.lt.${filter.endIso}`);
+  }
+  if (meetingBounds.length === 0) return query;
+
+  const meetingClause = meetingBounds.length > 1 ? `and(${meetingBounds.join(',')})` : meetingBounds[0];
+  const createdClause = `and(meeting_at.is.null,${createdBounds.join(',')})`;
+  return query.or(`${meetingClause},${createdClause}`);
 }
 
 export function describeDateFilter(input: DateFilterInput, resolved: ResolvedDateFilter): Record<string, string | null> {

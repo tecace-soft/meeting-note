@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { jsonResource } from '../lib/formatters.js';
-import { fetchNote, getNoteSummary, summarizeNote } from '../lib/supabase.js';
+import { fetchNote, getNoteSummary, NOTE_SUMMARY_SELECT, summarizeNote } from '../lib/supabase.js';
 
 function variableToString(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -17,7 +17,7 @@ export function registerNoteResources(server: McpServer): void {
     },
     async (uri, variables) => {
       const noteId = variableToString(variables.noteId);
-      const note = await fetchNote(noteId);
+      const note = await fetchNote(noteId, NOTE_SUMMARY_SELECT);
       return jsonResource(
         uri.href,
         note
