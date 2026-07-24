@@ -696,13 +696,17 @@ const TranscriptionSummary: React.FC = () => {
 
       if (storageError) throw storageError;
 
-      const { error: deleteError } = await supabase
+      const { data: deletedFile, error: deleteError } = await supabase
         .from('file')
         .delete()
         .eq('id', file.id)
-        .eq('user_id', user.id);
+        .eq('user_id', user.id)
+        .select('id')
+        .maybeSingle();
 
       if (deleteError) throw deleteError;
+      // 0 rows deleted (RLS denied / already gone): don't imply success.
+      if (!deletedFile) throw new Error('Could not delete this recording. Please refresh and try again.');
 
       setRecentAudioFiles((prev) => prev.filter((item) => item.id !== file.id));
     } catch (error) {
@@ -1633,12 +1637,16 @@ const TranscriptionSummary: React.FC = () => {
     try {
       const toSave = canonicalOntologyProfileString(profile.draft);
       if (profile.speakerId) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('speaker')
           .update({ profile: toSave })
           .eq('id', profile.speakerId)
-          .eq('user_id', user.id);
+          .eq('user_id', user.id)
+          .select('id')
+          .maybeSingle();
         if (error) throw error;
+        // 0 rows updated (RLS denied / row gone): don't mark it saved.
+        if (!data) throw new Error('Could not save the speaker profile. Please refresh and try again.');
       } else {
         const { error } = await supabase
           .from('speaker')

@@ -1853,12 +1853,17 @@ const SummaryHistory: React.FC = () => {
         });
         if (removeShareError) throw removeShareError;
       } else {
-        const { error: deleteError } = await supabase
+        const { data: deletedNote, error: deleteError } = await supabase
           .from('note')
           .delete()
           .eq('id', deleteNoteTarget.id)
-          .eq('user_id', user.id);
+          .eq('user_id', user.id)
+          .select('id')
+          .maybeSingle();
         if (deleteError) throw deleteError;
+        // 0 rows deleted (RLS denied / already gone): don't drop it from the
+        // list and imply success — it would reappear on refresh.
+        if (!deletedNote) throw new Error('Could not delete this note. Please refresh and try again.');
       }
 
       const removedId = deleteNoteTarget.id;
@@ -2124,8 +2129,10 @@ const SummaryHistory: React.FC = () => {
     try {
       const toSave = canonicalOntologyProfileString(profile.draft);
       if (profile.speakerId) {
-        const { error } = await supabase.from('speaker').update({ profile: toSave }).eq('id', profile.speakerId).eq('user_id', user.id);
+        const { data, error } = await supabase.from('speaker').update({ profile: toSave }).eq('id', profile.speakerId).eq('user_id', user.id).select('id').maybeSingle();
         if (error) throw error;
+        // 0 rows updated (RLS denied / row gone): don't mark it saved.
+        if (!data) throw new Error('Could not save the speaker profile. Please refresh and try again.');
       } else {
         const { error } = await supabase.from('speaker').insert({ user_id: user.id, name: speakerName, profile: toSave });
         if (error) throw error;
