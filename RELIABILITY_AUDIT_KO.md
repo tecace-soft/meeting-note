@@ -91,6 +91,7 @@
 - 공유 데이터 레이어(`useNotes`/`useNoteActions`) 추출, 3중 복제 제거
 - 거대 페이지 분해
 - edge function 인증 구멍 봉합 (테넌트 검증, generate-profile 인증)
+- **[백로그, 2026-07-24 배포 중 발견]** 프로덕션 프론트가 Vite **dev** 서버로 서빙됨 (`meetingnote.tecace.com`이 `/@vite/client` + 원본 `/src/main.tsx` 반환): 소스가 공개로 읽히고, minify 안 되고, HMR 클라이언트가 프로덕션에 상주. Render 프론트를 `vite build` + 정적 서빙(또는 `vite preview` / 정적 호스트)으로 전환.
 
 Phase 1만 해도 데모 체감 안정성이 크게 달라질 겁니다.
 보안 이슈(supabase-token 테넌트 미검증)는 데모와 별개로 빠른 시일 내 처리를 권합니다.

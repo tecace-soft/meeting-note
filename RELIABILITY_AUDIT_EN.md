@@ -91,6 +91,7 @@ There are 3 root patterns.
 - Extract a shared data layer (`useNotes`/`useNoteActions`); remove the triplication.
 - Break up the giant pages.
 - Close the edge-function auth holes (tenant validation, generate-profile auth).
+- **[Backlog, found 2026-07-24 deploy]** Prod frontend serves the Vite **dev** server (`meetingnote.tecace.com` returns `/@vite/client` + raw `/src/main.tsx`): source is publicly readable, unminified, with the HMR client live in prod. Switch the Render frontend to `vite build` + static serve (or `vite preview` / a static host).
 
 Phase 1 alone will noticeably change perceived demo stability.
 The security issue (missing tenant validation in supabase-token) should be addressed soon, independently of demo concerns.
