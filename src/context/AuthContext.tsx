@@ -5,7 +5,12 @@ import { loginRequest } from '../config/msalConfig';
 import { shouldUseRedirectInteraction } from '../lib/msalRedirect';
 import { ensureSelfSpeakerRowForUser } from '../lib/ensureSelfSpeakerRow';
 import { registerAppUser } from '../lib/registerAppUser';
-import { setSupabaseAccessTokenProvider, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
+import {
+  setSupabaseAccessTokenProvider,
+  setSupabaseAuthResolvedWithoutUser,
+  SUPABASE_ANON_KEY,
+  SUPABASE_URL,
+} from '../config/supabaseConfig';
 
 interface User {
   id: string;
@@ -27,12 +32,17 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Refresh the Supabase JWT this long before it actually expires so requests
+// never race the ~60min expiry cliff.
+const SUPABASE_TOKEN_REFRESH_BUFFER_MS = 5 * 60_000;
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { instance, accounts, inProgress } = useMsal();
   const isAuthenticated = useIsAuthenticated();
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const supabaseTokenRef = React.useRef<{ token: string; expiresAt: number } | null>(null);
+  const supabaseExchangeInFlightRef = React.useRef<Promise<string | null> | null>(null);
 
   useEffect(() => {
     if (inProgress === InteractionStatus.None) {
@@ -44,8 +54,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           microsoftAccountName: account.name ?? null,
           email: account.username,
         });
+        setSupabaseAuthResolvedWithoutUser(false);
       } else {
         setUser(null);
+        // Auth settled with no user: let pending Supabase queries proceed with
+        // the anon key instead of stalling on a token that will never arrive.
+        setSupabaseAuthResolvedWithoutUser(true);
       }
       setIsLoading(false);
     }
@@ -105,37 +119,68 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [instance]);
 
-  const getSupabaseAccessToken = useCallback(async (): Promise<string | null> => {
-    const cached = supabaseTokenRef.current;
-    if (cached && cached.expiresAt - Date.now() > 60_000) return cached.token;
+  const exchangeSupabaseToken = useCallback(async (): Promise<string | null> => {
     const microsoftToken = await getAccessToken();
     if (!microsoftToken || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
 
-    const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/supabase-token`, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-        'x-ms-access-token': microsoftToken,
-      },
-      body: '{}',
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      access_token?: unknown;
-      expires_at?: unknown;
-      error?: unknown;
-    };
-    if (!response.ok || typeof data.access_token !== 'string') {
-      console.error('supabase-token exchange failed:', {
-        status: response.status,
-        error: data.error,
-      });
-      throw new Error(typeof data.error === 'string' ? data.error : 'Could not get Supabase access token.');
+    const MAX_ATTEMPTS = 3;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/supabase-token`, {
+          method: 'POST',
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+            'x-ms-access-token': microsoftToken,
+          },
+          body: '{}',
+        });
+        const data = (await response.json().catch(() => ({}))) as {
+          access_token?: unknown;
+          expires_at?: unknown;
+          error?: unknown;
+        };
+        if (!response.ok || typeof data.access_token !== 'string') {
+          throw new Error(
+            typeof data.error === 'string' ? data.error : `supabase-token exchange failed (${response.status}).`
+          );
+        }
+        const expiresAt =
+          typeof data.expires_at === 'number' ? data.expires_at * 1000 : Date.now() + 55 * 60 * 1000;
+        supabaseTokenRef.current = { token: data.access_token, expiresAt };
+        return data.access_token;
+      } catch (error) {
+        lastError = error;
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** (attempt - 1), 4000)));
+        }
+      }
     }
-    const expiresAt = typeof data.expires_at === 'number' ? data.expires_at * 1000 : Date.now() + 55 * 60 * 1000;
-    supabaseTokenRef.current = { token: data.access_token, expiresAt };
-    return data.access_token;
+    console.error('supabase-token exchange failed after retries:', lastError);
+    throw lastError instanceof Error ? lastError : new Error('Could not get Supabase access token.');
   }, [getAccessToken]);
+
+  const getSupabaseAccessToken = useCallback(async (): Promise<string | null> => {
+    const cached = supabaseTokenRef.current;
+    if (cached && cached.expiresAt - Date.now() > SUPABASE_TOKEN_REFRESH_BUFFER_MS) return cached.token;
+    // Single-flight: concurrent callers (and the background refresher) share one
+    // exchange instead of stampeding the edge function at expiry.
+    if (!supabaseExchangeInFlightRef.current) {
+      supabaseExchangeInFlightRef.current = exchangeSupabaseToken().finally(() => {
+        supabaseExchangeInFlightRef.current = null;
+      });
+    }
+    try {
+      return await supabaseExchangeInFlightRef.current;
+    } catch (error) {
+      // A transient exchange failure shouldn't break a live session: if the
+      // cached token is still valid, keep using it rather than failing the query.
+      const stillValid = supabaseTokenRef.current;
+      if (stillValid && stillValid.expiresAt - Date.now() > 30_000) return stillValid.token;
+      throw error;
+    }
+  }, [exchangeSupabaseToken]);
 
   useEffect(() => {
     if (!isAuthenticated || !user?.id) {
@@ -145,6 +190,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setSupabaseAccessTokenProvider(getSupabaseAccessToken);
     return () => setSupabaseAccessTokenProvider(null);
+  }, [getSupabaseAccessToken, isAuthenticated, user?.id]);
+
+  // Proactively refresh the Supabase token in the background so an idle session
+  // never blocks a request on a cold exchange and never hits the ~60min expiry
+  // cliff. getSupabaseAccessToken refreshes only when inside the buffer window,
+  // and single-flight dedup keeps this from colliding with on-demand calls.
+  useEffect(() => {
+    if (!isAuthenticated || !user?.id) return;
+    let cancelled = false;
+    const id = window.setInterval(() => {
+      if (cancelled) return;
+      void getSupabaseAccessToken().catch(() => {
+        /* retried on the next tick or the next on-demand request */
+      });
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [getSupabaseAccessToken, isAuthenticated, user?.id]);
 
   useEffect(() => {
