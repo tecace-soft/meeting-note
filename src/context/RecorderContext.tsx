@@ -39,6 +39,9 @@ interface RecorderContextValue {
   wakeLockWarning: string | null;
   recoverabilityStatus: RecordingRecoverabilityStatus;
   recoveryWarning: string | null;
+  /** Error from a failed start (mic permission, or an unresolved recovery), shown inline by consumers. */
+  recorderError: string | null;
+  clearRecorderError: () => void;
   recoverableSession: RecoverableRecordingSession | null;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
@@ -366,6 +369,8 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [wakeLockWarning, setWakeLockWarning] = useState<string | null>(null);
   const [recoverabilityStatus, setRecoverabilityStatus] = useState<RecordingRecoverabilityStatus>('local-only');
   const [recoveryWarning, setRecoveryWarning] = useState<string | null>(null);
+  const [recorderError, setRecorderError] = useState<string | null>(null);
+  const clearRecorderError = useCallback(() => setRecorderError(null), []);
   const [recoverableSession, setRecoverableSession] = useState<RecoverableRecordingSession | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -521,8 +526,9 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const startRecording = useCallback(async () => {
     try {
+      setRecorderError(null);
       if (recoverableSession) {
-        alert('Recover or discard the interrupted recording before starting a new one.');
+        setRecorderError('Recover or discard the interrupted recording before starting a new one.');
         return;
       }
       clearPlayback();
@@ -666,7 +672,7 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (error) {
       await releaseScreenWakeLock();
       console.error('Error starting recording:', error);
-      alert('Could not access microphone. Please ensure you have granted microphone permissions.');
+      setRecorderError('Could not access microphone. Please ensure you have granted microphone permissions.');
     }
   }, [clearPlayback, finalizeRecording, recoverableSession, releaseScreenWakeLock, startScreenWakeLockKeepAlive, updateRecoveryStatus, user?.id]);
 
@@ -882,6 +888,8 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         wakeLockWarning,
         recoverabilityStatus,
         recoveryWarning,
+        recorderError,
+        clearRecorderError,
         recoverableSession,
         startRecording,
         stopRecording,

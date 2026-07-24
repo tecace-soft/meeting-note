@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useConfirm } from '../components/ConfirmDialog';
 import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import {
   supabase,
@@ -297,6 +298,8 @@ const TranscriptionSummary: React.FC = () => {
     recoverabilityStatus,
     recoveryWarning,
     recoverableSession,
+    recorderError,
+    clearRecorderError,
     startRecording,
     stopRecording,
     clearRecording,
@@ -373,6 +376,8 @@ const TranscriptionSummary: React.FC = () => {
   const [recentAudioFiles, setRecentAudioFiles] = useState<RecentAudioFile[]>([]);
   const [recentAudioLoading, setRecentAudioLoading] = useState(false);
   const [recentAudioError, setRecentAudioError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [forwardError, setForwardError] = useState<string | null>(null);
   /** Tailwind `md` is 768px — used to mirror “mobile” layout behavior. */
   const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
@@ -405,9 +410,17 @@ const TranscriptionSummary: React.FC = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const confirmDiscardRecording = useCallback((): boolean => {
-    return window.confirm('This will permanently discard the saved recording backup. Continue?');
-  }, []);
+  const confirm = useConfirm();
+  const confirmDiscardRecording = useCallback(
+    (): Promise<boolean> =>
+      confirm({
+        title: 'Discard recording',
+        message: 'This will permanently discard the saved recording backup. Continue?',
+        confirmLabel: 'Discard',
+        destructive: true,
+      }),
+    [confirm]
+  );
 
   const useRecording = () => {
     if (!recordedBlob) return;
@@ -696,13 +709,17 @@ const TranscriptionSummary: React.FC = () => {
 
       if (storageError) throw storageError;
 
-      const { error: deleteError } = await supabase
+      const { data: deletedFile, error: deleteError } = await supabase
         .from('file')
         .delete()
         .eq('id', file.id)
-        .eq('user_id', user.id);
+        .eq('user_id', user.id)
+        .select('id')
+        .maybeSingle();
 
       if (deleteError) throw deleteError;
+      // 0 rows deleted (RLS denied / already gone): don't imply success.
+      if (!deletedFile) throw new Error('Could not delete this recording. Please refresh and try again.');
 
       setRecentAudioFiles((prev) => prev.filter((item) => item.id !== file.id));
     } catch (error) {
@@ -731,19 +748,20 @@ const TranscriptionSummary: React.FC = () => {
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB - matches Supabase bucket limit
 
   const handleFiles = (files: File[]) => {
-    const audioFiles = files.filter(file => 
-      file.type.startsWith('audio/') || 
+    setUploadError(null);
+    const audioFiles = files.filter(file =>
+      file.type.startsWith('audio/') ||
       ASSEMBLYAI_AUDIO_EXTENSION_RE.test(file.name)
     );
 
     if (audioFiles.length === 0) {
-      alert('Please upload an AssemblyAI-supported audio file.');
+      setUploadError('Please upload an AssemblyAI-supported audio file.');
       return;
     }
 
     const oversizedFiles = audioFiles.filter(f => f.size > MAX_FILE_SIZE);
     if (oversizedFiles.length > 0) {
-      alert(`File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB. Your file: ${(oversizedFiles[0].size / 1024 / 1024).toFixed(1)}MB`);
+      setUploadError(`File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB. Your file: ${(oversizedFiles[0].size / 1024 / 1024).toFixed(1)}MB`);
       return;
     }
 
@@ -1371,11 +1389,16 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('note')
         .update({ summary_edit: summaryText })
-        .eq('id', currentNoteId);
+        .eq('id', currentNoteId)
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
+      // 0 rows updated (RLS denied / note gone): don't report a save that
+      // didn't happen — the edit would silently vanish on refresh.
+      if (!data) throw new Error('Could not save your edit. Please refresh and try again.');
       return true;
     } catch (err: unknown) {
       console.error('Error saving summary edit:', err);
@@ -1406,11 +1429,15 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('note')
         .update({ name })
-        .eq('id', currentNoteId);
+        .eq('id', currentNoteId)
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
+      // 0 rows updated (RLS denied / note gone): don't fake a successful rename.
+      if (!data) throw new Error('Could not save the title. Please refresh and try again.');
       setSummaryResult((prev) => (prev ? { ...prev, title: name } : prev));
     } catch (err: unknown) {
       setSummaryEditError(err instanceof Error ? err.message : 'Failed to save note title');
@@ -1438,11 +1465,12 @@ const TranscriptionSummary: React.FC = () => {
     
     setIsForwarding(true);
     setForwardSuccess(false);
-    
+    setForwardError(null);
+
     try {
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
-      
+
       // Convert markdown to HTML for Teams
       const summaryHtml = await marked(editedSummary);
       const message = `<strong>Meeting Note:</strong><br><br>${summaryHtml}`;
@@ -1464,7 +1492,7 @@ const TranscriptionSummary: React.FC = () => {
       setTimeout(() => setForwardSuccess(false), 3000);
     } catch (error: any) {
       console.error('Error forwarding summary:', error);
-      alert('Failed to forward summary: ' + (error.message || 'Unknown error'));
+      setForwardError('Failed to forward summary: ' + (error.message || 'Unknown error'));
     } finally {
       setIsForwarding(false);
     }
@@ -1492,7 +1520,7 @@ const TranscriptionSummary: React.FC = () => {
       return;
     }
     const nextTranslations = updateTranslationMap(summaryResult?.diarization_translations, language, next);
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('note')
       .update({
         diarization_translations: nextTranslations,
@@ -1501,8 +1529,11 @@ const TranscriptionSummary: React.FC = () => {
           [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
         },
       })
-      .eq('id', currentNoteId);
+      .eq('id', currentNoteId)
+      .select('id')
+      .maybeSingle();
     if (error) throw error;
+    if (!data) throw new Error('Transcript translation save did not update the note.');
   };
 
   const updateGeneratedTranscript = (language: TranscriptLanguage, next: TranscriptSegment[]) => {
@@ -1621,12 +1652,16 @@ const TranscriptionSummary: React.FC = () => {
     try {
       const toSave = canonicalOntologyProfileString(profile.draft);
       if (profile.speakerId) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('speaker')
           .update({ profile: toSave })
           .eq('id', profile.speakerId)
-          .eq('user_id', user.id);
+          .eq('user_id', user.id)
+          .select('id')
+          .maybeSingle();
         if (error) throw error;
+        // 0 rows updated (RLS denied / row gone): don't mark it saved.
+        if (!data) throw new Error('Could not save the speaker profile. Please refresh and try again.');
       } else {
         const { error } = await supabase
           .from('speaker')
@@ -1779,6 +1814,26 @@ const TranscriptionSummary: React.FC = () => {
                     {t('uploadAudioPageSubtitle')}
               </p>
             </div>
+            {recorderError ? (
+              <div
+                className="mb-4 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm"
+                style={{
+                  backgroundColor: 'var(--error-light)',
+                  borderColor: 'var(--error)',
+                  color: 'var(--error)',
+                }}
+                role="alert"
+              >
+                <span>{recorderError}</span>
+                <button
+                  type="button"
+                  onClick={clearRecorderError}
+                  className="shrink-0 underline"
+                >
+                  {appLanguage === 'ko' ? '닫기' : 'Dismiss'}
+                </button>
+              </div>
+            ) : null}
             {wakeLockWarning && isRecording ? (
               <div
                 className="mb-4 rounded-lg border px-4 py-3 text-sm"
@@ -1826,8 +1881,8 @@ const TranscriptionSummary: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (confirmDiscardRecording()) discardRecording();
+                      onClick={async () => {
+                        if (await confirmDiscardRecording()) discardRecording();
                       }}
                       className="rounded-lg px-4 py-2 text-sm font-medium"
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
@@ -1926,6 +1981,12 @@ const TranscriptionSummary: React.FC = () => {
               </div>
             </div>
 
+            {uploadError ? (
+              <p className="mb-4 text-sm" style={{ color: 'var(--error)' }}>
+                {uploadError}
+              </p>
+            ) : null}
+
             {/* Recording Playback - Shows when recording is complete but not uploaded */}
             <div className={`collapse-container ${(recordedAudioUrl && uploadedFiles.length === 0) ? 'expanded' : 'collapsed'}`}>
               <div className="collapse-content">
@@ -1988,8 +2049,8 @@ const TranscriptionSummary: React.FC = () => {
                       </a>
                     ) : null}
                     <button
-                      onClick={() => {
-                        if (confirmDiscardRecording()) clearRecording({ discardDraft: true });
+                      onClick={async () => {
+                        if (await confirmDiscardRecording()) clearRecording({ discardDraft: true });
                       }}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
                       style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
@@ -2050,8 +2111,12 @@ const TranscriptionSummary: React.FC = () => {
                         </span>
                       )}
                       {file.status === 'error' && (
-                        <span className="text-xs px-2 py-1 rounded-full" style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)' }}>
-                          {t('error')}
+                        <span
+                          className="inline-block max-w-[12rem] truncate rounded-full px-2 py-1 align-middle text-xs"
+                          style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)' }}
+                          title={file.error || undefined}
+                        >
+                          {file.error || t('error')}
                         </span>
                       )}
                       {file.status === 'completed' && (file.publicUrl || file.storagePath) ? (
@@ -2960,6 +3025,11 @@ const TranscriptionSummary: React.FC = () => {
               className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t px-4 py-3 sm:px-5"
               style={{ borderColor: 'var(--border)' }}
             >
+              {forwardError ? (
+                <p className="mr-auto text-sm" style={{ color: 'var(--error)' }}>
+                  {forwardError}
+                </p>
+              ) : null}
               <button
                 type="button"
                 disabled={isForwarding}
