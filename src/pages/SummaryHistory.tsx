@@ -462,6 +462,10 @@ const SummaryHistory: React.FC = () => {
   const [notesTotalCount, setNotesTotalCount] = useState(0);
   const [notesPage, setNotesPage] = useState(1);
   const [notesLoading, setNotesLoading] = useState(true);
+  // Distinguishes "the fetch failed" from "there are legitimately no notes":
+  // without this, a failed load renders the empty state and reads as data loss.
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const [notesReloadNonce, setNotesReloadNonce] = useState(0);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
   const [historyViewMode, setHistoryViewMode] = useState<HistoryViewMode>('list');
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthStart(new Date()));
@@ -671,6 +675,7 @@ const SummaryHistory: React.FC = () => {
     const loadNotes = async () => {
       try {
         setNotesLoading(true);
+        setNotesError(null);
 
         let effectivePage = notesPage;
         if (prevNotesScopeRef.current !== notesScopeKey) {
@@ -751,6 +756,11 @@ const SummaryHistory: React.FC = () => {
         if (!cancelled) {
           setNotes([]);
           setNotesTotalCount(0);
+          setNotesError(
+            error instanceof Error
+              ? error.message
+              : 'Could not load your notes. Check your connection and try again.'
+          );
         }
       } finally {
         if (!cancelled) setNotesLoading(false);
@@ -773,6 +783,7 @@ const SummaryHistory: React.FC = () => {
     normalizedNoteSearchQuery,
     noteOwnershipFilter,
     noteSortKey,
+    notesReloadNonce,
   ]);
 
   useEffect(() => {
@@ -872,12 +883,17 @@ const SummaryHistory: React.FC = () => {
 
     try {
       setNoteListActionError(null);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('note')
         .update({ name })
         .eq('id', note.id)
-        .eq('user_id', user.id);
+        .eq('user_id', user.id)
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
+      // 0 rows updated (e.g. a shared note you don't own): the write silently
+      // no-ops under RLS, so surface it instead of faking success.
+      if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
       setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, name } : n)));
     } catch (err: unknown) {
       setNoteListActionError(err instanceof Error ? err.message : 'Failed to rename note');
@@ -1762,12 +1778,16 @@ const SummaryHistory: React.FC = () => {
     setSavingNoteId(note.id);
     setNoteEditError(null);
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('note')
         .update({ summary_edit: noteEditDraft })
         .eq('id', note.id)
-        .eq('user_id', user.id);
+        .eq('user_id', user.id)
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
+      // 0 rows updated (e.g. a shared note you don't own): don't fake success.
+      if (!data) throw new Error('Could not save your edit. You may not have permission to edit this note.');
 
       setNotes((prev) =>
         prev.map((n) => (n.id === note.id ? { ...n, summary_edit: noteEditDraft } : n))
@@ -1796,12 +1816,16 @@ const SummaryHistory: React.FC = () => {
     }
     try {
       setNoteListActionError(null);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('note')
         .update({ name })
         .eq('id', noteId)
-        .eq('user_id', user.id);
+        .eq('user_id', user.id)
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
+      // 0 rows updated (e.g. a shared note you don't own): don't fake success.
+      if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
       setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, name } : n)));
       setRenamingNoteId(null);
       setRenameNoteDraft('');
@@ -1895,7 +1919,13 @@ const SummaryHistory: React.FC = () => {
       if (!token) throw new Error('No access token');
       const summaryHtml = await marked(summaryText);
       await sendChatMessage(token, selectedForwardChatId, `<strong>Meeting Note:</strong><br><br>${summaryHtml}`, 'html');
-      await supabase.from('note').update({ chat_id: selectedForwardChatId }).eq('id', note.id);
+      const { error: chatIdError } = await supabase
+        .from('note')
+        .update({ chat_id: selectedForwardChatId })
+        .eq('id', note.id);
+      // The Teams message already sent; a failed chat_id write is bookkeeping
+      // only, so log it rather than failing the whole forward.
+      if (chatIdError) console.error('Failed to persist forwarded chat_id:', chatIdError);
       setForwardSuccess(true);
       setTimeout(() => {
         setForwardSuccess(false);
@@ -2328,6 +2358,22 @@ const SummaryHistory: React.FC = () => {
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                     Loading notes...
                   </p>
+                </div>
+              </div>
+            ) : notesError ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center">
+                <div className="card rounded-lg p-8 text-center">
+                  <p className="mb-4 text-sm" style={{ color: 'var(--error)' }}>
+                    {notesError}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setNotesReloadNonce((n) => n + 1)}
+                    className="rounded-lg border px-4 py-2 text-sm font-medium"
+                    style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                  >
+                    Try again
+                  </button>
                 </div>
               </div>
             ) : historyViewMode === 'calendar' ? (

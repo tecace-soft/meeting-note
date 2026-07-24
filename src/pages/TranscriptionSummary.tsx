@@ -1371,11 +1371,16 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('note')
         .update({ summary_edit: summaryText })
-        .eq('id', currentNoteId);
+        .eq('id', currentNoteId)
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
+      // 0 rows updated (RLS denied / note gone): don't report a save that
+      // didn't happen — the edit would silently vanish on refresh.
+      if (!data) throw new Error('Could not save your edit. Please refresh and try again.');
       return true;
     } catch (err: unknown) {
       console.error('Error saving summary edit:', err);
@@ -1406,11 +1411,15 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('note')
         .update({ name })
-        .eq('id', currentNoteId);
+        .eq('id', currentNoteId)
+        .select('id')
+        .maybeSingle();
       if (error) throw error;
+      // 0 rows updated (RLS denied / note gone): don't fake a successful rename.
+      if (!data) throw new Error('Could not save the title. Please refresh and try again.');
       setSummaryResult((prev) => (prev ? { ...prev, title: name } : prev));
     } catch (err: unknown) {
       setSummaryEditError(err instanceof Error ? err.message : 'Failed to save note title');
@@ -1492,7 +1501,7 @@ const TranscriptionSummary: React.FC = () => {
       return;
     }
     const nextTranslations = updateTranslationMap(summaryResult?.diarization_translations, language, next);
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('note')
       .update({
         diarization_translations: nextTranslations,
@@ -1501,8 +1510,11 @@ const TranscriptionSummary: React.FC = () => {
           [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
         },
       })
-      .eq('id', currentNoteId);
+      .eq('id', currentNoteId)
+      .select('id')
+      .maybeSingle();
     if (error) throw error;
+    if (!data) throw new Error('Transcript translation save did not update the note.');
   };
 
   const updateGeneratedTranscript = (language: TranscriptLanguage, next: TranscriptSegment[]) => {
@@ -2050,8 +2062,12 @@ const TranscriptionSummary: React.FC = () => {
                         </span>
                       )}
                       {file.status === 'error' && (
-                        <span className="text-xs px-2 py-1 rounded-full" style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)' }}>
-                          {t('error')}
+                        <span
+                          className="inline-block max-w-[12rem] truncate rounded-full px-2 py-1 align-middle text-xs"
+                          style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)' }}
+                          title={file.error || undefined}
+                        >
+                          {file.error || t('error')}
                         </span>
                       )}
                       {file.status === 'completed' && (file.publicUrl || file.storagePath) ? (
