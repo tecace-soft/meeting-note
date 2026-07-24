@@ -2,6 +2,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CloseMd, Stop, UserVoice } from 'react-coolicons';
 import { useRecorder } from '../context/RecorderContext';
+import { useConfirm } from './ConfirmDialog';
 
 function formatRecordingTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -21,6 +22,7 @@ const FloatingRecorderWidget: React.FC = () => {
     stopRecording,
     discardRecording,
   } = useRecorder();
+  const confirm = useConfirm();
 
   if (!isRecording || location.pathname === '/transcription-summary') return null;
 
@@ -67,8 +69,15 @@ const FloatingRecorderWidget: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={() => {
-            if (window.confirm('This will permanently discard the saved recording backup. Continue?')) {
+          onClick={async () => {
+            if (
+              await confirm({
+                title: 'Discard recording',
+                message: 'This will permanently discard the saved recording backup. Continue?',
+                confirmLabel: 'Discard',
+                destructive: true,
+              })
+            ) {
               discardRecording();
             }
           }}

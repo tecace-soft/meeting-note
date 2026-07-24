@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useConfirm } from '../components/ConfirmDialog';
 import { supabase } from '../config/supabaseConfig';
 import {
   Check,
@@ -59,6 +60,10 @@ const SaveSummary: React.FC = () => {
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([{ id: null, name: 'OneDrive' }]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Inline error for folder/file actions (create/rename/delete/save*) that
+  // previously surfaced via browser alert(). Rendered in the Save section.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -176,6 +181,7 @@ const SaveSummary: React.FC = () => {
     if (!newFolderName.trim()) return;
 
     try {
+      setActionError(null);
       setCreatingFolderLoading(true);
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
@@ -186,7 +192,7 @@ const SaveSummary: React.FC = () => {
       await fetchContents(currentFolderId);
     } catch (err: any) {
       console.error('Error creating folder:', err);
-      alert('Failed to create folder: ' + err.message);
+      setActionError('Failed to create folder: ' + err.message);
     } finally {
       setCreatingFolderLoading(false);
     }
@@ -196,6 +202,7 @@ const SaveSummary: React.FC = () => {
     if (!renameValue.trim()) return;
 
     try {
+      setActionError(null);
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
 
@@ -205,14 +212,23 @@ const SaveSummary: React.FC = () => {
       await fetchContents(currentFolderId);
     } catch (err: any) {
       console.error('Error renaming item:', err);
-      alert('Failed to rename: ' + err.message);
+      setActionError('Failed to rename: ' + err.message);
     }
   };
 
   const handleDelete = async (itemId: string) => {
-    if (!confirm('Are you sure you want to delete this item?')) return;
+    if (
+      !(await confirm({
+        title: 'Delete item',
+        message: 'Are you sure you want to delete this item?',
+        confirmLabel: 'Delete',
+        destructive: true,
+      }))
+    )
+      return;
 
     try {
+      setActionError(null);
       setDeletingItemId(itemId);
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
@@ -221,7 +237,7 @@ const SaveSummary: React.FC = () => {
       await fetchContents(currentFolderId);
     } catch (err: any) {
       console.error('Error deleting item:', err);
-      alert('Failed to delete: ' + err.message);
+      setActionError('Failed to delete: ' + err.message);
     } finally {
       setDeletingItemId(null);
     }
@@ -231,6 +247,7 @@ const SaveSummary: React.FC = () => {
     if (!note?.summary || !saveFileName.trim()) return;
 
     try {
+      setActionError(null);
       setIsSaving(true);
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
@@ -245,7 +262,7 @@ const SaveSummary: React.FC = () => {
       }, 2000);
     } catch (err: any) {
       console.error('Error saving summary:', err);
-      alert('Failed to save summary: ' + err.message);
+      setActionError('Failed to save summary: ' + err.message);
     } finally {
       setIsSaving(false);
     }
@@ -255,6 +272,7 @@ const SaveSummary: React.FC = () => {
     if (!note?.transcription || !transcriptFileName.trim()) return;
 
     try {
+      setActionError(null);
       setIsSavingTranscript(true);
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
@@ -268,7 +286,7 @@ const SaveSummary: React.FC = () => {
       }, 2000);
     } catch (err: any) {
       console.error('Error saving transcript:', err);
-      alert('Failed to save transcript: ' + err.message);
+      setActionError('Failed to save transcript: ' + err.message);
     } finally {
       setIsSavingTranscript(false);
     }
@@ -278,6 +296,7 @@ const SaveSummary: React.FC = () => {
     if (!audioUrl || !audioFileName.trim()) return;
 
     try {
+      setActionError(null);
       setIsSavingAudio(true);
       const token = await getAccessToken();
       if (!token) throw new Error('No access token');
@@ -306,7 +325,7 @@ const SaveSummary: React.FC = () => {
       }, 2000);
     } catch (err: any) {
       console.error('Error saving audio:', err);
-      alert('Failed to save audio file: ' + err.message);
+      setActionError('Failed to save audio file: ' + err.message);
     } finally {
       setIsSavingAudio(false);
     }
@@ -417,6 +436,12 @@ const SaveSummary: React.FC = () => {
                 </button>
               </div>
             )}
+
+            {actionError ? (
+              <p className="mb-2 text-sm" style={{ color: 'var(--error)' }}>
+                {actionError}
+              </p>
+            ) : null}
 
             {/* Items List */}
             <div className="card rounded-lg flex-grow overflow-hidden flex flex-col">
@@ -549,6 +574,11 @@ const SaveSummary: React.FC = () => {
             {/* Save Section */}
             {(note || audioUrl) && (
               <div className="mt-4 card rounded-lg p-4 space-y-4">
+                {actionError ? (
+                  <p className="text-sm" style={{ color: 'var(--error)' }}>
+                    {actionError}
+                  </p>
+                ) : null}
                 {/* Save Summary */}
                 {note && (
                   <div>

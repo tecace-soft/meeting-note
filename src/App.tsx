@@ -16,6 +16,7 @@ import AdminAnalytics from './pages/AdminAnalytics';
 import AdminControls from './pages/AdminControls';
 import TranscriptionModelTest from './pages/TranscriptionModelTest';
 import AppShell from './components/AppShell';
+import { ConfirmProvider } from './components/ConfirmDialog';
 import { canAccessTranscriptionModelTest } from './lib/adminAccess';
 
 const msalInstance = new PublicClientApplication(msalConfig);
@@ -96,7 +97,8 @@ const App: React.FC = () => {
       <AppThemeProvider>
         <AuthProvider>
           <LanguageProvider>
-            <Router>
+            <ConfirmProvider>
+              <Router>
               <div className="App app-skin">
                 <Routes>
                   <Route path="/" element={<Login />} />
@@ -114,7 +116,8 @@ const App: React.FC = () => {
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </div>
-            </Router>
+              </Router>
+            </ConfirmProvider>
           </LanguageProvider>
         </AuthProvider>
       </AppThemeProvider>
