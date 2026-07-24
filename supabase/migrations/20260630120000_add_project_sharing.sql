@@ -1,0 +1,2 @@
+-- Superseded by 20260630123000_fix_project_sharing_rpcs.sql.
+-- The follow-up migration contains the corrected project sharing policies and RPCs.

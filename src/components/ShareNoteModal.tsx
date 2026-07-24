@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, CloseMd, Loading, SearchMagnifyingGlass, ShareAndroid, Users } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { supabase } from '../config/supabaseConfig';
 import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
 
@@ -26,6 +27,7 @@ const ShareNoteModal: React.FC<ShareNoteModalProps> = ({
   onShared,
 }) => {
   const { user, getAccessToken } = useAuth();
+  const { t, appLanguage } = useLanguage();
   const [contacts, setContacts] = useState<MicrosoftContact[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
@@ -127,7 +129,7 @@ const ShareNoteModal: React.FC<ShareNoteModalProps> = ({
             <div className="flex items-center gap-2">
               <ShareAndroid className="h-5 w-5 shrink-0" style={{ color: 'var(--accent)' }} aria-hidden />
               <h2 id="share-note-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                Share note
+                {appLanguage === 'ko' ? '회의록 공유' : 'Share note'}
               </h2>
             </div>
             <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -141,7 +143,7 @@ const ShareNoteModal: React.FC<ShareNoteModalProps> = ({
             onClick={onClose}
             disabled={saving}
             className="summary-toolbar-btn inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg disabled:opacity-50"
-            aria-label="Close share note"
+            aria-label={appLanguage === 'ko' ? '공유 창 닫기' : 'Close share note'}
           >
             <CloseMd className="h-4 w-4" aria-hidden />
           </button>
@@ -157,7 +159,7 @@ const ShareNoteModal: React.FC<ShareNoteModalProps> = ({
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search TecAce contacts"
+            placeholder={appLanguage === 'ko' ? 'TecAce 연락처 검색' : 'Search TecAce contacts'}
             className="w-full rounded-lg border py-2 pl-9 pr-3 text-sm"
             style={{
               backgroundColor: 'var(--surface)',
@@ -228,7 +230,7 @@ const ShareNoteModal: React.FC<ShareNoteModalProps> = ({
             disabled={saving}
             className="summary-toolbar-btn rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
-            Cancel
+            {t('cancel')}
           </button>
           <button
             type="button"
@@ -237,7 +239,7 @@ const ShareNoteModal: React.FC<ShareNoteModalProps> = ({
             className="btn-accent inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : <ShareAndroid className="h-4 w-4" aria-hidden />}
-            Share
+            {appLanguage === 'ko' ? '공유' : 'Share'}
           </button>
         </div>
       </div>

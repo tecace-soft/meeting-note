@@ -58,6 +58,7 @@ export const loginRequest = {
     'Files.ReadWrite',
     'Files.ReadWrite.All',
     'User.ReadBasic.All',
+    'Calendars.Read',
   ],
 };
 
@@ -67,4 +68,5 @@ export const graphScopes = {
   messages: ['ChatMessage.Read'],
   user: ['User.Read', 'User.ReadBasic.All'],
   files: ['Files.ReadWrite', 'Files.ReadWrite.All'],
+  calendar: ['Calendars.Read'],
 };

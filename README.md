@@ -47,6 +47,7 @@ Edit `.env`:
 VITE_MSAL_CLIENT_ID=your-client-id-from-step-1
 VITE_MSAL_AUTHORITY=https://login.microsoftonline.com/common
 VITE_MSAL_REDIRECT_URI=http://localhost:5174
+VITE_WORKFLOW_API_URL=http://localhost:8787
 ```
 
 ### 4. Install Dependencies
@@ -63,6 +64,28 @@ npm run dev
 ```
 
 The app will be available at `http://localhost:5174`
+
+### 6. Run Workflow Server
+
+The main audio summarization flow uses the dedicated backend in `workflow-server`.
+
+```bash
+cd workflow-server
+npm install
+npm run dev
+```
+
+The workflow server requires:
+
+```
+SUPABASE_URL=your-supabase-url
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_TRANSCRIPTION_MODEL=gemini-2.5-flash
+GEMINI_SUMMARY_MODEL=gemini-2.5-flash-lite
+WORKFLOW_FETCH_HEADERS_TIMEOUT_MS=1200000
+WORKFLOW_FETCH_BODY_TIMEOUT_MS=1200000
+```
 
 ## Project Structure
 

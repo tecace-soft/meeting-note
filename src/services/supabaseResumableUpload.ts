@@ -21,8 +21,18 @@ export function isSupabaseResumableConfigured(projectUrl: string): boolean {
   return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(t);
 }
 
-/** TUS only for large files: standard `upload()` hits the same RLS path that usually works with anon keys; TUS can succeed at the protocol level but not materialize an object for some policies. */
+function isAndroidBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android/i.test(navigator.userAgent || '');
+}
+
+/**
+ * TUS only for large files: standard `upload()` hits the same RLS path that usually works
+ * with anon keys. Android Chrome is more prone to tab reloads with file-provider backed
+ * resumable uploads, so keep that platform on the simpler Storage upload path.
+ */
 export function shouldUseResumableUpload(fileSize: number): boolean {
+  if (isAndroidBrowser()) return false;
   return fileSize >= RESUMABLE_UPLOAD_CHUNK_BYTES;
 }
 
@@ -35,10 +45,14 @@ export function uploadWithTus(
   file: File,
   projectUrl: string,
   anonKey: string,
+  accessToken: string,
   onProgress?: (bytesUploaded: number, bytesTotal: number) => void
 ): Promise<void> {
   if (!projectUrl || !anonKey) {
     return Promise.reject(new Error('Supabase URL or key not configured'));
+  }
+  if (!accessToken) {
+    return Promise.reject(new Error('Supabase auth token is required for private storage upload'));
   }
 
   const endpoint = getResumableEndpoint(projectUrl);
@@ -48,7 +62,7 @@ export function uploadWithTus(
       endpoint,
       retryDelays: [0, 2000, 5000, 10000, 20000, 30000, 45000],
       headers: {
-        authorization: `Bearer ${anonKey}`,
+        authorization: `Bearer ${accessToken}`,
         apikey: anonKey,
       },
       uploadDataDuringCreation: true,
@@ -65,12 +79,6 @@ export function uploadWithTus(
       onSuccess: () => resolve(),
     });
 
-    upload
-      .findPreviousUploads()
-      .then((previous) => {
-        if (previous.length) upload.resumeFromPreviousUpload(previous[0]);
-        upload.start();
-      })
-      .catch(reject);
+    upload.start();
   });
 }

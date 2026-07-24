@@ -16,6 +16,20 @@ type RangeKey = 'all' | '7d' | '30d' | '90d';
 
 interface RequestBody {
   range?: RangeKey;
+  chartStartDate?: string;
+  chartEndDate?: string;
+}
+
+interface UsageDay {
+  date: string;
+  notes: number;
+  aiTokens: number;
+  aiEstimatedCostUsd: number;
+  transcriptionLatencyMs: number;
+  transcriptionLatencySamples: number;
+  summaryLatencyMs: number;
+  summaryLatencySamples: number;
+  total: number;
 }
 
 interface AppUserRow {
@@ -77,6 +91,18 @@ interface SpeakerRow {
   created_at: string | null;
 }
 
+interface WorkflowUsageRow {
+  user_id: string | null;
+  stage: string | null;
+  provider: string | null;
+  prompt_tokens: number | null;
+  candidates_tokens: number | null;
+  total_tokens: number | null;
+  latency_ms: number | null;
+  estimated_cost_usd: number | string | null;
+  created_at: string | null;
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -108,6 +134,131 @@ function sinceForRange(range: RangeKey): string | null {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return d.toISOString();
+}
+
+function isDateKey(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function addUtcDays(dateKey: string, days: number): string {
+  const date = new Date(`${dateKey}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function getChartWindow(chartStartDate: unknown, chartEndDate: unknown): {
+  startDate: string;
+  endDate: string;
+  startIso: string;
+  endExclusiveIso: string;
+  days: string[];
+} {
+  const endDate = isDateKey(chartEndDate) ? chartEndDate : new Date().toISOString().slice(0, 10);
+  let startDate = isDateKey(chartStartDate) ? chartStartDate : addUtcDays(endDate, -6);
+  if (startDate > endDate) {
+    startDate = addUtcDays(endDate, -6);
+  }
+
+  const days: string[] = [];
+  let cursor = startDate;
+  while (cursor <= endDate && days.length < 90) {
+    days.push(cursor);
+    cursor = addUtcDays(cursor, 1);
+  }
+
+  const endExclusiveDate = addUtcDays(endDate, 1);
+  return {
+    startDate,
+    endDate,
+    startIso: `${startDate}T00:00:00.000Z`,
+    endExclusiveIso: `${endExclusiveDate}T00:00:00.000Z`,
+    days,
+  };
+}
+
+function dateKeyFromTimestamp(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function createUsageDays(days: string[]): Map<string, UsageDay> {
+  return new Map(
+    days.map((date) => [
+      date,
+      {
+        date,
+        notes: 0,
+        aiTokens: 0,
+        aiEstimatedCostUsd: 0,
+        transcriptionLatencyMs: 0,
+        transcriptionLatencySamples: 0,
+        summaryLatencyMs: 0,
+        summaryLatencySamples: 0,
+        total: 0,
+      },
+    ])
+  );
+}
+
+function asFiniteNumber(value: number | string | null | undefined): number {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeUsageProvider(provider: string | null | undefined): string {
+  return provider?.trim().toLowerCase() ?? '';
+}
+
+function isAssemblyTranscriptionUsage(row: WorkflowUsageRow): boolean {
+  return row.stage === 'transcription' && normalizeUsageProvider(row.provider) === 'assemblyai';
+}
+
+function isGeminiSummaryUsage(row: WorkflowUsageRow): boolean {
+  const provider = normalizeUsageProvider(row.provider);
+  return row.stage === 'summarization' && (!provider || provider === 'google-gemini' || provider === 'gemini');
+}
+
+function addNoteUsageRows(rows: Array<{ created_at: string | null }>, usageByDate: Map<string, UsageDay>): void {
+  for (const row of rows) {
+    const dateKey = dateKeyFromTimestamp(row.created_at);
+    const day = dateKey ? usageByDate.get(dateKey) : undefined;
+    if (!day) continue;
+    day.notes += 1;
+    day.total += 1;
+  }
+}
+
+function addWorkflowUsageRows(rows: WorkflowUsageRow[], usageByDate: Map<string, UsageDay>): void {
+  for (const row of rows) {
+    const dateKey = dateKeyFromTimestamp(row.created_at);
+    const day = dateKey ? usageByDate.get(dateKey) : undefined;
+    if (!day) continue;
+
+    if (isGeminiSummaryUsage(row)) {
+      day.aiTokens += asFiniteNumber(row.total_tokens);
+    }
+    day.aiEstimatedCostUsd += asFiniteNumber(row.estimated_cost_usd);
+
+    const latencyMs = asFiniteNumber(row.latency_ms);
+    if (latencyMs <= 0) continue;
+    if (isAssemblyTranscriptionUsage(row)) {
+      day.transcriptionLatencyMs += latencyMs;
+      day.transcriptionLatencySamples += 1;
+    } else if (isGeminiSummaryUsage(row)) {
+      day.summaryLatencyMs += latencyMs;
+      day.summaryLatencySamples += 1;
+    }
+  }
+}
+
+function finalizeUsageDay(day: UsageDay): UsageDay {
+  return {
+    ...day,
+    aiEstimatedCostUsd: Number(day.aiEstimatedCostUsd.toFixed(6)),
+    transcriptionLatencyMs: day.transcriptionLatencySamples > 0 ? Math.round(day.transcriptionLatencyMs / day.transcriptionLatencySamples) : 0,
+    summaryLatencyMs: day.summaryLatencySamples > 0 ? Math.round(day.summaryLatencyMs / day.summaryLatencySamples) : 0,
+  };
 }
 
 function normalizeSharedUsers(raw: unknown): string[] {
@@ -153,6 +304,19 @@ function increment(map: Map<string, number>, key: string | null | undefined, amo
   map.set(id, (map.get(id) ?? 0) + amount);
 }
 
+function sumUsageByUser(rows: WorkflowUsageRow[], key: 'total_tokens' | 'estimated_cost_usd'): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    const id = row.user_id?.trim();
+    if (!id) continue;
+    const raw = row[key];
+    const value = asFiniteNumber(raw);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    map.set(id, (map.get(id) ?? 0) + value);
+  }
+  return map;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS });
@@ -183,6 +347,7 @@ serve(async (req) => {
   const body = (await req.json().catch(() => ({}))) as RequestBody;
   const range: RangeKey = body.range === '7d' || body.range === '30d' || body.range === '90d' ? body.range : 'all';
   const since = sinceForRange(range);
+  const chartWindow = getChartWindow(body.chartStartDate, body.chartEndDate);
   const adminClient = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
@@ -196,6 +361,7 @@ serve(async (req) => {
       speakersResult,
       promptsResult,
       tokensResult,
+      workflowUsageResult,
     ] = await Promise.all([
       adminClient
         .from('app_user')
@@ -225,9 +391,22 @@ serve(async (req) => {
         ? adminClient.from('mcp_token').select('id, user_id, last_used_at, revoked_at, created_at').gte('created_at', since)
         : adminClient.from('mcp_token').select('id, user_id, last_used_at, revoked_at, created_at')
       ).order('created_at', { ascending: false }),
+      (since
+        ? adminClient.from('workflow_usage').select('user_id, stage, provider, prompt_tokens, candidates_tokens, total_tokens, latency_ms, estimated_cost_usd, created_at').gte('created_at', since)
+        : adminClient.from('workflow_usage').select('user_id, stage, provider, prompt_tokens, candidates_tokens, total_tokens, latency_ms, estimated_cost_usd, created_at')
+      ).order('created_at', { ascending: false }),
     ]);
 
-    for (const result of [appUsersResult, notesResult, filesResult, projectsResult, speakersResult, promptsResult, tokensResult]) {
+    for (const result of [
+      appUsersResult,
+      notesResult,
+      filesResult,
+      projectsResult,
+      speakersResult,
+      promptsResult,
+      tokensResult,
+      workflowUsageResult,
+    ]) {
       if (result.error) throw result.error;
     }
 
@@ -238,6 +417,10 @@ serve(async (req) => {
     const speakers = (speakersResult.data ?? []) as SpeakerRow[];
     const prompts = (promptsResult.data ?? []) as PromptRow[];
     const tokens = (tokensResult.data ?? []) as TokenRow[];
+    const workflowUsage = (workflowUsageResult.data ?? []) as WorkflowUsageRow[];
+    const usageByDate = createUsageDays(chartWindow.days);
+    addNoteUsageRows(notes, usageByDate);
+    addWorkflowUsageRows(workflowUsage, usageByDate);
 
     const notesByUser = countByUser(notes);
     const filesByUser = countByUser(files);
@@ -245,6 +428,8 @@ serve(async (req) => {
     const speakersByUser = countByUser(speakers);
     const promptsByUser = countByUser(prompts);
     const tokensByUser = countByUser(tokens);
+    const aiTokensByUser = sumUsageByUser(workflowUsage, 'total_tokens');
+    const aiCostByUser = sumUsageByUser(workflowUsage, 'estimated_cost_usd');
     const sharedReceivedByUser = new Map<string, number>();
     for (const note of notes) {
       for (const sharedId of normalizeSharedUsers(note.shared_users)) {
@@ -254,7 +439,7 @@ serve(async (req) => {
 
     const knownUserIds = new Set<string>();
     appUsers.forEach((u) => knownUserIds.add(u.microsoft_id));
-    [notesByUser, filesByUser, projectsByUser, speakersByUser, promptsByUser, tokensByUser, sharedReceivedByUser].forEach((map) =>
+    [notesByUser, filesByUser, projectsByUser, speakersByUser, promptsByUser, tokensByUser, sharedReceivedByUser, aiTokensByUser].forEach((map) =>
       map.forEach((_, id) => knownUserIds.add(id))
     );
 
@@ -275,6 +460,8 @@ serve(async (req) => {
       const promptCount = promptsByUser.get(id) ?? 0;
       const tokenCount = tokensByUser.get(id) ?? 0;
       const sharedNotesReceived = sharedReceivedByUser.get(id) ?? 0;
+      const aiTokens = aiTokensByUser.get(id) ?? 0;
+      const aiEstimatedCostUsd = aiCostByUser.get(id) ?? 0;
       return {
         userId: id,
         displayName: appUser?.display_name || fallbackNameByUser.get(id) || 'Unknown user',
@@ -288,6 +475,8 @@ serve(async (req) => {
         promptCount,
         tokenCount,
         sharedNotesReceived,
+        aiTokens,
+        aiEstimatedCostUsd,
         activityCount: noteCount + fileCount + projectCount + speakerCount + promptCount,
       };
     }).sort((a, b) => b.activityCount - a.activityCount || a.displayName.localeCompare(b.displayName));
@@ -309,6 +498,24 @@ serve(async (req) => {
     });
 
     const totalFileBytes = files.reduce((sum, file) => sum + (typeof file.size_bytes === 'number' ? file.size_bytes : 0), 0);
+    const transcriptionUsageRows = workflowUsage.filter((row) => row.stage === 'transcription');
+    const summaryUsageRows = workflowUsage.filter((row) => row.stage === 'summarization');
+    const assemblyTranscriptionRows = transcriptionUsageRows.filter(isAssemblyTranscriptionUsage);
+    const geminiSummaryRows = summaryUsageRows.filter(isGeminiSummaryUsage);
+    const totalAiPromptTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.prompt_tokens), 0);
+    const totalAiCandidateTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.candidates_tokens), 0);
+    const totalAiTokens = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.total_tokens), 0);
+    const totalAiEstimatedCostUsd = workflowUsage.reduce((sum, row) => sum + asFiniteNumber(row.estimated_cost_usd), 0);
+    const assemblyTranscriptionCostUsd = assemblyTranscriptionRows.reduce((sum, row) => sum + asFiniteNumber(row.estimated_cost_usd), 0);
+    const geminiSummaryCostUsd = geminiSummaryRows.reduce((sum, row) => sum + asFiniteNumber(row.estimated_cost_usd), 0);
+    const transcriptionLatencyRows = assemblyTranscriptionRows.filter((row) => asFiniteNumber(row.latency_ms) > 0);
+    const summaryLatencyRows = geminiSummaryRows.filter((row) => asFiniteNumber(row.latency_ms) > 0);
+    const averageTranscriptionLatencyMs = transcriptionLatencyRows.length > 0
+      ? Math.round(transcriptionLatencyRows.reduce((sum, row) => sum + asFiniteNumber(row.latency_ms), 0) / transcriptionLatencyRows.length)
+      : 0;
+    const averageSummaryLatencyMs = summaryLatencyRows.length > 0
+      ? Math.round(summaryLatencyRows.reduce((sum, row) => sum + asFiniteNumber(row.latency_ms), 0) / summaryLatencyRows.length)
+      : 0;
     const sharedNotes = notes.filter((note) => normalizeSharedUsers(note.shared_users).length > 0);
     const summariesGenerated = notes.filter((note) => Boolean(note.summary?.trim() || note.summary_edit?.trim())).length;
     const transcriptionsGenerated = notes.filter((note) => Boolean(note.transcription?.trim()) || Boolean(note.diarization)).length;
@@ -339,6 +546,24 @@ serve(async (req) => {
         summaryPrompts: prompts.length,
         mcpTokens: tokens.length,
         activeMcpTokens: tokens.filter((token) => !token.revoked_at).length,
+        aiCalls: workflowUsage.length,
+        transcriptionCalls: transcriptionUsageRows.length,
+        assemblyTranscriptionCalls: assemblyTranscriptionRows.length,
+        summaryCalls: summaryUsageRows.length,
+        geminiSummaryCalls: geminiSummaryRows.length,
+        aiPromptTokens: totalAiPromptTokens,
+        aiCandidateTokens: totalAiCandidateTokens,
+        aiTokens: totalAiTokens,
+        aiEstimatedCostUsd: Number(totalAiEstimatedCostUsd.toFixed(6)),
+        assemblyTranscriptionCostUsd: Number(assemblyTranscriptionCostUsd.toFixed(6)),
+        geminiSummaryCostUsd: Number(geminiSummaryCostUsd.toFixed(6)),
+        averageTranscriptionLatencyMs,
+        averageSummaryLatencyMs,
+      },
+      usageChart: {
+        startDate: chartWindow.startDate,
+        endDate: chartWindow.endDate,
+        days: chartWindow.days.map((date) => finalizeUsageDay(usageByDate.get(date)!)),
       },
       users: userUsage,
       speakerProfiles,

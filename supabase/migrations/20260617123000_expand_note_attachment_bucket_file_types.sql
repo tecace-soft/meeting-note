@@ -1,0 +1,37 @@
+update storage.buckets
+set
+  file_size_limit = 52428800,
+  allowed_mime_types = array[
+    'text/html',
+    'text/css',
+    'text/plain',
+    'text/xml',
+    'text/csv',
+    'text/rtf',
+    'text/javascript',
+    'application/json',
+    'application/pdf',
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/bmp',
+    'image/heic',
+    'image/heif',
+    'video/mp4',
+    'video/mpeg',
+    'video/quicktime',
+    'video/avi',
+    'video/x-flv',
+    'video/mpg',
+    'video/webm',
+    'video/wmv',
+    'video/3gpp',
+    'audio/wav',
+    'audio/mp3',
+    'audio/mpeg',
+    'audio/aiff',
+    'audio/aac',
+    'audio/ogg',
+    'audio/flac'
+  ]
+where id = 'meeting-note-images';
