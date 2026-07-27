@@ -185,6 +185,10 @@ function extractWebhookResponse(data: unknown): string | null {
   return null;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function generateSessionId(): string {
   const now = new Date();
   const yy = String(now.getFullYear() % 100).padStart(2, '0');
@@ -630,13 +634,18 @@ const Project: React.FC = () => {
         }
         assistantContent = extractWebhookResponse(await fallbackRes.json()) ?? '';
         if (assistantContent) {
-          setChatMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMessageId
-                ? { ...msg, content: assistantContent }
-                : msg
-            )
-          );
+          let visible = '';
+          for (const token of assistantContent.match(/\S+\s*/g) ?? [assistantContent]) {
+            visible += token;
+            setChatMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantMessageId
+                  ? { ...msg, content: visible }
+                  : msg
+              )
+            );
+            await delay(12);
+          }
         }
       }
       if (!assistantContent) {

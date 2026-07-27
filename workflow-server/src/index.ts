@@ -2185,49 +2185,59 @@ function projectChatDelta(data: unknown): string {
 async function streamProjectChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
   const prompt = await projectChatPromptFromRequest(req);
-  if (prompt === 'I cannot find the answer to that in the provided meeting documents.') {
+  const openStream = () => {
     res.writeHead(200, {
       ...corsHeaders(),
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     });
-    const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.flushHeaders?.();
+  };
+  const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  if (prompt === 'I cannot find the answer to that in the provided meeting documents.') {
+    openStream();
     send({ delta: prompt });
     send({ done: true });
     res.end();
     return;
   }
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(PROJECT_CHAT_MODEL)}:streamGenerateContent?alt=sse`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': env.geminiApiKey,
-      },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 4096,
-          responseMimeType: 'text/plain',
+  const models = [PROJECT_CHAT_MODEL, 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+  let response: Response | null = null;
+  let lastError = '';
+  for (const model of models) {
+    const candidate = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': env.geminiApiKey,
         },
-      }),
-    },
-  );
-  if (!response.ok || !response.body) {
-    throw new Error(`Gemini stream failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 4096,
+            responseMimeType: 'text/plain',
+          },
+        }),
+      },
+    );
+    if (candidate.ok && candidate.body) {
+      response = candidate;
+      break;
+    }
+    lastError = `Gemini stream failed (${candidate.status}): ${(await candidate.text()).slice(0, 500)}`;
+  }
+  if (!response || !response.body) {
+    throw new Error(lastError || 'Gemini stream failed.');
   }
 
-  res.writeHead(200, {
-    ...corsHeaders(),
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-  });
-  const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  openStream();
+  send({ delta: '' });
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -2235,7 +2245,7 @@ async function streamProjectChat(req: IncomingMessage, res: ServerResponse): Pro
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split('\n\n');
+    const events = buffer.split(/\r?\n\r?\n/);
     buffer = events.pop() ?? '';
     for (const event of events) {
       for (const line of event.split('\n')) {

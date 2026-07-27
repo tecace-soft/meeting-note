@@ -16,6 +16,7 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     final tabs = [
       const _TabSpec(label: 'Home'),
       const _TabSpec(label: 'History'),
@@ -24,8 +25,9 @@ class AppShell extends StatelessWidget {
     ];
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       body: shell,
-      bottomNavigationBar: showBottomNav
+      bottomNavigationBar: showBottomNav && !keyboardOpen
           ? SafeArea(
               top: false,
               child: Container(

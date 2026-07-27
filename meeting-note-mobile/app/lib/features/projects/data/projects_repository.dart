@@ -408,7 +408,15 @@ class ProjectsRepository {
       }),
     );
     final assistant = _extractWebhookResponse(response.data) ?? '';
-    if (assistant.isNotEmpty) onDelta?.call(assistant);
+    if (assistant.isNotEmpty) {
+      var visible = '';
+      for (final token in RegExp(r'\S+\s*').allMatches(assistant)) {
+        visible += token.group(0) ?? '';
+        onDelta?.call(visible);
+        await Future<void>.delayed(const Duration(milliseconds: 12));
+      }
+      if (visible.isEmpty) onDelta?.call(assistant);
+    }
     return assistant;
   }
 }

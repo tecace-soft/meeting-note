@@ -467,15 +467,29 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
                 children: [
                   _ProjectBackHeader(title: title, subtitle: subtitle),
                   SizedBox(height: keyboardOpen ? 10 : 26),
-                  _ProjectChatCard(
-                    expanded: !_isLowerSectionExpanded,
-                    controller: _chatController,
-                    scrollController: _chatScrollController,
-                    messages: _messages,
-                    sending: _sending,
-                    error: _chatError,
-                    onSend: _sendChat,
-                  ),
+                  if (keyboardOpen)
+                    Expanded(
+                      child: _ProjectChatCard(
+                        fillAvailable: true,
+                        expanded: true,
+                        controller: _chatController,
+                        scrollController: _chatScrollController,
+                        messages: _messages,
+                        sending: _sending,
+                        error: _chatError,
+                        onSend: _sendChat,
+                      ),
+                    )
+                  else
+                    _ProjectChatCard(
+                      expanded: !_isLowerSectionExpanded,
+                      controller: _chatController,
+                      scrollController: _chatScrollController,
+                      messages: _messages,
+                      sending: _sending,
+                      error: _chatError,
+                      onSend: _sendChat,
+                    ),
                   if (!keyboardOpen) ...[
                     const SizedBox(height: 16),
                     _ProjectDetailToggle(
@@ -589,6 +603,7 @@ class _ProjectBackHeader extends StatelessWidget {
 
 class _ProjectChatCard extends StatelessWidget {
   const _ProjectChatCard({
+    this.fillAvailable = false,
     required this.expanded,
     required this.controller,
     required this.scrollController,
@@ -598,6 +613,7 @@ class _ProjectChatCard extends StatelessWidget {
     required this.onSend,
   });
 
+  final bool fillAvailable;
   final bool expanded;
   final TextEditingController controller;
   final ScrollController scrollController;
@@ -619,7 +635,7 @@ class _ProjectChatCard extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
-      height: expanded ? expandedHeight : 284,
+      height: fillAvailable ? null : (expanded ? expandedHeight : 284),
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       decoration: BoxDecoration(
