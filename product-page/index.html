@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Meeting Note — AI meeting transcription & summaries, from anywhere</title>
+  <meta name="description" content="Meeting Note records any meeting, transcribes it with speaker labels, and writes an AI summary in your words. Background recording, custom prompts, and projects you can chat with — on iOS and Android." />
+  <meta name="theme-color" content="#3366ff" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="assets/tokens.css?v=2" />
+  <link rel="stylesheet" href="assets/page.css?v=2" />
+</head>
+<body>
+  <div class="scroll-progress" id="progress"></div>
+
+  <!-- ============================= HEADER ============================= -->
+  <header class="site-header" id="header">
+    <div class="wrap nav">
+      <a class="brand" href="#top" aria-label="Meeting Note home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
+        </span>
+        <span>Meeting&nbsp;<span style="color:var(--primary-normal)">Note</span></span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a class="nav-link" href="#how">How it works</a>
+        <a class="nav-link" href="#features">Features</a>
+        <a class="nav-link" href="#deep">Why it's different</a>
+        <a class="nav-link" href="#faq">FAQ</a>
+      </nav>
+      <span class="nav-spacer"></span>
+      <div class="nav-actions">
+        <a class="btn btn-primary" href="#download">Get the app</a>
+      </div>
+      <button class="theme-toggle nav-toggle" id="navToggle" aria-label="Open menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- ============================= HERO ============================= -->
+    <section class="hero dotgrid">
+      <div class="aurora" aria-hidden="true"></div>
+      <div class="wrap section-pad">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <span class="pill reveal"><span class="dot"></span>For iOS &amp; Android</span>
+            <h1 class="display-1 reveal" data-delay="1">Every meeting,<br />captured and summarized.</h1>
+            <p class="lede body-lg text-muted reveal" data-delay="2">
+              Tap once to record — even in your pocket. Meeting Note transcribes every
+              speaker and hands you a clean AI summary in the words that matter to you.
+              No note-taking, no typing, no missed action items.
+            </p>
+            <div class="hero-cta reveal" data-delay="2">
+              <a class="btn btn-primary btn-lg" href="#download">
+                Get the app
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </a>
+              <a class="btn btn-ghost btn-lg" href="#how">See how it works</a>
+            </div>
+            <div class="hero-meta reveal" data-delay="3">
+              <span class="item"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Records in the background</span>
+              <span class="item"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Speaker-labeled transcripts</span>
+              <span class="item"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Chat with your notes</span>
+            </div>
+          </div>
+
+          <div class="hero-phone reveal" data-delay="2">
+            <div class="float-tag t1"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg></span> Recording · background active</div>
+            <div class="float-tag t2"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.9 3.8 4.1.6-3 2.9.7 4.1L12 14.5 8.3 16l.7-4.1-3-2.9 4.1-.6z"/></svg></span> Summary ready</div>
+            <div class="phone">
+              <div class="phone-screen">
+                <img src="assets/media/hero-record.png" alt="Meeting Note home screen — record your meeting" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= TRUST STRIP ============================= -->
+    <section class="section-tight">
+      <div class="wrap">
+        <div class="logostrip reveal">
+          <span class="lbl">Works with</span>
+          <span class="item">Microsoft sign-in</span>
+          <span class="item">ChatGPT</span>
+          <span class="item">Claude</span>
+          <span class="item">Meeting Note for Web</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= HOW IT WORKS ============================= -->
+    <section id="how" class="section-pad">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <span class="mono-eyebrow">How it works</span>
+          <h2 class="display-3">From “record” to a shareable summary in five steps.</h2>
+          <p class="body-lg text-muted">You run the meeting. Meeting Note does the writing. Here’s the whole flow, start to finish.</p>
+        </div>
+
+        <div class="steps">
+          <div class="step-list" id="stepList">
+            <div class="step is-active" data-step="0">
+              <span class="step-num">1</span>
+              <div>
+                <h3 class="heading-1">Tap to record</h3>
+                <p class="body text-muted">Open the app and hit record — it starts in under three seconds and keeps going in the background, even with the screen off or on a call. Everything is saved locally as you go.</p>
+              </div>
+            </div>
+            <div class="step" data-step="1">
+              <span class="step-num">2</span>
+              <div>
+                <h3 class="heading-1">Set up the note</h3>
+                <p class="body text-muted">Give it a title, add optional instructions like “focus on action items” or “summarize in Korean,” pick a summary template, and attach files or a photo of the whiteboard.</p>
+              </div>
+            </div>
+            <div class="step" data-step="2">
+              <span class="step-num">3</span>
+              <div>
+                <h3 class="heading-1">Let the AI work</h3>
+                <p class="body text-muted">Transcription and summarization run on our servers — Upload, Transcribing, Summarize, Done. Close the app if you like; you’ll get a push notification the moment it’s ready.</p>
+              </div>
+            </div>
+            <div class="step" data-step="3">
+              <span class="step-num">4</span>
+              <div>
+                <h3 class="heading-1">Read the summary &amp; transcript</h3>
+                <p class="body text-muted">Get a clean, formatted summary plus a full transcript with each speaker labeled and time-stamped. Rename speakers and filter the conversation by who said what.</p>
+              </div>
+            </div>
+            <div class="step" data-step="4">
+              <span class="step-num">5</span>
+              <div>
+                <h3 class="heading-1">Chat with your meetings</h3>
+                <p class="body text-muted">Group related notes into a Project and chat with an AI that answers from your own transcripts and summaries. Ask what got decided, pull the action items, or catch up on a meeting you missed — grounded in what was actually said.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="step-media">
+            <div class="phone">
+              <div class="phone-screen">
+                <!-- Each step swaps in its own screenshot. Suggested files below. -->
+                <div class="step-visual is-active" data-step="0">
+                  <img src="assets/media/step-1-record.png" alt="Tap to record screen" />
+                </div>
+                <div class="step-visual" data-step="1">
+                  <img src="assets/media/step-2-setup.png" alt="New meeting note setup screen" />
+                </div>
+                <div class="step-visual" data-step="2">
+                  <img src="assets/media/step-3-processing.gif?v=2" alt="AI Summary processing — Upload, Transcribing, Summarize, Done" />
+                </div>
+                <div class="step-visual" data-step="3">
+                  <img src="assets/media/step-4-summary.gif" alt="Meeting summary and speaker-labeled transcript, toggling between tabs" />
+                </div>
+                <div class="step-visual" data-step="4">
+                  <img src="assets/media/step-5-projects.png" alt="Projects — chat with your meeting notes" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= FEATURES GRID ============================= -->
+    <section id="features" class="section-pad" style="background:var(--background-normal-alternative)">
+      <div class="wrap">
+        <div class="section-head center reveal">
+          <span class="mono-eyebrow">Features</span>
+          <h2 class="display-3">Built for the way meetings actually happen.</h2>
+          <p class="body-lg text-muted">Off the desk, back to back, and never at a keyboard. Meeting Note keeps up.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="card card-glow reveal">
+            <span class="card-icon ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg></span>
+            <h3 class="heading-2">Background recording &amp; auto-recovery</h3>
+            <p class="body text-muted">Keeps recording with the screen off or the app in the background, and saves locally as it goes. If a call or crash interrupts you, pick right back up — no audio lost.</p>
+          </article>
+
+          <article class="card card-glow reveal" data-delay="1">
+            <span class="card-icon ic-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 11a4 4 0 1 0-8 0M4 20a8 8 0 0 1 16 0"/><circle cx="12" cy="7" r="0"/></svg></span>
+            <h3 class="heading-2">Speaker-labeled transcripts</h3>
+            <p class="body text-muted">Every line is diarized and time-stamped. Rename speakers, filter the transcript by person, and save speaker profiles so names carry over to the next meeting.</p>
+          </article>
+
+          <article class="card card-glow reveal" data-delay="2">
+            <span class="card-icon ic-cyan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.9 3.8 4.1.6-3 2.9.7 4.1L12 14.5 8.3 16l.7-4.1-3-2.9 4.1-.6z"/></svg></span>
+            <h3 class="heading-2">Summaries in your words</h3>
+            <p class="body text-muted">Choose a reusable summary template or write per-meeting instructions — “pull out action items,” “keep it to five bullets,” “summarize in Korean.” The AI follows your lead.</p>
+          </article>
+
+          <article class="card card-glow reveal">
+            <span class="card-icon ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v9H3z"/><path d="M8 13h6"/></svg></span>
+            <h3 class="heading-2">Projects with AI chat</h3>
+            <p class="body text-muted">Group related meetings into a Project and ask questions across all of them — “what did we decide about pricing?” — in a persistent chat that remembers the whole thread.</p>
+          </article>
+
+          <article class="card card-glow reveal" data-delay="1">
+            <span class="card-icon ic-orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><circle cx="9" cy="10" r="2"/><path d="m4 17 5-4 4 3 3-2 4 3"/></svg></span>
+            <h3 class="heading-2">Attach files &amp; whiteboards</h3>
+            <p class="body text-muted">Snap a photo of the whiteboard or add documents to a note, so the summary reflects everything in the room — not just what was said out loud.</p>
+          </article>
+
+          <article class="card card-glow reveal" data-delay="2">
+            <span class="card-icon ic-pink"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 8-8 8 8 0 0 1 0 16M8 12h8M12 8v8"/></svg></span>
+            <h3 class="heading-2">Connect ChatGPT &amp; Claude</h3>
+            <p class="body text-muted">Meeting Note speaks MCP, so your notes become a source your favorite AI assistants can query — pull meeting context into ChatGPT or Claude without copy-paste.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= DEEP DIVE (SPLIT ROWS) ============================= -->
+    <section id="deep" class="section-pad">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <span class="mono-eyebrow">Why it's different</span>
+          <h2 class="display-3">More than speech-to-text.</h2>
+          <p class="body-lg text-muted">Plenty of apps turn a recording into a transcript. Meeting Note is built to actually understand your meetings — with an ontology that gives the AI real context, and MCP that makes that knowledge usable anywhere.</p>
+        </div>
+
+        <div style="margin-top:56px">
+          <!-- Row 1 — Summary generation -->
+          <div class="split reveal">
+            <div class="split-copy">
+              <span class="pill pill-neutral">Summarize</span>
+              <h3 class="title-2">Summaries shaped to your meeting, not a generic recap.</h3>
+              <p class="body-lg text-muted">Save summary templates for the meetings you run again and again — standups, client calls, 1:1s — or drop in a quick instruction for a one-off. Ask for action items only, a set length, or a different language, and get exactly that in clean, formatted markdown.</p>
+              <ul class="checklist">
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Reusable, fully editable summary prompts</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Per-meeting instructions in plain language</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Output in the language you need</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Clean, formatted markdown you can copy anywhere</li>
+              </ul>
+            </div>
+            <div class="split-media">
+              <div class="media-frame solid" style="aspect-ratio:4/3">
+                <div class="illus illus-doc">
+                  <div class="doc-top">
+                    <span class="doc-title">Weekly Product Sync</span>
+                    <span class="doc-badge">Summary</span>
+                  </div>
+                  <div class="doc-h">Key Discussion Topics</div>
+                  <ul class="doc-list">
+                    <li><b>Onboarding:</b> signup trimmed from five steps to three</li>
+                    <li><b>Q3 Roadmap:</b> search &amp; shared workspaces ship first</li>
+                  </ul>
+                  <div class="doc-h">Action Items</div>
+                  <ul class="doc-list">
+                    <li><span class="who">Priya</span> — ship onboarding behind a flag</li>
+                    <li><span class="who">Marcus</span> — draft the pricing A/B test</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Row 2 — Speaker profiles + ontology -->
+          <div class="split reverse reveal">
+            <div class="split-copy">
+              <span class="pill pill-neutral">Context</span>
+              <h3 class="title-2">It knows your people, projects, and language.</h3>
+              <p class="body-lg text-muted">Generic summaries miss what makes your meeting <em>yours</em>. Meeting Note builds an ontology — saved speaker profiles that recognize who’s talking, plus the projects, product names, and acronyms your team actually uses — and feeds that context to the AI before it writes a word. The more it knows, the sharper the summary.</p>
+              <ul class="checklist">
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Saved speaker profiles recognize who said what, meeting to meeting</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> An ontology of your people, projects, and terminology adds context</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Summaries use the right names, acronyms, and domain language</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Richer context in, sharper and more accurate summaries out</li>
+              </ul>
+            </div>
+            <div class="split-media">
+              <div class="media-frame solid" style="aspect-ratio:4/3">
+                <div class="illus illus-graph">
+                  <svg class="graph-lines" preserveAspectRatio="none" aria-hidden="true">
+                    <line x1="50%" y1="50%" x2="50%" y2="15%"/>
+                    <line x1="50%" y1="50%" x2="84%" y2="33%"/>
+                    <line x1="50%" y1="50%" x2="75%" y2="83%"/>
+                    <line x1="50%" y1="50%" x2="25%" y2="83%"/>
+                    <line x1="50%" y1="50%" x2="16%" y2="33%"/>
+                  </svg>
+                  <span class="gnode gnode-center" style="left:50%;top:50%">Your meeting</span>
+                  <span class="gnode" style="left:50%;top:15%"><span class="d" style="background:var(--cyan-50)"></span>Project Atlas</span>
+                  <span class="gnode" style="left:84%;top:33%"><span class="d" style="background:var(--green-50)"></span>Roadmap</span>
+                  <span class="gnode" style="left:75%;top:83%"><span class="d" style="background:var(--purple-50)"></span>Acronyms</span>
+                  <span class="gnode" style="left:25%;top:83%"><span class="d" style="background:var(--violet-50-2)"></span>Speaker B</span>
+                  <span class="gnode" style="left:16%;top:33%"><span class="d" style="background:var(--primary-normal)"></span>Speaker A</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Row 3 — Searchable knowledge: chat + MCP -->
+          <div class="split reveal">
+            <div class="split-copy">
+              <span class="pill pill-neutral">Knowledge</span>
+              <h3 class="title-2">Your meetings become searchable knowledge — in the app and beyond.</h3>
+              <p class="body-lg text-muted">Group related meetings into a Project and chat with an AI that answers from your own transcripts and summaries. And because Meeting Note speaks MCP, that same knowledge is available to ChatGPT and Claude — your meetings become a live source your assistants can query directly, no copy-paste.</p>
+              <ul class="checklist">
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Chat with an AI grounded in your own meetings</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Projects turn related meetings into one knowledge base</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> Connect ChatGPT &amp; Claude over MCP to query your notes</li>
+                <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> One account synced with Meeting Note on the web</li>
+              </ul>
+            </div>
+            <div class="split-media">
+              <div class="media-frame solid" style="aspect-ratio:4/3">
+                <div class="illus illus-flow">
+                  <div class="flow-src">
+                    <div class="cap"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5"/></svg></span> Your meetings</div>
+                    <div class="note-line" style="width:100%"></div>
+                    <div class="note-line" style="width:82%"></div>
+                    <div class="note-line" style="width:92%"></div>
+                    <div class="note-line" style="width:66%"></div>
+                  </div>
+                  <div class="flow-arrow">
+                    <span class="mcp">MCP</span>
+                    <span class="line"></span>
+                  </div>
+                  <div class="flow-dests">
+                    <span class="dest"><span class="ic" style="background:#10a37f"></span>ChatGPT</span>
+                    <span class="dest"><span class="ic" style="background:#d97757"></span>Claude</span>
+                    <span class="dest"><span class="ic" style="background:var(--primary-normal)"></span>Project chat</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= STATS ============================= -->
+    <section class="section-tight" style="background:var(--background-normal-alternative)">
+      <div class="wrap">
+        <div class="stats">
+          <div class="stat reveal"><div class="num">&lt;3s</div><div class="cap">from tap to recording</div></div>
+          <div class="stat reveal" data-delay="1"><div class="num">2</div><div class="cap">platforms — iOS &amp; Android, one app</div></div>
+          <div class="stat reveal" data-delay="2"><div class="num">0</div><div class="cap">words typed to get your notes</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= CTA BAND ============================= -->
+    <section id="download" class="section-pad">
+      <div class="wrap">
+        <div class="cta-band reveal">
+          <h2 class="display-3">Your next meeting can write itself.</h2>
+          <p class="body-lg">Install Meeting Note, tap record, and walk out with a summary. It’s that short a to-do list.</p>
+          <div class="hero-cta">
+            <a class="btn btn-primary btn-lg" href="#">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 12.5c0-1.9 1-3.3 2.5-4.2-.9-1.3-2.3-2-3.9-2.1-1.6-.2-3.4 1-4 1-.7 0-2.1-1-3.4-1-1.8 0-3.4 1-4.3 2.6-1.9 3.2-.5 8 1.3 10.6.9 1.3 1.9 2.7 3.3 2.6 1.3-.05 1.8-.85 3.4-.85 1.6 0 2 .85 3.4.8 1.4 0 2.3-1.3 3.2-2.6.6-.9 1-1.9 1.3-2.9-1.6-.7-2.6-2.3-2.6-3.5zM14.5 4.7c.7-.9 1.2-2.1 1-3.2-1 .05-2.3.7-3 1.6-.7.8-1.3 2-1.1 3.1 1.1.1 2.3-.6 3.1-1.5z"/></svg>
+              App Store
+            </a>
+            <a class="btn btn-ghost btn-lg" href="#">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3.6 2.3c-.3.3-.5.8-.5 1.4v16.6c0 .6.2 1.1.5 1.4l.1.1L13 12.6v-.2L3.7 2.2l-.1.1zM16.3 15.9l-3.1-3.1v-.2l3.1-3.1.1.05 3.7 2.1c1 .6 1 1.6 0 2.2l-3.7 2.1-.1.05zM15.7 16.5l-3.2-3.2-9.4 9.4c.4.3 1 .4 1.6.05l11-6.3zM4.7 1.4c-.6-.35-1.2-.3-1.6 0l9.4 9.4 3.2-3.2-11-6.2z"/></svg>
+              Google Play
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= FAQ ============================= -->
+    <section id="faq" class="section-pad" style="padding-top:0">
+      <div class="wrap">
+        <div class="section-head center reveal">
+          <span class="mono-eyebrow">FAQ</span>
+          <h2 class="display-3">Questions, answered.</h2>
+        </div>
+
+        <div class="faq" id="faq-list">
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">Do I have to keep the app open while I record?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">No. Meeting Note records natively in the background — you can lock the screen, switch apps, or take a call and it keeps capturing audio. Everything is saved to your device as you go, and if a session is ever interrupted you can recover it and still generate the note.</div></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">How does the AI summary work?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">When you tap Generate Summary, your recording is transcribed and then summarized on our servers. You’ll see it move through Upload → Transcribing → Summarize → Done. You can close the app and get a push notification the moment it’s ready — you don’t have to sit and wait.</div></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">Can I control what the summary focuses on?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">Yes. Pick a saved summary template, or add plain-language instructions for a single meeting — for example, “focus on action items,” “keep it to five bullets,” or “summarize in Korean.” You can create and edit your own templates any time in Settings.</div></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">Does it tell who said what?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">The transcript is speaker-diarized and time-stamped. You can rename each speaker, filter the conversation by person, and save speaker profiles so recognized names carry into future meetings.</div></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">Can I upload audio I already have?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">Absolutely. Alongside live recording you can upload existing files — m4a, mp3, wav, aac, ogg, flac, mp4, and webm — or reuse a recent recording. They all flow into the same setup-and-summarize process.</div></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">Where do my notes live, and does it sync with the web app?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">Meeting Note mobile uses the same account as Meeting Note on the web, so your history stays in one place across devices — record on your phone and pick up the same notes later on your computer.</div></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">Can I use my notes with ChatGPT or Claude?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">Yes. Meeting Note supports MCP connections, so you can link your meeting notes to ChatGPT and Claude and let those assistants pull in meeting context directly — no copy-pasting transcripts around.</div></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" aria-expanded="false">Which devices does it run on?<span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></button>
+            <div class="faq-a"><div class="faq-a-inner">It’s a single native app for both iOS (15+) and Android (8+), with full light and dark themes and both English and Korean interfaces.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================= FOOTER ============================= -->
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-col footer-about">
+          <a class="brand" href="#top">
+            <span class="brand-mark" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg></span>
+            <span>Meeting&nbsp;<span style="color:var(--primary-normal)">Note</span></span>
+          </a>
+          <p class="body text-muted">AI meeting transcription and summaries, from anywhere. A product by TecAce.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#deep">Why it's different</a>
+          <a href="#download">Get the app</a>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <a href="#faq">FAQ</a>
+          <a href="https://meetingnote.tecace.com">Meeting Note for Web</a>
+          <a href="#">Support</a>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <a href="#">About TecAce</a>
+          <a href="#">Privacy</a>
+          <a href="#">Terms</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 TecAce. All rights reserved.</span>
+        <span>Made for people who’d rather be in the meeting than typing it up.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/app.js?v=2"></script>
+</body>
+</html>

@@ -23,6 +23,7 @@ interface SummarizeAudioRequest {
   fileName?: unknown;
   instructions?: unknown;
   promptId?: unknown;
+  summaryRulesOverride?: unknown;
   userId?: unknown;
   userName?: unknown;
   noteId?: unknown;
@@ -527,6 +528,10 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
     downloadUrl: requiredString(body, 'downloadUrl'),
     fileName: requiredString(body, 'fileName'),
     promptId: requiredString(body, 'promptId'),
+    summaryRulesOverride:
+      typeof body.summaryRulesOverride === 'string'
+        ? body.summaryRulesOverride
+        : undefined,
     userId: requiredString(body, 'userId'),
     userName: typeof body.userName === 'string' ? body.userName.trim() : '',
     noteId: requiredString(body, 'noteId'),

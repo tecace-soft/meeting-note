@@ -1,0 +1,50 @@
+{
+  "authorities": [
+    {
+      "type": "AAD",
+      "authority_url": "https://login.microsoftonline.com/a141d6e8-fddb-4309-8b71-44753a78495a",
+      "audience": {
+        "type": "AzureADMyOrg",
+        "tenant_id": "a141d6e8-fddb-4309-8b71-44753a78495a"
+      }
+    }
+  ],
+  "authorization_user_agent": "BROWSER",
+  "multiple_clouds_supported": false,
+  "broker_redirect_uri_registered": true,
+  "http": {
+    "connect_timeout": 10000,
+    "read_timeout": 30000
+  },
+  "logging": {
+    "pii_enabled": false,
+    "log_level": "VERBOSE",
+    "logcat_enabled": true
+  },
+  "shared_device_mode_supported": false,
+  "account_mode": "SINGLE",
+  "browser_safelist": [
+    {
+      "browser_package_name": "com.android.chrome",
+      "browser_signature_hashes": [
+        "7fmduHKTdHHrlMvldlEqAIlSfii1tl35bxj1OXN5Ve8c4lU6URVu4xtSHc3BVZxS6WWJnxMDhIfQN0N0K2NDJg=="
+      ],
+      "browser_use_customTab": true,
+      "browser_version_lower_bound": "45"
+    },
+    {
+      "browser_package_name": "com.android.chrome",
+      "browser_signature_hashes": [
+        "7fmduHKTdHHrlMvldlEqAIlSfii1tl35bxj1OXN5Ve8c4lU6URVu4xtSHc3BVZxS6WWJnxMDhIfQN0N0K2NDJg=="
+      ],
+      "browser_use_customTab": false
+    },
+    {
+      "browser_package_name": "com.microsoft.emmx",
+      "browser_signature_hashes": [
+        "Ivy-Rk6ztai_IudfbyUrSHugzRqAtHWslFvHT0PTvLMsEKLUIgv7ZZbVxygWy_M5mOPpfjZrd3vOx3t-cA6fVQ=="
+      ],
+      "browser_use_customTab": false
+    }
+  ]
+}

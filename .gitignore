@@ -35,3 +35,20 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 
+# Flutter / Dart
+meeting-note-mobile-handoff/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+**/build/
+**/.dart_tool/
+**/.pub-cache/
+**/.pub/
+**/coverage/
+**/android/.gradle/
+**/android/local.properties
+**/debug-cert.der
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+

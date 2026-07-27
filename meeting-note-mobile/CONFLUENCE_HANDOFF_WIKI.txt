@@ -1,0 +1,378 @@
+h1. Meeting Note Mobile Developer Handoff
+
+h2. Overview
+
+Meeting Note Mobile is a Flutter mobile app for the existing Meeting Note product. It currently targets Android first, with iOS scaffolded but not production-configured yet.
+
+The app connects to the same Supabase data layer and workflow backend used by the Meeting Note web app.
+
+h2. Repository Locations
+
+* Mobile app: {code}meeting-note-mobile/app{code}
+* Mobile source: {code}meeting-note-mobile/app/lib{code}
+* Android native config: {code}meeting-note-mobile/app/android{code}
+* iOS scaffold: {code}meeting-note-mobile/app/ios{code}
+* Workflow backend: {code}workflow-server{code}
+* Web app reference: {code}src{code}
+
+h2. Tech Stack
+
+* Flutter / Dart
+* Riverpod
+* GoRouter
+* Dio
+* MSAL Microsoft authentication
+* Supabase REST API
+* Supabase Storage
+* Render-hosted workflow backend
+* n8n project chat webhook
+* Android foreground service for background recording
+
+h2. Public Runtime Config
+
+These values are public client/runtime config and are currently present in the mobile app.
+
+* Supabase URL: {code}https://smnnlamrwisqaquymsdl.supabase.co{code}
+* Supabase anon/publishable key: {code}sb_publishable_xkdZSukdjjCSwD4TCuKrgA_Qnhz0h4D{code}
+* Workflow API URL: {code}https://meeting-note-backend-njfb.onrender.com{code}
+* Microsoft client ID: {code}f81ec595-e95f-4b99-8143-fb4b198df787{code}
+* Microsoft tenant ID: {code}a141d6e8-fddb-4309-8b71-44753a78495a{code}
+* Android package name: {code}com.example.meeting_note_mobile{code}
+* Android redirect URI: {code}msauth://com.example.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D{code}
+
+Relevant files:
+
+* {code}meeting-note-mobile/app/lib/core/network/supabase_config.dart{code}
+* {code}meeting-note-mobile/app/lib/core/network/workflow_config.dart{code}
+* {code}meeting-note-mobile/app/lib/features/auth/data/auth_config.dart{code}
+* {code}meeting-note-mobile/app/assets/msal_config.json{code}
+* {code}meeting-note-mobile/app/android/app/build.gradle.kts{code}
+* {code}meeting-note-mobile/app/android/app/src/main/AndroidManifest.xml{code}
+
+h2. Sensitive Credentials To Transfer Securely
+
+Do not paste raw secret values into Confluence unless the page is access-restricted. Prefer a password manager, Render dashboard access, Supabase dashboard access, or another secure secret handoff.
+
+Required secrets/env vars:
+
+* Supabase backend access: {code}SUPABASE_SERVICE_ROLE_KEY{code}
+* Gemini / Google AI: {code}GEMINI_API_KEY{code}
+* Gemini model config: {code}GEMINI_SUMMARY_MODEL{code}, {code}GEMINI_REGENERATE_SUMMARY_MODEL{code}, optional pricing/model env vars
+* OpenAI: {code}OPENAI_API_KEY{code}, if still used by workflow tests or fallback paths
+* AssemblyAI: {code}ASSEMBLYAI_API_KEY{code}, {code}ASSEMBLYAI_SPEECH_MODEL{code}
+* Resend alerts: {code}RESEND_API_KEY{code}, {code}WORKFLOW_ALERT_TO{code}, {code}WORKFLOW_ALERT_FROM{code}
+* Workflow server: {code}SUPABASE_URL{code}, {code}PORT{code}, timeout env vars
+
+Recommended: rotate any keys that were copied into chats, screenshots, logs, or unsecured local files.
+
+h2. Microsoft / Azure Setup
+
+The Azure App Registration must include this Android platform configuration:
+
+* Package name: {code}com.example.meeting_note_mobile{code}
+* Signature hash: {code}guC64kbNdu+bu67b7Ujd62XWb3s={code}
+* Redirect URI: {code}msauth://com.example.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D{code}
+
+Authority must be tenant-specific:
+
+{code}
+https://login.microsoftonline.com/a141d6e8-fddb-4309-8b71-44753a78495a
+{code}
+
+Do not use {code}/common{code}; this app registration is not configured as multi-tenant.
+
+Current mobile login scopes:
+
+{code}
+https://graph.microsoft.com/user.read
+https://graph.microsoft.com/User.ReadBasic.All
+{code}
+
+Additional Graph scopes listed for future integrations:
+
+{code}
+Chat.Read
+Chat.ReadWrite
+ChatMessage.Read
+Files.ReadWrite
+Files.ReadWrite.All
+User.ReadBasic.All
+Calendars.Read
+{code}
+
+h2. Supabase Dependencies
+
+The mobile app uses Supabase REST and Storage with a Supabase JWT exchanged from the Microsoft access token.
+
+Token exchange function:
+
+{code}
+/functions/v1/supabase-token
+{code}
+
+Important Supabase tables:
+
+{code}
+note
+file
+summary_prompt
+speaker
+project
+session
+chat
+note_image
+mcp_token
+workflow_job
+workflow_usage
+{code}
+
+Important Supabase Edge Functions / RPCs:
+
+{code}
+/functions/v1/supabase-token
+/functions/v1/mcp-token
+/functions/v1/generate-profile
+/rpc/add_accessible_note_to_project
+{code}
+
+Storage buckets:
+
+{code}
+meeting-recordings
+meeting-note-images
+recording-drafts
+{code}
+
+h2. Transcription / Summary Flow
+
+# User records audio or selects an audio file.
+# Mobile uploads audio to Supabase Storage bucket {code}meeting-recordings{code}.
+# Mobile inserts a {code}file{code} row.
+# Mobile creates a signed Supabase Storage URL.
+# Mobile submits the signed URL to the workflow backend.
+# Workflow backend runs transcription and summary generation.
+# Mobile polls the workflow job endpoint.
+# Workflow backend creates/updates the final {code}note{code} data.
+# Mobile navigates to the summary/transcript detail screen.
+
+Workflow endpoints:
+
+{code}
+POST /summarize-audio/jobs
+GET  /summarize-audio/jobs/:jobId
+{code}
+
+Workflow request fields:
+
+* {code}downloadUrl{code}: signed Supabase audio URL
+* {code}fileName{code}: audio file name
+* {code}fileId{code}: file table id
+* {code}meetingAt{code}: ISO timestamp
+* {code}userTimeZone{code}: device timezone
+* {code}instructions{code}: optional user instructions
+* {code}promptId{code}: summary_prompt id
+* {code}userId{code}: authenticated user id
+* {code}userName{code}: display name
+* {code}noteId{code}: uuid generated by app
+* {code}language{code}: {code}en{code} or {code}ko{code}
+* {code}attachments{code}: base64 attachment objects
+
+h2. Attachments
+
+Mobile supports file attachments and camera photos during note creation.
+
+Current behavior:
+
+* Attachments are sent to the workflow backend as base64 objects.
+* After the workflow job completes, attachments are saved to Supabase Storage bucket {code}meeting-note-images{code}.
+* Attachment metadata is inserted into {code}note_image{code}.
+
+Attachment limits currently enforced by mobile:
+
+* Up to 10 attachments per note
+* Max 25 MB per attachment sent to workflow
+* Max 50 MB total attachments sent to workflow
+* Max 50 MB per attachment stored after completion
+
+Supported attachment types include PDFs, text files, images, audio, and video.
+
+h2. Project Chat
+
+Project chat currently posts to this n8n webhook:
+
+{code}
+https://n8n.srv1153481.hstgr.cloud/webhook/9fe1b3b5-9e2e-4b23-8775-b38fc21e4b4d
+{code}
+
+Defined in:
+
+{code}
+meeting-note-mobile/app/lib/features/projects/data/projects_repository.dart
+{code}
+
+After the webhook response returns, mobile stores chat data in Supabase:
+
+{code}
+session
+chat
+{code}
+
+Note: the mobile code supports both {code}response{code} and the legacy typo fallback {code}repsonse{code}.
+
+h2. Settings Features
+
+The Settings tab includes:
+
+* Microsoft signed-in user information
+* App language: English / Korean
+* Theme toggle: Light / Dark
+* Summary prompt templates
+* Speaker profiles
+* MCP setup and API key generation
+
+Relevant Supabase-backed areas:
+
+* Summary prompts: {code}summary_prompt{code}
+* Speaker profiles: {code}speaker{code}
+* MCP keys: {code}/functions/v1/mcp-token{code}, {code}mcp_token{code}
+
+h2. Local Cache
+
+The app uses JSON file caching to improve perceived load time.
+
+Cache implementation:
+
+{code}
+meeting-note-mobile/app/lib/core/cache/json_cache_store.dart
+{code}
+
+Cached areas include:
+
+* Notes/history
+* Projects
+* Project notes
+* Project chat sessions
+* Project chats
+* Summary prompts
+* Speaker profiles
+
+The app generally displays cached data first, then refreshes from Supabase.
+
+h2. Android Recording
+
+Android recording uses the Flutter {code}record{code} package plus native foreground-service support.
+
+Important files:
+
+{code}
+meeting-note-mobile/app/lib/features/record/data/recording_service.dart
+meeting-note-mobile/app/android/app/src/main/kotlin/com/example/meeting_note_mobile/ForegroundRecordingService.kt
+meeting-note-mobile/app/android/app/src/main/AndroidManifest.xml
+{code}
+
+Android permissions include internet, network state, camera, record audio, wake lock, foreground service, foreground service microphone, and post notifications.
+
+h2. Build Commands
+
+From:
+
+{code}
+cd meeting-note-mobile/app
+{code}
+
+Install debug build to connected Android device:
+
+{code}
+flutter build apk --debug
+flutter install -d DEVICE_ID --debug
+{code}
+
+Build lightweight release APKs for sharing:
+
+{code}
+flutter build apk --release --split-per-abi
+{code}
+
+For most modern Android phones, share:
+
+{code}
+build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+{code}
+
+h2. Production Build Caveats
+
+Current Android release signing still uses debug signing in:
+
+{code}
+meeting-note-mobile/app/android/app/build.gradle.kts
+{code}
+
+Before Play Store or production distribution:
+
+# Create a real Android release keystore.
+# Configure {code}signingConfigs.release{code}.
+# Build a signed release APK or AAB.
+# Consider changing the package name from {code}com.example.meeting_note_mobile{code}.
+# If package name changes, update Azure Android redirect URI and MSAL config.
+
+h2. iOS Status
+
+iOS scaffold exists but is not production-ready.
+
+Before iOS validation/release:
+
+# Use macOS + Xcode.
+# Configure Apple Developer Team.
+# Set a production bundle ID.
+# Configure MSAL iOS redirect scheme.
+# Confirm microphone/camera/background audio permissions.
+# Test Microsoft login on simulator and physical device.
+# Build through Xcode or Flutter on macOS.
+
+h2. Known Caveats / Risks
+
+* Android package name is still {code}com.example.meeting_note_mobile{code}.
+* Android release signing is not production-ready.
+* iOS has not been fully configured or validated.
+* Project chat depends on an external n8n webhook.
+* Workflow processing depends on Render backend availability.
+* Supabase auth depends on Microsoft token exchange through {code}supabase-token{code}.
+* Some old README/handoff docs may still describe the original mock-data starter app and are stale.
+
+h2. Developer First-Day Checklist
+
+# Get access to Supabase, Azure App Registration, Render, n8n, AssemblyAI, Gemini / Google AI, OpenAI if still used, and Resend if alerting is needed.
+# Install Flutter and Android tooling.
+# Run the app.
+
+{code}
+cd meeting-note-mobile/app
+flutter pub get
+flutter devices
+flutter run -d DEVICE_ID
+{code}
+
+Confirm:
+
+* Microsoft login works.
+* History loads notes.
+* Projects load.
+* Summary prompts load.
+* Speaker profiles load.
+* Recording creates a usable audio file.
+* Generate Summary reaches the workflow backend.
+* Processing completes and opens summary/transcript.
+* Attachments/photos are saved.
+* Project chat returns and stores responses.
+* MCP key generation works from Settings.
+
+Before production:
+
+* Rename package/bundle ID if needed.
+* Register production Android/iOS redirect URIs in Azure.
+* Add real Android release signing.
+* Configure iOS signing.
+* Rotate exposed secrets.
+* Move all secrets to managed secret storage.
+* Build signed release artifacts.
+
