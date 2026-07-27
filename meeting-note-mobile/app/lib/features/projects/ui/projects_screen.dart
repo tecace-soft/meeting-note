@@ -174,6 +174,7 @@ class ProjectDetailScreen extends ConsumerStatefulWidget {
 class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
   final _chatController = TextEditingController();
   final _chatScrollController = ScrollController();
+  final _chatFocusNode = FocusNode();
   late Future<_ProjectDetailData> _future;
   _ProjectDetailData? _data;
   String? _activeSessionId;
@@ -187,13 +188,21 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
   void initState() {
     super.initState();
     _future = _load();
+    _chatFocusNode.addListener(_handleChatFocusChange);
   }
 
   @override
   void dispose() {
+    _chatFocusNode.removeListener(_handleChatFocusChange);
+    _chatFocusNode.dispose();
     _chatController.dispose();
     _chatScrollController.dispose();
     super.dispose();
+  }
+
+  void _handleChatFocusChange() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<_ProjectDetailData> _load({bool preferCache = true}) async {
@@ -421,7 +430,7 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      resizeToAvoidBottomInset: true,
+      resizeToAvoidBottomInset: false,
       backgroundColor: FigmaDesign.of(context).pageBackground,
       body: SafeArea(
         child: Padding(
@@ -458,47 +467,36 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
               final data = snapshot.data ?? _data!;
               _data = data;
               final title = data.project.name;
-              final keyboardOpen =
-                  MediaQuery.viewInsetsOf(context).bottom > 0;
+              final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+              final keyboardActive = keyboardInset > 0;
               final subtitle =
                   '${data.notes.length} ${data.notes.length == 1 ? 'note' : 'notes'} - ${_lastActivity(data)}';
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _ProjectBackHeader(title: title, subtitle: subtitle),
-                  SizedBox(height: keyboardOpen ? 10 : 26),
-                  if (keyboardOpen)
-                    Expanded(
-                      child: _ProjectChatCard(
-                        fillAvailable: true,
-                        expanded: true,
-                        controller: _chatController,
-                        scrollController: _chatScrollController,
-                        messages: _messages,
-                        sending: _sending,
-                        error: _chatError,
-                        onSend: _sendChat,
-                      ),
-                    )
-                  else
-                    _ProjectChatCard(
-                      expanded: !_isLowerSectionExpanded,
-                      controller: _chatController,
-                      scrollController: _chatScrollController,
-                      messages: _messages,
-                      sending: _sending,
-                      error: _chatError,
-                      onSend: _sendChat,
-                    ),
-                  if (!keyboardOpen) ...[
-                    const SizedBox(height: 16),
-                    _ProjectDetailToggle(
-                      showChats: _showChats,
-                      onChanged: (value) => setState(() {
-                        _showChats = value;
-                        _isLowerSectionExpanded = true;
-                      }),
-                    ),
+                  const SizedBox(height: 26),
+                  _ProjectChatCard(
+                    expanded: !_isLowerSectionExpanded,
+                    keyboardActive: keyboardActive,
+                    keyboardInset: keyboardInset,
+                    focusNode: _chatFocusNode,
+                    controller: _chatController,
+                    scrollController: _chatScrollController,
+                    messages: _messages,
+                    sending: _sending,
+                    error: _chatError,
+                    onSend: _sendChat,
+                  ),
+                  const SizedBox(height: 16),
+                  _ProjectDetailToggle(
+                    showChats: _showChats,
+                    onChanged: (value) => setState(() {
+                      _showChats = value;
+                      _isLowerSectionExpanded = true;
+                    }),
+                  ),
+                  if (!keyboardActive) ...[
                     const SizedBox(height: 12),
                     Expanded(
                       child: AnimatedSwitcher(
@@ -603,8 +601,10 @@ class _ProjectBackHeader extends StatelessWidget {
 
 class _ProjectChatCard extends StatelessWidget {
   const _ProjectChatCard({
-    this.fillAvailable = false,
     required this.expanded,
+    required this.keyboardActive,
+    required this.keyboardInset,
+    required this.focusNode,
     required this.controller,
     required this.scrollController,
     required this.messages,
@@ -613,8 +613,10 @@ class _ProjectChatCard extends StatelessWidget {
     required this.onSend,
   });
 
-  final bool fillAvailable;
   final bool expanded;
+  final bool keyboardActive;
+  final double keyboardInset;
+  final FocusNode focusNode;
   final TextEditingController controller;
   final ScrollController scrollController;
   final List<_ProjectChatMessage> messages;
@@ -627,15 +629,18 @@ class _ProjectChatCard extends StatelessWidget {
     final palette = FigmaDesign.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
     final hasMessages = messages.isNotEmpty || sending;
-    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final screenHeight = MediaQuery.sizeOf(context).height;
-    final expandedHeight = keyboardInset > 0
-        ? (screenHeight - keyboardInset - 210).clamp(220.0, 340.0).toDouble()
+    final effectiveKeyboardInset =
+        keyboardActive ? keyboardInset.clamp(300.0, 420.0).toDouble() : 0.0;
+    final expandedHeight = keyboardActive
+        ? (screenHeight - effectiveKeyboardInset - 180)
+            .clamp(180.0, 360.0)
+            .toDouble()
         : (screenHeight * 0.58).clamp(390.0, 540.0).toDouble();
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
-      height: fillAvailable ? null : (expanded ? expandedHeight : 284),
+      height: expanded ? expandedHeight : 284,
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       decoration: BoxDecoration(
@@ -717,6 +722,7 @@ class _ProjectChatCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: TextField(
+                    focusNode: focusNode,
                     controller: controller,
                     minLines: 1,
                     maxLines: 3,
