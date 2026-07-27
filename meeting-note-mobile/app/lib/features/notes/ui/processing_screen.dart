@@ -147,6 +147,19 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
       if (!mounted) return;
       if (next.isComplete && next.noteId.isNotEmpty) {
         _timer?.cancel();
+        try {
+          await ref.read(notesRepositoryProvider).savePendingAttachmentsForJob(
+                jobId: widget.jobId,
+                noteId: next.noteId,
+              );
+        } catch (error) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Note created, but attachments failed to save: $error')),
+            );
+          }
+        }
+        if (!mounted) return;
         context.pushReplacement('/note/${next.noteId}');
         return;
       }

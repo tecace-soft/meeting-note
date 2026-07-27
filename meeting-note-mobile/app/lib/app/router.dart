@@ -23,7 +23,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       final isSigningIn = state.matchedLocation == '/signin';
       final isLoading = state.matchedLocation == '/loading';
       if (auth.loading) {
-        return isLoading ? null : '/loading';
+        return isLoading ? '/record' : null;
       }
       if (isLoading) return auth.isAuthenticated ? '/record' : '/signin';
       if (!auth.isAuthenticated && !isSigningIn) return '/signin';
@@ -44,9 +44,18 @@ final routerProvider = Provider<GoRouter>((ref) {
               routes: [
                 GoRoute(
                   path: 'new-note',
-                  builder: (context, state) => NewNoteScreen(
-                    audioPath: state.extra is String ? state.extra as String : null,
-                  ),
+                  builder: (context, state) {
+                    final extra = state.extra;
+                    return NewNoteScreen(
+                      audioPath: extra is NewNoteDraft
+                          ? extra.audioPath
+                          : extra is String
+                              ? extra
+                              : null,
+                      initialAttachmentPaths:
+                          extra is NewNoteDraft ? extra.attachmentPaths : const [],
+                    );
+                  },
                 ),
               ],
             ),

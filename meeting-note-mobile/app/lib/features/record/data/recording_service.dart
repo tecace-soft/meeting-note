@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
@@ -118,6 +119,8 @@ final recordingProvider =
 class RecordingNotifier extends Notifier<RecordingState> {
   static const _recoveryKey = 'meeting_note_active_recording_session';
   static const _mimeType = 'audio/mp4';
+  static const _nativeRecorder =
+      MethodChannel('meeting_note_mobile/foreground_recorder');
 
   final _recorder = AudioRecorder();
   final _storage = const FlutterSecureStorage();
@@ -126,7 +129,7 @@ class RecordingNotifier extends Notifier<RecordingState> {
 
   @override
   RecordingState build() {
-    unawaited(loadRecoverableSession());
+    unawaited(_restoreNativeOrRecoverableSession());
     ref.onDispose(() {
       _ticker?.cancel();
       _ampSub?.cancel();
@@ -141,13 +144,40 @@ class RecordingNotifier extends Notifier<RecordingState> {
     final dir = await getApplicationDocumentsDirectory();
     final startedAt = DateTime.now();
     final sessionId = startedAt.millisecondsSinceEpoch.toString();
-    final path =
-        '${dir.path}/rec_$sessionId.m4a';
+    if (Platform.isAndroid) {
+      final path = '${dir.path}/rec_$sessionId.m4a';
+      final session = RecoverableRecordingSession(
+        id: sessionId,
+        filePath: path,
+        fileName: 'rec_$sessionId.m4a',
+        mimeType: _mimeType,
+        startedAt: startedAt,
+        lastHeartbeatAt: startedAt,
+        elapsedSeconds: 0,
+        sizeBytes: 0,
+      );
+      await _persistRecoverySession(session);
+      await _nativeRecorder.invokeMethod<bool>('start', {'path': path});
+      state = RecordingState(
+        state: RecordState.recording,
+        filePath: path,
+        recoverableSession: session,
+        loadingRecovery: false,
+      );
+      _startTicker();
+      return true;
+    }
+
+    final useOpus = await _recorder.isEncoderSupported(AudioEncoder.opus);
+    final encoder = useOpus ? AudioEncoder.opus : AudioEncoder.aacLc;
+    final extension = useOpus ? 'ogg' : 'm4a';
+    final mimeType = useOpus ? 'audio/ogg' : _mimeType;
+    final path = '${dir.path}/rec_$sessionId.$extension';
     final session = RecoverableRecordingSession(
       id: sessionId,
       filePath: path,
-      fileName: 'rec_$sessionId.m4a',
-      mimeType: _mimeType,
+      fileName: 'rec_$sessionId.$extension',
+      mimeType: mimeType,
       startedAt: startedAt,
       lastHeartbeatAt: startedAt,
       elapsedSeconds: 0,
@@ -157,10 +187,10 @@ class RecordingNotifier extends Notifier<RecordingState> {
     await _persistRecoverySession(session);
 
     await _recorder.start(
-      const RecordConfig(
-        encoder: AudioEncoder.aacLc,
-        bitRate: 64000,
-        sampleRate: 44100,
+      RecordConfig(
+        encoder: encoder,
+        bitRate: useOpus ? 32000 : 64000,
+        sampleRate: useOpus ? 16000 : 44100,
         numChannels: 1,
       ),
       path: path,
@@ -184,12 +214,26 @@ class RecordingNotifier extends Notifier<RecordingState> {
   }
 
   Future<void> pause() async {
+    if (Platform.isAndroid) {
+      final ok = await _nativeRecorder.invokeMethod<bool>('pause') ?? false;
+      if (!ok) return;
+      _ticker?.cancel();
+      state = state.copyWith(state: RecordState.paused);
+      return;
+    }
     await _recorder.pause();
     _ticker?.cancel();
     state = state.copyWith(state: RecordState.paused);
   }
 
   Future<void> resume() async {
+    if (Platform.isAndroid) {
+      final ok = await _nativeRecorder.invokeMethod<bool>('resume') ?? false;
+      if (!ok) return;
+      _startTicker();
+      state = state.copyWith(state: RecordState.recording);
+      return;
+    }
     await _recorder.resume();
     _startTicker();
     state = state.copyWith(state: RecordState.recording);
@@ -199,7 +243,9 @@ class RecordingNotifier extends Notifier<RecordingState> {
   Future<String?> stop() async {
     _ticker?.cancel();
     await _ampSub?.cancel();
-    final path = await _recorder.stop();
+    final path = Platform.isAndroid
+        ? await _nativeRecorder.invokeMethod<String>('stop')
+        : await _recorder.stop();
     final result = path ?? state.filePath;
     await clearRecoverableSession(deleteFile: false);
     state = const RecordingState(loadingRecovery: false);
@@ -213,6 +259,11 @@ class RecordingNotifier extends Notifier<RecordingState> {
     final file = File(session.filePath);
     if (!await file.exists() || await file.length() == 0) {
       await clearRecoverableSession(deleteFile: false);
+      return null;
+    }
+    if (_isMpeg4Recording(session.filePath, session.mimeType) &&
+        !await _hasFinalizedMp4Metadata(file)) {
+      await clearRecoverableSession(deleteFile: true);
       return null;
     }
 
@@ -312,4 +363,85 @@ class RecordingNotifier extends Notifier<RecordingState> {
       return null;
     }
   }
+
+  Future<void> _restoreNativeOrRecoverableSession() async {
+    if (Platform.isAndroid) {
+      final status = await _nativeRecorder.invokeMapMethod<String, Object?>(
+        'status',
+      );
+      if (status != null && status['active'] == true) {
+        final path = status['path'] as String?;
+        final startedAtMs = status['startedAt'] as int? ?? 0;
+        if (path != null && path.isNotEmpty) {
+          final file = File(path);
+          final startedAt = startedAtMs > 0
+              ? DateTime.fromMillisecondsSinceEpoch(startedAtMs)
+              : DateTime.now();
+          final elapsedSeconds = status['elapsedSeconds'] as int? ?? 0;
+          final session = RecoverableRecordingSession(
+            id: startedAt.millisecondsSinceEpoch.toString(),
+            filePath: path,
+            fileName: path.split(Platform.pathSeparator).last,
+            mimeType: _mimeType,
+            startedAt: startedAt,
+            lastHeartbeatAt: DateTime.now(),
+            elapsedSeconds: elapsedSeconds,
+            sizeBytes: await file.exists() ? await file.length() : 0,
+          );
+          await _persistRecoverySession(session);
+          state = RecordingState(
+            state: status['paused'] == true
+                ? RecordState.paused
+                : RecordState.recording,
+            elapsed: Duration(seconds: elapsedSeconds),
+            filePath: path,
+            recoverableSession: session,
+            loadingRecovery: false,
+          );
+          if (state.state == RecordState.recording) _startTicker();
+          return;
+        }
+      }
+    }
+    await loadRecoverableSession();
+  }
+}
+
+bool _isMpeg4Recording(String path, String mimeType) {
+  final lowerPath = path.toLowerCase();
+  final lowerMime = mimeType.toLowerCase();
+  return lowerMime.contains('mp4') ||
+      lowerPath.endsWith('.m4a') ||
+      lowerPath.endsWith('.mp4');
+}
+
+Future<bool> _hasFinalizedMp4Metadata(File file) async {
+  try {
+    return await _fileContainsAscii(file, 'moov') &&
+        await _fileContainsAscii(file, 'mdat');
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> _fileContainsAscii(File file, String value) async {
+  final pattern = value.codeUnits;
+  var carry = <int>[];
+  await for (final chunk in file.openRead()) {
+    final bytes = [...carry, ...chunk];
+    for (var i = 0; i <= bytes.length - pattern.length; i++) {
+      var found = true;
+      for (var j = 0; j < pattern.length; j++) {
+        if (bytes[i + j] != pattern[j]) {
+          found = false;
+          break;
+        }
+      }
+      if (found) return true;
+    }
+    carry = bytes.length <= pattern.length
+        ? bytes
+        : bytes.sublist(bytes.length - pattern.length + 1);
+  }
+  return false;
 }

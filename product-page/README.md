@@ -39,12 +39,13 @@ Suggested media (phone screens are portrait ~9:19.5; the split-row frames are 4:
 | Hero phone | `hero-record.png` | The Record screen (hero shot) |
 | Step 1 | `step-1-record.png` | Tap-to-record |
 | Step 2 | `step-2-setup.png` | New meeting note setup |
-| Step 3 | `step-3-processing.gif` | Upload → Transcribing → Summarize → Done |
-| Step 4 | `step-4-summary.png` | Summary + transcript tabs |
-| Step 5 | `step-5-projects.png` | Projects list / detail |
-| Capture row | `capture-waveform.gif` | Live recording with waveform |
-| Summarize row | `summarize-result.png` | Summary result screen |
-| Organize row | `organize-project.png` | Project detail + AI chat |
+| Step 3 | `step-3-processing.gif` | Upload → Transcribing → Summarize → Done (generated) |
+| Step 4 | `step-4-summary.gif` | Summary ⇄ Transcript toggle (generated) |
+| Step 5 | `step-5-projects.png` | Projects / project chat |
+
+The **"Why it's different"** section needs no images — its three visuals (example
+summary card, ontology knowledge-graph, and MCP flow) are drawn in HTML/CSS/SVG
+inline in `index.html` and adapt to light/dark automatically.
 
 Example — turning the hero slot into a real image:
 
@@ -61,5 +62,5 @@ Example — turning the hero slot into a real image:
 - **Accessibility**: honors `prefers-reduced-motion`, semantic landmarks, keyboard-operable FAQ.
 - Copy is grounded in the app's real, implemented features (background recording &
   auto-recovery, speaker-diarized transcripts, custom summary prompts, Projects with
-  AI chat, attachments, OneDrive export, ChatGPT/Claude MCP). App Store / Google Play
+  AI chat, attachments, ChatGPT/Claude MCP). App Store / Google Play
   buttons currently link to `#` — point them at your store listings when live.

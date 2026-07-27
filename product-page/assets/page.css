@@ -451,3 +451,70 @@ section { position: relative; }
   .footer-grid { grid-template-columns: 1fr 1fr; }
   .float-tag.t1 { left: 0; } .float-tag.t2 { right: 0; }
 }
+
+/* ==========================================================================
+   "Why it's different" — inline illustrations (no image assets required)
+   ========================================================================== */
+.illus { width: 100%; height: 100%; font-family: var(--font-sans); }
+
+/* Row 1 — example summary document */
+.illus-doc {
+  display: flex; flex-direction: column; justify-content: center;
+  padding: clamp(20px, 3.4vw, 34px);
+}
+.doc-top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.doc-title { font-weight: 700; font-size: clamp(15px, 1.6vw, 18px); letter-spacing: -0.01em; color: var(--label-normal); }
+.doc-badge { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--primary-normal);
+  background: var(--blue-95); padding: 5px 12px; border-radius: var(--radius-pill); }
+.doc-h { font-weight: 700; font-size: clamp(13px, 1.35vw, 15px); color: var(--primary-normal); margin: 14px 0 8px; }
+.doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.doc-list li { position: relative; padding-left: 18px; font-weight: 500;
+  font-size: clamp(13px, 1.35vw, 15px); line-height: 1.42; color: var(--label-neutral); }
+.doc-list li::before { content: ""; position: absolute; left: 3px; top: 8px; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--label-assistive); }
+.doc-list li b, .doc-list li .who { color: var(--label-normal); font-weight: 700; }
+
+/* Row 2 — ontology knowledge graph */
+.illus-graph { position: relative; padding: 10px; }
+.graph-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.graph-lines line { stroke: var(--line-normal-strong); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.gnode { position: absolute; transform: translate(-50%, -50%);
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  padding: 8px 13px; border-radius: var(--radius-pill);
+  background: var(--background-elevated-normal); border: 1px solid var(--line-normal-neutral);
+  box-shadow: var(--shadow-card); font-weight: 600; font-size: clamp(11px, 1.2vw, 13.5px);
+  color: var(--label-normal); }
+.gnode .d { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.gnode-center { padding: 12px 18px; background: var(--primary-normal); color: #fff; border: none;
+  font-weight: 700; font-size: clamp(12px, 1.3vw, 15px);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--primary-normal) 40%, transparent); z-index: 2; }
+
+/* Row 3 — MCP flow */
+.illus-flow { display: flex; align-items: center; gap: clamp(10px, 1.6vw, 20px); padding: clamp(18px, 3vw, 30px); }
+.flow-src { flex: 1 1 44%; background: var(--background-normal-normal);
+  border: 1px solid var(--line-normal-neutral); border-radius: 14px; padding: 14px; box-shadow: var(--shadow-card); }
+.flow-src .cap { display: flex; align-items: center; gap: 8px; font-weight: 700;
+  font-size: clamp(12px, 1.25vw, 14px); color: var(--label-normal); margin-bottom: 10px; }
+.flow-src .mark { width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0; color: #fff;
+  background: linear-gradient(135deg, var(--primary-normal), var(--violet-50-2));
+  display: inline-flex; align-items: center; justify-content: center; }
+.flow-src .mark svg { width: 13px; height: 13px; }
+.note-line { height: 7px; border-radius: 4px; margin-top: 7px;
+  background: linear-gradient(90deg, rgba(120,170,255,.55), rgba(150,225,185,.5)); }
+.flow-arrow { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.flow-arrow .mcp { font-family: var(--font-display); font-weight: 600; font-size: 12px; letter-spacing: 0.06em;
+  color: var(--primary-normal); background: var(--blue-95); padding: 5px 11px; border-radius: var(--radius-pill); }
+.flow-arrow .line { position: relative; width: clamp(34px, 5vw, 60px); height: 2px; background: var(--line-normal-strong); }
+.flow-arrow .line::after { content: ""; position: absolute; right: -1px; top: 50%; transform: translateY(-50%);
+  border-left: 7px solid var(--line-normal-strong); border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+.flow-dests { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; }
+.dest { display: inline-flex; align-items: center; gap: 9px; padding: 10px 13px; border-radius: 12px;
+  background: var(--background-elevated-normal); border: 1px solid var(--line-normal-neutral);
+  box-shadow: var(--shadow-card); font-weight: 600; font-size: clamp(12px, 1.25vw, 14.5px); color: var(--label-normal); }
+.dest .ic { width: 18px; height: 18px; border-radius: 6px; flex-shrink: 0; }
+
+@media (max-width: 520px) {
+  .illus-flow { flex-direction: column; align-items: stretch; }
+  .flow-arrow { flex-direction: row; justify-content: center; }
+  .flow-arrow .line { transform: rotate(90deg); width: 26px; }
+}

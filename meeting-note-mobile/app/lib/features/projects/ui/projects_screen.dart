@@ -20,6 +20,7 @@ class ProjectsScreen extends ConsumerStatefulWidget {
 class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
   late Future<_ProjectsScreenData> _future;
   String? _loadedForUserId;
+  int _loadRetries = 0;
 
   @override
   void initState() {
@@ -27,22 +28,49 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     _future = _load();
   }
 
-  Future<_ProjectsScreenData> _load() async {
-    final projects = await ref.read(projectsRepositoryProvider).list();
-    List<MeetingNote> notes = const [];
-    try {
-      notes = await ref.read(notesRepositoryProvider).list(limit: 200);
-    } catch (_) {
-      notes = const [];
+  Future<_ProjectsScreenData> _load({bool preferCache = true}) async {
+    final projectsRepository = ref.read(projectsRepositoryProvider);
+    if (preferCache) {
+      final cachedProjects = await projectsRepository.cachedList();
+      if (cachedProjects != null) {
+        _refreshFromNetwork();
+        return _ProjectsScreenData(projects: cachedProjects);
+      }
     }
-    return _ProjectsScreenData(projects: projects, notes: notes);
+    final projects = await projectsRepository.refreshList();
+    return _ProjectsScreenData(projects: projects);
   }
 
   void _refresh() {
-    setState(() => _future = _load());
+    setState(() {
+      _loadRetries = 0;
+      _future = _load(preferCache: false);
+    });
   }
 
-  Future<void> _openCreateProject(List<MeetingNote> notes) async {
+  Future<void> _refreshFromNetwork() async {
+    try {
+      final data = await _load(preferCache: false);
+      if (!mounted) return;
+      setState(() => _future = Future.value(data));
+    } catch (_) {
+      // Keep showing cached projects.
+    }
+  }
+
+  void _retryQuietly() {
+    _loadRetries += 1;
+    Future<void>.delayed(Duration(milliseconds: 500 * _loadRetries), () {
+      if (!mounted) return;
+      setState(() => _future = _load());
+    });
+  }
+
+  Future<void> _openCreateProject() async {
+    final repository = ref.read(notesRepositoryProvider);
+    final notes = await repository.cachedList(limit: 200) ??
+        await repository.refreshList(limit: 200);
+    if (!mounted) return;
     final created = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -60,7 +88,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     if (!auth.loading && userId != _loadedForUserId) {
       _loadedForUserId = userId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _refresh();
+        if (mounted) _refreshFromNetwork();
       });
     }
 
@@ -72,7 +100,6 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
           child: FutureBuilder<_ProjectsScreenData>(
             future: _future,
             builder: (context, snapshot) {
-              final notes = snapshot.data?.notes ?? const <MeetingNote>[];
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -93,20 +120,32 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                         onTap: snapshot.connectionState ==
                                 ConnectionState.waiting
                             ? null
-                            : () => _openCreateProject(notes),
+                            : _openCreateProject,
                       ),
                     ],
                   ),
                   const SizedBox(height: 28),
                   Expanded(
-                    child: _ProjectBody(
-                      snapshot: snapshot,
-                      onRetry: _refresh,
-                      onOpenProject: (project) => context.push(
-                        '/projects/${project.id}',
-                        extra: project.name,
+                    child: Builder(
+                      builder: (context) {
+                        if (snapshot.hasError && _loadRetries < 2) {
+                          _retryQuietly();
+                          return const Center(child: CircularProgressIndicator());
+                        }
+                        if (!snapshot.hasError &&
+                            snapshot.connectionState != ConnectionState.waiting) {
+                          _loadRetries = 0;
+                        }
+                        return _ProjectBody(
+                          snapshot: snapshot,
+                          onRetry: _refresh,
+                          onOpenProject: (project) => context.push(
+                            '/projects/${project.id}',
+                            extra: project.name,
+                          ),
+                        );
+                      },
                       ),
-                    ),
                   ),
                 ],
               );
@@ -157,8 +196,30 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
     super.dispose();
   }
 
-  Future<_ProjectDetailData> _load() async {
+  Future<_ProjectDetailData> _load({bool preferCache = true}) async {
     final repository = ref.read(projectsRepositoryProvider);
+    if (preferCache) {
+      final cachedProject = await repository.cachedGet(widget.projectId);
+      if (cachedProject != null) {
+        final cachedNotes =
+            await repository.cachedNotesForProject(widget.projectId);
+        final cachedSessions =
+            await repository.cachedSessionsForProject(widget.projectId);
+        final cachedChats = await repository.cachedChatsForSessions(
+          (cachedSessions ?? const <ProjectChatSession>[])
+              .map((session) => session.id)
+              .toList(),
+        );
+        final data = _buildProjectDetailData(
+          project: cachedProject,
+          notes: cachedNotes ?? const [],
+          sessions: cachedSessions ?? const [],
+          chats: cachedChats ?? const [],
+        );
+        _refreshFromNetwork();
+        return data;
+      }
+    }
     final project = await repository.get(widget.projectId);
     var notes = const <ProjectNoteSummary>[];
     var sessions = const <ProjectChatSession>[];
@@ -177,6 +238,20 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
       sessions = const <ProjectChatSession>[];
       chats = const <ProjectChatRow>[];
     }
+    return _buildProjectDetailData(
+      project: project,
+      notes: notes,
+      sessions: sessions,
+      chats: chats,
+    );
+  }
+
+  _ProjectDetailData _buildProjectDetailData({
+    required MeetingProject project,
+    required List<ProjectNoteSummary> notes,
+    required List<ProjectChatSession> sessions,
+    required List<ProjectChatRow> chats,
+  }) {
     final chatsBySession = <String, List<ProjectChatRow>>{};
     for (final chat in chats) {
       chatsBySession.putIfAbsent(chat.sessionId, () => []).add(chat);
@@ -197,7 +272,17 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
   }
 
   void _refresh() {
-    setState(() => _future = _load());
+    setState(() => _future = _load(preferCache: false));
+  }
+
+  Future<void> _refreshFromNetwork() async {
+    try {
+      final data = await _load(preferCache: false);
+      if (!mounted) return;
+      setState(() => _future = Future.value(data));
+    } catch (_) {
+      // Keep showing cached project data.
+    }
   }
 
   void _selectSession(String sessionId) {
@@ -1059,7 +1144,6 @@ class _ProjectBody extends StatelessWidget {
     }
     final data = snapshot.data;
     final projects = data?.projects ?? const <MeetingProject>[];
-    final notes = data?.notes ?? const <MeetingNote>[];
     if (projects.isEmpty) {
       return const EmptyState(
         icon: Icons.folder_open_rounded,
@@ -1078,9 +1162,7 @@ class _ProjectBody extends StatelessWidget {
           final project = projects[index];
           return _ProjectCard(
             project: project,
-            noteCount: notes
-                .where((note) => note.projectIds.contains(project.id))
-                .length,
+            noteCount: null,
             onTap: () => onOpenProject(project),
           );
         },
@@ -1141,7 +1223,7 @@ class _ProjectCard extends StatelessWidget {
   });
 
   final MeetingProject project;
-  final int noteCount;
+  final int? noteCount;
   final VoidCallback onTap;
 
   @override
@@ -1209,7 +1291,11 @@ class _ProjectCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      noteCount == 1 ? '1 note' : '$noteCount notes',
+                      noteCount == null
+                          ? 'Open project'
+                          : noteCount == 1
+                              ? '1 note'
+                              : '$noteCount notes',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w300,
@@ -1553,9 +1639,7 @@ class _ProjectSheetEmptyNoteList extends StatelessWidget {
 class _ProjectsScreenData {
   const _ProjectsScreenData({
     required this.projects,
-    required this.notes,
   });
 
   final List<MeetingProject> projects;
-  final List<MeetingNote> notes;
 }

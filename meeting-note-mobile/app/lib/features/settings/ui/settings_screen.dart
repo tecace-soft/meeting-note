@@ -171,13 +171,36 @@ class _SummaryPromptsScreenState extends ConsumerState<SummaryPromptsScreen> {
     _future = _load();
   }
 
-  Future<List<SettingsSummaryPrompt>> _load() =>
-      ref.read(settingsRepositoryProvider).summaryPrompts();
+  Future<List<SettingsSummaryPrompt>> _load({bool preferCache = true}) async {
+    final repository = ref.read(settingsRepositoryProvider);
+    if (preferCache) {
+      final cached = await repository.cachedSummaryPrompts();
+      if (cached != null) {
+        _refreshFromNetwork();
+        return cached;
+      }
+    }
+    return repository.refreshSummaryPrompts();
+  }
 
   void _refresh() {
-    setState(() => _future = _load());
+    setState(() => _future = _load(preferCache: false));
     ref.invalidate(settingsCountsProvider);
     ref.invalidate(promptsProvider);
+  }
+
+  Future<void> _refreshFromNetwork() async {
+    try {
+      final prompts = await ref
+          .read(settingsRepositoryProvider)
+          .refreshSummaryPrompts();
+      if (!mounted) return;
+      setState(() => _future = Future.value(prompts));
+      ref.invalidate(settingsCountsProvider);
+      ref.invalidate(promptsProvider);
+    } catch (_) {
+      // Keep showing cached prompts.
+    }
   }
 
   @override
@@ -283,12 +306,34 @@ class _SpeakerProfilesScreenState extends ConsumerState<SpeakerProfilesScreen> {
     _future = _load();
   }
 
-  Future<List<SettingsSpeakerProfile>> _load() =>
-      ref.read(settingsRepositoryProvider).speakerProfiles();
+  Future<List<SettingsSpeakerProfile>> _load({bool preferCache = true}) async {
+    final repository = ref.read(settingsRepositoryProvider);
+    if (preferCache) {
+      final cached = await repository.cachedSpeakerProfiles();
+      if (cached != null) {
+        _refreshFromNetwork();
+        return cached;
+      }
+    }
+    return repository.refreshSpeakerProfiles();
+  }
 
   void _refresh() {
-    setState(() => _future = _load());
+    setState(() => _future = _load(preferCache: false));
     ref.invalidate(settingsCountsProvider);
+  }
+
+  Future<void> _refreshFromNetwork() async {
+    try {
+      final speakers = await ref
+          .read(settingsRepositoryProvider)
+          .refreshSpeakerProfiles();
+      if (!mounted) return;
+      setState(() => _future = Future.value(speakers));
+      ref.invalidate(settingsCountsProvider);
+    } catch (_) {
+      // Keep showing cached speakers.
+    }
   }
 
   @override

@@ -4,8 +4,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/supabase_config.dart';
 import '../../auth/data/auth_token_store.dart';
+import '../../auth/data/mobile_supabase_session.dart';
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
   (ref) => SettingsRepository(),
@@ -30,11 +32,15 @@ class SettingsRepository {
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 30),
           ),
-        );
+        ) {
+    _supabase.interceptors
+        .add(MobileSupabaseSession().retryOnUnauthorizedInterceptor());
+  }
 
   final Dio _supabase;
   final Dio _supabaseRoot;
   static const _storage = FlutterSecureStorage();
+  static const _cache = JsonCacheStore('settings');
   static const _defaultPromptName = 'Default';
   static const _defaultPrompt = '''
 You are an Insightful Meeting Notes Writer and Transcript extractor.
@@ -86,6 +92,16 @@ Rules:
     );
   }
 
+  Future<List<SettingsSummaryPrompt>?> cachedSummaryPrompts() async {
+    final userId = await MobileSupabaseSession.cachedUserId();
+    if (userId == null) return null;
+    final rows = await _cache.readList(_summaryPromptsCacheKey(userId));
+    return rows == null ? null : _promptRows(rows);
+  }
+
+  Future<List<SettingsSummaryPrompt>> refreshSummaryPrompts() =>
+      summaryPrompts();
+
   Future<List<SettingsSummaryPrompt>> summaryPrompts() async {
     final auth = await _supabaseAuth();
     var rows = _promptRows(await _fetchSummaryPromptRows(auth));
@@ -102,7 +118,20 @@ Rules:
       }
       rows = _promptRows(await _fetchSummaryPromptRows(auth));
     }
-    return _dedupeDefaultPrompts(auth, rows);
+    final prompts = await _dedupeDefaultPrompts(auth, rows);
+    await _cache.writeList(
+      _summaryPromptsCacheKey(auth.userId),
+      prompts
+          .map((prompt) => {
+                'id': prompt.id,
+                'name': prompt.name,
+                'prompt': prompt.prompt,
+                if (prompt.createdAt != null)
+                  'created_at': prompt.createdAt!.toIso8601String(),
+              })
+          .toList(),
+    );
+    return prompts;
   }
 
   Future<List<dynamic>?> _fetchSummaryPromptRows(_SupabaseAuth auth) async {
@@ -190,6 +219,7 @@ Rules:
     );
     final rows = _promptRows(response.data);
     if (rows.isEmpty) throw StateError('Prompt was not created.');
+    await _cache.delete(_summaryPromptsCacheKey(auth.userId));
     return rows.first;
   }
 
@@ -215,6 +245,7 @@ Rules:
       },
       options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_summaryPromptsCacheKey(auth.userId));
   }
 
   Future<void> deleteSummaryPrompt(SettingsSummaryPrompt prompt) async {
@@ -234,7 +265,18 @@ Rules:
       },
       options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_summaryPromptsCacheKey(auth.userId));
   }
+
+  Future<List<SettingsSpeakerProfile>?> cachedSpeakerProfiles() async {
+    final userId = await MobileSupabaseSession.cachedUserId();
+    if (userId == null) return null;
+    final rows = await _cache.readList(_speakerProfilesCacheKey(userId));
+    return rows == null ? null : _speakerRows(rows);
+  }
+
+  Future<List<SettingsSpeakerProfile>> refreshSpeakerProfiles() =>
+      speakerProfiles();
 
   Future<List<SettingsSpeakerProfile>> speakerProfiles() async {
     final auth = await _supabaseAuth();
@@ -247,12 +289,9 @@ Rules:
       },
       options: Options(headers: _supabaseHeaders(auth.token)),
     );
-    return (response.data ?? const [])
-        .whereType<Map>()
-        .map((row) => row.cast<String, dynamic>())
-        .map(SettingsSpeakerProfile.fromJson)
-        .whereType<SettingsSpeakerProfile>()
-        .toList();
+    final rows = response.data ?? const [];
+    await _cache.writeList(_speakerProfilesCacheKey(auth.userId), rows);
+    return _speakerRows(rows);
   }
 
   Future<void> updateSpeakerProfile({
@@ -269,6 +308,7 @@ Rules:
       },
       options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_speakerProfilesCacheKey(auth.userId));
   }
 
   SettingsSpeakerProfile? findSelfSpeaker(
@@ -360,16 +400,8 @@ Rules:
   }
 
   Future<_SupabaseAuth> _supabaseAuth() async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    if (!isSupabaseConfigured ||
-        token == null ||
-        token.isEmpty ||
-        userId == null ||
-        userId.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
-    return _SupabaseAuth(token: token, userId: userId);
+    final auth = await MobileSupabaseSession().auth();
+    return _SupabaseAuth(token: auth.token, userId: auth.userId);
   }
 
   List<SettingsSummaryPrompt> _promptRows(List<dynamic>? data) =>
@@ -378,6 +410,14 @@ Rules:
           .map((row) => row.cast<String, dynamic>())
           .map(SettingsSummaryPrompt.fromJson)
           .whereType<SettingsSummaryPrompt>()
+          .toList();
+
+  List<SettingsSpeakerProfile> _speakerRows(List<dynamic>? data) =>
+      (data ?? const [])
+          .whereType<Map>()
+          .map((row) => row.cast<String, dynamic>())
+          .map(SettingsSpeakerProfile.fromJson)
+          .whereType<SettingsSpeakerProfile>()
           .toList();
 }
 
@@ -534,6 +574,10 @@ Map<String, String> _supabaseHeaders(String token) => {
       'authorization': 'Bearer $token',
       'content-type': 'application/json',
     };
+
+String _summaryPromptsCacheKey(String userId) => 'summary_prompts_$userId';
+
+String _speakerProfilesCacheKey(String userId) => 'speaker_profiles_$userId';
 
 String? _stringValue(Object? value) {
   final text = value?.toString().trim();

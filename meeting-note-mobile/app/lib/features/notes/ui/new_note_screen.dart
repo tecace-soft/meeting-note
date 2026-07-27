@@ -17,10 +17,25 @@ import '../../settings/data/settings_repository.dart';
 import '../data/notes_repository.dart';
 import '../models/meeting_note.dart';
 
+class NewNoteDraft {
+  const NewNoteDraft({
+    required this.audioPath,
+    this.attachmentPaths = const [],
+  });
+
+  final String audioPath;
+  final List<String> attachmentPaths;
+}
+
 class NewNoteScreen extends ConsumerStatefulWidget {
-  const NewNoteScreen({super.key, this.audioPath});
+  const NewNoteScreen({
+    super.key,
+    this.audioPath,
+    this.initialAttachmentPaths = const [],
+  });
 
   final String? audioPath;
+  final List<String> initialAttachmentPaths;
 
   @override
   ConsumerState<NewNoteScreen> createState() => _NewNoteScreenState();
@@ -31,7 +46,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   final _instructions = TextEditingController();
   SummaryPrompt? _prompt;
   late String? _audioPath;
-  String? _attachmentPath;
+  late final List<String> _attachmentPaths;
   bool _loadingPrompts = true;
   bool _submitting = false;
 
@@ -42,6 +57,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
       text: 'Meeting ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
     );
     _audioPath = widget.audioPath;
+    _attachmentPaths = [...widget.initialAttachmentPaths];
     Future.microtask(_loadDefaultPrompt);
   }
 
@@ -55,7 +71,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   @override
   Widget build(BuildContext context) {
     final audioName = _fileName(_audioPath) ?? 'No audio selected';
-    final attachmentName = _fileName(_attachmentPath);
+    final attachmentNames = _attachmentPaths.map(_fileName).whereType<String>().toList();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF3F4F8),
@@ -144,22 +160,26 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: _AttachmentButton(
-                            label: '+ Camera',
+                            label: 'Camera',
                             icon: Icons.camera_alt_outlined,
                             onTap: _pickCameraImage,
                           ),
                         ),
                       ],
                     ),
-                    if (attachmentName != null) ...[
+                    if (attachmentNames.isNotEmpty) ...[
                       const SizedBox(height: 10),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: _AttachmentButton(
-                          label: attachmentName,
-                          muted: true,
-                          onTap: () => setState(() => _attachmentPath = null),
-                        ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (var i = 0; i < attachmentNames.length; i++)
+                            _AttachmentButton(
+                              label: attachmentNames[i],
+                              muted: true,
+                              onTap: () => setState(() => _attachmentPaths.removeAt(i)),
+                            ),
+                        ],
                       ),
                     ],
                     const SizedBox(height: 55),
@@ -234,9 +254,10 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
 
   Future<void> _loadDefaultPrompt() async {
     try {
-      final prompts = await _loadPromptsFresh();
+      final prompts = await _loadPrompts();
       if (!mounted || prompts.isEmpty || _prompt != null) return;
       setState(() => _prompt = _preferredPrompt(prompts));
+      _loadPromptsFresh().catchError((_) => <SummaryPrompt>[]);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -249,7 +270,20 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
 
   Future<List<SummaryPrompt>> _loadPromptsFresh() async {
     ref.invalidate(promptsProvider);
-    final rows = await ref.read(settingsRepositoryProvider).summaryPrompts();
+    final rows = await ref.read(settingsRepositoryProvider).refreshSummaryPrompts();
+    return _summaryPromptsFromSettings(rows);
+  }
+
+  Future<List<SummaryPrompt>> _loadPrompts() async {
+    final repository = ref.read(settingsRepositoryProvider);
+    final rows = await repository.cachedSummaryPrompts() ??
+        await repository.refreshSummaryPrompts();
+    return _summaryPromptsFromSettings(rows);
+  }
+
+  List<SummaryPrompt> _summaryPromptsFromSettings(
+    List<SettingsSummaryPrompt> rows,
+  ) {
     return rows
         .map(
           (row) => SummaryPrompt(
@@ -270,7 +304,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
 
   Future<SummaryPrompt?> _selectedPromptForSubmit() async {
     if (_prompt != null) return _prompt;
-    final prompts = await _loadPromptsFresh();
+    final prompts = await _loadPrompts();
     if (prompts.isEmpty) return null;
     final prompt = _preferredPrompt(prompts);
     if (mounted) setState(() => _prompt = prompt);
@@ -378,7 +412,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     try {
       final result = await FilePicker.pickFiles();
       final path = result?.files.single.path;
-      if (path != null) setState(() => _attachmentPath = path);
+      if (path != null) setState(() => _attachmentPaths.add(path));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -390,7 +424,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   Future<void> _pickCameraImage() async {
     try {
       final image = await ImagePicker().pickImage(source: ImageSource.camera);
-      if (image != null) setState(() => _attachmentPath = image.path);
+      if (image != null) setState(() => _attachmentPaths.add(image.path));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -420,6 +454,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                 : _instructions.text.trim(),
             promptId: selectedPrompt.id,
             userName: user?.displayName,
+            attachmentPaths: _attachmentPaths,
           );
       if (mounted) context.pushReplacement('/processing/$jobId');
     } catch (e) {

@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/supabase_config.dart';
-import '../../auth/data/auth_token_store.dart';
+import '../../auth/data/mobile_supabase_session.dart';
 
 final projectsRepositoryProvider = Provider<ProjectsRepository>(
   (ref) => ProjectsRepository(),
@@ -29,29 +29,45 @@ class ProjectsRepository {
             connectTimeout: const Duration(seconds: 20),
             receiveTimeout: const Duration(minutes: 2),
           ),
-        );
+        ) {
+    _supabase.interceptors
+        .add(MobileSupabaseSession().retryOnUnauthorizedInterceptor());
+  }
 
   final Dio _supabase;
   final Dio _webhook;
-  static const _storage = FlutterSecureStorage();
+  static const _cache = JsonCacheStore('projects');
   static const _projectChatWebhookUrl =
       'https://n8n.srv1153481.hstgr.cloud/webhook/9fe1b3b5-9e2e-4b23-8775-b38fc21e4b4d';
 
+  Future<List<MeetingProject>?> cachedList() async {
+    final userId = await MobileSupabaseSession.cachedUserId();
+    if (userId == null) return null;
+    final rows = await _cache.readList(_projectsCacheKey(userId));
+    if (rows == null) return null;
+    return _projectsFromRows(rows);
+  }
+
+  Future<List<MeetingProject>> refreshList() => list();
+
   Future<List<MeetingProject>> list() async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
     final response = await _supabase.get<List<dynamic>>(
       '/project',
       queryParameters: {
         'select': 'id,name,user_id,shared_users',
         'order': 'name.asc',
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
 
-    return (response.data ?? const [])
+    final rows = response.data ?? const [];
+    await _cache.writeList(_projectsCacheKey(auth.userId), rows);
+    return _projectsFromRows(rows);
+  }
+
+  List<MeetingProject> _projectsFromRows(List<dynamic> rows) {
+    return rows
         .whereType<Map>()
         .map((row) => row.cast<String, dynamic>())
         .map(MeetingProject.fromJson)
@@ -63,23 +79,16 @@ class ProjectsRepository {
     required String name,
     required List<String> noteIds,
   }) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _currentSupabaseUserId(token);
-    if (!isSupabaseConfigured ||
-        token == null ||
-        token.isEmpty ||
-        userId == null) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.post<List<dynamic>>(
       '/project',
       data: {
         'name': name,
-        'user_id': userId,
+        'user_id': auth.userId,
       },
       queryParameters: {'select': 'id,name,user_id,shared_users'},
-      options: Options(headers: _supabaseInsertHeaders(token)),
+      options: Options(headers: _supabaseInsertHeaders(auth.token)),
     );
     Map? row;
     for (final item in response.data ?? const []) {
@@ -99,17 +108,15 @@ class ProjectsRepository {
           'p_note_id': noteId,
           'p_project_id': project.id,
         },
-        options: Options(headers: _supabaseJsonHeaders(token)),
+        options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
     }
+    await _cache.delete(_projectsCacheKey(auth.userId));
     return project;
   }
 
   Future<MeetingProject> get(String projectId) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.get<List<dynamic>>(
       '/project',
@@ -118,7 +125,7 @@ class ProjectsRepository {
         'id': 'eq.$projectId',
         'limit': 1,
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
     final rows = response.data?.whereType<Map>().toList() ?? const [];
     if (rows.isEmpty) throw StateError('Project not found.');
@@ -127,11 +134,24 @@ class ProjectsRepository {
     return project;
   }
 
-  Future<List<ProjectNoteSummary>> notesForProject(String projectId) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
+  Future<MeetingProject?> cachedGet(String projectId) async {
+    final projects = await cachedList();
+    if (projects == null) return null;
+    for (final project in projects) {
+      if (project.id == projectId) return project;
     }
+    return null;
+  }
+
+  Future<List<ProjectNoteSummary>?> cachedNotesForProject(
+    String projectId,
+  ) async {
+    final rows = await _cache.readList(_projectNotesCacheKey(projectId));
+    return rows == null ? null : _projectNotesFromRows(rows);
+  }
+
+  Future<List<ProjectNoteSummary>> notesForProject(String projectId) async {
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.get<List<dynamic>>(
       '/note',
@@ -140,9 +160,15 @@ class ProjectsRepository {
         'projects': 'cs.{${_escapeArrayValue(projectId)}}',
         'order': 'created_at.desc',
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
-    return (response.data ?? const [])
+    final rows = response.data ?? const [];
+    await _cache.writeList(_projectNotesCacheKey(projectId), rows);
+    return _projectNotesFromRows(rows);
+  }
+
+  List<ProjectNoteSummary> _projectNotesFromRows(List<dynamic> rows) {
+    return rows
         .whereType<Map>()
         .map((row) => row.cast<String, dynamic>())
         .map(ProjectNoteSummary.fromJson)
@@ -150,11 +176,15 @@ class ProjectsRepository {
         .toList();
   }
 
+  Future<List<ProjectChatSession>?> cachedSessionsForProject(
+    String projectId,
+  ) async {
+    final rows = await _cache.readList(_projectSessionsCacheKey(projectId));
+    return rows == null ? null : _projectSessionsFromRows(rows);
+  }
+
   Future<List<ProjectChatSession>> sessionsForProject(String projectId) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.get<List<dynamic>>(
       '/session',
@@ -163,9 +193,15 @@ class ProjectsRepository {
         'project_id': 'eq.$projectId',
         'order': 'created_at.desc',
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
-    return (response.data ?? const [])
+    final rows = response.data ?? const [];
+    await _cache.writeList(_projectSessionsCacheKey(projectId), rows);
+    return _projectSessionsFromRows(rows);
+  }
+
+  List<ProjectChatSession> _projectSessionsFromRows(List<dynamic> rows) {
+    return rows
         .whereType<Map>()
         .map((row) => row.cast<String, dynamic>())
         .map(ProjectChatSession.fromJson)
@@ -173,12 +209,17 @@ class ProjectsRepository {
         .toList();
   }
 
+  Future<List<ProjectChatRow>?> cachedChatsForSessions(
+    List<String> sessionIds,
+  ) async {
+    if (sessionIds.isEmpty) return const [];
+    final rows = await _cache.readList(_projectChatsCacheKey(sessionIds));
+    return rows == null ? null : _projectChatsFromRows(rows);
+  }
+
   Future<List<ProjectChatRow>> chatsForSessions(List<String> sessionIds) async {
     if (sessionIds.isEmpty) return const [];
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.get<List<dynamic>>(
       '/chat',
@@ -187,9 +228,15 @@ class ProjectsRepository {
         'session_id': 'in.(${sessionIds.map(_escapeInValue).join(',')})',
         'order': 'created_at.asc',
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
-    return (response.data ?? const [])
+    final rows = response.data ?? const [];
+    await _cache.writeList(_projectChatsCacheKey(sessionIds), rows);
+    return _projectChatsFromRows(rows);
+  }
+
+  List<ProjectChatRow> _projectChatsFromRows(List<dynamic> rows) {
+    return rows
         .whereType<Map>()
         .map((row) => row.cast<String, dynamic>())
         .map(ProjectChatRow.fromJson)
@@ -203,10 +250,7 @@ class ProjectsRepository {
     required String userId,
     String? sessionId,
   }) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final webhookResponse = await _webhook.post<dynamic>(
       _projectChatWebhookUrl,
@@ -230,7 +274,7 @@ class ProjectsRepository {
           'id': nextSessionId,
           'project_id': projectId,
         },
-        options: Options(headers: _supabaseJsonHeaders(token)),
+        options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
     }
 
@@ -249,7 +293,7 @@ class ProjectsRepository {
             'response': assistant,
           }
         ],
-        options: Options(headers: _supabaseJsonHeaders(token)),
+        options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
     } on DioException catch (error) {
       final details = error.response?.data?.toString() ?? error.message ?? '';
@@ -262,10 +306,12 @@ class ProjectsRepository {
             'repsonse': assistant,
           }
         ],
-        options: Options(headers: _supabaseJsonHeaders(token)),
+        options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
     }
 
+    await _cache.delete(_projectSessionsCacheKey(projectId));
+    await _cache.delete(_projectChatsCacheKey([nextSessionId]));
     return ProjectChatSendResult(
       sessionId: nextSessionId,
       assistantResponse: assistant,
@@ -431,35 +477,16 @@ Map<String, String> _supabaseInsertHeaders(String token) => {
       'prefer': 'return=representation',
     };
 
-Future<String?> _currentSupabaseUserId(String? token) async {
-  final jwtUserId = _jwtSubject(token);
-  if (jwtUserId != null && jwtUserId.isNotEmpty) return jwtUserId;
-  final storedUserId =
-      await ProjectsRepository._storage.read(key: AuthTokenStore.supabaseUserIdKey);
-  if (storedUserId != null && storedUserId.isNotEmpty) return storedUserId;
-  final microsoftUserId =
-      await ProjectsRepository._storage.read(key: AuthTokenStore.microsoftUserIdKey);
-  if (microsoftUserId != null && microsoftUserId.isNotEmpty) {
-    return microsoftUserId;
-  }
-  return null;
-}
+String _projectsCacheKey(String userId) => 'projects_$userId';
 
-String? _jwtSubject(String? token) {
-  if (token == null || token.isEmpty) return null;
-  final parts = token.split('.');
-  if (parts.length < 2) return null;
-  try {
-    final payload = utf8.decode(base64Url.decode(base64Url.normalize(parts[1])));
-    final json = jsonDecode(payload);
-    if (json is Map) {
-      final sub = json['sub'];
-      if (sub is String && sub.trim().isNotEmpty) return sub.trim();
-    }
-  } catch (_) {
-    return null;
-  }
-  return null;
+String _projectNotesCacheKey(String projectId) => 'project_notes_$projectId';
+
+String _projectSessionsCacheKey(String projectId) =>
+    'project_sessions_$projectId';
+
+String _projectChatsCacheKey(List<String> sessionIds) {
+  final sorted = [...sessionIds]..sort();
+  return 'project_chats_${sorted.join('_')}';
 }
 
 String? _stringValue(Object? value) {

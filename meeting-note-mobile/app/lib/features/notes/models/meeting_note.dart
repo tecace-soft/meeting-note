@@ -104,7 +104,14 @@ class MeetingNote {
 
   factory MeetingNote.fromJson(Map<String, dynamic> json) {
     final createdAt = _parseDate(json['createdAt'] ?? json['created_at']);
-    final meetingAt = _parseNullableDate(json['meetingAt'] ?? json['meeting_at']);
+    final rawDuration =
+        _int(json['durationSec'] ?? json['duration_seconds']) ?? 0;
+    final meetingAt = _parseNullableDate(
+          json['meetingAt'] ?? json['meeting_at'],
+        ) ??
+        (rawDuration > 0
+            ? createdAt.subtract(Duration(seconds: rawDuration))
+            : null);
     final title = _string(json['title']) ?? _string(json['name']) ?? 'Untitled note';
     final summaryTranslations = _stringMap(
       json['summaryTranslations'] ?? json['summary_translations'],
@@ -121,8 +128,7 @@ class MeetingNote {
       title: title,
       createdAt: createdAt,
       meetingAt: meetingAt,
-      durationSec:
-          _int(json['durationSec'] ?? json['duration_seconds']) ?? 0,
+      durationSec: rawDuration,
       status: NoteStatus.values.firstWhere(
         (s) => s.name == json['status'],
         orElse: () => summary?.trim().isNotEmpty == true || summaryEdit != null
@@ -147,7 +153,7 @@ class MeetingNote {
     return '${m}m ${s.toString().padLeft(2, '0')}s';
   }
 
-  DateTime get displayDate => meetingAt ?? createdAt;
+  DateTime get displayDate => (meetingAt ?? createdAt).toLocal();
 
   String get displaySummary =>
       summaryEdit?.trim().isNotEmpty == true
@@ -159,6 +165,8 @@ class MeetingNote {
 
   MeetingNote copyWith({
     List<TranscriptSegment>? transcript,
+    String? summaryEdit,
+    List<String>? sharedUserIds,
   }) =>
       MeetingNote(
         id: id,
@@ -170,11 +178,11 @@ class MeetingNote {
         ownerName: ownerName,
         meetingAt: meetingAt,
         summaryMarkdown: summaryMarkdown,
-        summaryEdit: summaryEdit,
+        summaryEdit: summaryEdit ?? this.summaryEdit,
         transcription: transcription,
         tags: tags,
         projectIds: projectIds,
-        sharedUserIds: sharedUserIds,
+        sharedUserIds: sharedUserIds ?? this.sharedUserIds,
         transcript: transcript ?? this.transcript,
       );
 }
@@ -192,7 +200,7 @@ DateTime _parseDate(Object? value) =>
 
 DateTime? _parseNullableDate(Object? value) {
   if (value is! String || value.isEmpty) return null;
-  return DateTime.tryParse(value);
+  return DateTime.tryParse(value)?.toLocal();
 }
 
 String? _string(Object? value) {

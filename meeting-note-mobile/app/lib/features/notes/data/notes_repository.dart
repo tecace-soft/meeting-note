@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -7,10 +8,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/supabase_config.dart';
 import '../../../core/network/workflow_config.dart';
 import '../../auth/data/auth_token_store.dart';
+import '../../auth/data/mobile_supabase_session.dart';
 import '../models/meeting_note.dart';
 
 final notesRepositoryProvider = Provider<NotesRepository>(
@@ -56,15 +59,50 @@ class NotesRepository {
             receiveTimeout: const Duration(minutes: 2),
             sendTimeout: const Duration(minutes: 5),
           ),
-        );
+        ) {
+    final retry = MobileSupabaseSession().retryOnUnauthorizedInterceptor();
+    _supabase.interceptors.add(retry);
+    _supabaseRoot.interceptors.add(retry);
+  }
 
   final Dio _dio; // ignore: unused_field
   final Dio _supabase;
   final Dio _supabaseRoot;
   final Dio _workflow;
   static const _storage = FlutterSecureStorage();
+  static const _cache = JsonCacheStore('notes');
   static const _audioBucket = 'meeting-recordings';
+  static const _noteImageBucket = 'meeting-note-images';
   static const _signedUrlSeconds = 60 * 60 * 6;
+  static final _pendingJobAttachments = <String, List<String>>{};
+
+  Future<List<MeetingNote>?> cachedList({
+    String? query,
+    NoteOwnershipFilter ownership = NoteOwnershipFilter.all,
+    NoteSortKey sort = NoteSortKey.meetingDesc,
+    int limit = 50,
+  }) async {
+    final userId = await MobileSupabaseSession.cachedUserId();
+    if (userId == null) return null;
+    final rows = await _cache.readList(_notesCacheKey(userId));
+    if (rows == null) return null;
+    return _notesFromRows(
+      rows,
+      userId: userId,
+      query: query,
+      ownership: ownership,
+      sort: sort,
+      limit: limit,
+    );
+  }
+
+  Future<List<MeetingNote>> refreshList({
+    String? query,
+    NoteOwnershipFilter ownership = NoteOwnershipFilter.all,
+    NoteSortKey sort = NoteSortKey.meetingDesc,
+    int limit = 50,
+  }) =>
+      list(query: query, ownership: ownership, sort: sort, limit: limit);
 
   Future<List<MeetingNote>> list({
     String? query,
@@ -72,52 +110,71 @@ class NotesRepository {
     NoteSortKey sort = NoteSortKey.meetingDesc,
     int limit = 50,
   }) async {
-    final token =
-        await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.get<List<dynamic>>(
       '/note',
       queryParameters: {
         'select': '*',
         'order': _orderParam(sort),
-        'limit': limit,
-        if (ownership == NoteOwnershipFilter.mine && userId != null)
-          'user_id': 'eq.$userId',
-        if (ownership == NoteOwnershipFilter.shared && userId != null) ...{
-          'user_id': 'neq.$userId',
-          'shared_users': 'cs.{$userId}',
+        'limit': max(limit, 200),
+        if (ownership == NoteOwnershipFilter.mine)
+          'user_id': 'eq.${auth.userId}',
+        if (ownership == NoteOwnershipFilter.shared) ...{
+          'user_id': 'neq.${auth.userId}',
+          'shared_users': 'cs.{${auth.userId}}',
         },
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
 
-    var notes = (response.data ?? const [])
+    final rows = response.data ?? const [];
+    if (ownership == NoteOwnershipFilter.all && query == null) {
+      await _cache.writeList(_notesCacheKey(auth.userId), rows);
+    }
+    return _notesFromRows(
+      rows,
+      userId: auth.userId,
+      query: query,
+      ownership: ownership,
+      sort: sort,
+      limit: limit,
+    );
+  }
+
+  List<MeetingNote> _notesFromRows(
+    List<dynamic> rows, {
+    required String userId,
+    String? query,
+    required NoteOwnershipFilter ownership,
+    required NoteSortKey sort,
+    required int limit,
+  }) {
+    var notes = rows
         .whereType<Map>()
         .map((json) => MeetingNote.fromJson(json.cast<String, dynamic>()))
         .where((note) => note.id.isNotEmpty)
         .toList();
-
-    if (ownership == NoteOwnershipFilter.all && userId != null) {
+    if (ownership == NoteOwnershipFilter.all) {
       notes = notes
           .where((note) =>
               note.ownerId == userId || note.sharedUserIds.contains(userId))
           .toList();
+    } else if (ownership == NoteOwnershipFilter.mine) {
+      notes = notes.where((note) => note.ownerId == userId).toList();
+    } else {
+      notes = notes
+          .where((note) =>
+              note.ownerId != userId && note.sharedUserIds.contains(userId))
+          .toList();
     }
     notes = _filter(notes, query);
     notes.sort((a, b) => _compareNotes(a, b, sort));
-    return notes;
+    return notes.take(limit).toList();
   }
 
   Future<MeetingNote> get(String id) async {
-    final token =
-        await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
     final response = await _supabase.get<List<dynamic>>(
       '/note',
       queryParameters: {
@@ -125,7 +182,7 @@ class NotesRepository {
         'id': 'eq.$id',
         'limit': 1,
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
     final rows = response.data?.whereType<Map>().toList() ?? const [];
     final row = rows.isEmpty ? null : rows.first;
@@ -134,24 +191,16 @@ class NotesRepository {
   }
 
   Future<List<SummaryPrompt>> prompts() async {
-    final token =
-        await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    if (!isSupabaseConfigured ||
-        token == null ||
-        token.isEmpty ||
-        userId == null) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.get<List<dynamic>>(
       '/summary_prompt',
       queryParameters: {
         'select': 'id,name,prompt',
-        'user_id': 'eq.$userId',
+        'user_id': 'eq.${auth.userId}',
         'order': 'name.asc',
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
 
     var prompts = (response.data ?? const [])
@@ -182,35 +231,24 @@ class NotesRepository {
     String? userName,
     List<String> attachmentPaths = const [],
   }) async {
-    if (attachmentPaths.isNotEmpty) {
-      throw StateError(
-        'Mobile attachment upload is not wired yet. Remove attachments and try again.',
-      );
-    }
-
     final microsoftToken =
         await _storage.read(key: AuthTokenStore.accessTokenKey);
-    final supabaseToken =
-        await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
+    final auth = await MobileSupabaseSession().auth();
     final appLanguage =
         await _storage.read(key: 'settings_app_language') == 'ko' ? 'ko' : 'en';
     if (microsoftToken == null || microsoftToken.isEmpty) {
       throw StateError('Sign in with Microsoft before generating a summary.');
     }
-    if (supabaseToken == null || supabaseToken.isEmpty || userId == null) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
-
     try {
       final audio = await _prepareAudioForWorkflow(
         audioPath: audioPath,
         title: title,
-        userId: userId,
-        supabaseToken: supabaseToken,
+        userId: auth.userId,
+        supabaseToken: auth.token,
       );
       final prompt = await _resolvePromptId(promptId);
       final noteId = _uuidV4();
+      final attachments = await _workflowAttachments(attachmentPaths);
 
       final response = await _workflow.post<Map<String, dynamic>>(
         '/summarize-audio/jobs',
@@ -224,11 +262,11 @@ class NotesRepository {
           'promptId': prompt.promptId,
           if (prompt.summaryRulesOverride != null)
             'summaryRulesOverride': prompt.summaryRulesOverride,
-          'userId': userId,
+          'userId': auth.userId,
           'userName': userName?.trim() ?? '',
           'noteId': noteId,
           'language': appLanguage,
-          'attachments': const [],
+          'attachments': attachments,
         },
         options: Options(
           headers: {
@@ -238,7 +276,13 @@ class NotesRepository {
         ),
       );
       final jobId = response.data?['jobId'];
-      if (jobId is String && jobId.trim().isNotEmpty) return jobId.trim();
+      if (jobId is String && jobId.trim().isNotEmpty) {
+        _pendingJobAttachments[jobId.trim()] = attachmentPaths
+            .map((path) => path.trim())
+            .where((path) => path.isNotEmpty)
+            .toList();
+        return jobId.trim();
+      }
       throw StateError('Workflow server did not return a job id.');
     } on DioException catch (error) {
       throw StateError(
@@ -248,6 +292,25 @@ class NotesRepository {
         ),
       );
     }
+  }
+
+  Future<void> savePendingAttachmentsForJob({
+    required String jobId,
+    required String noteId,
+  }) async {
+    final key = jobId.trim();
+    final paths = _pendingJobAttachments[key] ?? const [];
+    if (paths.isEmpty) return;
+    final auth = await MobileSupabaseSession().auth();
+    for (final path in paths.take(10)) {
+      await _saveNoteAttachment(
+        path: path,
+        noteId: noteId,
+        userId: auth.userId,
+        token: auth.token,
+      );
+    }
+    _pendingJobAttachments.remove(key);
   }
 
   Future<WorkflowJobSnapshot> jobStatus(String jobId) async {
@@ -334,6 +397,11 @@ class NotesRepository {
 
     final fileId = _uuidV4();
     final fileName = _fileName(localAudioPath, fallback: '$title.m4a');
+    if (_isMpeg4Audio(fileName) && !await _hasFinalizedMp4Metadata(file)) {
+      throw StateError(
+        'This recovered recording was interrupted before Android finalized the audio file. Please discard it and record again.',
+      );
+    }
     final storagePath = '$fileId-${_sanitizeStorageFileName(fileName)}';
     final mimeType = _audioMimeType(fileName);
     await _uploadAudioToStorage(
@@ -385,6 +453,103 @@ class NotesRepository {
         },
       ),
     );
+  }
+
+  Future<List<Map<String, String>>> _workflowAttachments(
+    List<String> paths,
+  ) async {
+    final attachments = <Map<String, String>>[];
+    var totalBytes = 0;
+    for (final path in paths.take(10)) {
+      final file = File(path);
+      if (!await file.exists()) continue;
+      final stat = await file.stat();
+      if (stat.size <= 0) continue;
+      if (stat.size > 25 * 1024 * 1024) {
+        throw StateError(
+          "Attachment ${_fileName(path, fallback: 'attachment')} is larger than 25 MB.",
+        );
+      }
+      totalBytes += stat.size;
+      if (totalBytes > 50 * 1024 * 1024) {
+        throw StateError('Attachments are larger than the 50 MB total limit.');
+      }
+      final name = _fileName(path, fallback: 'attachment');
+      final mimeType = _attachmentMimeType(name);
+      if (!_isSupportedAttachmentMimeType(mimeType)) {
+        throw StateError(
+          'Unsupported attachment type for $name. Use PDF, text, image, audio, or video.',
+        );
+      }
+      attachments.add({
+        'name': name,
+        'mimeType': mimeType,
+        'dataBase64': base64Encode(await file.readAsBytes()),
+      });
+    }
+    return attachments;
+  }
+
+  Future<void> _saveNoteAttachment({
+    required String path,
+    required String noteId,
+    required String userId,
+    required String token,
+  }) async {
+    final file = File(path);
+    if (!await file.exists()) return;
+    final stat = await file.stat();
+    if (stat.size <= 0) return;
+    if (stat.size > 50 * 1024 * 1024) {
+      throw StateError(
+        "Attachment ${_fileName(path, fallback: 'attachment')} is larger than 50 MB.",
+      );
+    }
+    final imageId = _uuidV4();
+    final name = _fileName(path, fallback: 'attachment');
+    final mimeType = _attachmentMimeType(name);
+    if (!_isSupportedAttachmentMimeType(mimeType)) {
+      throw StateError(
+        'Unsupported attachment type for $name. Use PDF, text, image, audio, or video.',
+      );
+    }
+    final storagePath =
+        '$userId/$noteId/$imageId.${_attachmentExtension(name, fallback: 'bin')}';
+    await _supabaseRoot.post<void>(
+      '/storage/v1/object/$_noteImageBucket/$storagePath',
+      data: await file.readAsBytes(),
+      options: Options(
+        contentType: mimeType,
+        headers: {
+          'apikey': supabaseAnonKey,
+          'authorization': 'Bearer $token',
+          'cache-control': '3600',
+          'x-upsert': 'false',
+        },
+      ),
+    );
+    try {
+      await _supabase.post<void>(
+        '/note_image',
+        data: {
+          'id': imageId,
+          'note_id': noteId,
+          'user_id': userId,
+          'bucket': _noteImageBucket,
+          'storage_path': storagePath,
+          'name': name,
+          'mime_type': mimeType,
+          'size_bytes': stat.size,
+        },
+        options: Options(headers: _supabaseJsonHeaders(token)),
+      );
+    } catch (_) {
+      await _supabaseRoot.delete<void>(
+        '/storage/v1/object/$_noteImageBucket/$storagePath',
+        options: Options(headers: _supabaseJsonHeaders(token)),
+      ).catchError((_) {});
+      rethrow;
+    }
   }
 
   Future<String> _createAudioSignedUrl(
@@ -461,81 +626,70 @@ class NotesRepository {
   }
 
   Future<void> delete(String id) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _currentSupabaseUserId(token);
-    if (!isSupabaseConfigured || token == null || token.isEmpty || userId == null) return;
+    final auth = await MobileSupabaseSession().auth();
     await _supabase.delete<void>(
       '/note',
-      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.$userId'},
-      options: Options(headers: _supabaseHeaders(token)),
+      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.${auth.userId}'},
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<void> removeCurrentUserFromSharedNote(String id) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) return;
+    final auth = await MobileSupabaseSession().auth();
     await _supabase.post<void>(
       '/rpc/remove_current_user_from_note_shared_users',
       data: {'p_note_id': id},
-      options: Options(headers: _supabaseJsonHeaders(token)),
+      options: Options(headers: _supabaseJsonHeaders(auth.token)),
     );
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<void> rename(String id, String name) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _currentSupabaseUserId(token);
-    if (!isSupabaseConfigured || token == null || token.isEmpty || userId == null) return;
+    final auth = await MobileSupabaseSession().auth();
     await _supabase.patch<void>(
       '/note',
       data: {'name': name},
-      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.$userId'},
-      options: Options(headers: _supabaseHeaders(token)),
+      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.${auth.userId}'},
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
-  Future<String?> currentUserId() => _currentSupabaseUserId(null);
+  Future<String?> currentUserId() async => (await MobileSupabaseSession().auth()).userId;
 
   Future<void> shareNote(String id, List<String> sharedUserIds) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _currentSupabaseUserId(token);
-    if (!isSupabaseConfigured || token == null || token.isEmpty || userId == null) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
     await _supabase.patch<void>(
       '/note',
       data: {'shared_users': sharedUserIds},
-      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.$userId'},
-      options: Options(headers: _supabaseHeaders(token)),
+      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.${auth.userId}'},
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<void> addNoteToProject({
     required String noteId,
     required String projectId,
   }) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
     await _supabase.post<void>(
       '/rpc/add_accessible_note_to_project',
       data: {
         'p_note_id': noteId,
         'p_project_id': projectId,
       },
-      options: Options(headers: _supabaseJsonHeaders(token)),
+      options: Options(headers: _supabaseJsonHeaders(auth.token)),
     );
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<String> regenerateSummary(MeetingNote note) async {
     final microsoftToken = await _storage.read(key: AuthTokenStore.accessTokenKey);
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    final supabaseToken = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
+    final auth = await MobileSupabaseSession().auth();
     if (microsoftToken == null || microsoftToken.isEmpty) {
       throw StateError('Sign in with Microsoft before regenerating a summary.');
-    }
-    if (userId == null || userId.isEmpty || supabaseToken == null || supabaseToken.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
     }
     if (note.transcript.isEmpty) {
       throw StateError('No diarized transcription found for this note.');
@@ -555,10 +709,10 @@ class NotesRepository {
         '/speaker',
         queryParameters: {
           'select': 'name,profile',
-          'user_id': 'eq.$userId',
+          'user_id': 'eq.${auth.userId}',
           'name': 'in.(${uniqueSpeakers.map(_quotedInValue).join(',')})',
         },
-        options: Options(headers: _supabaseHeaders(supabaseToken)),
+        options: Options(headers: _supabaseHeaders(auth.token)),
       );
       for (final row in response.data ?? const []) {
         if (row is! Map) continue;
@@ -595,11 +749,7 @@ class NotesRepository {
   Future<List<GeneratedSpeakerProfile>> generateProfilesForNote(
     MeetingNote note,
   ) async {
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (userId == null || userId.isEmpty || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
     if (note.transcript.isEmpty) {
       throw StateError('No diarized transcription found for this note.');
     }
@@ -616,10 +766,10 @@ class NotesRepository {
       '/speaker',
       queryParameters: {
         'select': 'id,name,profile',
-        'user_id': 'eq.$userId',
+        'user_id': 'eq.${auth.userId}',
         'name': 'in.(${uniqueSpeakers.map(_quotedInValue).join(',')})',
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
     final existing = <String, SavedSpeaker>{};
     for (final row in existingResponse.data ?? const []) {
@@ -653,31 +803,27 @@ class NotesRepository {
   Future<void> saveGeneratedSpeakerProfile(
     GeneratedSpeakerProfile profile,
   ) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _currentSupabaseUserId(token);
-    if (token == null || token.isEmpty || userId == null) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
     if (profile.speakerId != null && profile.speakerId!.isNotEmpty) {
       await _supabase.patch<void>(
         '/speaker',
         data: {'profile': profile.profile},
         queryParameters: {
           'id': 'eq.${profile.speakerId}',
-          'user_id': 'eq.$userId',
+          'user_id': 'eq.${auth.userId}',
         },
-        options: Options(headers: _supabaseHeaders(token)),
+        options: Options(headers: _supabaseHeaders(auth.token)),
       );
       return;
     }
     await _supabase.post<void>(
       '/speaker',
       data: {
-        'user_id': userId,
+        'user_id': auth.userId,
         'name': profile.speakerName,
         'profile': profile.profile,
       },
-      options: Options(headers: _supabaseJsonHeaders(token)),
+      options: Options(headers: _supabaseJsonHeaders(auth.token)),
     );
   }
 
@@ -712,28 +858,25 @@ class NotesRepository {
   }
 
   Future<void> saveSummaryEdit(String id, String summaryEdit) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) return;
+    final auth = await MobileSupabaseSession().auth();
     await _supabase.patch<void>(
       '/note',
       data: {'summary_edit': summaryEdit},
       queryParameters: {'id': 'eq.$id'},
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<List<SavedSpeaker>> savedSpeakers() async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
     final response = await _supabase.get<List<dynamic>>(
       '/speaker',
       queryParameters: {
         'select': 'id,name,profile,email,microsoft_id',
         'order': 'name.asc',
       },
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
 
     return (response.data ?? const [])
@@ -784,19 +927,12 @@ class NotesRepository {
     String? email,
     String? microsoftId,
   }) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _currentSupabaseUserId(token);
-    if (!isSupabaseConfigured ||
-        token == null ||
-        token.isEmpty ||
-        userId == null) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     Future<SavedSpeaker?> lookup() async {
       final params = <String, dynamic>{
         'select': 'id,name,profile,email,microsoft_id',
-        'user_id': 'eq.$userId',
+        'user_id': 'eq.${auth.userId}',
         'limit': 1,
       };
       if (microsoftId != null && microsoftId.isNotEmpty) {
@@ -809,7 +945,7 @@ class NotesRepository {
       final response = await _supabase.get<List<dynamic>>(
         '/speaker',
         queryParameters: params,
-        options: Options(headers: _supabaseHeaders(token)),
+        options: Options(headers: _supabaseHeaders(auth.token)),
       );
       for (final item in response.data ?? const []) {
         if (item is Map) {
@@ -826,14 +962,14 @@ class NotesRepository {
       final response = await _supabase.post<List<dynamic>>(
         '/speaker',
         data: {
-          'user_id': userId,
+          'user_id': auth.userId,
           'name': name,
           if (email != null && email.isNotEmpty) 'email': email,
           if (microsoftId != null && microsoftId.isNotEmpty)
             'microsoft_id': microsoftId,
         },
         queryParameters: {'select': 'id,name,profile,email,microsoft_id'},
-        options: Options(headers: _supabaseInsertHeaders(token)),
+        options: Options(headers: _supabaseInsertHeaders(auth.token)),
       );
       for (final item in response.data ?? const []) {
         if (item is Map) {
@@ -857,10 +993,7 @@ class NotesRepository {
     String noteId,
     List<TranscriptSegment> segments,
   ) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty) {
-      throw StateError('Supabase mobile token is not available yet.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     final response = await _supabase.patch<List<dynamic>>(
       '/note',
@@ -869,13 +1002,14 @@ class NotesRepository {
         'id': 'eq.$noteId',
         'select': 'id',
       },
-      options: Options(headers: _supabaseInsertHeaders(token)),
+      options: Options(headers: _supabaseInsertHeaders(auth.token)),
     );
     if ((response.data ?? const []).isEmpty) {
       throw StateError(
         'Diarization save did not update the note. You may not have permission to edit this note.',
       );
     }
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<void> shareNoteWithMicrosoftUser(
@@ -883,10 +1017,8 @@ class NotesRepository {
     String microsoftId,
     List<String> currentSharedUserIds,
   ) async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
+    final auth = await MobileSupabaseSession().auth();
     if (!isSupabaseConfigured ||
-        token == null ||
-        token.isEmpty ||
         microsoftId.trim().isEmpty ||
         currentSharedUserIds.contains(microsoftId)) {
       return;
@@ -897,8 +1029,9 @@ class NotesRepository {
       '/note',
       data: {'shared_users': nextSharedUsers},
       queryParameters: {'id': 'eq.$noteId'},
-      options: Options(headers: _supabaseHeaders(token)),
+      options: Options(headers: _supabaseHeaders(auth.token)),
     );
+    await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<String> exportToOneDrive(String noteId,
@@ -1113,36 +1246,7 @@ Map<String, String> _supabaseInsertHeaders(String token) => {
       'prefer': 'return=representation',
     };
 
-Future<String?> _currentSupabaseUserId(String? token) async {
-  final jwtUserId = _jwtSubject(token);
-  if (jwtUserId != null && jwtUserId.isNotEmpty) return jwtUserId;
-  final storedUserId =
-      await NotesRepository._storage.read(key: AuthTokenStore.supabaseUserIdKey);
-  if (storedUserId != null && storedUserId.isNotEmpty) return storedUserId;
-  final microsoftUserId =
-      await NotesRepository._storage.read(key: AuthTokenStore.microsoftUserIdKey);
-  if (microsoftUserId != null && microsoftUserId.isNotEmpty) {
-    return microsoftUserId;
-  }
-  return null;
-}
-
-String? _jwtSubject(String? token) {
-  if (token == null || token.isEmpty) return null;
-  final parts = token.split('.');
-  if (parts.length < 2) return null;
-  try {
-    final payload = utf8.decode(base64Url.decode(base64Url.normalize(parts[1])));
-    final json = jsonDecode(payload);
-    if (json is Map) {
-      final sub = json['sub'];
-      if (sub is String && sub.trim().isNotEmpty) return sub.trim();
-    }
-  } catch (_) {
-    return null;
-  }
-  return null;
-}
+String _notesCacheKey(String userId) => 'notes_$userId';
 
 Future<String> _localAudioPath(String audioPath, String title) async {
   if (audioPath.startsWith('demo://')) {
@@ -1220,7 +1324,7 @@ String _audioMimeType(String fileName) {
   final ext = fileName.split('.').last.toLowerCase();
   return switch (ext) {
     'm4a' => 'audio/mp4',
-    'mp4' => 'video/mp4',
+    'mp4' => 'audio/mp4',
     'mp3' => 'audio/mpeg',
     'wav' => 'audio/wav',
     'aac' => 'audio/aac',
@@ -1230,6 +1334,122 @@ String _audioMimeType(String fileName) {
     'webm' => 'video/webm',
     _ => 'application/octet-stream',
   };
+}
+
+String _attachmentExtension(String fileName, {String fallback = ''}) {
+  final ext = fileName.split('.').last.toLowerCase();
+  if (ext == fileName.toLowerCase()) return fallback;
+  final cleaned = ext.replaceAll(RegExp(r'[^a-z0-9]'), '');
+  return cleaned.isEmpty ? fallback : cleaned;
+}
+
+String _attachmentMimeType(String fileName) {
+  final ext = _attachmentExtension(fileName);
+  return switch (ext) {
+    'html' || 'htm' => 'text/html',
+    'css' => 'text/css',
+    'txt' => 'text/plain',
+    'xml' => 'text/xml',
+    'csv' => 'text/csv',
+    'rtf' => 'text/rtf',
+    'js' || 'mjs' => 'text/javascript',
+    'json' => 'application/json',
+    'pdf' => 'application/pdf',
+    'jpg' || 'jpeg' => 'image/jpeg',
+    'png' => 'image/png',
+    'webp' => 'image/webp',
+    'bmp' => 'image/bmp',
+    'heic' => 'image/heic',
+    'heif' => 'image/heif',
+    'mp4' => 'video/mp4',
+    'mpeg' => 'video/mpeg',
+    'mov' => 'video/quicktime',
+    'avi' => 'video/avi',
+    'flv' => 'video/x-flv',
+    'mpg' => 'video/mpg',
+    'webm' => 'video/webm',
+    'wmv' => 'video/wmv',
+    '3gp' => 'video/3gpp',
+    'wav' => 'audio/wav',
+    'mp3' => 'audio/mp3',
+    'aiff' || 'aif' => 'audio/aiff',
+    'aac' => 'audio/aac',
+    'ogg' => 'audio/ogg',
+    'flac' => 'audio/flac',
+    _ => 'application/octet-stream',
+  };
+}
+
+bool _isSupportedAttachmentMimeType(String mimeType) {
+  return const {
+    'text/html',
+    'text/css',
+    'text/plain',
+    'text/xml',
+    'text/csv',
+    'text/rtf',
+    'text/javascript',
+    'application/json',
+    'application/pdf',
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/bmp',
+    'image/heic',
+    'image/heif',
+    'video/mp4',
+    'video/mpeg',
+    'video/quicktime',
+    'video/avi',
+    'video/x-flv',
+    'video/mpg',
+    'video/webm',
+    'video/wmv',
+    'video/3gpp',
+    'audio/wav',
+    'audio/mp3',
+    'audio/mpeg',
+    'audio/aiff',
+    'audio/aac',
+    'audio/ogg',
+    'audio/flac',
+  }.contains(mimeType);
+}
+
+bool _isMpeg4Audio(String fileName) {
+  final ext = fileName.split('.').last.toLowerCase();
+  return ext == 'm4a' || ext == 'mp4';
+}
+
+Future<bool> _hasFinalizedMp4Metadata(File file) async {
+  try {
+    return await _fileContainsAscii(file, 'moov') &&
+        await _fileContainsAscii(file, 'mdat');
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> _fileContainsAscii(File file, String value) async {
+  final pattern = value.codeUnits;
+  var carry = <int>[];
+  await for (final chunk in file.openRead()) {
+    final bytes = [...carry, ...chunk];
+    for (var i = 0; i <= bytes.length - pattern.length; i++) {
+      var found = true;
+      for (var j = 0; j < pattern.length; j++) {
+        if (bytes[i + j] != pattern[j]) {
+          found = false;
+          break;
+        }
+      }
+      if (found) return true;
+    }
+    carry = bytes.length <= pattern.length
+        ? bytes
+        : bytes.sublist(bytes.length - pattern.length + 1);
+  }
+  return false;
 }
 
 String _uuidV4() {

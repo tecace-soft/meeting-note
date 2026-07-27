@@ -115,7 +115,11 @@ class _DetailScaffoldState extends State<_DetailScaffold> {
           ),
         ),
       ),
-      bottomNavigationBar: _ActionBar(note: note),
+      bottomNavigationBar: _ActionBar(
+        note: note,
+        tab: _tab,
+        onNoteChanged: (next) => setState(() => _note = next),
+      ),
     );
   }
 }
@@ -499,21 +503,34 @@ class _TranscriptRow extends StatelessWidget {
   }
 }
 
-class _ActionBar extends StatefulWidget {
-  const _ActionBar({required this.note});
+class _ActionBar extends ConsumerStatefulWidget {
+  const _ActionBar({
+    required this.note,
+    required this.tab,
+    required this.onNoteChanged,
+  });
 
   final MeetingNote note;
+  final int tab;
+  final ValueChanged<MeetingNote> onNoteChanged;
 
   @override
-  State<_ActionBar> createState() => _ActionBarState();
+  ConsumerState<_ActionBar> createState() => _ActionBarState();
 }
 
-class _ActionBarState extends State<_ActionBar> {
+class _ActionBarState extends ConsumerState<_ActionBar> {
   String? _activeAction;
 
-  void _runAction(String label, VoidCallback action) {
+  Future<void> _runAction(String label, Future<void> Function() action) async {
     setState(() => _activeAction = label);
-    action();
+    try {
+      await action();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$label failed: $error')),
+      );
+    }
   }
 
   @override
@@ -531,39 +548,98 @@ class _ActionBarState extends State<_ActionBar> {
             _ActionText(
               label: 'Copy',
               active: _activeAction == 'Copy',
-              onTap: () => _runAction('Copy', () {
-                Clipboard.setData(ClipboardData(text: note.displaySummary));
+              onTap: () => _runAction('Copy', () async {
+                final text = widget.tab == 0
+                    ? note.displaySummary
+                    : _transcriptCopyText(note);
+                await Clipboard.setData(ClipboardData(text: text));
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Summary copied')),
+                  SnackBar(
+                    content: Text(widget.tab == 0
+                        ? 'Summary copied'
+                        : 'Transcript copied'),
+                  ),
                 );
               }),
             ),
             _ActionText(
               label: 'Share',
               active: _activeAction == 'Share',
-              onTap: () => _runAction('Share', () {
+              onTap: () => _runAction('Share', () async {
+                final selected = await showModalBottomSheet<List<String>>(
+                  context: context,
+                  showDragHandle: true,
+                  isScrollControlled: true,
+                  builder: (context) => _DetailShareNoteSheet(
+                    note: note,
+                    repository: ref.read(notesRepositoryProvider),
+                  ),
+                );
+                if (selected == null) return;
+                await ref.read(notesRepositoryProvider).shareNote(
+                      note.id,
+                      selected,
+                    );
+                widget.onNoteChanged(note.copyWith(sharedUserIds: selected));
+                if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Share is not wired yet')),
+                  const SnackBar(content: Text('Sharing updated.')),
                 );
               }),
             ),
             _ActionText(
               label: 'Sync Profile',
               active: _activeAction == 'Sync Profile',
-              onTap: () => _runAction('Sync Profile', () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Sync Profile is not wired yet')),
+              onTap: () => _runAction('Sync Profile', () async {
+                await showModalBottomSheet<void>(
+                  context: context,
+                  showDragHandle: true,
+                  isScrollControlled: true,
+                  builder: (context) => _DetailSyncProfilesSheet(
+                    note: note,
+                    repository: ref.read(notesRepositoryProvider),
+                  ),
                 );
               }),
             ),
             _ActionText(
               label: 'Regenerate',
               active: _activeAction == 'Regenerate',
-              onTap: () => _runAction('Regenerate', () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Regenerate is not wired yet')),
-                );
-              }),
+              onTap: note.transcript.isEmpty
+                  ? null
+                  : () => _runAction('Regenerate', () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Regenerate summary?'),
+                          content: const Text(
+                            'This will replace the edited summary for this note.',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('Regenerate'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Regenerating summary...')),
+                      );
+                      final summary = await ref
+                          .read(notesRepositoryProvider)
+                          .regenerateSummary(note);
+                      widget.onNoteChanged(note.copyWith(summaryEdit: summary));
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Summary regenerated.')),
+                      );
+                    }),
             ),
           ],
         ),
@@ -580,7 +656,7 @@ class _ActionText extends StatelessWidget {
   });
 
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool active;
 
   @override
@@ -595,8 +671,498 @@ class _ActionText extends StatelessWidget {
           style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w400,
-            color: active ? const Color(0xFF2F80FF) : const Color(0xFF4B5565),
+            color: onTap == null
+                ? const Color(0xFFB6BFCC)
+                : active
+                    ? const Color(0xFF2F80FF)
+                    : const Color(0xFF4B5565),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailShareNoteSheet extends StatefulWidget {
+  const _DetailShareNoteSheet({
+    required this.note,
+    required this.repository,
+  });
+
+  final MeetingNote note;
+  final NotesRepository repository;
+
+  @override
+  State<_DetailShareNoteSheet> createState() => _DetailShareNoteSheetState();
+}
+
+class _DetailShareNoteSheetState extends State<_DetailShareNoteSheet> {
+  late final Future<List<TecAceContact>> _future;
+  late final Set<String> _selectedIds;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _future = widget.repository.tecAceContacts();
+    _selectedIds = {...widget.note.sharedUserIds};
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.82,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _DetailSheetHeader(title: 'Share note', subtitle: widget.note.title),
+              const SizedBox(height: 12),
+              _DetailSheetSearchField(
+                hintText: 'Search TecAce members',
+                onChanged: (value) => setState(() => _query = value),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: FutureBuilder<List<TecAceContact>>(
+                  future: _future,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return _DetailSheetMessage(
+                        'Could not load TecAce members: ${snapshot.error}',
+                      );
+                    }
+                    final contacts = (snapshot.data ?? const <TecAceContact>[])
+                        .where((contact) => _contactMatches(contact, _query))
+                        .toList();
+                    if (contacts.isEmpty) {
+                      return const _DetailSheetMessage('No TecAce members found.');
+                    }
+                    return ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: contacts.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final contact = contacts[index];
+                        final selected = _selectedIds.contains(contact.id);
+                        return _DetailSelectableRow(
+                          title: contact.displayName,
+                          subtitle: contact.email,
+                          selected: selected,
+                          onTap: () {
+                            setState(() {
+                              if (selected) {
+                                _selectedIds.remove(contact.id);
+                              } else {
+                                _selectedIds.add(contact.id);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.pop(context, _selectedIds.toList()),
+                  child: Text('Share with ${_selectedIds.length}'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _contactMatches(TecAceContact contact, String query) {
+    final needle = query.trim().toLowerCase();
+    if (needle.isEmpty) return true;
+    return contact.displayName.toLowerCase().contains(needle) ||
+        contact.email.toLowerCase().contains(needle) ||
+        contact.userPrincipalName.toLowerCase().contains(needle);
+  }
+}
+
+class _DetailSyncProfilesSheet extends StatefulWidget {
+  const _DetailSyncProfilesSheet({
+    required this.note,
+    required this.repository,
+  });
+
+  final MeetingNote note;
+  final NotesRepository repository;
+
+  @override
+  State<_DetailSyncProfilesSheet> createState() => _DetailSyncProfilesSheetState();
+}
+
+class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
+  late final Future<List<GeneratedSpeakerProfile>> _future;
+  final _savedSpeakerNames = <String>{};
+  String? _error;
+  bool _savingAll = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = widget.repository.generateProfilesForNote(widget.note);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.86,
+          ),
+          child: FutureBuilder<List<GeneratedSpeakerProfile>>(
+            future: _future,
+            builder: (context, snapshot) {
+              final profiles = snapshot.data ?? const <GeneratedSpeakerProfile>[];
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _DetailSheetHeader(
+                    title: 'Sync Profile',
+                    subtitle: 'AI-generated speaker profiles from this transcript',
+                  ),
+                  const SizedBox(height: 12),
+                  if (snapshot.connectionState == ConnectionState.waiting)
+                    const Flexible(child: Center(child: CircularProgressIndicator()))
+                  else if (snapshot.hasError)
+                    Flexible(
+                      child: _DetailSheetMessage(
+                        'Profile sync failed: ${snapshot.error}',
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: profiles.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final profile = profiles[index];
+                          final saved =
+                              _savedSpeakerNames.contains(profile.speakerName);
+                          return _GeneratedProfileTile(
+                            profile: profile,
+                            saved: saved,
+                            onSave: saved ? null : () => _saveProfile(profile),
+                          );
+                        },
+                      ),
+                    ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      _error!,
+                      style: const TextStyle(
+                        color: Color(0xFFE5484D),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                  if (profiles.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _savingAll ? null : () => _saveAll(profiles),
+                        child: Text(_savingAll ? 'Saving...' : 'Save all profiles'),
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveProfile(GeneratedSpeakerProfile profile) async {
+    try {
+      setState(() => _error = null);
+      await widget.repository.saveGeneratedSpeakerProfile(profile);
+      if (!mounted) return;
+      setState(() => _savedSpeakerNames.add(profile.speakerName));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = '$error');
+    }
+  }
+
+  Future<void> _saveAll(List<GeneratedSpeakerProfile> profiles) async {
+    setState(() {
+      _savingAll = true;
+      _error = null;
+    });
+    try {
+      for (final profile in profiles) {
+        if (_savedSpeakerNames.contains(profile.speakerName)) continue;
+        await widget.repository.saveGeneratedSpeakerProfile(profile);
+        _savedSpeakerNames.add(profile.speakerName);
+      }
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Speaker profiles saved.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _savingAll = false;
+        _error = '$error';
+      });
+    }
+  }
+}
+
+class _GeneratedProfileTile extends StatelessWidget {
+  const _GeneratedProfileTile({
+    required this.profile,
+    required this.saved,
+    required this.onSave,
+  });
+
+  final GeneratedSpeakerProfile profile;
+  final bool saved;
+  final VoidCallback? onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: palette.card,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: palette.cardShadow,
+            blurRadius: 14,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              FigmaAvatarInitial(name: profile.speakerName, size: 34, fontSize: 12),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  profile.speakerName,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: palette.text,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: onSave,
+                child: Text(saved ? 'Saved' : 'Save'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            profile.profile,
+            maxLines: 6,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.35,
+              color: palette.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailSheetHeader extends StatelessWidget {
+  const _DetailSheetHeader({required this.title, this.subtitle});
+
+  final String title;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: palette.text,
+                ),
+              ),
+              if (subtitle != null && subtitle!.trim().isNotEmpty)
+                Text(
+                  subtitle!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: palette.textMuted),
+                ),
+            ],
+          ),
+        ),
+        IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: Icon(Icons.close_rounded, color: palette.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+class _DetailSheetSearchField extends StatelessWidget {
+  const _DetailSheetSearchField({
+    required this.hintText,
+    required this.onChanged,
+  });
+
+  final String hintText;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return TextField(
+      onChanged: onChanged,
+      style: TextStyle(color: palette.text),
+      decoration: InputDecoration(
+        hintText: hintText,
+        hintStyle: TextStyle(color: palette.textMuted),
+        filled: true,
+        fillColor: palette.field,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailSelectableRow extends StatelessWidget {
+  const _DetailSelectableRow({
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: selected
+              ? (dark ? const Color(0xFF17345D) : const Color(0xFFE8F2FF))
+              : palette.field,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selected ? Icons.check_circle_rounded : Icons.circle_outlined,
+              color: selected ? const Color(0xFF2F80FF) : palette.textMuted,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: palette.text,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: palette.textMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailSheetMessage extends StatelessWidget {
+  const _DetailSheetMessage(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Text(
+          message,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: palette.textSecondary),
         ),
       ),
     );
@@ -652,6 +1218,16 @@ String _formatDetailDate(DateTime value) {
   final minute = value.minute.toString().padLeft(2, '0');
   final suffix = value.hour >= 12 ? 'PM' : 'AM';
   return '${months[value.month - 1]} ${value.day}, ${value.year} - $hour:$minute $suffix';
+}
+
+String _transcriptCopyText(MeetingNote note) {
+  if (note.transcript.isNotEmpty) {
+    return note.transcript
+        .map((segment) =>
+            '[${segment.timestampRange}] ${_speakerName(segment)}: ${segment.text}')
+        .join('\n');
+  }
+  return note.transcription?.trim() ?? '';
 }
 
 List<String> _orderedSpeakers(List<TranscriptSegment> segments) {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/auth_token_store.dart';
@@ -65,9 +67,9 @@ class AuthController extends Notifier<AuthState> {
         userId: result.user.id,
       );
       final canonicalUserId = await _saveSupabaseToken(result.accessToken);
-      await _ensureSelfSpeaker(result.user, microsoftId: canonicalUserId);
       ref.invalidate(promptsProvider);
       state = AuthState(user: result.user);
+      unawaited(_ensureSelfSpeaker(result.user, microsoftId: canonicalUserId));
     } catch (_) {
       state = const AuthState();
     }
@@ -84,9 +86,9 @@ class AuthController extends Notifier<AuthState> {
         userId: result.user.id,
       );
       final canonicalUserId = await _saveSupabaseToken(result.accessToken);
-      await _ensureSelfSpeaker(result.user, microsoftId: canonicalUserId);
       ref.invalidate(promptsProvider);
       state = AuthState(user: result.user);
+      unawaited(_ensureSelfSpeaker(result.user, microsoftId: canonicalUserId));
     } catch (error) {
       state = AuthState(error: _messageFor(error));
     }

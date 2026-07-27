@@ -4,17 +4,26 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import '../../../shared/widgets/widgets.dart';
+import '../../notes/ui/new_note_screen.dart';
 import '../data/recent_recordings_repository.dart';
 import '../data/recording_service.dart';
 
-class RecordScreen extends ConsumerWidget {
+class RecordScreen extends ConsumerStatefulWidget {
   const RecordScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RecordScreen> createState() => _RecordScreenState();
+}
+
+class _RecordScreenState extends ConsumerState<RecordScreen> {
+  final List<String> _capturedAttachmentPaths = [];
+
+  @override
+  Widget build(BuildContext context) {
     final rec = ref.watch(recordingProvider);
     final notifier = ref.read(recordingProvider.notifier);
     final recoverableSession = rec.state == RecordState.idle
@@ -27,10 +36,19 @@ class RecordScreen extends ConsumerWidget {
         elapsed: rec.elapsed,
         amplitude: rec.amplitude,
         onPauseResume: () => _handleRecordTap(context, notifier, rec.state),
+        attachmentCount: _capturedAttachmentPaths.length,
+        onCamera: () => _capturePhoto(context),
         onDone: () async {
           final path = await notifier.stop();
           if (path != null && context.mounted) {
-            context.push('/record/new-note', extra: path);
+            context.push(
+              '/record/new-note',
+              extra: NewNoteDraft(
+                audioPath: path,
+                attachmentPaths: List.of(_capturedAttachmentPaths),
+              ),
+            );
+            _capturedAttachmentPaths.clear();
           }
         },
       );
@@ -71,7 +89,9 @@ class RecordScreen extends ConsumerWidget {
                     if (path == null) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('The recovered recording file is no longer available.'),
+                          content: Text(
+                            'This interrupted recording could not be finalized. Please record again.',
+                          ),
                         ),
                       );
                       return;
@@ -99,6 +119,7 @@ class RecordScreen extends ConsumerWidget {
     RecordState state,
   ) async {
     if (state == RecordState.idle) {
+      _capturedAttachmentPaths.clear();
       final ok = await notifier.start();
       if (!ok && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -116,6 +137,23 @@ class RecordScreen extends ConsumerWidget {
     }
 
     await notifier.resume();
+  }
+
+  Future<void> _capturePhoto(BuildContext context) async {
+    try {
+      final image = await ImagePicker().pickImage(source: ImageSource.camera);
+      if (image == null) return;
+      if (!mounted) return;
+      setState(() => _capturedAttachmentPaths.add(image.path));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Photo attached to this recording.')),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open camera: $error')),
+      );
+    }
   }
 
   Future<void> _showUploadOptions(BuildContext context) async {
@@ -271,14 +309,18 @@ class _ActiveRecordingScreen extends StatelessWidget {
     required this.elapsed,
     required this.amplitude,
     required this.onPauseResume,
+    required this.onCamera,
     required this.onDone,
+    required this.attachmentCount,
   });
 
   final RecordState state;
   final Duration elapsed;
   final double amplitude;
   final VoidCallback onPauseResume;
+  final VoidCallback onCamera;
   final VoidCallback onDone;
+  final int attachmentCount;
 
   @override
   Widget build(BuildContext context) {
@@ -374,6 +416,12 @@ class _ActiveRecordingScreen extends StatelessWidget {
                       _SecondaryActionButton(
                         label: state == RecordState.paused ? 'Resume' : 'Pause',
                         onTap: onPauseResume,
+                      ),
+                      const SizedBox(width: 16),
+                      _IconActionButton(
+                        icon: Icons.camera_alt_outlined,
+                        badgeText: attachmentCount > 0 ? '$attachmentCount' : null,
+                        onTap: onCamera,
                       ),
                       const SizedBox(width: 16),
                       _GradientActionButton(
@@ -616,6 +664,75 @@ class _GradientActionButton extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _IconActionButton extends StatelessWidget {
+  const _IconActionButton({
+    required this.icon,
+    required this.onTap,
+    this.badgeText,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final String? badgeText;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: palette.card,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: palette.cardShadow,
+                  blurRadius: 22,
+                  offset: const Offset(0, 12),
+                ),
+              ],
+            ),
+            child: Icon(
+              icon,
+              color: Color(0xFF2F80FF),
+              size: 22,
+            ),
+          ),
+          if (badgeText != null)
+            Positioned(
+              top: -2,
+              right: -2,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 17, minHeight: 17),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF2F80FF),
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Text(
+                    badgeText!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -915,11 +1032,32 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
   @override
   void initState() {
     super.initState();
-    _future = widget.repository.list();
+    _future = _load();
+  }
+
+  Future<List<RecentRecording>> _load({bool preferCache = true}) async {
+    if (preferCache) {
+      final cached = await widget.repository.cachedList();
+      if (cached != null) {
+        _refreshFromNetwork();
+        return cached;
+      }
+    }
+    return widget.repository.refreshList();
   }
 
   void _refresh() {
-    setState(() => _future = widget.repository.list());
+    setState(() => _future = _load(preferCache: false));
+  }
+
+  Future<void> _refreshFromNetwork() async {
+    try {
+      final recordings = await widget.repository.refreshList();
+      if (!mounted) return;
+      setState(() => _future = Future.value(recordings));
+    } catch (_) {
+      // Keep showing cached recordings.
+    }
   }
 
   @override

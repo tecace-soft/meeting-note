@@ -1,10 +1,10 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/supabase_config.dart';
-import '../../auth/data/auth_token_store.dart';
+import '../../auth/data/mobile_supabase_session.dart';
 
 class RecentRecording {
   const RecentRecording({
@@ -71,10 +71,23 @@ class RecentRecordingsRepository {
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 30),
           ),
-        );
+        ) {
+    _supabase.interceptors
+        .add(MobileSupabaseSession().retryOnUnauthorizedInterceptor());
+  }
 
-  static const _storage = FlutterSecureStorage();
   final Dio _supabase;
+  static const _cache = JsonCacheStore('recent_recordings');
+
+  Future<List<RecentRecording>?> cachedList() async {
+    final userId = await MobileSupabaseSession.cachedUserId();
+    if (userId == null) return null;
+    final rows = await _cache.readList(_recentRecordingsCacheKey(userId));
+    if (rows == null) return null;
+    return _recordingsFromRows(rows);
+  }
+
+  Future<List<RecentRecording>> refreshList() => _listCloudRecordings();
 
   Future<List<RecentRecording>> list() async {
     try {
@@ -94,17 +107,13 @@ class RecentRecordingsRepository {
       return;
     }
 
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    if (token == null || token.isEmpty || userId == null) {
-      throw StateError('Supabase session is not available. Sign in again.');
-    }
+    final auth = await MobileSupabaseSession().auth();
 
     if (recording.bucket != null && recording.storagePath != null) {
       try {
         await _supabase.delete<void>(
           '/storage/v1/object/${recording.bucket}/${_encodeStoragePath(recording.storagePath!)}',
-          options: Options(headers: _headers(token)),
+          options: Options(headers: _headers(auth.token)),
         );
       } on DioException catch (error) {
         // If the object was already removed, still delete the stale file row.
@@ -116,10 +125,11 @@ class RecentRecordingsRepository {
       '/rest/v1/file',
       queryParameters: {
         'id': 'eq.${recording.id}',
-        'user_id': 'eq.$userId',
+        'user_id': 'eq.${auth.userId}',
       },
-      options: Options(headers: _headers(token)),
+      options: Options(headers: _headers(auth.token)),
     );
+    await _cache.delete(_recentRecordingsCacheKey(auth.userId));
   }
 
   Future<String> resolveAudioPath(RecentRecording recording) async {
@@ -141,9 +151,8 @@ class RecentRecordingsRepository {
   }
 
   Future<List<RecentRecording>> _listCloudRecordings() async {
-    final token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
-    final userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    if (!isSupabaseConfigured || token == null || token.isEmpty || userId == null) {
+    final auth = await MobileSupabaseSession().auth();
+    if (!isSupabaseConfigured) {
       return const [];
     }
 
@@ -154,11 +163,11 @@ class RecentRecordingsRepository {
         queryParameters: {
           'select':
               'id,name,bucket,storage_path,public_url,mime_type,size_bytes,source,recorded_at,created_at',
-          'user_id': 'eq.$userId',
+          'user_id': 'eq.${auth.userId}',
           'order': 'recorded_at.desc.nullslast,created_at.desc',
           'limit': 10,
         },
-        options: Options(headers: _headers(token)),
+        options: Options(headers: _headers(auth.token)),
       );
     } on DioException catch (error) {
       final message = error.response?.data?.toString() ?? error.message ?? '';
@@ -168,15 +177,21 @@ class RecentRecordingsRepository {
         queryParameters: {
           'select':
               'id,name,bucket,storage_path,public_url,mime_type,size_bytes,source,created_at',
-          'user_id': 'eq.$userId',
+          'user_id': 'eq.${auth.userId}',
           'order': 'created_at.desc',
           'limit': 10,
         },
-        options: Options(headers: _headers(token)),
+        options: Options(headers: _headers(auth.token)),
       );
     }
 
-    return (response.data ?? const [])
+    final rows = response.data ?? const [];
+    await _cache.writeList(_recentRecordingsCacheKey(auth.userId), rows);
+    return _recordingsFromRows(rows);
+  }
+
+  List<RecentRecording> _recordingsFromRows(List<dynamic> rows) {
+    return rows
         .whereType<Map>()
         .map((row) => row.cast<String, dynamic>())
         .map(_fromCloudRow)
@@ -211,6 +226,8 @@ class RecentRecordingsRepository {
         'authorization': 'Bearer $token',
         'content-type': 'application/json',
       };
+
+  String _recentRecordingsCacheKey(String userId) => 'recent_recordings_$userId';
 
   String _encodeStoragePath(String path) =>
       path.split('/').map(Uri.encodeComponent).join('/');
