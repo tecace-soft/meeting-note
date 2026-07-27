@@ -2108,7 +2108,7 @@ ${context}
 ${message}`;
 }
 
-async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function projectChatPromptFromRequest(req: IncomingMessage): Promise<string> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   const input = parseProjectChatInput((await readBody(req)) as ProjectChatRequest);
 
@@ -2128,16 +2128,14 @@ async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<v
   }
   if (projectError) throw projectError;
   if (!projectRow) {
-    sendJson(res, 404, { error: 'Project not found.' });
-    return;
+    throw new HttpError(404, 'Project not found.');
   }
 
   const project = projectRow as Record<string, unknown>;
   const sharedUsers = stringArray(project.shared_users);
   const hasProjectAccess = project.user_id === tokenUserId || sharedUsers.includes(tokenUserId);
   if (!hasProjectAccess) {
-    sendJson(res, 403, { error: 'You do not have access to this project.' });
-    return;
+    throw new HttpError(403, 'You do not have access to this project.');
   }
 
   const { data: noteRows, error: noteError } = await supabase
@@ -2147,20 +2145,110 @@ async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<v
   if (noteError) throw noteError;
   const notes = (noteRows ?? []) as Array<Record<string, unknown>>;
   if (notes.length === 0) {
-    sendJson(res, 200, { response: 'I cannot find the answer to that in the provided meeting documents.' });
+    return 'I cannot find the answer to that in the provided meeting documents.';
+  }
+  return buildProjectChatPrompt(projectChatContext(notes), input.message);
+}
+
+async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+  const prompt = await projectChatPromptFromRequest(req);
+  if (prompt === 'I cannot find the answer to that in the provided meeting documents.') {
+    sendJson(res, 200, { response: prompt });
     return;
   }
-
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
   const result = await callGeminiWithFallback({
     stage: 'Project chat',
     model: PROJECT_CHAT_MODEL,
     fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
     responseMimeType: 'text/plain',
     maxOutputTokens: 4096,
-    parts: [{ text: buildProjectChatPrompt(projectChatContext(notes), input.message) }],
+    parts: [{ text: prompt }],
   });
   sendJson(res, 200, { response: result.text.trim() });
+}
+
+function projectChatDelta(data: unknown): string {
+  if (!data || typeof data !== 'object') return '';
+  const candidates = (data as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates)) return '';
+  return candidates
+    .flatMap((candidate) => {
+      const parts = (candidate as { content?: { parts?: unknown } }).content?.parts;
+      return Array.isArray(parts) ? parts : [];
+    })
+    .map((part) => (part as { text?: unknown }).text)
+    .filter((text): text is string => typeof text === 'string')
+    .join('');
+}
+
+async function streamProjectChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+  const prompt = await projectChatPromptFromRequest(req);
+  if (prompt === 'I cannot find the answer to that in the provided meeting documents.') {
+    res.writeHead(200, {
+      ...corsHeaders(),
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    });
+    const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    send({ delta: prompt });
+    send({ done: true });
+    res.end();
+    return;
+  }
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(PROJECT_CHAT_MODEL)}:streamGenerateContent?alt=sse`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': env.geminiApiKey,
+      },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 4096,
+          responseMimeType: 'text/plain',
+        },
+      }),
+    },
+  );
+  if (!response.ok || !response.body) {
+    throw new Error(`Gemini stream failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
+  }
+
+  res.writeHead(200, {
+    ...corsHeaders(),
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+  });
+  const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop() ?? '';
+    for (const event of events) {
+      for (const line of event.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const raw = line.slice('data:'.length).trim();
+        if (!raw || raw === '[DONE]') continue;
+        const delta = projectChatDelta(JSON.parse(raw));
+        if (delta) send({ delta });
+      }
+    }
+  }
+  send({ done: true });
+  res.end();
 }
 
 async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -2283,6 +2371,10 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'POST' && req.url === '/project-chat') {
       await projectChat(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/project-chat/stream') {
+      await streamProjectChat(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {

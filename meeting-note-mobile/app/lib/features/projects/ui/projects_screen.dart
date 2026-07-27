@@ -316,10 +316,16 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
       role: _ProjectChatRole.user,
       content: text,
     );
+    final assistantId = 'a-${DateTime.now().microsecondsSinceEpoch}';
+    final assistant = _ProjectChatMessage(
+      id: assistantId,
+      role: _ProjectChatRole.assistant,
+      content: '',
+    );
     setState(() {
       _sending = true;
       _chatError = null;
-      _messages = [..._messages, optimistic];
+      _messages = [..._messages, optimistic, assistant];
       _showChats = true;
       _isLowerSectionExpanded = false;
     });
@@ -332,12 +338,20 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
             message: text,
             userId: userId,
             sessionId: _activeSessionId,
+            onDelta: (content) {
+              if (!mounted) return;
+              setState(() {
+                _messages = [
+                  for (final message in _messages)
+                    if (message.id == assistantId)
+                      message.copyWith(content: content)
+                    else
+                      message,
+                ];
+              });
+              _scrollChatSoon();
+            },
           );
-      final assistant = _ProjectChatMessage(
-        id: 'a-${DateTime.now().microsecondsSinceEpoch}',
-        role: _ProjectChatRole.assistant,
-        content: result.assistantResponse,
-      );
       final row = ProjectChatRow(
         id: 'local-${DateTime.now().microsecondsSinceEpoch}',
         sessionId: result.sessionId,
@@ -369,13 +383,25 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
       );
       setState(() {
         _activeSessionId = result.sessionId;
-        _messages = [..._messages, assistant];
+        _messages = [
+          for (final message in _messages)
+            if (message.id == assistantId)
+              message.copyWith(content: result.assistantResponse)
+            else
+              message,
+        ];
         _data = nextData;
         _future = Future.value(nextData);
       });
       _scrollChatSoon();
     } catch (error) {
-      setState(() => _chatError = '$error');
+      setState(() {
+        _messages = _messages
+            .where((message) =>
+                message.id != assistantId || message.content.isNotEmpty)
+            .toList();
+        _chatError = '$error';
+      });
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -395,6 +421,7 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: FigmaDesign.of(context).pageBackground,
       body: SafeArea(
         child: Padding(
@@ -580,8 +607,11 @@ class _ProjectChatCard extends StatelessWidget {
     final palette = FigmaDesign.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
     final hasMessages = messages.isNotEmpty || sending;
-    final expandedHeight =
-        (MediaQuery.sizeOf(context).height * 0.58).clamp(390.0, 540.0);
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final expandedHeight = keyboardInset > 0
+        ? (screenHeight - keyboardInset - 240).clamp(260.0, 380.0).toDouble()
+        : (screenHeight * 0.58).clamp(390.0, 540.0).toDouble();
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
@@ -621,13 +651,16 @@ class _ProjectChatCard extends StatelessWidget {
                 ? ListView.separated(
                     controller: scrollController,
                     padding: const EdgeInsets.only(top: 38, bottom: 8),
-                    itemCount: messages.length + (sending ? 1 : 0),
+                    itemCount: messages.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
-                      if (index >= messages.length) {
+                      final message = messages[index];
+                      if (sending &&
+                          message.role == _ProjectChatRole.assistant &&
+                          message.content.isEmpty) {
                         return const _ProjectAssistantTyping();
                       }
-                      return _ProjectMessageBubble(message: messages[index]);
+                      return _ProjectMessageBubble(message: message);
                     },
                   )
                 : Center(
@@ -1071,6 +1104,12 @@ class _ProjectChatMessage {
   final String id;
   final _ProjectChatRole role;
   final String content;
+
+  _ProjectChatMessage copyWith({String? content}) => _ProjectChatMessage(
+        id: id,
+        role: role,
+        content: content ?? this.content,
+      );
 }
 
 List<_ProjectChatMessage> _messagesForRows(List<ProjectChatRow> rows) {

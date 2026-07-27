@@ -251,6 +251,7 @@ class ProjectsRepository {
     required String message,
     required String userId,
     String? sessionId,
+    void Function(String)? onDelta,
   }) async {
     final auth = await MobileSupabaseSession().auth();
     final microsoftToken =
@@ -259,19 +260,13 @@ class ProjectsRepository {
       throw StateError('Sign in with Microsoft before using project chat.');
     }
 
-    final webhookResponse = await _webhook.post<dynamic>(
-      '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat',
-      data: {
-        'message': message,
-        'project_id': projectId,
-      },
-      options: Options(headers: {
-        'content-type': 'application/json',
-        'authorization': 'Bearer $microsoftToken',
-      }),
+    final assistant = await _streamProjectChat(
+      projectId: projectId,
+      message: message,
+      microsoftToken: microsoftToken,
+      onDelta: onDelta,
     );
-    final assistant = _extractWebhookResponse(webhookResponse.data);
-    if (assistant == null || assistant.isEmpty) {
+    if (assistant.isEmpty) {
       throw StateError('Webhook response missing "response" field.');
     }
 
@@ -329,6 +324,58 @@ class ProjectsRepository {
       isNewSession: isNewSession,
     );
   }
+
+  Future<String> _streamProjectChat({
+    required String projectId,
+    required String message,
+    required String microsoftToken,
+    void Function(String)? onDelta,
+  }) async {
+    final response = await _webhook.post<ResponseBody>(
+      '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat/stream',
+      data: {
+        'message': message,
+        'project_id': projectId,
+      },
+      options: Options(headers: {
+        'content-type': 'application/json',
+        'accept': 'text/event-stream',
+        'authorization': 'Bearer $microsoftToken',
+      }, responseType: ResponseType.stream),
+    );
+    final body = response.data;
+    if (body == null) return '';
+    var buffer = '';
+    var assistant = '';
+    await for (final chunk in body.stream.cast<List<int>>().transform(utf8.decoder)) {
+      buffer += chunk;
+      final events = buffer.split('\n\n');
+      buffer = events.removeLast();
+      for (final event in events) {
+        for (final line in event.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          final raw = line.substring('data:'.length).trim();
+          if (raw.isEmpty) continue;
+          final delta = _projectChatStreamDelta(raw);
+          if (delta.isEmpty) continue;
+          assistant += delta;
+          onDelta?.call(assistant);
+        }
+      }
+    }
+    return assistant.trim();
+  }
+}
+
+String _projectChatStreamDelta(String raw) {
+  final decoded = jsonDecode(raw);
+  if (decoded is! Map) return '';
+  final error = decoded['error'];
+  if (error is String && error.trim().isNotEmpty) {
+    throw StateError(error.trim());
+  }
+  final delta = decoded['delta'];
+  return delta is String ? delta : '';
 }
 
 class MeetingProject {
@@ -543,19 +590,6 @@ DateTime? _dateValue(Object? value) {
 String _escapeArrayValue(String value) => value.replaceAll('"', r'\"');
 
 String _escapeInValue(String value) => '"${value.replaceAll('"', r'\"')}"';
-
-String? _extractWebhookResponse(Object? data) {
-  if (data is Map) return _stringValue(data['response']);
-  if (data is String && data.trim().isNotEmpty) {
-    try {
-      final decoded = jsonDecode(data);
-      if (decoded is Map) return _stringValue(decoded['response']);
-    } catch (_) {
-      return null;
-    }
-  }
-  return null;
-}
 
 String _generateSessionId() {
   final now = DateTime.now();

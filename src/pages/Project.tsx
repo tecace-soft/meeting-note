@@ -168,10 +168,13 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function extractWebhookResponse(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const value = (payload as { response?: unknown }).response;
-  return typeof value === 'string' ? value.trim() : '';
+function parseProjectChatStreamEvent(raw: string): { delta?: string; done?: boolean } {
+  const parsed = JSON.parse(raw) as { delta?: unknown; done?: unknown; error?: unknown };
+  if (typeof parsed.error === 'string' && parsed.error.trim()) throw new Error(parsed.error.trim());
+  return {
+    delta: typeof parsed.delta === 'string' ? parsed.delta : undefined,
+    done: parsed.done === true,
+  };
 }
 
 function generateSessionId(): string {
@@ -551,7 +554,15 @@ const Project: React.FC = () => {
     try {
       const token = await getAccessToken();
       if (!token) throw new Error('Could not acquire Microsoft access token.');
-      const res = await fetch(`${WORKFLOW_API_URL}/project-chat`, {
+      const assistantMessageId =
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `a-${Date.now()}`;
+      let assistantContent = '';
+      setChatMessages((prev) => [
+        ...prev,
+        { id: assistantMessageId, role: 'assistant', content: '' },
+      ]);
+
+      const res = await fetch(`${WORKFLOW_API_URL}/project-chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -559,20 +570,42 @@ const Project: React.FC = () => {
         },
         body: JSON.stringify({ message: trimmed, project_id: resolvedProjectId }),
       });
-
-      const rawText = await res.text();
       if (!res.ok) {
+        const rawText = await res.text();
         throw new Error(rawText.trim() || `Request failed with status ${res.status}`);
       }
+      if (!res.body) throw new Error('Project chat stream was empty.');
 
-      let assistantContent = '';
-      if (rawText.trim()) {
-        try {
-          assistantContent = extractWebhookResponse(JSON.parse(rawText) as unknown);
-        } catch {
-          throw new Error('Webhook returned invalid JSON');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() ?? '';
+        for (const event of events) {
+          for (const line of event.split('\n')) {
+            if (!line.startsWith('data:')) continue;
+            const raw = line.slice('data:'.length).trim();
+            if (!raw) continue;
+            const chunk = parseProjectChatStreamEvent(raw);
+            if (chunk.delta) {
+              assistantContent += chunk.delta;
+              setChatMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? { ...msg, content: assistantContent }
+                    : msg
+                )
+              );
+            }
+            if (chunk.done) break;
+          }
         }
       }
+      assistantContent = assistantContent.trim();
       if (!assistantContent) {
         throw new Error('Webhook response missing "response" field');
       }
@@ -639,16 +672,11 @@ const Project: React.FC = () => {
         ],
       }));
 
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `a-${Date.now()}`,
-          role: 'assistant',
-          content: assistantContent,
-        },
-      ]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to send message';
+      setChatMessages((prev) =>
+        prev.filter((message) => message.content.trim() || message.role !== 'assistant')
+      );
       setChatError(msg);
     } finally {
       setChatSending(false);
