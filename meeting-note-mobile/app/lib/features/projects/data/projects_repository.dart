@@ -1,10 +1,13 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/supabase_config.dart';
+import '../../../core/network/workflow_config.dart';
+import '../../auth/data/auth_token_store.dart';
 import '../../auth/data/mobile_supabase_session.dart';
 
 final projectsRepositoryProvider = Provider<ProjectsRepository>(
@@ -36,9 +39,8 @@ class ProjectsRepository {
 
   final Dio _supabase;
   final Dio _webhook;
+  static const _storage = FlutterSecureStorage();
   static const _cache = JsonCacheStore('projects');
-  static const _projectChatWebhookUrl =
-      'https://n8n.srv1153481.hstgr.cloud/webhook/9fe1b3b5-9e2e-4b23-8775-b38fc21e4b4d';
 
   Future<List<MeetingProject>?> cachedList() async {
     final userId = await MobileSupabaseSession.cachedUserId();
@@ -251,14 +253,22 @@ class ProjectsRepository {
     String? sessionId,
   }) async {
     final auth = await MobileSupabaseSession().auth();
+    final microsoftToken =
+        await _storage.read(key: AuthTokenStore.accessTokenKey);
+    if (microsoftToken == null || microsoftToken.isEmpty) {
+      throw StateError('Sign in with Microsoft before using project chat.');
+    }
 
     final webhookResponse = await _webhook.post<dynamic>(
-      _projectChatWebhookUrl,
+      '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat',
       data: {
         'message': message,
         'project_id': projectId,
       },
-      options: Options(headers: {'content-type': 'application/json'}),
+      options: Options(headers: {
+        'content-type': 'application/json',
+        'authorization': 'Bearer $microsoftToken',
+      }),
     );
     final assistant = _extractWebhookResponse(webhookResponse.data);
     if (assistant == null || assistant.isEmpty) {

@@ -50,6 +50,11 @@ interface RegenerateSummaryRequest {
   instructions?: unknown;
 }
 
+interface ProjectChatRequest {
+  message?: unknown;
+  project_id?: unknown;
+}
+
 type TranscriptionTestModel =
   | 'assembly_universal2_codeswitch'
   | 'assembly_universal3pro_auto'
@@ -189,6 +194,7 @@ const env = {
   openAiApiKey: process.env.OPENAI_API_KEY ?? '',
   summaryModel: process.env.GEMINI_SUMMARY_MODEL ?? 'gemini-2.5-flash-lite',
   regenerateSummaryModel: process.env.GEMINI_REGENERATE_SUMMARY_MODEL ?? 'gemini-3.1-flash-lite',
+  projectChatModel: process.env.GEMINI_PROJECT_CHAT_MODEL ?? process.env.GEMINI_REGENERATE_SUMMARY_MODEL ?? 'gemini-3.1-flash-lite',
   transcriptionTestGeminiModel: process.env.GEMINI_TRANSCRIPTION_TEST_MODEL ?? 'gemini-2.5-flash',
   transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL ?? 'gpt-4o-transcribe',
   assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL ?? 'universal-3-pro',
@@ -416,8 +422,8 @@ function parseAndroidMultipartUpload(req: IncomingMessage): Promise<AndroidRecor
   });
 }
 
-function requiredString(body: SummarizeAudioRequest, key: keyof SummarizeAudioRequest): string {
-  const value = body[key];
+function requiredString(body: object, key: string): string {
+  const value = (body as Record<string, unknown>)[key];
   if (typeof value === 'string' && value.trim()) {
     return value.trim();
   }
@@ -2029,6 +2035,119 @@ async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId:
   if (row.status === 'completed') completedJobResults.delete(jobId);
 }
 
+function parseProjectChatInput(body: ProjectChatRequest): { message: string; projectId: string; projectIdFilterValue: string | number } {
+  const message = requiredString(body, 'message');
+  const rawProjectId = body.project_id;
+  const projectId =
+    typeof rawProjectId === 'string' || typeof rawProjectId === 'number'
+      ? String(rawProjectId).trim()
+      : '';
+  if (!projectId) throw new HttpError(400, 'project_id is required.');
+  const asNumber = Number(projectId);
+  return {
+    message,
+    projectId,
+    projectIdFilterValue: Number.isNaN(asNumber) ? projectId : asNumber,
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
+}
+
+function noteText(row: Record<string, unknown>, key: string): string {
+  const value = row[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function projectChatContext(notes: Array<Record<string, unknown>>): string {
+  return notes.map((note, index) => {
+    const n = index + 1;
+    const title = noteText(note, 'name') || noteText(note, 'title') || `Meeting ${n}`;
+    const meetingAt = noteText(note, 'meeting_at') || noteText(note, 'created_at') || 'Unknown date';
+    const transcription = noteText(note, 'transcription');
+    const summary = noteText(note, 'summary_edit') || noteText(note, 'summary');
+    return [
+      `meeting${n}: ${title}`,
+      `date${n}: ${meetingAt}`,
+      `transcription${n}:`,
+      transcription,
+      '',
+      `summary${n}:`,
+      summary,
+    ].join('\n');
+  }).join('\n\n');
+}
+
+function buildProjectChatPrompt(context: string, message: string): string {
+  return `You are an internal AI assistant for TecAce Software, Ltd. Your primary role is to answer user questions accurately, concisely, and professionally, based EXCLUSIVELY on the provided company meeting transcriptions and the summaries of those transcriptions.
+
+### CORE DIRECTIVES
+1. **Strict Grounding:** You must base your answers ONLY on the context provided in the prompt (the transcripts, summaries, and associated metadata). Under no circumstances should you use outside knowledge, speculate, guess, or hallucinate information. First check the summaries for your answers. If unable to generate a response based on summary information alone start digging deeper into the transcription itself to see if more information can be found there.
+2. **Handling Missing Information:** If the provided context does not contain the answer to the user's question, you must clearly state: "I cannot find the answer to that in the provided meeting documents." Do not attempt to infer an answer if the data is missing.
+3. **Cite Sources:** Whenever possible, reference the specific meeting date, title, or speaker associated with the information to build trust (e.g., "During the Q3 All-Hands on October 12th, Jane Doe stated...").
+4. **Maintain Objectivity:** Present the information exactly as it was discussed. Do not inject personal opinions, bias, or commentary on the meeting's contents.
+
+### RESPONSE GUIDELINES
+- **Clarity & Brevity:** Keep your answers direct and easy to read. Use bullet points when summarizing multiple topics, listing action items, or detailing decisions.
+- **Direct Quotes:** If a user asks exactly what a specific person said, or if the exact phrasing is highly important, provide a brief direct quote from the transcript enclosed in quotation marks.
+- **Action Items & Decisions:** If asked about next steps or outcomes, clearly identify what was decided, who is responsible, and any stated deadlines—provided that information exists in the text.
+- **Ambiguity:** If the meeting text is ambiguous, speakers are unclear, or multiple meetings have conflicting information, point out this discrepancy to the user rather than guessing the "correct" interpretation.
+
+### TRANSCRIPTION AND SUMMARIES
+${context}
+
+### USER QUESTION
+${message}`;
+}
+
+async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  const input = parseProjectChatInput((await readBody(req)) as ProjectChatRequest);
+
+  const { data: projectRow, error: projectError } = await supabase
+    .from('project')
+    .select('id,user_id,shared_users')
+    .eq('id', input.projectIdFilterValue)
+    .maybeSingle();
+  if (projectError) throw projectError;
+  if (!projectRow) {
+    sendJson(res, 404, { error: 'Project not found.' });
+    return;
+  }
+
+  const project = projectRow as Record<string, unknown>;
+  const sharedUsers = stringArray(project.shared_users);
+  const hasProjectAccess = project.user_id === tokenUserId || sharedUsers.includes(tokenUserId);
+  if (!hasProjectAccess) {
+    sendJson(res, 403, { error: 'You do not have access to this project.' });
+    return;
+  }
+
+  const { data: noteRows, error: noteError } = await supabase
+    .from('note')
+    .select('name,title,user_id,shared_users,created_at,meeting_at,transcription,summary,summary_edit,projects')
+    .contains('projects', [input.projectIdFilterValue])
+    .order('created_at', { ascending: false });
+  if (noteError) throw noteError;
+  const notes = (noteRows ?? []) as Array<Record<string, unknown>>;
+  if (notes.length === 0) {
+    sendJson(res, 200, { response: 'I cannot find the answer to that in the provided meeting documents.' });
+    return;
+  }
+
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+  const result = await callGeminiWithFallback({
+    stage: 'Project chat',
+    model: env.projectChatModel,
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    responseMimeType: 'text/plain',
+    maxOutputTokens: 4096,
+    parts: [{ text: buildProjectChatPrompt(projectChatContext(notes), input.message) }],
+  });
+  sendJson(res, 200, { response: result.text.trim() });
+}
+
 async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   const input = parseRegenerateSummaryInput((await readBody(req, 12_000_000)) as RegenerateSummaryRequest);
@@ -2131,6 +2250,7 @@ const server = createServer((req, res) => {
         codeSwitchingModel: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
         summaryModel: env.summaryModel,
         regenerateSummaryModel: env.regenerateSummaryModel,
+        projectChatModel: env.projectChatModel,
       });
       return;
     }
@@ -2144,6 +2264,10 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'POST' && req.url === '/regenerate-summary') {
       await regenerateSummary(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/project-chat') {
+      await projectChat(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {

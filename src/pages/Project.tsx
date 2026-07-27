@@ -239,11 +239,10 @@ function buildChatMessages(rows: ChatRow[]): ChatMessage[] {
   });
 }
 
-const PROJECT_CHAT_WEBHOOK_URL =
-  'https://n8n.srv1153481.hstgr.cloud/webhook/9fe1b3b5-9e2e-4b23-8775-b38fc21e4b4d';
+const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? 'https://meeting-note-backend-njfb.onrender.com').replace(/\/$/, '');
 
 const Project: React.FC = () => {
-  const { user } = useAuth();
+  const { user, getAccessToken } = useAuth();
   const { appLanguage, t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const projectId = searchParams.get('id');
@@ -550,9 +549,14 @@ const Project: React.FC = () => {
     setChatInput('');
 
     try {
-      const res = await fetch(PROJECT_CHAT_WEBHOOK_URL, {
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not acquire Microsoft access token.');
+      const res = await fetch(`${WORKFLOW_API_URL}/project-chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ message: trimmed, project_id: resolvedProjectId }),
       });
 
