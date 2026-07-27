@@ -286,11 +286,28 @@ function readBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<unknown> 
 
 function getHttpStatus(error: unknown): number {
   if (error instanceof HttpError) return error.status;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   if (message.includes('Missing bearer token') || message.includes('Microsoft Graph /me rejected')) return 401;
   if (message.includes('too large') || message.includes('exceeds')) return 413;
   if (message.includes('required') || message.includes('must be') || message.includes('Unsupported') || message.includes('token') || message.includes('userId')) return 400;
   return 500;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    for (const key of ['message', 'error', 'details', 'hint', 'code']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
 }
 
 function sanitizeUploadFileName(value: string, fallback: string): string {
@@ -2105,11 +2122,20 @@ async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<v
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   const input = parseProjectChatInput((await readBody(req)) as ProjectChatRequest);
 
-  const { data: projectRow, error: projectError } = await supabase
+  let { data: projectRow, error: projectError } = await supabase
     .from('project')
     .select('id,user_id,shared_users')
-    .eq('id', input.projectIdFilterValue)
+    .eq('id', input.projectId)
     .maybeSingle();
+  if (!projectRow && !projectError && input.projectIdFilterValue !== input.projectId) {
+    const fallback = await supabase
+      .from('project')
+      .select('id,user_id,shared_users')
+      .eq('id', input.projectIdFilterValue)
+      .maybeSingle();
+    projectRow = fallback.data;
+    projectError = fallback.error;
+  }
   if (projectError) throw projectError;
   if (!projectRow) {
     sendJson(res, 404, { error: 'Project not found.' });
@@ -2285,7 +2311,7 @@ const server = createServer((req, res) => {
     }
     sendJson(res, 404, { error: 'Not found' });
   })().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     const status = getHttpStatus(error);
     console.error('Workflow request failed:', error);
     if (status >= 500) {
