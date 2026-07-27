@@ -331,39 +331,85 @@ class ProjectsRepository {
     required String microsoftToken,
     void Function(String)? onDelta,
   }) async {
-    final response = await _webhook.post<ResponseBody>(
-      '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat/stream',
+    try {
+      final response = await _webhook.post<ResponseBody>(
+        '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat/stream',
+        data: {
+          'message': message,
+          'project_id': projectId,
+        },
+        options: Options(headers: {
+          'content-type': 'application/json',
+          'accept': 'text/event-stream',
+          'authorization': 'Bearer $microsoftToken',
+        }, responseType: ResponseType.stream),
+      );
+      final body = response.data;
+      if (body == null) return '';
+      var buffer = '';
+      var assistant = '';
+      await for (final chunk
+          in body.stream.cast<List<int>>().transform(utf8.decoder)) {
+        buffer += chunk;
+        final events = buffer.split(RegExp(r'\r?\n\r?\n'));
+        buffer = events.removeLast();
+        for (final event in events) {
+          for (final line in event.split('\n')) {
+            if (!line.startsWith('data:')) continue;
+            final raw = line.substring('data:'.length).trim();
+            if (raw.isEmpty) continue;
+            final delta = _projectChatStreamDelta(raw);
+            if (delta.isEmpty) continue;
+            assistant += delta;
+            onDelta?.call(assistant);
+          }
+        }
+      }
+      if (buffer.trim().isNotEmpty) {
+        for (final line in buffer.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          final raw = line.substring('data:'.length).trim();
+          if (raw.isEmpty) continue;
+          final delta = _projectChatStreamDelta(raw);
+          if (delta.isNotEmpty) {
+            assistant += delta;
+            onDelta?.call(assistant);
+          }
+        }
+      }
+      if (assistant.trim().isNotEmpty) return assistant.trim();
+    } on DioException {
+      // Fall through to the non-stream endpoint when the deployed backend has
+      // not picked up /project-chat/stream yet.
+    }
+    return _fallbackProjectChat(
+      projectId: projectId,
+      message: message,
+      microsoftToken: microsoftToken,
+      onDelta: onDelta,
+    );
+  }
+
+  Future<String> _fallbackProjectChat({
+    required String projectId,
+    required String message,
+    required String microsoftToken,
+    void Function(String)? onDelta,
+  }) async {
+    final response = await _webhook.post<Object?>(
+      '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat',
       data: {
         'message': message,
         'project_id': projectId,
       },
       options: Options(headers: {
         'content-type': 'application/json',
-        'accept': 'text/event-stream',
         'authorization': 'Bearer $microsoftToken',
-      }, responseType: ResponseType.stream),
+      }),
     );
-    final body = response.data;
-    if (body == null) return '';
-    var buffer = '';
-    var assistant = '';
-    await for (final chunk in body.stream.cast<List<int>>().transform(utf8.decoder)) {
-      buffer += chunk;
-      final events = buffer.split('\n\n');
-      buffer = events.removeLast();
-      for (final event in events) {
-        for (final line in event.split('\n')) {
-          if (!line.startsWith('data:')) continue;
-          final raw = line.substring('data:'.length).trim();
-          if (raw.isEmpty) continue;
-          final delta = _projectChatStreamDelta(raw);
-          if (delta.isEmpty) continue;
-          assistant += delta;
-          onDelta?.call(assistant);
-        }
-      }
-    }
-    return assistant.trim();
+    final assistant = _extractWebhookResponse(response.data) ?? '';
+    if (assistant.isNotEmpty) onDelta?.call(assistant);
+    return assistant;
   }
 }
 
@@ -376,6 +422,19 @@ String _projectChatStreamDelta(String raw) {
   }
   final delta = decoded['delta'];
   return delta is String ? delta : '';
+}
+
+String? _extractWebhookResponse(Object? data) {
+  if (data is Map) return _stringValue(data['response']);
+  if (data is String && data.trim().isNotEmpty) {
+    try {
+      final decoded = jsonDecode(data);
+      if (decoded is Map) return _stringValue(decoded['response']);
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
 }
 
 class MeetingProject {

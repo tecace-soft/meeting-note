@@ -177,6 +177,14 @@ function parseProjectChatStreamEvent(raw: string): { delta?: string; done?: bool
   };
 }
 
+function extractWebhookResponse(data: unknown): string | null {
+  if (data && typeof data === 'object' && 'response' in data) {
+    const response = (data as { response?: unknown }).response;
+    return typeof response === 'string' ? response.trim() : null;
+  }
+  return null;
+}
+
 function generateSessionId(): string {
   const now = new Date();
   const yy = String(now.getFullYear() % 100).padStart(2, '0');
@@ -562,50 +570,75 @@ const Project: React.FC = () => {
         { id: assistantMessageId, role: 'assistant', content: '' },
       ]);
 
-      const res = await fetch(`${WORKFLOW_API_URL}/project-chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ message: trimmed, project_id: resolvedProjectId }),
-      });
-      if (!res.ok) {
-        const rawText = await res.text();
-        throw new Error(rawText.trim() || `Request failed with status ${res.status}`);
-      }
-      if (!res.body) throw new Error('Project chat stream was empty.');
+      try {
+        const res = await fetch(`${WORKFLOW_API_URL}/project-chat/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ message: trimmed, project_id: resolvedProjectId }),
+        });
+        if (!res.ok) throw new Error(`Stream failed with status ${res.status}`);
+        if (!res.body) throw new Error('Project chat stream was empty.');
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() ?? '';
-        for (const event of events) {
-          for (const line of event.split('\n')) {
-            if (!line.startsWith('data:')) continue;
-            const raw = line.slice('data:'.length).trim();
-            if (!raw) continue;
-            const chunk = parseProjectChatStreamEvent(raw);
-            if (chunk.delta) {
-              assistantContent += chunk.delta;
-              setChatMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? { ...msg, content: assistantContent }
-                    : msg
-                )
-              );
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split(/\r?\n\r?\n/);
+          buffer = events.pop() ?? '';
+          for (const event of events) {
+            for (const line of event.split('\n')) {
+              if (!line.startsWith('data:')) continue;
+              const raw = line.slice('data:'.length).trim();
+              if (!raw) continue;
+              const chunk = parseProjectChatStreamEvent(raw);
+              if (chunk.delta) {
+                assistantContent += chunk.delta;
+                setChatMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: assistantContent }
+                      : msg
+                  )
+                );
+              }
+              if (chunk.done) break;
             }
-            if (chunk.done) break;
           }
         }
+      } catch {
+        // Use the existing non-stream endpoint until the deployed backend has /project-chat/stream.
       }
       assistantContent = assistantContent.trim();
+      if (!assistantContent) {
+        const fallbackRes = await fetch(`${WORKFLOW_API_URL}/project-chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ message: trimmed, project_id: resolvedProjectId }),
+        });
+        if (!fallbackRes.ok) {
+          const rawText = await fallbackRes.text();
+          throw new Error(rawText.trim() || `Request failed with status ${fallbackRes.status}`);
+        }
+        assistantContent = extractWebhookResponse(await fallbackRes.json()) ?? '';
+        if (assistantContent) {
+          setChatMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, content: assistantContent }
+                : msg
+            )
+          );
+        }
+      }
       if (!assistantContent) {
         throw new Error('Webhook response missing "response" field');
       }

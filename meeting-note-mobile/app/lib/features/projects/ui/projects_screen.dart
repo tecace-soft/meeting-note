@@ -458,13 +458,15 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
               final data = snapshot.data ?? _data!;
               _data = data;
               final title = data.project.name;
+              final keyboardOpen =
+                  MediaQuery.viewInsetsOf(context).bottom > 0;
               final subtitle =
                   '${data.notes.length} ${data.notes.length == 1 ? 'note' : 'notes'} - ${_lastActivity(data)}';
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _ProjectBackHeader(title: title, subtitle: subtitle),
-                  const SizedBox(height: 26),
+                  SizedBox(height: keyboardOpen ? 10 : 26),
                   _ProjectChatCard(
                     expanded: !_isLowerSectionExpanded,
                     controller: _chatController,
@@ -474,38 +476,40 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
                     error: _chatError,
                     onSend: _sendChat,
                   ),
-                  const SizedBox(height: 16),
-                  _ProjectDetailToggle(
-                    showChats: _showChats,
-                    onChanged: (value) => setState(() {
-                      _showChats = value;
-                      _isLowerSectionExpanded = true;
-                    }),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      child: _isLowerSectionExpanded
-                          ? (_showChats
-                              ? _ProjectChatSessionList(
-                                  key: const ValueKey('project-chats'),
-                                  sessions: data.sessions,
-                                  chatsBySession: data.chatsBySession,
-                                  selectedSessionId: _activeSessionId,
-                                  onSelect: _selectSession,
-                                )
-                              : _ProjectNotesList(
-                                  key: const ValueKey('project-notes'),
-                                  notes: data.notes,
-                                  onOpen: (note) =>
-                                      context.push('/note/${note.id}'),
-                                ))
-                          : const SizedBox.shrink(
-                              key: ValueKey('project-lower-collapsed'),
-                            ),
+                  if (!keyboardOpen) ...[
+                    const SizedBox(height: 16),
+                    _ProjectDetailToggle(
+                      showChats: _showChats,
+                      onChanged: (value) => setState(() {
+                        _showChats = value;
+                        _isLowerSectionExpanded = true;
+                      }),
                     ),
-                  ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child: _isLowerSectionExpanded
+                            ? (_showChats
+                                ? _ProjectChatSessionList(
+                                    key: const ValueKey('project-chats'),
+                                    sessions: data.sessions,
+                                    chatsBySession: data.chatsBySession,
+                                    selectedSessionId: _activeSessionId,
+                                    onSelect: _selectSession,
+                                  )
+                                : _ProjectNotesList(
+                                    key: const ValueKey('project-notes'),
+                                    notes: data.notes,
+                                    onOpen: (note) =>
+                                        context.push('/note/${note.id}'),
+                                  ))
+                            : const SizedBox.shrink(
+                                key: ValueKey('project-lower-collapsed'),
+                              ),
+                      ),
+                    ),
+                  ],
                 ],
               );
             },
@@ -610,7 +614,7 @@ class _ProjectChatCard extends StatelessWidget {
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final screenHeight = MediaQuery.sizeOf(context).height;
     final expandedHeight = keyboardInset > 0
-        ? (screenHeight - keyboardInset - 240).clamp(260.0, 380.0).toDouble()
+        ? (screenHeight - keyboardInset - 210).clamp(220.0, 340.0).toDouble()
         : (screenHeight * 0.58).clamp(390.0, 540.0).toDouble();
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
