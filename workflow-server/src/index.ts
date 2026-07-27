@@ -139,6 +139,7 @@ The summary output must be in markdown format and include tables where useful.
 Use the requested output language.
 Focus on meeting purpose, key topics, decisions, risks/issues, responsibilities, action items, timelines, and management-level insights when useful.
 Do not hallucinate. Base the notes on the transcript and provided context.`;
+const PROJECT_CHAT_MODEL = 'gemini-3.1-flash-lite';
 
 const SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES = new Set([
   'text/html',
@@ -194,7 +195,6 @@ const env = {
   openAiApiKey: process.env.OPENAI_API_KEY ?? '',
   summaryModel: process.env.GEMINI_SUMMARY_MODEL ?? 'gemini-2.5-flash-lite',
   regenerateSummaryModel: process.env.GEMINI_REGENERATE_SUMMARY_MODEL ?? 'gemini-3.1-flash-lite',
-  projectChatModel: process.env.GEMINI_PROJECT_CHAT_MODEL ?? process.env.GEMINI_REGENERATE_SUMMARY_MODEL ?? 'gemini-3.1-flash-lite',
   transcriptionTestGeminiModel: process.env.GEMINI_TRANSCRIPTION_TEST_MODEL ?? 'gemini-2.5-flash',
   transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL ?? 'gpt-4o-transcribe',
   assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL ?? 'universal-3-pro',
@@ -2080,19 +2080,9 @@ function noteText(row: Record<string, unknown>, key: string): string {
 function projectChatContext(notes: Array<Record<string, unknown>>): string {
   return notes.map((note, index) => {
     const n = index + 1;
-    const title = noteText(note, 'name') || noteText(note, 'title') || `Meeting ${n}`;
-    const meetingAt = noteText(note, 'meeting_at') || noteText(note, 'created_at') || 'Unknown date';
     const transcription = noteText(note, 'transcription');
-    const summary = noteText(note, 'summary_edit') || noteText(note, 'summary');
-    return [
-      `meeting${n}: ${title}`,
-      `date${n}: ${meetingAt}`,
-      `transcription${n}:`,
-      transcription,
-      '',
-      `summary${n}:`,
-      summary,
-    ].join('\n');
+    const summary = noteText(note, 'summary');
+    return `transcription${n}:\n${transcription}\n\nsummary${n}:\n${summary}\n\n`;
   }).join('\n\n');
 }
 
@@ -2152,9 +2142,8 @@ async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<v
 
   const { data: noteRows, error: noteError } = await supabase
     .from('note')
-    .select('name,title,user_id,shared_users,created_at,meeting_at,transcription,summary,summary_edit,projects')
-    .contains('projects', [input.projectIdFilterValue])
-    .order('created_at', { ascending: false });
+    .select('transcription,summary')
+    .contains('projects', [input.projectIdFilterValue]);
   if (noteError) throw noteError;
   const notes = (noteRows ?? []) as Array<Record<string, unknown>>;
   if (notes.length === 0) {
@@ -2165,7 +2154,7 @@ async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<v
   if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
   const result = await callGeminiWithFallback({
     stage: 'Project chat',
-    model: env.projectChatModel,
+    model: PROJECT_CHAT_MODEL,
     fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
     responseMimeType: 'text/plain',
     maxOutputTokens: 4096,
@@ -2276,7 +2265,7 @@ const server = createServer((req, res) => {
         codeSwitchingModel: ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL,
         summaryModel: env.summaryModel,
         regenerateSummaryModel: env.regenerateSummaryModel,
-        projectChatModel: env.projectChatModel,
+        projectChatModel: PROJECT_CHAT_MODEL,
       });
       return;
     }
