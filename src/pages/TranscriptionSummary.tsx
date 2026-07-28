@@ -240,18 +240,22 @@ interface SummaryResultState {
   audioDurationSeconds?: number | null;
 }
 
-async function invokeGenerateProfile(body: {
-  speakerName: string;
-  speakerId: string;
-  transcriptText: string;
-  existingProfile: string | null;
-}): Promise<{ profile?: string; error?: string }> {
+async function invokeGenerateProfile(
+  body: {
+    speakerName: string;
+    speakerId: string;
+    transcriptText: string;
+    existingProfile: string | null;
+  },
+  auth: { appToken: string | null; msToken: string | null }
+): Promise<{ profile?: string; error?: string }> {
   const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/generate-profile`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      Authorization: `Bearer ${auth.appToken ?? SUPABASE_ANON_KEY}`,
+      ...(auth.msToken ? { 'x-ms-access-token': auth.msToken } : {}),
     },
     body: JSON.stringify(body),
   });
@@ -1601,6 +1605,11 @@ const TranscriptionSummary: React.FC = () => {
 
       const transcriptText = formatTranscriptText(summaryResult.transcript);
 
+      const appToken = await getSupabaseAccessTokenForRequest();
+      const msToken = appToken ? null : await getAccessToken();
+      if (!appToken && !msToken) throw new Error('Could not get access. Please sign in again.');
+      const auth = { appToken, msToken };
+
       const results = await Promise.all(
         uniqueSpeakers.map(async (speakerName): Promise<GeneratedProfile> => {
           const record = speakerMap.get(speakerName.toLowerCase()) ?? null;
@@ -1611,7 +1620,7 @@ const TranscriptionSummary: React.FC = () => {
             speakerId: record?.id ?? '',
             transcriptText,
             existingProfile,
-          }).catch((error: unknown) => {
+          }, auth).catch((error: unknown) => {
             console.error(`generate-profile failed for "${speakerName}"`, error);
             throw new Error(`Edge function error for "${speakerName}": ${error instanceof Error ? error.message : String(error)}`);
           });

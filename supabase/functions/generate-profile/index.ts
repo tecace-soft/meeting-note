@@ -2,16 +2,99 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-ms-access-token',
 };
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, 'Content-Type': 'application/json' },
+  });
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+/** Verify the app JWT minted by supabase-token (HS256). Mirrors note-audio-url's gate. */
+async function verifyAppJwt(token: string, secret: string): Promise<{ userId: string | null; error?: string }> {
+  const parts = token.split('.');
+  if (parts.length !== 3) return { userId: null, error: 'Invalid JWT format.' };
+  const [encodedHeader, encodedPayload, signature] = parts;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const expectedSignature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signingInput));
+  if (!timingSafeEqual(base64Url(new Uint8Array(expectedSignature)), signature)) {
+    return { userId: null, error: 'Invalid JWT signature.' };
+  }
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encodedPayload))) as Record<string, unknown>;
+  } catch {
+    return { userId: null, error: 'Invalid JWT payload.' };
+  }
+  const exp = typeof payload.exp === 'number' ? payload.exp : 0;
+  if (exp && exp < Math.floor(Date.now() / 1000)) {
+    return { userId: null, error: 'JWT is expired.' };
+  }
+  const sub = typeof payload.sub === 'string' ? payload.sub.trim() : '';
+  return sub ? { userId: sub } : { userId: null, error: 'JWT did not include a user id.' };
+}
+
+/** Fallback: validate a Microsoft Graph access token by calling /me. Mirrors note-audio-url. */
+async function getMicrosoftUserId(accessToken: string): Promise<{ userId: string | null; error?: string }> {
+  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    return {
+      userId: null,
+      error: `Microsoft Graph /me rejected the token (${response.status}). ${detail.slice(0, 300)}`,
+    };
+  }
+  const data = (await response.json()) as { id?: unknown };
+  return {
+    userId: typeof data.id === 'string' && data.id.trim() ? data.id.trim() : null,
+    error: 'Microsoft Graph /me did not return a user id.',
+  };
+}
 
 interface RequestBody {
   speakerName: string;
   speakerId?: string;
   transcriptText: string;
   existingProfile?: string | null;
-  /** Optional override (e.g. local dev). Prefer GEMINI_API_KEY secret on the function. */
-  apiKey?: string;
 }
 
 /** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
@@ -474,19 +557,40 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS });
   }
+  if (req.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed' }, 405);
+  }
+
+  // Auth gate: require an authenticated user. Primary signal is the app JWT minted by
+  // supabase-token (already tenant-gated); fall back to a Microsoft Graph access token.
+  // Without this, anyone could burn the org's Gemini quota. Mirrors note-audio-url.
+  const jwtSecret = Deno.env.get('SUPABASE_JWT_SECRET') ?? Deno.env.get('JWT_SECRET') ?? '';
+  const authHeader = req.headers.get('authorization')?.trim() ?? '';
+  const appToken = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice('Bearer '.length).trim() : '';
+  const microsoftToken = req.headers.get('x-ms-access-token')?.trim() ?? '';
+  let authResult = appToken && jwtSecret
+    ? await verifyAppJwt(appToken, jwtSecret)
+    : { userId: null as string | null, error: 'Missing app bearer token.' };
+  if (!authResult.userId && microsoftToken) {
+    authResult = await getMicrosoftUserId(microsoftToken);
+  }
+  if (!authResult.userId && !appToken && !microsoftToken) {
+    authResult = { userId: null, error: 'Missing bearer token.' };
+  }
+  if (!authResult.userId) {
+    return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, 401);
+  }
 
   try {
     const body = (await req.json()) as RequestBody;
-    const { speakerName, speakerId = '', transcriptText, existingProfile, apiKey: bodyApiKey } = body;
+    const { speakerName, speakerId = '', transcriptText, existingProfile } = body;
 
-    const apiKey =
-      Deno.env.get('GEMINI_API_KEY') ?? Deno.env.get('GOOGLE_API_KEY') ?? bodyApiKey ?? '';
+    const apiKey = Deno.env.get('GEMINI_API_KEY') ?? Deno.env.get('GOOGLE_API_KEY') ?? '';
     const model = (Deno.env.get('GEMINI_MODEL') ?? DEFAULT_GEMINI_MODEL).trim();
     if (!apiKey) {
       return new Response(
         JSON.stringify({
-          error:
-            'No Gemini API key. Set GEMINI_API_KEY (or GOOGLE_API_KEY) as a Supabase secret, or pass apiKey from the client.',
+          error: 'No Gemini API key. Set GEMINI_API_KEY (or GOOGLE_API_KEY) as a Supabase secret.',
         }),
         { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } }
       );

@@ -785,6 +785,7 @@ class NotesRepository {
     for (final speakerName in uniqueSpeakers) {
       final record = existing[speakerName.toLowerCase()];
       final profile = await _generateSpeakerProfile(
+        appToken: auth.token,
         speakerName: speakerName,
         speakerId: record?.id ?? '',
         transcriptText: transcriptText,
@@ -828,6 +829,7 @@ class NotesRepository {
   }
 
   Future<String> _generateSpeakerProfile({
+    required String appToken,
     required String speakerName,
     required String speakerId,
     required String transcriptText,
@@ -841,11 +843,7 @@ class NotesRepository {
         'transcriptText': transcriptText,
         'existingProfile': existingProfile,
       },
-      options: Options(headers: {
-        'content-type': 'application/json',
-        'apikey': supabaseAnonKey,
-        'authorization': 'Bearer $supabaseAnonKey',
-      }),
+      options: Options(headers: _supabaseJsonHeaders(appToken)),
     );
     final error = _stringValue(response.data?['error']);
     if (error != null) throw StateError(error);
