@@ -106,8 +106,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/processing/:jobId',
-        builder: (context, state) =>
-            ProcessingScreen(jobId: state.pathParameters['jobId']!),
+        builder: (context, state) => ProcessingScreen(
+          jobId: state.pathParameters['jobId']!,
+          pendingJob: state.extra is PendingProcessingJob
+              ? state.extra as PendingProcessingJob
+              : null,
+        ),
       ),
       GoRoute(
         path: '/note/:id',
