@@ -16,17 +16,22 @@ final apiClientProvider = Provider<Dio>((ref) {
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 30),
   ));
-  dio.interceptors.add(AuthInterceptor(dio));
+  dio.interceptors.add(AuthInterceptor());
   return dio;
 });
 
+/// Attaches the Microsoft access token as a Bearer header.
+///
+/// NOTE: this client is currently unused for live requests (workflow calls go
+/// through NotesRepository's own `_workflow` Dio, which has its own 401 recovery
+/// in `retryOnWorkflowUnauthorizedInterceptor`). The previous 401-refresh branch
+/// here was dead and unsafe: it read a `refresh_token` key that is never written
+/// and posted to an `/auth/refresh` endpoint this backend does not expose, and
+/// its unreachable failure path wiped every token via `deleteAll()` with no
+/// redirect. It was removed rather than left as misleading dead code.
 class AuthInterceptor extends Interceptor {
-  AuthInterceptor(this._dio);
-
-  final Dio _dio;
   static const _storage = FlutterSecureStorage();
   static const _kAccess = AuthTokenStore.accessTokenKey;
-  static const _kRefresh = 'refresh_token';
 
   @override
   Future<void> onRequest(
@@ -36,33 +41,5 @@ class AuthInterceptor extends Interceptor {
       options.headers['Authorization'] = 'Bearer $token';
     }
     handler.next(options);
-  }
-
-  @override
-  Future<void> onError(
-      DioException err, ErrorInterceptorHandler handler) async {
-    // Refresh once on 401, then replay the original request.
-    if (err.response?.statusCode == 401 &&
-        err.requestOptions.extra['retried'] != true) {
-      final refresh = await _storage.read(key: _kRefresh);
-      if (refresh != null) {
-        try {
-          final res = await _dio.post('/auth/refresh',
-              data: {'refreshToken': refresh},
-              options: Options(extra: {'retried': true}));
-          final newAccess = res.data['accessToken'] as String;
-          await _storage.write(key: _kAccess, value: newAccess);
-
-          final opts = err.requestOptions..extra['retried'] = true;
-          opts.headers['Authorization'] = 'Bearer $newAccess';
-          final replay = await _dio.fetch(opts);
-          return handler.resolve(replay);
-        } catch (_) {
-          await _storage.deleteAll();
-          // TODO: notify auth provider → router redirects to /signin.
-        }
-      }
-    }
-    handler.next(err);
   }
 }

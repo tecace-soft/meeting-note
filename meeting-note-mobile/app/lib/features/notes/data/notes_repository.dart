@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -60,9 +59,12 @@ class NotesRepository {
             sendTimeout: const Duration(minutes: 5),
           ),
         ) {
-    final retry = MobileSupabaseSession().retryOnUnauthorizedInterceptor();
+    final session = MobileSupabaseSession();
+    final retry = session.retryOnUnauthorizedInterceptor();
     _supabase.interceptors.add(retry);
     _supabaseRoot.interceptors.add(retry);
+    _workflow.interceptors
+        .add(session.retryOnWorkflowUnauthorizedInterceptor());
   }
 
   final Dio _dio; // ignore: unused_field
@@ -372,8 +374,8 @@ class NotesRepository {
       );
       return _PreparedAudio(
         downloadUrl: signedUrl,
-        fileName:
-            storageRef.name ?? _fileName(storageRef.storagePath, fallback: '$title.m4a'),
+        fileName: storageRef.name ??
+            _fileName(storageRef.storagePath, fallback: '$title.m4a'),
         fileId: storageRef.fileId,
         recordedAt: storageRef.recordedAt,
       );
@@ -544,10 +546,12 @@ class NotesRepository {
         options: Options(headers: _supabaseJsonHeaders(token)),
       );
     } catch (_) {
-      await _supabaseRoot.delete<void>(
-        '/storage/v1/object/$_noteImageBucket/$storagePath',
-        options: Options(headers: _supabaseJsonHeaders(token)),
-      ).catchError((_) {});
+      await _supabaseRoot
+          .delete<void>(
+            '/storage/v1/object/$_noteImageBucket/$storagePath',
+            options: Options(headers: _supabaseJsonHeaders(token)),
+          )
+          .catchError((_) {});
       rethrow;
     }
   }
@@ -627,10 +631,18 @@ class NotesRepository {
 
   Future<void> delete(String id) async {
     final auth = await MobileSupabaseSession().auth();
-    await _supabase.delete<void>(
+    final response = await _supabase.delete<List<dynamic>>(
       '/note',
-      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.${auth.userId}'},
-      options: Options(headers: _supabaseHeaders(auth.token)),
+      queryParameters: {
+        'id': 'eq.$id',
+        'user_id': 'eq.${auth.userId}',
+        'select': 'id',
+      },
+      options: Options(headers: _supabaseInsertHeaders(auth.token)),
+    );
+    _requireAffectedRows(
+      response.data,
+      'Delete did not remove the note. You may not have permission to delete it.',
     );
     await _cache.delete(_notesCacheKey(auth.userId));
   }
@@ -647,16 +659,25 @@ class NotesRepository {
 
   Future<void> rename(String id, String name) async {
     final auth = await MobileSupabaseSession().auth();
-    await _supabase.patch<void>(
+    final response = await _supabase.patch<List<dynamic>>(
       '/note',
       data: {'name': name},
-      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.${auth.userId}'},
-      options: Options(headers: _supabaseHeaders(auth.token)),
+      queryParameters: {
+        'id': 'eq.$id',
+        'user_id': 'eq.${auth.userId}',
+        'select': 'id',
+      },
+      options: Options(headers: _supabaseInsertHeaders(auth.token)),
+    );
+    _requireAffectedRows(
+      response.data,
+      'Rename did not update the note. You may not have permission to edit it.',
     );
     await _cache.delete(_notesCacheKey(auth.userId));
   }
 
-  Future<String?> currentUserId() async => (await MobileSupabaseSession().auth()).userId;
+  Future<String?> currentUserId() async =>
+      (await MobileSupabaseSession().auth()).userId;
 
   Future<void> shareNote(String id, List<String> sharedUserIds) async {
     final auth = await MobileSupabaseSession().auth();
@@ -686,7 +707,8 @@ class NotesRepository {
   }
 
   Future<String> regenerateSummary(MeetingNote note) async {
-    final microsoftToken = await _storage.read(key: AuthTokenStore.accessTokenKey);
+    final microsoftToken =
+        await _storage.read(key: AuthTokenStore.accessTokenKey);
     final auth = await MobileSupabaseSession().auth();
     if (microsoftToken == null || microsoftToken.isEmpty) {
       throw StateError('Sign in with Microsoft before regenerating a summary.');
@@ -730,7 +752,8 @@ class NotesRepository {
       '/regenerate-summary',
       data: {
         'noteId': note.id,
-        'diarization': note.transcript.map((segment) => segment.toJson()).toList(),
+        'diarization':
+            note.transcript.map((segment) => segment.toJson()).toList(),
         'previousSummary': note.displaySummary,
         'speakerProfiles': speakerProfiles,
         'instructions': '',
@@ -806,14 +829,19 @@ class NotesRepository {
   ) async {
     final auth = await MobileSupabaseSession().auth();
     if (profile.speakerId != null && profile.speakerId!.isNotEmpty) {
-      await _supabase.patch<void>(
+      final response = await _supabase.patch<List<dynamic>>(
         '/speaker',
         data: {'profile': profile.profile},
         queryParameters: {
           'id': 'eq.${profile.speakerId}',
           'user_id': 'eq.${auth.userId}',
+          'select': 'id',
         },
-        options: Options(headers: _supabaseHeaders(auth.token)),
+        options: Options(headers: _supabaseInsertHeaders(auth.token)),
+      );
+      _requireAffectedRows(
+        response.data,
+        'Profile save did not update the speaker. You may not have permission to edit it.',
       );
       return;
     }
@@ -857,11 +885,15 @@ class NotesRepository {
 
   Future<void> saveSummaryEdit(String id, String summaryEdit) async {
     final auth = await MobileSupabaseSession().auth();
-    await _supabase.patch<void>(
+    final response = await _supabase.patch<List<dynamic>>(
       '/note',
       data: {'summary_edit': summaryEdit},
-      queryParameters: {'id': 'eq.$id'},
-      options: Options(headers: _supabaseHeaders(auth.token)),
+      queryParameters: {'id': 'eq.$id', 'select': 'id'},
+      options: Options(headers: _supabaseInsertHeaders(auth.token)),
+    );
+    _requireAffectedRows(
+      response.data,
+      'Summary save did not update the note. You may not have permission to edit it.',
     );
     await _cache.delete(_notesCacheKey(auth.userId));
   }
@@ -888,7 +920,8 @@ class NotesRepository {
   Future<List<TecAceContact>> tecAceContacts() async {
     final token = await _storage.read(key: AuthTokenStore.accessTokenKey);
     if (token == null || token.isEmpty) {
-      throw StateError('Microsoft access token is not available. Sign in again.');
+      throw StateError(
+          'Microsoft access token is not available. Sign in again.');
     }
 
     final graph = Dio(BaseOptions(
@@ -995,7 +1028,9 @@ class NotesRepository {
 
     final response = await _supabase.patch<List<dynamic>>(
       '/note',
-      data: {'diarization': segments.map((segment) => segment.toJson()).toList()},
+      data: {
+        'diarization': segments.map((segment) => segment.toJson()).toList()
+      },
       queryParameters: {
         'id': 'eq.$noteId',
         'select': 'id',
@@ -1149,7 +1184,8 @@ class GeneratedSpeakerProfile {
   final String profile;
   final bool isNew;
 
-  GeneratedSpeakerProfile copyWith({String? profile}) => GeneratedSpeakerProfile(
+  GeneratedSpeakerProfile copyWith({String? profile}) =>
+      GeneratedSpeakerProfile(
         speakerId: speakerId,
         speakerName: speakerName,
         profile: profile ?? this.profile,
@@ -1246,6 +1282,13 @@ Map<String, String> _supabaseInsertHeaders(String token) => {
 
 String _notesCacheKey(String userId) => 'notes_$userId';
 
+/// Throw when an owner-scoped PostgREST write affected no rows. A 0-row write
+/// still returns 2xx, so without this the UI reports success on a write that
+/// RLS/ownership silently denied. Mirrors saveDiarization's inline guard.
+void _requireAffectedRows(List<dynamic>? rows, String message) {
+  if ((rows ?? const []).isEmpty) throw StateError(message);
+}
+
 Future<String> _localAudioPath(String audioPath, String title) async {
   if (audioPath.startsWith('demo://')) {
     throw StateError(
@@ -1265,7 +1308,15 @@ Future<String> _localAudioPath(String audioPath, String title) async {
   final targetName =
       _fileName(Uri.parse(audioPath).path, fallback: '$title.m4a');
   final target = File('${dir.path}${Platform.pathSeparator}$targetName');
-  await Dio().download(audioPath, target.path);
+  // Timeouts required: a stalled/huge remote file must not hang the create-note
+  // flow forever. A bare Dio() has no connect/receive timeout.
+  final downloadDio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(minutes: 5),
+    ),
+  );
+  await downloadDio.download(audioPath, target.path);
   return target.path;
 }
 
@@ -1294,10 +1345,7 @@ String _sanitizeStorageFileName(String name) {
 }
 
 String _encodeStoragePath(String storagePath) {
-  return storagePath
-      .split('/')
-      .map(Uri.encodeComponent)
-      .join('/');
+  return storagePath.split('/').map(Uri.encodeComponent).join('/');
 }
 
 String _absoluteSupabaseStorageUrl(String signedUrl) {
@@ -1455,7 +1503,8 @@ String _uuidV4() {
   final bytes = List<int>.generate(16, (_) => random.nextInt(256));
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  final hex = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  final hex =
+      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
   return [
     hex.substring(0, 8),
     hex.substring(8, 12),
@@ -1503,11 +1552,20 @@ String? _errorText(Object? value) {
   if (value is String) {
     final text = value.trim();
     if (text.isEmpty) return null;
-    return text == '[object Object]' ? 'Backend returned an error object.' : text;
+    return text == '[object Object]'
+        ? 'Backend returned an error object.'
+        : text;
   }
   if (value is Map) {
     final parts = <String>[];
-    for (final key in const ['message', 'error', 'detail', 'details', 'hint', 'code']) {
+    for (final key in const [
+      'message',
+      'error',
+      'detail',
+      'details',
+      'hint',
+      'code'
+    ]) {
       final text = _stringValue(value[key]);
       if (text != null && text != '[object Object]') {
         parts.add('$key: $text');

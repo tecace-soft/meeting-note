@@ -422,7 +422,14 @@ class ProjectsRepository {
 }
 
 String _projectChatStreamDelta(String raw) {
-  final decoded = jsonDecode(raw);
+  Object? decoded;
+  try {
+    decoded = jsonDecode(raw);
+  } on FormatException {
+    // A single malformed SSE chunk must not abort the whole stream; skip it.
+    // A real server error arrives as a well-formed {"error": ...} event below.
+    return '';
+  }
   if (decoded is! Map) return '';
   final error = decoded['error'];
   if (error is String && error.trim().isNotEmpty) {
@@ -562,7 +569,8 @@ class ProjectChatRow {
       sessionId: sessionId,
       createdAt: _dateValue(json['created_at']) ?? DateTime.now(),
       message: _stringValue(json['message']),
-      response: _stringValue(json['response']) ?? _stringValue(json['repsonse']),
+      response:
+          _stringValue(json['response']) ?? _stringValue(json['repsonse']),
     );
   }
 }
@@ -666,7 +674,8 @@ String _generateSessionId() {
   final hh = now.hour.toString().padLeft(2, '0');
   final min = now.minute.toString().padLeft(2, '0');
   final ss = now.second.toString().padLeft(2, '0');
-  final random = DateTime.now().microsecondsSinceEpoch
+  final random = DateTime.now()
+      .microsecondsSinceEpoch
       .remainder(100000000)
       .toString()
       .padLeft(8, '0');
