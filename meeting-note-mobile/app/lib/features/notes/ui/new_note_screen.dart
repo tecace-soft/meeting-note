@@ -16,6 +16,7 @@ import '../../auth/providers/auth_provider.dart';
 import '../../settings/data/settings_repository.dart';
 import '../data/notes_repository.dart';
 import '../models/meeting_note.dart';
+import 'processing_screen.dart';
 
 class NewNoteDraft {
   const NewNoteDraft({
@@ -48,7 +49,6 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   late String? _audioPath;
   late final List<String> _attachmentPaths;
   bool _loadingPrompts = true;
-  bool _submitting = false;
 
   @override
   void initState() {
@@ -185,7 +185,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                     const SizedBox(height: 55),
                     PrimaryButton(
                       label: 'Generate Summary',
-                      loading: _submitting,
+                      loading: false,
                       onPressed: _audioPath == null ? null : _submit,
                     ),
                     const SizedBox(height: 19),
@@ -437,7 +437,6 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     final audioPath = _audioPath;
     if (audioPath == null) return;
 
-    setState(() => _submitting = true);
     try {
       final selectedPrompt = await _selectedPromptForSubmit();
       if (selectedPrompt == null) {
@@ -446,20 +445,22 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
         );
       }
       final user = ref.read(authControllerProvider).user;
-      final jobId = await ref.read(notesRepositoryProvider).createNote(
-            audioPath: audioPath,
-            title: _title.text.trim(),
-            instructions: _instructions.text.trim().isEmpty
-                ? null
-                : _instructions.text.trim(),
-            promptId: selectedPrompt.id,
-            userName: user?.displayName,
-            attachmentPaths: _attachmentPaths,
-          );
-      if (mounted) context.pushReplacement('/processing/$jobId');
+      if (!mounted) return;
+      context.pushReplacement(
+        '/processing/starting',
+        extra: PendingProcessingJob(
+          audioPath: audioPath,
+          title: _title.text.trim(),
+          instructions: _instructions.text.trim().isEmpty
+              ? null
+              : _instructions.text.trim(),
+          promptId: selectedPrompt.id,
+          userName: user?.displayName,
+          attachmentPaths: [..._attachmentPaths],
+        ),
+      );
     } catch (e) {
       if (mounted) {
-        setState(() => _submitting = false);
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Failed to submit: $e')));
       }
