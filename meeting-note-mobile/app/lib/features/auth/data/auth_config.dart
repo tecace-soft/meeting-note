@@ -7,19 +7,13 @@ const microsoftAuthority = 'https://login.microsoftonline.com/$microsoftTenantId
 const microsoftAndroidRedirectUri =
     'msauth://com.example.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D';
 
+// Only the scopes the app actually uses are requested: User.Read (sign-in +
+// profile) and User.ReadBasic.All (the TecAce contact directory). The broad
+// Chat/Files/Calendar scopes were never requested or used and were removed to
+// keep the consent surface minimal.
 const microsoftLoginScopes = <String>[
   'https://graph.microsoft.com/user.read',
   'https://graph.microsoft.com/User.ReadBasic.All',
-];
-
-const microsoftGraphScopes = <String>[
-  'Chat.Read',
-  'Chat.ReadWrite',
-  'ChatMessage.Read',
-  'Files.ReadWrite',
-  'Files.ReadWrite.All',
-  'User.ReadBasic.All',
-  'Calendars.Read',
 ];
 
 bool get isMicrosoftAuthConfigured => microsoftClientId.isNotEmpty;
