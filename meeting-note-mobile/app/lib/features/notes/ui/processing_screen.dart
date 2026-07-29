@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/network/workflow_config.dart';
+import '../../../shared/widgets/widgets.dart';
 import '../data/notes_repository.dart';
 
 class ProcessingScreen extends ConsumerStatefulWidget {
@@ -50,12 +51,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     final snapshot = _snapshot;
     final activeStep = _activeStep(snapshot?.stage, snapshot?.progress ?? 0);
     final starting = widget.pendingJob != null && snapshot == null && _error == null;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F8),
+      backgroundColor: palette.pageBackground,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 33, 24, 0),
@@ -66,25 +68,25 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () => context.go('/record'),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(
                         'Back',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w400,
-                          color: Color(0xFF4B5565),
+                          color: palette.textSecondary,
                         ),
                       ),
                     ),
                   ),
                   const Spacer(),
-                  const Text(
+                  Text(
                     'AI Summary',
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF111827),
+                      color: palette.text,
                     ),
                   ),
                   const Spacer(),
@@ -124,13 +126,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
                 ),
               ],
               const SizedBox(height: 39),
-              const Text(
+              Text(
                 "You can leave this screen - we'll notify you",
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w300,
-                  color: Color(0xFF9EA8B8),
+                  color: palette.textMuted,
                 ),
               ),
               const SizedBox(height: 23),
@@ -142,10 +144,10 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
               Text(
                 workflowApiUrl,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w300,
-                  color: Color(0xFF9EA8B8),
+                  color: palette.textMuted,
                 ),
               ),
               const Spacer(flex: 18),
@@ -534,6 +536,7 @@ class _CancelButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -542,16 +545,16 @@ class _CancelButton extends StatelessWidget {
         constraints: const BoxConstraints(minWidth: 108),
         padding: const EdgeInsets.symmetric(horizontal: 24),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: palette.card,
           borderRadius: BorderRadius.circular(22),
         ),
         child: Center(
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w400,
-              color: Color(0xFF667085),
+              color: palette.textSecondary,
             ),
           ),
         ),

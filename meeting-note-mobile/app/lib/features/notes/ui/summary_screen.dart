@@ -131,20 +131,21 @@ class _DetailHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => context.canPop() ? context.pop() : context.go('/history'),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(
               'Back',
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w400,
-                color: Color(0xFF4B5565),
+                color: palette.textSecondary,
               ),
             ),
           ),
@@ -159,11 +160,11 @@ class _DetailHeader extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   height: 1.1,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF111827),
+                  color: palette.text,
                 ),
               ),
               const SizedBox(height: 5),
@@ -172,24 +173,24 @@ class _DetailHeader extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w300,
-                  color: Color(0xFF9EA8B8),
+                  color: palette.textMuted,
                 ),
               ),
             ],
           ),
         ),
         const SizedBox(width: 18),
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Text(
             'More',
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w400,
-              color: Color(0xFF4B5565),
+              color: palette.textSecondary,
             ),
           ),
         ),
@@ -237,56 +238,57 @@ class _SummaryTab extends StatelessWidget {
       );
     }
 
+    final palette = FigmaDesign.of(context);
     return ListView(
       padding: EdgeInsets.zero,
       children: [
         Container(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: palette.card,
             borderRadius: BorderRadius.circular(24),
           ),
           child: MarkdownBody(
             data: summary,
             styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-              h1: const TextStyle(
+              h1: TextStyle(
                 fontSize: 18,
                 height: 1.2,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF111827),
+                color: palette.text,
               ),
-              h2: const TextStyle(
+              h2: TextStyle(
                 fontSize: 14,
                 height: 1.25,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF111827),
+                color: palette.text,
               ),
               h3: const TextStyle(
                 fontSize: 13,
                 height: 1.25,
                 fontWeight: FontWeight.w500,
-                color: Color(0xFF2F80FF),
+                color: FigmaDesign.activeBlue,
               ),
-              p: const TextStyle(
+              p: TextStyle(
                 fontSize: 13,
                 height: 1.42,
                 fontWeight: FontWeight.w300,
-                color: Color(0xFF4B5565),
+                color: palette.textSecondary,
               ),
-              strong: const TextStyle(
+              strong: TextStyle(
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF111827),
+                color: palette.text,
               ),
-              listBullet: const TextStyle(
+              listBullet: TextStyle(
                 fontSize: 13,
                 height: 1.42,
-                color: Color(0xFF4B5565),
+                color: palette.textSecondary,
               ),
-              blockquote: const TextStyle(
+              blockquote: TextStyle(
                 fontSize: 13,
                 height: 1.42,
                 fontWeight: FontWeight.w300,
-                color: Color(0xFF4B5565),
+                color: palette.textSecondary,
               ),
             ),
           ),
@@ -390,6 +392,8 @@ class _SpeakerChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -397,7 +401,9 @@ class _SpeakerChip extends StatelessWidget {
         height: 34,
         padding: const EdgeInsets.symmetric(horizontal: 15),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFE8F2FF) : Colors.white,
+          color: selected
+              ? (dark ? const Color(0xFF17345D) : const Color(0xFFE8F2FF))
+              : palette.card,
           borderRadius: BorderRadius.circular(18),
         ),
         child: Center(
@@ -407,8 +413,7 @@ class _SpeakerChip extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w400,
-              color:
-                  selected ? const Color(0xFF2F80FF) : const Color(0xFF4B5565),
+              color: selected ? FigmaDesign.activeBlue : palette.textSecondary,
             ),
           ),
         ),
@@ -428,6 +433,7 @@ class _TranscriptRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     final speaker = _speakerName(segment);
     final color = _speakerColor(speaker);
     return Padding(
@@ -476,10 +482,10 @@ class _TranscriptRow extends StatelessWidget {
                     const SizedBox(width: 7),
                     Text(
                       segment.timestamp,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w300,
-                        color: Color(0xFFB5BECC),
+                        color: palette.textMuted,
                       ),
                     ),
                   ],
@@ -487,11 +493,11 @@ class _TranscriptRow extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   segment.text,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     height: 1.35,
                     fontWeight: FontWeight.w300,
-                    color: Color(0xFF344054),
+                    color: palette.textSecondary,
                   ),
                 ),
               ],
@@ -541,7 +547,7 @@ class _ActionBarState extends ConsumerState<_ActionBar> {
       child: Container(
         height: 80,
         padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
-        color: Colors.white,
+        color: FigmaDesign.of(context).card,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -672,10 +678,10 @@ class _ActionText extends StatelessWidget {
             fontSize: 13,
             fontWeight: FontWeight.w400,
             color: onTap == null
-                ? const Color(0xFFB6BFCC)
+                ? FigmaDesign.of(context).textMuted
                 : active
-                    ? const Color(0xFF2F80FF)
-                    : const Color(0xFF4B5565),
+                    ? FigmaDesign.activeBlue
+                    : FigmaDesign.of(context).textSecondary,
           ),
         ),
       ),
@@ -1480,13 +1486,13 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
             children: [
               Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Change speaker',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF111827),
+                        color: FigmaDesign.of(context).text,
                       ),
                     ),
                   ),
@@ -1499,10 +1505,12 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
               const SizedBox(height: 10),
               TextField(
                 controller: _controller,
+                style: TextStyle(color: FigmaDesign.of(context).text),
                 decoration: InputDecoration(
                   hintText: 'Search or type speaker',
+                  hintStyle: TextStyle(color: FigmaDesign.of(context).textMuted),
                   filled: true,
-                  fillColor: const Color(0xFFF5F7FB),
+                  fillColor: FigmaDesign.of(context).field,
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   border: OutlineInputBorder(
@@ -1672,6 +1680,7 @@ class _ScopeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     return InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: onTap,
@@ -1684,16 +1693,15 @@ class _ScopeRow extends StatelessWidget {
                   ? Icons.radio_button_checked_rounded
                   : Icons.radio_button_off_rounded,
               size: 19,
-              color:
-                  selected ? const Color(0xFF2F80FF) : const Color(0xFFB5BECC),
+              color: selected ? FigmaDesign.activeBlue : palette.textMuted,
             ),
             const SizedBox(width: 10),
             Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w400,
-                color: Color(0xFF344054),
+                color: palette.textSecondary,
               ),
             ),
           ],
@@ -1714,10 +1722,10 @@ class _SpeakerSectionTitle extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,
-          color: Color(0xFF8B98AA),
+          color: FigmaDesign.of(context).textMuted,
         ),
       ),
     );
@@ -1739,6 +1747,8 @@ class _SpeakerChoiceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
     final color = _speakerColor(title);
     return InkWell(
       borderRadius: BorderRadius.circular(18),
@@ -1747,7 +1757,9 @@ class _SpeakerChoiceRow extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFE8F2FF) : const Color(0xFFF7F9FC),
+          color: selected
+              ? (dark ? const Color(0xFF17345D) : const Color(0xFFE8F2FF))
+              : palette.field,
           borderRadius: BorderRadius.circular(18),
           border: selected
               ? Border.all(color: const Color(0xFFB8DAFF))
@@ -1782,10 +1794,10 @@ class _SpeakerChoiceRow extends StatelessWidget {
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w500,
-                      color: Color(0xFF111827),
+                      color: palette.text,
                     ),
                   ),
                   if (subtitle != null && subtitle!.trim().isNotEmpty)
@@ -1793,18 +1805,18 @@ class _SpeakerChoiceRow extends StatelessWidget {
                       subtitle!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w300,
-                        color: Color(0xFF8B98AA),
+                        color: palette.textMuted,
                       ),
                     ),
                 ],
               ),
             ),
-            const Icon(
+            Icon(
               Icons.chevron_right_rounded,
-              color: Color(0xFFB5BECC),
+              color: palette.textMuted,
             ),
           ],
         ),
@@ -1820,20 +1832,21 @@ class _SpeakerEmptyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFF7F9FC),
+        color: palette.field,
         borderRadius: BorderRadius.circular(18),
       ),
       child: Text(
         message,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 12,
           height: 1.35,
           fontWeight: FontWeight.w300,
-          color: Color(0xFF8B98AA),
+          color: palette.textMuted,
         ),
       ),
     );

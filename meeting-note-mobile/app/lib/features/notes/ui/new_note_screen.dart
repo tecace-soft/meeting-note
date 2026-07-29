@@ -71,11 +71,12 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     final audioName = _fileName(_audioPath) ?? 'No audio selected';
     final attachmentNames = _attachmentPaths.map(_fileName).whereType<String>().toList();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F8),
+      backgroundColor: palette.pageBackground,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 33, 24, 0),
@@ -86,25 +87,25 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: _goBackToRecord,
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(
                         'Back',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w400,
-                          color: Color(0xFF4B5565),
+                          color: palette.textSecondary,
                         ),
                       ),
                     ),
                   ),
                   const Spacer(),
-                  const Text(
+                  Text(
                     'New Meeting Note',
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF111827),
+                      color: palette.text,
                     ),
                   ),
                   const Spacer(),
@@ -190,13 +191,13 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                       onPressed: _audioPath == null ? null : _submit,
                     ),
                     const SizedBox(height: 19),
-                    const Text(
+                    Text(
                       "We'll notify you when it's ready",
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w300,
-                        color: Color(0xFFB6BFCC),
+                        color: palette.textMuted,
                       ),
                     ),
                     const SizedBox(height: 34),
@@ -523,11 +524,12 @@ class _AudioSourceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     return Container(
       height: 75,
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: palette.card,
         borderRadius: BorderRadius.circular(21),
       ),
       child: Row(
@@ -564,10 +566,10 @@ class _AudioSourceCard extends StatelessWidget {
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
-                    color: Color(0xFF111827),
+                    color: palette.text,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -575,10 +577,10 @@ class _AudioSourceCard extends StatelessWidget {
                   meta,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w300,
-                    color: Color(0xFF9BA6B7),
+                    color: palette.textMuted,
                   ),
                 ),
               ],
@@ -587,12 +589,12 @@ class _AudioSourceCard extends StatelessWidget {
           const SizedBox(width: 10),
           GestureDetector(
             onTap: onRemove,
-            child: const Text(
+            child: Text(
               'Remove',
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w300,
-                color: Color(0xFFADB6C6),
+                color: palette.textMuted,
               ),
             ),
           ),
@@ -611,10 +613,10 @@ class _FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       label,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 13,
         fontWeight: FontWeight.w400,
-        color: Color(0xFF667085),
+        color: FigmaDesign.of(context).textSecondary,
       ),
     );
   }
@@ -635,27 +637,28 @@ class _FigmaTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     return Container(
       constraints: BoxConstraints(minHeight: minHeight),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: palette.field,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE4E8F0)),
+        border: Border.all(color: palette.fieldBorder),
       ),
       child: TextField(
         controller: controller,
         maxLines: maxLines,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w400,
-          color: Color(0xFF111827),
+          color: palette.text,
         ),
         decoration: InputDecoration(
           hintText: hintText,
-          hintStyle: const TextStyle(
+          hintStyle: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w300,
-            color: Color(0xFFBAC3D0),
+            color: palette.textMuted,
           ),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
@@ -683,9 +686,9 @@ class _SummaryPromptButton extends StatelessWidget {
         height: 56,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: FigmaDesign.of(context).field,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE4E8F0)),
+          border: Border.all(color: FigmaDesign.of(context).fieldBorder),
         ),
         child: Row(
           children: [
@@ -694,10 +697,10 @@ class _SummaryPromptButton extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w400,
-                  color: Color(0xFF111827),
+                  color: FigmaDesign.of(context).text,
                 ),
               ),
             ),
@@ -707,7 +710,7 @@ class _SummaryPromptButton extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
-                color: Color(0xFF2F80FF),
+                color: FigmaDesign.activeBlue,
               ),
             ),
           ],
@@ -732,6 +735,7 @@ class _AttachmentButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -740,7 +744,7 @@ class _AttachmentButton extends StatelessWidget {
         constraints: const BoxConstraints(minWidth: 96),
         padding: const EdgeInsets.symmetric(horizontal: 18),
         decoration: BoxDecoration(
-          color: muted ? const Color(0xFFF1F3F7) : Colors.white,
+          color: muted ? palette.field : palette.card,
           borderRadius: BorderRadius.circular(22),
         ),
         child: Center(
@@ -752,7 +756,7 @@ class _AttachmentButton extends StatelessWidget {
                 Icon(
                   icon,
                   size: 16,
-                  color: muted ? const Color(0xFF667085) : const Color(0xFF111827),
+                  color: muted ? palette.textSecondary : palette.text,
                 ),
                 const SizedBox(width: 6),
               ],
@@ -764,9 +768,7 @@ class _AttachmentButton extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w400,
-                    color: muted
-                        ? const Color(0xFF667085)
-                        : const Color(0xFF111827),
+                    color: muted ? palette.textSecondary : palette.text,
                   ),
                 ),
               ),
