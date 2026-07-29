@@ -25,6 +25,23 @@ export interface GeminiCallResult {
   usageMetadata: GeminiUsageMetadata;
 }
 
+// HTTP statuses worth retrying: rate limiting and transient server/gateway
+// errors. Everything else (400/401/403/404, blocked prompt) is a permanent
+// failure that a retry would only repeat.
+const TRANSIENT_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+export class GeminiApiError extends Error {
+  readonly status?: number;
+  readonly retryable: boolean;
+
+  constructor(message: string, options: { status?: number; retryable?: boolean } = {}) {
+    super(message);
+    this.name = 'GeminiApiError';
+    this.status = options.status;
+    this.retryable = options.retryable ?? false;
+  }
+}
+
 interface GeminiGenerateContentResponse {
   candidates?: {
     content?: { parts?: { text?: string }[] };
@@ -68,7 +85,10 @@ export async function callGemini(input: {
       },
     );
   } catch (error) {
-    throw new Error(fetchErrorMessage(`Gemini generateContent fetch for ${input.model}`, error));
+    // Network-level failure (DNS, reset, timeout): transient, safe to retry.
+    throw new GeminiApiError(fetchErrorMessage(`Gemini generateContent fetch for ${input.model}`, error), {
+      retryable: true,
+    });
   }
 
   const text = await response.text();
@@ -76,11 +96,17 @@ export async function callGemini(input: {
   try {
     data = JSON.parse(text) as GeminiGenerateContentResponse;
   } catch {
-    throw new Error(`Gemini API error (${response.status}): ${text.slice(0, 500)}`);
+    throw new GeminiApiError(`Gemini API error (${response.status}): ${text.slice(0, 500)}`, {
+      status: response.status,
+      retryable: TRANSIENT_GEMINI_STATUSES.has(response.status),
+    });
   }
 
   if (!response.ok) {
-    throw new Error(`Gemini API error (${response.status}): ${data.error?.message ?? text.slice(0, 500)}`);
+    throw new GeminiApiError(`Gemini API error (${response.status}): ${data.error?.message ?? text.slice(0, 500)}`, {
+      status: response.status,
+      retryable: TRANSIENT_GEMINI_STATUSES.has(response.status),
+    });
   }
   if (data.error?.message) throw new Error(`Gemini API error: ${data.error.message}`);
   if (data.promptFeedback?.blockReason) throw new Error(`Gemini blocked the prompt: ${data.promptFeedback.blockReason}`);

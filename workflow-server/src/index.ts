@@ -10,7 +10,7 @@ import { createClient } from '@supabase/supabase-js';
 import { config as loadDotenv } from 'dotenv';
 import { Agent, setGlobalDispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
-import { callGemini, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
+import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
 import { sendWorkflowAlert } from './alerts.js';
@@ -671,6 +671,11 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Transient Gemini failures (429/5xx/network) get a few backoff retries on the
+// SAME model before falling back, so a rate-limit blip mid-demo does not kill
+// the whole summarize job.
+const MAX_GEMINI_TRANSIENT_RETRIES = 3;
+
 async function callGeminiWithFallback(input: {
   stage: string;
   model: string;
@@ -682,30 +687,40 @@ async function callGeminiWithFallback(input: {
   const models = [input.model, ...input.fallbackModels].filter((model, index, all) => model && all.indexOf(model) === index);
   let lastError: unknown = null;
   for (const model of models) {
-    try {
-      console.log(`${input.stage}: calling Gemini model ${model}`);
-      const startedAt = performance.now();
-      const result = await callGemini({
-        apiKey: env.geminiApiKey,
-        model,
-        parts: input.parts,
-        responseMimeType: input.responseMimeType,
-        maxOutputTokens: input.maxOutputTokens,
-      });
-      return {
-        text: result.text,
-        model,
-        usageMetadata: result.usageMetadata,
-        latencyMs: Math.round(performance.now() - startedAt),
-      };
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      const isMissingModel = message.includes('404') || message.includes('not found') || message.includes('not supported');
-      if (!isMissingModel) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        console.log(`${input.stage}: calling Gemini model ${model}${attempt > 0 ? ` (retry ${attempt})` : ''}`);
+        const startedAt = performance.now();
+        const result = await callGemini({
+          apiKey: env.geminiApiKey,
+          model,
+          parts: input.parts,
+          responseMimeType: input.responseMimeType,
+          maxOutputTokens: input.maxOutputTokens,
+        });
+        return {
+          text: result.text,
+          model,
+          usageMetadata: result.usageMetadata,
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        const isMissingModel = message.includes('404') || message.includes('not found') || message.includes('not supported');
+        if (isMissingModel) {
+          console.warn(`${input.stage}: Gemini model ${model} unavailable, trying fallback if configured. ${message}`);
+          break; // move on to the next fallback model
+        }
+        const retryable = error instanceof GeminiApiError && error.retryable;
+        if (retryable && attempt < MAX_GEMINI_TRANSIENT_RETRIES) {
+          const backoffMs = Math.min(1000 * 2 ** attempt, 8000) + Math.floor(Math.random() * 500);
+          console.warn(`${input.stage}: Gemini model ${model} transient error (attempt ${attempt + 1}/${MAX_GEMINI_TRANSIENT_RETRIES + 1}), retrying in ${backoffMs}ms. ${message}`);
+          await delay(backoffMs);
+          continue; // retry the same model
+        }
         throw new Error(`${input.stage}: ${message}`);
       }
-      console.warn(`${input.stage}: Gemini model ${model} unavailable, trying fallback if configured. ${message}`);
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Gemini request failed.'));
@@ -1175,16 +1190,53 @@ async function transcribeWithAssembly(input: {
 
   let transcript: Record<string, unknown> | null = null;
   const timeoutMs = 30 * 60 * 1000;
+  // A single failed poll (network blip, 5xx, rate limit, truncated body) must
+  // not kill an otherwise-healthy transcription. Tolerate a bounded run of
+  // consecutive transient failures and keep polling; a fatal response (4xx, or
+  // an explicit 'error' status from AssemblyAI) still aborts immediately.
+  const maxConsecutivePollFailures = 5;
+  let consecutivePollFailures = 0;
   while (performance.now() - startedAt < timeoutMs) {
     await delay(3000);
-    const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(created.id)}`, {
-      headers: { Authorization: env.assemblyAiApiKey },
-    });
-    const pollRaw = await pollResponse.text();
-    if (!pollResponse.ok) {
-      throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+    let pollResponse: Response;
+    let pollRaw: string;
+    try {
+      pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(created.id)}`, {
+        headers: { Authorization: env.assemblyAiApiKey },
+      });
+      pollRaw = await pollResponse.text();
+    } catch (error) {
+      consecutivePollFailures += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      if (consecutivePollFailures > maxConsecutivePollFailures) {
+        throw new Error(`AssemblyAI transcript poll failed after ${consecutivePollFailures} consecutive network errors: ${message}`);
+      }
+      console.warn(`AssemblyAI transcript poll network error (${consecutivePollFailures}/${maxConsecutivePollFailures}), retrying. ${message}`);
+      continue;
     }
-    transcript = JSON.parse(pollRaw) as Record<string, unknown>;
+    if (!pollResponse.ok) {
+      const isTransient = pollResponse.status >= 500 || pollResponse.status === 429;
+      if (!isTransient) {
+        throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+      }
+      consecutivePollFailures += 1;
+      if (consecutivePollFailures > maxConsecutivePollFailures) {
+        throw new Error(`AssemblyAI transcript poll failed after ${consecutivePollFailures} consecutive transient errors (last ${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+      }
+      console.warn(`AssemblyAI transcript poll transient ${pollResponse.status} (${consecutivePollFailures}/${maxConsecutivePollFailures}), retrying.`);
+      continue;
+    }
+    try {
+      transcript = JSON.parse(pollRaw) as Record<string, unknown>;
+    } catch {
+      consecutivePollFailures += 1;
+      if (consecutivePollFailures > maxConsecutivePollFailures) {
+        throw new Error(`AssemblyAI transcript poll returned invalid JSON ${consecutivePollFailures} times in a row (${pollResponse.status}): ${pollRaw.slice(0, 500)}`);
+      }
+      console.warn(`AssemblyAI transcript poll returned invalid JSON (${consecutivePollFailures}/${maxConsecutivePollFailures}), retrying.`);
+      continue;
+    }
+    consecutivePollFailures = 0;
     if (transcript.status === 'completed') break;
     if (transcript.status === 'error') {
       throw new Error(typeof transcript.error === 'string' ? transcript.error : 'AssemblyAI transcription failed.');

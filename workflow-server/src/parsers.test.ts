@@ -50,6 +50,31 @@ test('parseSummary rejects missing summary', () => {
   assert.throws(() => parseSummary('{"title":"Nope","tags":[]}'), /summary/);
 });
 
+test('parseSummary recovers JSON wrapped in preamble prose', () => {
+  assert.deepEqual(
+    parseSummary('Here is the meeting summary you asked for:\n{"title":"T","summary":"Done","tags":[]}'),
+    { title: 'T', summary: 'Done', tags: [] },
+  );
+});
+
+test('parseSummary recovers JSON with trailing prose', () => {
+  assert.deepEqual(
+    parseSummary('{"title":"T","summary":"Done","tags":[]}\n\nLet me know if you need changes.'),
+    { title: 'T', summary: 'Done', tags: [] },
+  );
+});
+
+test('parseSummary recovery ignores braces inside string values', () => {
+  assert.deepEqual(
+    parseSummary('noise {"title":"T","summary":"a } b { c","tags":[]} trailing'),
+    { title: 'T', summary: 'a } b { c', tags: [] },
+  );
+});
+
+test('parseSummary still throws when no JSON object is present', () => {
+  assert.throws(() => parseSummary('no json here at all'), /JSON/);
+});
+
 test('buildNoteName uses YYMMDD and up to five capitalized title words', () => {
   assert.equal(
     buildNoteName({

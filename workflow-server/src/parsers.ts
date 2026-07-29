@@ -20,9 +20,53 @@ export function stripJsonCodeFences(raw: string): string {
     .trim();
 }
 
+/// Extracts the outermost brace-balanced object from text that surrounds JSON
+/// with prose or a partial code fence. Ignores braces inside strings so a `{`
+/// in the summary body does not throw off the balance. Returns null when no
+/// complete object is present.
+function extractJsonObjectText(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 function parseJsonObject(raw: string): Record<string, unknown> {
   const stripped = stripJsonCodeFences(raw);
-  const parsed = JSON.parse(stripped) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripped) as unknown;
+  } catch (error) {
+    // Recovery: the model occasionally wraps the JSON in prose or an unbalanced
+    // code fence. Retry on the outermost brace-balanced object before failing,
+    // so a summary is not discarded over a formatting slip.
+    const recovered = extractJsonObjectText(stripped);
+    if (recovered === null) throw error;
+    parsed = JSON.parse(recovered) as unknown;
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Model output must be a JSON object.');
   }
