@@ -11,9 +11,11 @@ import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/supabase_config.dart';
 import '../../../core/network/workflow_config.dart';
+import '../../../shared/util/uuid.dart';
 import '../../auth/data/auth_token_store.dart';
 import '../../auth/data/mobile_supabase_session.dart';
 import '../models/meeting_note.dart';
+import 'active_job_store.dart';
 
 final notesRepositoryProvider = Provider<NotesRepository>(
   (ref) => NotesRepository(ref.watch(apiClientProvider)),
@@ -76,7 +78,7 @@ class NotesRepository {
   static const _audioBucket = 'meeting-recordings';
   static const _noteImageBucket = 'meeting-note-images';
   static const _signedUrlSeconds = 60 * 60 * 6;
-  static final _pendingJobAttachments = <String, List<String>>{};
+  static const _activeJobs = ActiveJobStore();
 
   Future<List<MeetingNote>?> cachedList({
     String? query,
@@ -225,9 +227,17 @@ class NotesRepository {
   }
 
   /// Uploads audio + attachments and creates the job. Returns jobId.
+  ///
+  /// [noteId] and [fileId] are stable idempotency keys: the caller generates
+  /// them once per recording (in [PendingProcessingJob]) and passes the same
+  /// values on every retry, so a resubmitted job is deduplicated server-side
+  /// instead of producing a duplicate note. Both are generated here only as a
+  /// fallback when the caller does not supply them.
   Future<String> createNote({
     required String audioPath,
     required String title,
+    String? noteId,
+    String? fileId,
     String? instructions,
     String? promptId,
     String? userName,
@@ -242,14 +252,17 @@ class NotesRepository {
       throw StateError('Sign in with Microsoft before generating a summary.');
     }
     try {
+      final resolvedNoteId =
+          (noteId != null && noteId.trim().isNotEmpty) ? noteId.trim() : _uuidV4();
       final audio = await _prepareAudioForWorkflow(
         audioPath: audioPath,
         title: title,
         userId: auth.userId,
         supabaseToken: auth.token,
+        preassignedFileId:
+            (fileId != null && fileId.trim().isNotEmpty) ? fileId.trim() : null,
       );
       final prompt = await _resolvePromptId(promptId);
-      final noteId = _uuidV4();
       final attachments = await _workflowAttachments(attachmentPaths);
 
       final response = await _workflow.post<Map<String, dynamic>>(
@@ -266,7 +279,7 @@ class NotesRepository {
             'summaryRulesOverride': prompt.summaryRulesOverride,
           'userId': auth.userId,
           'userName': userName?.trim() ?? '',
-          'noteId': noteId,
+          'noteId': resolvedNoteId,
           'language': appLanguage,
           'attachments': attachments,
         },
@@ -279,10 +292,21 @@ class NotesRepository {
       );
       final jobId = response.data?['jobId'];
       if (jobId is String && jobId.trim().isNotEmpty) {
-        _pendingJobAttachments[jobId.trim()] = attachmentPaths
-            .map((path) => path.trim())
-            .where((path) => path.isNotEmpty)
-            .toList();
+        // Persist the in-flight job so a cold restart can resume polling and
+        // still save the attachments (both are lost if this only lived in
+        // memory).
+        await _activeJobs.put(
+          ActiveJob(
+            jobId: jobId.trim(),
+            noteId: resolvedNoteId,
+            userId: auth.userId,
+            attachmentPaths: attachmentPaths
+                .map((path) => path.trim())
+                .where((path) => path.isNotEmpty)
+                .toList(),
+            createdAtMillis: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
         return jobId.trim();
       }
       throw StateError('Workflow server did not return a job id.');
@@ -300,8 +324,8 @@ class NotesRepository {
     required String jobId,
     required String noteId,
   }) async {
-    final key = jobId.trim();
-    final paths = _pendingJobAttachments[key] ?? const [];
+    final job = await _activeJobs.get(jobId.trim());
+    final paths = job?.attachmentPaths ?? const [];
     if (paths.isEmpty) return;
     final auth = await MobileSupabaseSession().auth();
     for (final path in paths.take(10)) {
@@ -312,7 +336,30 @@ class NotesRepository {
         token: auth.token,
       );
     }
-    _pendingJobAttachments.remove(key);
+  }
+
+  /// Removes the persisted in-flight record once its job has reached a terminal
+  /// state, so a launch-time resume never loops on a finished or dead job.
+  Future<void> clearActiveJob(String jobId) => _activeJobs.remove(jobId.trim());
+
+  /// The most recent in-flight job for the signed-in user, used on app launch
+  /// to resume the processing screen. Returns null when nothing is pending.
+  ///
+  /// A real summarize job finishes in minutes; anything older than a day is a
+  /// dead record (its terminal cleanup never ran). Such entries are pruned and
+  /// ignored so a relaunch never loops on a job that will never resume.
+  Future<ActiveJob?> pendingJobForCurrentUser() async {
+    final userId = await MobileSupabaseSession.cachedUserId();
+    if (userId == null) return null;
+    final job = await _activeJobs.latestForUser(userId);
+    if (job == null) return null;
+    const maxAgeMs = 24 * 60 * 60 * 1000;
+    final ageMs = DateTime.now().millisecondsSinceEpoch - job.createdAtMillis;
+    if (ageMs < 0 || ageMs > maxAgeMs) {
+      await _activeJobs.remove(job.jobId);
+      return null;
+    }
+    return job;
   }
 
   Future<WorkflowJobSnapshot> jobStatus(String jobId) async {
@@ -364,6 +411,7 @@ class NotesRepository {
     required String title,
     required String userId,
     required String supabaseToken,
+    String? preassignedFileId,
   }) async {
     final storageRef = _StorageAudioRef.tryParse(audioPath);
     if (storageRef != null) {
@@ -397,7 +445,9 @@ class NotesRepository {
       throw StateError('File too large. Maximum size is 100 MB.');
     }
 
-    final fileId = _uuidV4();
+    // Reuse the caller's stable fileId across retries so the storage object and
+    // the file row are the same on a resubmit (idempotent), not duplicated.
+    final fileId = preassignedFileId ?? _uuidV4();
     final fileName = _fileName(localAudioPath, fallback: '$title.m4a');
     if (_isMpeg4Audio(fileName) && !await _hasFinalizedMp4Metadata(file)) {
       throw StateError(
@@ -418,6 +468,7 @@ class NotesRepository {
       token: supabaseToken,
     );
     final rowId = await _saveAudioFileRecord(
+      id: fileId,
       userId: userId,
       name: fileName,
       storagePath: storagePath,
@@ -431,7 +482,7 @@ class NotesRepository {
     return _PreparedAudio(
       downloadUrl: signedUrl,
       fileName: fileName,
-      fileId: rowId,
+      fileId: rowId ?? fileId,
       recordedAt: stat.modified.toUtc().toIso8601String(),
     );
   }
@@ -442,19 +493,29 @@ class NotesRepository {
     required String mimeType,
     required String token,
   }) async {
-    await _supabaseRoot.post<void>(
-      '/storage/v1/object/$_audioBucket/$storagePath',
-      data: await file.readAsBytes(),
-      options: Options(
-        contentType: mimeType,
-        headers: {
-          'apikey': supabaseAnonKey,
-          'authorization': 'Bearer $token',
-          'cache-control': '3600',
-          'x-upsert': 'false',
-        },
-      ),
-    );
+    try {
+      await _supabaseRoot.post<void>(
+        '/storage/v1/object/$_audioBucket/$storagePath',
+        data: await file.readAsBytes(),
+        options: Options(
+          contentType: mimeType,
+          headers: {
+            'apikey': supabaseAnonKey,
+            'authorization': 'Bearer $token',
+            'cache-control': '3600',
+            'x-upsert': 'false',
+          },
+        ),
+      );
+    } on DioException catch (error) {
+      // A createNote retry re-uploads to the same (stable fileId-derived) path.
+      // Storage uploads are atomic, so a Duplicate here means the object is
+      // already fully present: treat it as success instead of failing the
+      // retry. Kept as insert-only (no overwrite) so it needs no storage
+      // update permission.
+      if (_isStorageDuplicateError(error)) return;
+      rethrow;
+    }
   }
 
   Future<List<Map<String, String>>> _workflowAttachments(
@@ -593,6 +654,7 @@ class NotesRepository {
   }
 
   Future<String?> _saveAudioFileRecord({
+    required String id,
     required String userId,
     required String name,
     required String storagePath,
@@ -602,9 +664,14 @@ class NotesRepository {
     required String recordedAt,
     required String source,
   }) async {
+    // Insert on the client-supplied id so a createNote retry reuses the same
+    // file row instead of leaking a duplicate. ignore-duplicates makes the
+    // second write skip (returning no row) rather than a primary-key conflict;
+    // the caller falls back to the known id in that case.
     final response = await _supabase.post<List<dynamic>>(
       '/file',
       data: {
+        'id': id,
         'user_id': userId,
         'name': name,
         'bucket': _audioBucket,
@@ -616,7 +683,7 @@ class NotesRepository {
         'recorded_at': recordedAt,
       },
       queryParameters: {'select': 'id'},
-      options: Options(headers: _supabaseInsertHeaders(token)),
+      options: Options(headers: _supabaseUpsertHeaders(token)),
     );
     Map? row;
     for (final item in response.data ?? const []) {
@@ -625,8 +692,8 @@ class NotesRepository {
         break;
       }
     }
-    final id = row?['id'];
-    return id is String && id.isNotEmpty ? id : null;
+    final returnedId = row?['id'];
+    return returnedId is String && returnedId.isNotEmpty ? returnedId : null;
   }
 
   Future<void> delete(String id) async {
@@ -1280,6 +1347,31 @@ Map<String, String> _supabaseInsertHeaders(String token) => {
       'prefer': 'return=representation',
     };
 
+/// Insert-or-skip on a primary-key conflict (ON CONFLICT DO NOTHING). Used so a
+/// createNote retry does not duplicate the file row. Deliberately not
+/// merge-duplicates: skipping needs only insert permission, whereas a merge
+/// would run an UPDATE and depend on a row-level update policy.
+Map<String, String> _supabaseUpsertHeaders(String token) => {
+      'apikey': supabaseAnonKey,
+      'authorization': 'Bearer $token',
+      'content-type': 'application/json',
+      'prefer': 'resolution=ignore-duplicates,return=representation',
+    };
+
+/// True when a Supabase Storage upload failed only because the object already
+/// exists (the createNote retry re-uploaded the same path).
+bool _isStorageDuplicateError(DioException error) {
+  if (error.response?.statusCode == 409) return true;
+  final data = error.response?.data;
+  final text = (data is Map ? (data['error'] ?? data['message'] ?? data['statusCode']) : data)
+      ?.toString()
+      .toLowerCase();
+  if (text == null) return false;
+  return text.contains('duplicate') ||
+      text.contains('already exists') ||
+      text.contains('409');
+}
+
 String _notesCacheKey(String userId) => 'notes_$userId';
 
 /// Throw when an owner-scoped PostgREST write affected no rows. A 0-row write
@@ -1498,21 +1590,7 @@ Future<bool> _fileContainsAscii(File file, String value) async {
   return false;
 }
 
-String _uuidV4() {
-  final random = Random.secure();
-  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  final hex =
-      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
-  return [
-    hex.substring(0, 8),
-    hex.substring(8, 12),
-    hex.substring(12, 16),
-    hex.substring(16, 20),
-    hex.substring(20),
-  ].join('-');
-}
+String _uuidV4() => uuidV4();
 
 String _preview(String value) {
   final compact = value.replaceAll(RegExp(r'\s+'), ' ').trim();

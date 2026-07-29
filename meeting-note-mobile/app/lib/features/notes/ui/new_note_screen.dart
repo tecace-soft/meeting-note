@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../../../shared/util/uuid.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../settings/data/settings_repository.dart';
@@ -449,6 +450,10 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
       context.pushReplacement(
         '/processing/starting',
         extra: PendingProcessingJob(
+          // Generated once here so a createNote retry reuses the same keys and
+          // the server deduplicates instead of creating a duplicate note.
+          noteId: uuidV4(),
+          fileId: uuidV4(),
           audioPath: audioPath,
           title: _title.text.trim(),
           instructions: _instructions.text.trim().isEmpty

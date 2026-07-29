@@ -1860,6 +1860,35 @@ async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Pr
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
 
+  // Idempotency: the mobile client generates noteId once per recording and
+  // reuses it when it retries createNote (e.g. after a lost HTTP response or a
+  // cold restart). Return the existing in-flight or completed job for this
+  // (user_id, note_id) instead of starting a second transcription+summary run,
+  // which would duplicate the note and double the Assembly/Gemini cost. A
+  // 'failed' job is intentionally excluded so the user can retry after a
+  // genuine failure.
+  const existing = await supabase
+    .from('workflow_job')
+    .select('id, status, stage, progress')
+    .eq('user_id', input.userId)
+    .eq('note_id', input.noteId)
+    .in('status', ['queued', 'processing', 'completed'])
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  if (existing.data) {
+    const row = existing.data as { id: string; status: WorkflowJobRow['status']; stage: string | null; progress: number | null };
+    sendJson(res, 202, {
+      jobId: row.id,
+      status: row.status,
+      stage: row.stage ?? row.status,
+      progress: row.progress ?? 0,
+      deduplicated: true,
+    });
+    return;
+  }
+
   const { data, error } = await supabase.from('workflow_job').insert({
     user_id: input.userId,
     note_id: input.noteId,

@@ -179,6 +179,10 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
             );
           }
         }
+        // Terminal: drop the persisted record so a relaunch does not resume a
+        // finished job. Done after the single attachment-save attempt so it
+        // cannot loop on a transient attachment failure.
+        await ref.read(notesRepositoryProvider).clearActiveJob(_jobId);
         if (!mounted) return;
         context.pushReplacement('/note/${next.noteId}');
         return;
@@ -189,7 +193,11 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
             ? next.error ?? 'The workflow failed while generating this note.'
             : null;
       });
-      if (next.isFailed) _timer?.cancel();
+      if (next.isFailed) {
+        _timer?.cancel();
+        // Terminal failure: stop resuming this dead job on future launches.
+        unawaited(ref.read(notesRepositoryProvider).clearActiveJob(_jobId));
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = '$error');
@@ -220,6 +228,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
         });
       }
       final jobId = await ref.read(notesRepositoryProvider).createNote(
+            noteId: job.noteId,
+            fileId: job.fileId,
             audioPath: job.audioPath,
             title: job.title,
             instructions: job.instructions,
@@ -401,6 +411,8 @@ class _GeneratingLinesState extends State<_GeneratingLines>
 
 class PendingProcessingJob {
   const PendingProcessingJob({
+    required this.noteId,
+    required this.fileId,
     required this.audioPath,
     required this.title,
     required this.promptId,
@@ -409,6 +421,11 @@ class PendingProcessingJob {
     this.attachmentPaths = const [],
   });
 
+  /// Stable idempotency keys generated once at submit time. Reused on every
+  /// createNote retry so a resubmitted job is deduplicated server-side instead
+  /// of creating a duplicate note.
+  final String noteId;
+  final String fileId;
   final String audioPath;
   final String title;
   final String promptId;
