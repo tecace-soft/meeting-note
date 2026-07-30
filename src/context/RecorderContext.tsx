@@ -579,7 +579,14 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
       }
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
+      // Cap the audio bitrate to a speech-optimal 32 kbps. Without this the
+      // browser default (~128 kbps, e.g. Safari AAC) makes a 2-hour meeting
+      // ~115 MB and it fails the storage upload. 32 kbps keeps 2 hours near
+      // ~29 MB. Applies whether the codec is Opus (Chrome/Firefox) or AAC (Safari).
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: recordingFormat.mimeType,
+        audioBitsPerSecond: 32000,
+      });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
       chunkIndexRef.current = 0;

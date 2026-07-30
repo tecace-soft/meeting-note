@@ -1,5 +1,6 @@
 package com.example.meeting_note_mobile
 
+import android.os.Build
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
@@ -25,6 +26,7 @@ class MainActivity : FlutterActivity() {
                 "pause" -> result.success(ForegroundRecordingService.pause())
                 "resume" -> result.success(ForegroundRecordingService.resume())
                 "status" -> result.success(ForegroundRecordingService.status(this))
+                "sdkInt" -> result.success(Build.VERSION.SDK_INT)
                 else -> result.notImplemented()
             }
         }

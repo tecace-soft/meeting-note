@@ -59,12 +59,22 @@ class ForegroundRecordingService : Service() {
             startForeground(NOTIFICATION_ID, notification("Recording in progress"))
         }
 
+        // Opus/OGG is the best speech-per-byte codec but needs API 29+ (Android 10);
+        // older devices fall back to AAC/m4a. The Dart side gates the file extension
+        // on the same SDK level, so the container here always matches the file name.
+        // 32 kbps mono / 16 kHz keeps a 2-hour meeting near ~29 MB (was ~58 MB at 64 kbps).
+        val useOpus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
         recorder = newRecorder().apply {
             setAudioSource(MediaRecorder.AudioSource.MIC)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setAudioEncodingBitRate(64000)
-            setAudioSamplingRate(44100)
+            if (useOpus) {
+                setOutputFormat(MediaRecorder.OutputFormat.OGG)
+                setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+            } else {
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            }
+            setAudioEncodingBitRate(32000)
+            setAudioSamplingRate(16000)
             setAudioChannels(1)
             setOutputFile(path)
             prepare()

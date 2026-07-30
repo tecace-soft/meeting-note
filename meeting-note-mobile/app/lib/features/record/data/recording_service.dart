@@ -138,6 +138,16 @@ class RecordingNotifier extends Notifier<RecordingState> {
     return const RecordingState();
   }
 
+  /// Android API level, used to pick Opus/OGG (29+) vs AAC/m4a for recording.
+  /// Fails safe to 0 (→ AAC/m4a) if the platform channel is unavailable.
+  Future<int> _androidSdkInt() async {
+    try {
+      return await _nativeRecorder.invokeMethod<int>('sdkInt') ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<bool> start() async {
     if (!await _recorder.hasPermission()) return false;
 
@@ -145,12 +155,18 @@ class RecordingNotifier extends Notifier<RecordingState> {
     final startedAt = DateTime.now();
     final sessionId = startedAt.millisecondsSinceEpoch.toString();
     if (Platform.isAndroid) {
-      final path = '${dir.path}/rec_$sessionId.m4a';
+      // Opus/OGG via MediaRecorder needs API 29+ (Android 10); older devices
+      // fall back to AAC/m4a. The native recorder gates on the same SDK level,
+      // so this file extension always matches the bytes it writes. The upload
+      // content-type is derived from the extension downstream.
+      final useOpus = await _androidSdkInt() >= 29;
+      final extension = useOpus ? 'ogg' : 'm4a';
+      final path = '${dir.path}/rec_$sessionId.$extension';
       final session = RecoverableRecordingSession(
         id: sessionId,
         filePath: path,
-        fileName: 'rec_$sessionId.m4a',
-        mimeType: _mimeType,
+        fileName: 'rec_$sessionId.$extension',
+        mimeType: useOpus ? 'audio/ogg' : _mimeType,
         startedAt: startedAt,
         lastHeartbeatAt: startedAt,
         elapsedSeconds: 0,
@@ -189,8 +205,11 @@ class RecordingNotifier extends Notifier<RecordingState> {
     await _recorder.start(
       RecordConfig(
         encoder: encoder,
-        bitRate: useOpus ? 32000 : 64000,
-        sampleRate: useOpus ? 16000 : 44100,
+        // 32 kbps mono / 16 kHz: speech-optimal, keeps a 2-hour meeting near
+        // ~29 MB so it stays under the storage cap. Applies to the AAC fallback
+        // too (iOS has no Opus encoder), which previously used 64 kbps.
+        bitRate: 32000,
+        sampleRate: 16000,
         numChannels: 1,
       ),
       path: path,
