@@ -52,3 +52,7 @@ meeting-note-mobile-handoff/
 **/ios/Flutter/Generated.xcconfig
 **/ios/Flutter/flutter_export_environment.sh
 
+# Claude Code: share skills, keep local settings and internal handoffs out of git
+.claude/settings.local.json
+.claude/handoffs/
+
