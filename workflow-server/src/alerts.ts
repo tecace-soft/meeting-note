@@ -20,13 +20,23 @@ const config: AlertConfig = {
   enabled: (process.env.WORKFLOW_ALERTS_ENABLED ?? 'true').toLowerCase() !== 'false',
   resendApiKey: process.env.RESEND_API_KEY ?? process.env.WORKFLOW_ALERT_RESEND_API_KEY ?? '',
   from: process.env.WORKFLOW_ALERT_FROM ?? 'Meeting Note Alerts <onboarding@resend.dev>',
-  to: process.env.WORKFLOW_ALERT_TO ?? 'genekim@tecace.com',
+  to: process.env.WORKFLOW_ALERT_TO ?? 'genekim@tecace.com,andrewyoo@tecace.com',
   appName: process.env.WORKFLOW_ALERT_APP_NAME ?? 'Meeting Note Workflow Server',
   environment: process.env.NODE_ENV ?? process.env.RENDER_SERVICE_NAME ?? 'development',
 };
 
 function truncate(value: string): string {
   return value.length > MAX_FIELD_LENGTH ? `${value.slice(0, MAX_FIELD_LENGTH)}...` : value;
+}
+
+/** Split a comma-separated recipient list into a deduped array of addresses. */
+function parseRecipients(value: string): string[] {
+  const seen = new Set<string>();
+  for (const address of value.split(',')) {
+    const trimmed = address.trim();
+    if (trimmed) seen.add(trimmed);
+  }
+  return [...seen];
 }
 
 function formatError(error: unknown): Record<string, string> {
@@ -86,6 +96,12 @@ export async function sendWorkflowAlert(input: WorkflowAlertInput): Promise<void
     return;
   }
 
+  const recipients = parseRecipients(config.to);
+  if (recipients.length === 0) {
+    console.warn('Workflow alert skipped: WORKFLOW_ALERT_TO resolved to no valid recipients.');
+    return;
+  }
+
   const errorFields = formatError(input.error);
   const context = sanitizeContext(input.context);
   const subject = `[${config.appName}] ${input.title}`;
@@ -100,7 +116,7 @@ export async function sendWorkflowAlert(input: WorkflowAlertInput): Promise<void
       },
       body: JSON.stringify({
         from: config.from,
-        to: [config.to],
+        to: recipients,
         subject,
         text,
       }),
