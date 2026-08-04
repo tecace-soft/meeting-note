@@ -5,8 +5,14 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
-import { supabase } from '../config/supabaseConfig';
+import { supabase, getSupabaseAccessTokenForRequest } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
+import {
+  anonymousLabelsInTranscript,
+  requestSpeakerSuggestions,
+  type SpeakerSuggestion,
+} from '../lib/identifySpeakers';
+import { accumulateSpeakerProfile } from '../lib/accumulateSpeakerProfile';
 import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
 import {
   applySpeakerReplacements,
@@ -230,6 +236,13 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const [contactsFetchError, setContactsFetchError] = useState<string | null>(null);
   const [speakersLoading, setSpeakersLoading] = useState(false);
   const [speakersFetchError, setSpeakersFetchError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<SpeakerSuggestion[] | null>(null);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [applyingSuggestions, setApplyingSuggestions] = useState(false);
+  const [profileSyncMsg, setProfileSyncMsg] = useState<string | null>(null);
+  // Dedupe F1a auto-accumulation per (note, speaker) so re-applying a label does not re-run it.
+  const accumulatedProfilesRef = useRef<Set<string>>(new Set());
   const [speakerNameInput, setSpeakerNameInput] = useState('');
   const [pickedSpeakerId, setPickedSpeakerId] = useState<string | null>(null);
   const [replacementScope, setReplacementScope] = useState<ReplacementScope>('single');
@@ -371,11 +384,11 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     }, 700);
   }, [saveSegmentTextEdit]);
 
-  const loadSpeakersForMenu = useCallback(async () => {
+  const loadSpeakersForMenu = useCallback(async (): Promise<DbSpeaker[]> => {
     if (!user?.id) {
       setSpeakersFetchError('You must be signed in to load speakers.');
       setSavedSpeakers([]);
-      return;
+      return [];
     }
     setSpeakersLoading(true);
     setSpeakersFetchError(null);
@@ -386,15 +399,96 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         .eq('user_id', user.id)
         .order('name', { ascending: true });
       if (error) throw error;
-      setSavedSpeakers((data as DbSpeaker[]) ?? []);
+      const list = (data as DbSpeaker[]) ?? [];
+      setSavedSpeakers(list);
+      return list;
     } catch (err: unknown) {
       console.error('Failed to load speakers:', err);
       setSpeakersFetchError(err instanceof Error ? err.message : 'Failed to load speakers');
       setSavedSpeakers([]);
+      return [];
     } finally {
       setSpeakersLoading(false);
     }
   }, [user?.id]);
+
+  const anonymousLabels = useMemo(() => anonymousLabelsInTranscript(segments), [segments]);
+
+  // F1a: once a speaker gets a real name applied, auto-update that speaker's ontology
+  // profile from this note's transcript. Fire-and-forget, best-effort, deduped per note+name.
+  const accumulateProfileInBackground = useCallback(
+    async (speakerName: string, speakerId: string | null, nextSegments: TranscriptSegment[]) => {
+      if (!user?.id) return;
+      const name = speakerName.trim();
+      if (!name) return;
+      const dedupeKey = `${noteId ?? 'no-note'}:${name.toLowerCase()}`;
+      if (accumulatedProfilesRef.current.has(dedupeKey)) return;
+      accumulatedProfilesRef.current.add(dedupeKey);
+      try {
+        const appToken = await getSupabaseAccessTokenForRequest();
+        const msToken = appToken ? null : await getAccessToken();
+        if (!appToken && !msToken) return;
+        setProfileSyncMsg(t('autoUpdatingProfile'));
+        const saved = await accumulateSpeakerProfile({
+          speakerName: name,
+          speakerId,
+          userId: user.id,
+          segments: nextSegments,
+          auth: { appToken, msToken },
+        });
+        if (saved && speakerId) {
+          setSavedSpeakers((prev) => prev.map((s) => (s.id === speakerId ? { ...s, profile: saved } : s)));
+        }
+      } catch (err: unknown) {
+        console.warn('Auto profile accumulation failed:', err);
+        accumulatedProfilesRef.current.delete(dedupeKey); // allow a retry on the next apply
+      } finally {
+        setProfileSyncMsg(null);
+      }
+    },
+    [user?.id, noteId, getAccessToken, t]
+  );
+
+  const handleSuggestSpeakers = useCallback(async () => {
+    if (suggesting) return;
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const roster = await loadSpeakersForMenu();
+      const appToken = await getSupabaseAccessTokenForRequest();
+      const msToken = appToken ? null : await getAccessToken();
+      if (!appToken && !msToken) throw new Error('Could not get access. Please sign in again.');
+      const result = await requestSpeakerSuggestions(segments, roster, user?.displayName ?? null, { appToken, msToken });
+      setSuggestions(result);
+    } catch (err: unknown) {
+      setSuggestError(err instanceof Error ? err.message : 'Speaker suggestion failed');
+      setSuggestions(null);
+    } finally {
+      setSuggesting(false);
+    }
+  }, [suggesting, loadSpeakersForMenu, getAccessToken, segments, user?.displayName]);
+
+  const handleAcceptSuggestion = useCallback(async (suggestion: SpeakerSuggestion) => {
+    if (!suggestion.name || applyingSuggestions) return;
+    const idx = segments.findIndex((s) => s.speaker.trim() === suggestion.label);
+    if (idx === -1) return;
+    setApplyingSuggestions(true);
+    setSuggestError(null);
+    try {
+      const next = applySpeakerReplacements(segments, idx, suggestion.label, suggestion.name, 'all');
+      if (noteId) {
+        if (onPersistSegments) await onPersistSegments(next);
+        else await persistNoteDiarization(noteId, next);
+      }
+      startTransition(() => { onSegmentsChange(next); });
+      setSuggestions((prev) => prev?.filter((s) => s.label !== suggestion.label) ?? null);
+      void accumulateProfileInBackground(suggestion.name, suggestion.speakerId, next);
+    } catch (err: unknown) {
+      setSuggestError(err instanceof Error ? err.message : 'Could not apply the suggestion');
+    } finally {
+      setApplyingSuggestions(false);
+    }
+  }, [applyingSuggestions, segments, noteId, onPersistSegments, onSegmentsChange, accumulateProfileInBackground]);
 
   const loadMicrosoftContactsForMenu = useCallback(async () => {
     setContactsLoading(true);
@@ -635,6 +729,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       startTransition(() => {
         onSegmentsChange(nextTranscript);
       });
+      void accumulateProfileInBackground(chosenName, selectedSpeaker?.id ?? pickedSpeakerId ?? null, nextTranscript);
       closeSpeakerMenu();
     } catch (err: unknown) {
       console.error('Speaker change failed:', err);
@@ -722,6 +817,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       startTransition(() => {
         onSegmentsChange(nextTranscript);
       });
+      void accumulateProfileInBackground(speakerRow.name, speakerRow.id, nextTranscript);
       closeSpeakerMenu();
     } catch (err: unknown) {
       console.error('Microsoft contact speaker change failed:', err);
@@ -774,6 +870,98 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
 
   return (
     <>
+      {profileSyncMsg && (
+        <div className="mb-2 flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          {profileSyncMsg}
+        </div>
+      )}
+      {(anonymousLabels.length > 0 || suggestions) && (
+        <div
+          className="mb-3 rounded-lg border p-3"
+          style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface-subtle)' }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+              <User01 className="h-4 w-4 shrink-0" aria-hidden />
+              <span className="truncate">{t('suggestSpeakersTitle')}</span>
+            </div>
+            {suggestions === null ? (
+              <button
+                type="button"
+                disabled={suggesting}
+                onClick={() => void handleSuggestSpeakers()}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent)' }}
+              >
+                {suggesting ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {suggesting ? t('suggestingSpeakers') : t('suggestSpeakers')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={suggesting}
+                onClick={() => void handleSuggestSpeakers()}
+                className="shrink-0 text-xs font-medium underline disabled:opacity-50"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                {suggesting ? t('suggestingSpeakers') : t('reSuggestSpeakers')}
+              </button>
+            )}
+          </div>
+
+          {suggestError && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{suggestError}</p>
+          )}
+
+          {suggestions && suggestions.length === 0 && !suggesting && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>{t('noSpeakerSuggestions')}</p>
+          )}
+
+          {suggestions && suggestions.length > 0 && (
+            <div className="mt-2 space-y-1.5">
+              {suggestions.map((s) => (
+                <div
+                  key={s.label}
+                  className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5"
+                  style={{ backgroundColor: 'var(--surface)' }}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm" style={{ color: 'var(--text)' }}>
+                      <span className="font-medium">{s.label}</span>
+                      {' → '}
+                      {s.name ? (
+                        <span className="font-semibold">{s.name}{s.isSelf ? ' (me)' : ''}</span>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)' }}>{t('unknownSpeakerLabel')}</span>
+                      )}
+                      {s.name ? (
+                        <span className="ml-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                          {Math.round(s.confidence * 100)}%
+                        </span>
+                      ) : null}
+                    </div>
+                    {s.rationale ? (
+                      <div className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>{s.rationale}</div>
+                    ) : null}
+                  </div>
+                  {s.name ? (
+                    <button
+                      type="button"
+                      disabled={applyingSuggestions}
+                      onClick={() => void handleAcceptSuggestion(s)}
+                      className="shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                      style={{ backgroundColor: 'var(--accent)' }}
+                    >
+                      {t('applySuggestion')}
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div
         className={`rounded-lg p-4 text-base leading-relaxed overflow-y-auto custom-scrollbar ${scrollContainerClassName ?? 'max-h-96'}`}
         style={{ backgroundColor: 'transparent' }}
