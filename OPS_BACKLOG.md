@@ -166,11 +166,11 @@ These are feature/deploy/cleanup items already in flight or deferred, unrelated 
 - Residual risk: any active phone still on the old anon-key build gets 401 on profile-gen only (rest of app unaffected). Web ✅, Z Fold ✅ (vc2003). Boss phone / S23 = still unconfirmed → see R4.
 - See pending-generate-profile-gate memory.
 
-### R2 Merge ui/dark-mode-theming → main
-- Do before/with R1. Branch head 8db861c pushed to origin. This branch now also carries the recording-bitrate fix (99b336f) and the iOS skill (fed1b06).
+### R2 Merge ui/dark-mode-theming → main — DONE 2026-08-04
+- Fast-forwarded main to 305c811 and pushed to origin. Brought in dark theme (8db861c), 32 kbps cap (99b336f), iOS skill (fed1b06), vc2004 bump (70fd21c), alerts dual-recipient (9361e84), OPS_BACKLOG (305c811). Push triggered the Render static-frontend auto-deploy (dark mode + 32 kbps now live on web).
 
-### R3 Push the two unpushed commits
-- `99b336f` (recording 32 kbps cap) and `fed1b06` (iOS IPA skill + .gitignore) are committed on ui/dark-mode-theming but not pushed. Web bitrate cap only reaches web testers after a merge-to-main deploy (blocked while Render backend is suspended anyway).
+### R3 Push the two unpushed commits — DONE 2026-08-04
+- `99b336f` (recording 32 kbps cap) and `fed1b06` (iOS IPA skill + .gitignore) reached origin via the R2 merge/push. Web bitrate cap is now deploying to web testers with the R2 frontend redeploy.
 
 ### R4 APK rollout to boss phone + S23
 - Z Fold has vc2003 (JWT app). Boss phone and the user's S23 need the new APK. Ties into R1's precondition and P2.1 (Firebase App Distribution would make this a link).
