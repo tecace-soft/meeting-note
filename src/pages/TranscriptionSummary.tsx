@@ -28,7 +28,6 @@ import {
   ListOrdered,
   Loading,
   MoreVertical,
-  PaperPlane,
   Pause,
   Play,
   Save,
@@ -64,7 +63,7 @@ import {
   type TranscriptTextTranslationMap,
   type TranscriptTranslationMap,
 } from '../lib/transcriptTranslationDisplay';
-import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
+import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta } from '../lib/noteDuration';
 import {
   uploadNoteImage,
@@ -609,7 +608,7 @@ const TranscriptionSummary: React.FC = () => {
     setRecentAudioLoading(true);
     setRecentAudioError(null);
     try {
-      let query = supabase
+      const query = supabase
         .from('file')
         .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, recorded_at, created_at')
         .eq('user_id', user.id)
