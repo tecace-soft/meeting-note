@@ -749,7 +749,13 @@ const TranscriptionSummary: React.FC = () => {
     setSummaryResult((prev) => (prev ? { ...prev, summary: translatedSummary } : prev));
   }, [appLanguage, isEditingSummary, summaryResult?.summaryTranslations]);
 
-  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB - matches Supabase bucket limit
+  // Keep in sync with the meeting-recordings bucket file_size_limit
+  // (supabase/migrations/20260805120000_raise_meeting_recordings_upload_limit.sql)
+  // and the project-wide storage upload limit in the Supabase dashboard.
+  const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
+
+  const oversizedFileMessage = (bytes: number): string =>
+    `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB. Your file: ${(bytes / 1024 / 1024).toFixed(1)}MB`;
 
   const handleFiles = (files: File[]) => {
     setUploadError(null);
@@ -765,7 +771,7 @@ const TranscriptionSummary: React.FC = () => {
 
     const oversizedFiles = audioFiles.filter(f => f.size > MAX_FILE_SIZE);
     if (oversizedFiles.length > 0) {
-      setUploadError(`File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB. Your file: ${(oversizedFiles[0].size / 1024 / 1024).toFixed(1)}MB`);
+      setUploadError(oversizedFileMessage(oversizedFiles[0].size));
       return;
     }
 
@@ -786,6 +792,17 @@ const TranscriptionSummary: React.FC = () => {
   };
 
   const uploadToSupabase = async (fileId: string, file: File, source: 'upload' | 'recording'): Promise<boolean> => {
+    // Enforce the size cap here so BOTH paths (file picker and recording) get a
+    // clear message before any network attempt, not an opaque Supabase 413.
+    if (file.size > MAX_FILE_SIZE) {
+      const message = oversizedFileMessage(file.size);
+      setUploadedFiles((prev) =>
+        prev.map((f) => (f.id === fileId ? { ...f, status: 'error', error: message } : f))
+      );
+      setUploadError(message);
+      return false;
+    }
+
     setUploadedFiles((prev) =>
       prev.map((f) => (f.id === fileId ? { ...f, status: 'uploading', progress: 0 } : f))
     );
@@ -871,13 +888,23 @@ const TranscriptionSummary: React.FC = () => {
       return true;
     } catch (error: any) {
       console.error('Upload error:', error);
+      // Backstop: if the storage layer rejects on size (e.g. the project-wide
+      // upload limit is below MAX_FILE_SIZE), show the same clear cap message
+      // instead of an opaque 413 / "exceeded the maximum allowed size".
+      const raw = String(error?.message ?? error?.error ?? '');
+      const isSizeError =
+        error?.statusCode === '413' ||
+        error?.status === 413 ||
+        /too large|maximum allowed size|payload too large|exceeded the maximum/i.test(raw);
+      const message = isSizeError ? oversizedFileMessage(file.size) : (error.message || 'Upload failed');
+      if (isSizeError) setUploadError(message);
       setUploadedFiles((prev) =>
         prev.map((f) =>
           f.id === fileId
             ? {
                 ...f,
                 status: 'error',
-                error: error.message || 'Upload failed',
+                error: message,
               }
             : f
         )
