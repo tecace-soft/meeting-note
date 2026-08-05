@@ -15,6 +15,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
+import { UserMemoryView } from '../components/UserMemoryView';
 import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
@@ -25,7 +26,7 @@ const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 const MCP_CHATGPT_URL = 'https://meeting-note-mcp.onrender.com/mcp-chatgpt';
 const MCP_CLAUDE_URL = 'https://meeting-note-mcp.onrender.com/mcp';
 
-type SettingsTab = 'account' | 'summary' | 'speaker' | 'mcp';
+type SettingsTab = 'account' | 'summary' | 'speaker' | 'memory' | 'mcp';
 type McpSetupView = 'chatgpt' | 'claude';
 type ClientOs = 'windows' | 'macos' | 'linux' | 'unknown';
 
@@ -610,6 +611,22 @@ const AccountSettings: React.FC = () => {
                 }
               >
                 {t('speakerProfiles')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'memory'}
+                id="settings-tab-memory"
+                aria-controls="settings-panel-memory"
+                onClick={() => setActiveTab('memory')}
+                className="rounded-full px-3 py-1.5 text-sm font-medium"
+                style={
+                  activeTab === 'memory'
+                    ? { backgroundColor: 'var(--bg-secondary)', color: 'var(--text)' }
+                    : { backgroundColor: 'transparent', color: 'var(--text-secondary)' }
+                }
+              >
+                {appLanguage === 'ko' ? '메모리' : 'Memory'}
               </button>
               <button
                 type="button"
@@ -1245,6 +1262,17 @@ const AccountSettings: React.FC = () => {
                       })}
                     </div>
                   ) : null}
+                </section>
+              ) : null}
+
+              {activeTab === 'memory' ? (
+                <section
+                  id="settings-panel-memory"
+                  role="tabpanel"
+                  aria-labelledby="settings-tab-memory"
+                  className="card rounded-lg p-5"
+                >
+                  {user?.id ? <UserMemoryView userId={user.id} /> : null}
                 </section>
               ) : null}
 

@@ -1,6 +1,6 @@
 # Memory Feature — Design & Decisions (F1)
 
-Status: F1b + F1a implemented & verified on web 2026-08-04. F1c not started.
+Status: F1b + F1a implemented & verified on web 2026-08-04. F1c backend + minimal UI implemented 2026-08-05 (branch `memory/user-context`), NOT yet deployed/verified — see the F1c "Implemented 2026-08-05" note below.
 Branch: `memory/user-context`.
 
 Progress (2026-08-04):
@@ -97,6 +97,14 @@ Boundary vs. F3: F1c is USER-centered across all their meetings; F3 (meeting-ser
 1. Population = per-meeting user-centric LLM extraction. After a summary, one LLM call over the whole transcript pulls user-centered items — the user's action items/commitments (including ones others assigned to them), decisions made in their meetings, and frequent collaborators — and MERGES them into `user_memory`. Chosen over the cheap "roll up the self-speaker profile" option because the user's vision explicitly includes what OTHERS said about them, which the self profile (self utterances only) misses.
 2. Storage = a dedicated `user_memory` table, keyed by `user_id` (RLS-isolated), holding a general/view-agnostic structured context base. One new migration. NOT reusing the self-speaker ontology (keeps the "reusable base" principle intact).
 3. UI = minimal read-only surface for v1 (e.g., a read-only section/tab in existing settings), with the polished "Memory" dashboard left to the designer later. Respects the designer-owns-UI rule and the "store is the primary asset" principle.
+
+**Implemented 2026-08-05 (branch `memory/user-context`, committed; deploy + E2E verify still pending):**
+- Migration `supabase/migrations/20260805130000_create_user_memory.sql`: one row per user, single `memory jsonb` base (view-agnostic; categories can grow without a migration), `processed_note_ids text[]` for durable per-note dedup, RLS mirroring speaker (owner_all on `auth.jwt()->>'sub'` + service_role_all).
+- Edge function `supabase/functions/update-user-memory/index.ts`: auth-gated (mirrors identify-speakers/generate-profile), takes transcript + existing memory + selfName + noteId, returns the LLM-merged memory. Bounded prompt + defensive normalize/validate.
+- Client `src/lib/userMemory.ts`: `fetchUserMemory` / `updateUserMemoryFromNote` (best-effort, deduped via processed_note_ids) / `clearUserMemory`, plus `coerceMemory` guard.
+- Trigger: fire-and-forget in `applySummaryResult` (TranscriptionSummary.tsx) after a summary completes — never blocks/fails the summary UI.
+- Minimal read-only UI: new `Memory` tab in AccountSettings rendering `src/components/UserMemoryView.tsx` (lists + delete-my-memory with inline confirm). Intentionally plain; polished dashboard is the designer's later work.
+- STILL TODO: deploy the edge function (`npx supabase functions deploy update-user-memory --project-ref smnnlamrwisqaquymsdl`), apply the migration (`supabase db push`), then verify on web that a real summary populates `user_memory`.
 
 **Next steps for tomorrow (F1c build order):**
 - Design the `user_memory` schema (columns for a structured base: open_action_items[], collaborators[], active_projects[], recurring_topics[], last_updated_at; each item carries source/confidence like the speaker ontology). Write the Supabase migration + RLS (mirror the `speaker` RLS: `user_id = auth.jwt()->>'sub'`).

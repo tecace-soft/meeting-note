@@ -66,6 +66,7 @@ import {
 } from '../lib/transcriptTranslationDisplay';
 import { buildSpeakerContextForSummary, canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta } from '../lib/noteDuration';
+import { updateUserMemoryFromNote } from '../lib/userMemory';
 import {
   uploadNoteImage,
   type NoteImage,
@@ -1175,6 +1176,31 @@ const TranscriptionSummary: React.FC = () => {
     setGeneratedTitleDraft(noteTitle);
     setEditedSummary(summaryText);
     setResultsTab('summary');
+
+    // F1c: fold this meeting into the user's personal memory (durable per-user
+    // context base). Best-effort and fully in the background — it must never
+    // block or fail the summary UI. Deduped per note inside updateUserMemoryFromNote.
+    if (user?.id && transcript.length > 0) {
+      const memoryUserId = user.id;
+      const memorySelfName = user.displayName ?? null;
+      void (async () => {
+        try {
+          const auth = {
+            appToken: await getSupabaseAccessTokenForRequest().catch(() => null),
+            msToken: await getAccessToken().catch(() => null),
+          };
+          await updateUserMemoryFromNote({
+            userId: memoryUserId,
+            noteId,
+            segments: transcript,
+            selfName: memorySelfName,
+            auth,
+          });
+        } catch (memoryError) {
+          console.error('Failed to update user memory:', memoryError);
+        }
+      })();
+    }
   };
 
   // Poll a created job to completion and apply its result. Persists the job id
