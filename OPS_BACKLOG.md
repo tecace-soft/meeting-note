@@ -1,12 +1,14 @@
 # Operations Backlog
 
-Last updated: 2026-08-04.
+Last updated: 2026-08-05.
 Goal: make running and maintaining Meeting Note easier and calmer, at (near) zero cost.
+Cost posture update (2026-08-05): the project now pays for **Supabase Pro**. Render is still the free-tier concern; the "near zero cost" goal now means "Render free + a small paid Supabase floor," not strictly $0.
 Boss's actual ask, as understood: operational peace of mind — e.g. "when the Render server goes down, a warning email arrives at the company address."
 So the backlog is ordered by that: visibility/alerting first (what the boss wants now), then removing the things that break (durable fixes), then distribution/maintenance chores.
 The 2026-08-04 standup added a product-feature track (section F) and re-prioritized: the "Memory" feature is now prioritized over meeting-series analysis, and the 2-hour recording cutoff is promoted from deferred to immediate.
+The 2026-08-05 standup added: the 50 MB upload limit fix (ASAP, now unblocked by Supabase Pro — see R9), a knowledge-base/wiki auto-generation direction (F4), an admin-dashboard access task (R10), and a clearer two-part framing of the Memory feature (see F1).
 
-Priority tiers: P0 = boss-visible, low effort, do first. P1 = durable root-cause fixes. P2 = quality-of-life. F = product features (2026-08-04 standup).
+Priority tiers: P0 = boss-visible, low effort, do first. P1 = durable root-cause fixes. P2 = quality-of-life. F = product features (2026-08-04 / 2026-08-05 standups).
 
 > Time-sensitive facts below (backend suspended, unpushed commits, device versions, Render reset date) reflect 2026-07-31. Before acting on any of them, re-verify against the live source: `git status`/`git log` for commit state, the Render dashboard for service/usage state, and `adb devices` + the installed app version for phones.
 
@@ -129,6 +131,7 @@ Feature track surfaced at the 2026-08-04 standup. Ordered by the standup's state
 - Owner / next step: Speaker A (user) begins architecture research + initiates development.
 - Effort: feature-scale (research → design → build). Needs a requirements-clarification pass before coding.
 - Open questions to resolve first: where the memory lives (Supabase table vs. vector store), scope (per-user vs. per-tenant), how speaker identity is keyed and matched, privacy/retention.
+- 2026-08-05 framing (Hansoo): treat Memory as TWO kinds — (1) personal profile/preference memory (per-user traits; the auto-accumulating speaker profile already covers this) and (2) meeting context/knowledge memory (facts, decisions, threads across meetings; feeds F4 knowledge-base/wiki). Keep the store general enough to serve both. Status: F1a (auto-accumulate profile) + F1b (auto speaker suggest) shipped on branch `memory/user-context` (committed, not pushed); F1c (per-user personal memory table) designed, not built. See MEMORY_FEATURE_DESIGN.md.
 
 ### F2 User feedback + support section, with AI bug-report analysis
 - What: an in-app user feedback/support section. Speaker B's suggestion: feed submitted bug reports to an AI that produces actionable repair steps for engineers. Overlaps the self-healing/error-reporting direction (P0.3) — the AI-analysis layer on top of raw error capture.
@@ -141,6 +144,12 @@ Feature track surfaced at the 2026-08-04 standup. Ordered by the standup's state
 - Why: higher-level insight across recurring meetings, not just single-note summaries.
 - Owner: Speaker A to explore metadata aggregation.
 - Effort: feature-scale. Explicitly sequenced AFTER F1 per standup.
+
+### F4 Knowledge base / wiki auto-generation (2026-08-05 standup)
+- What: auto-generate wiki-style knowledge pages from meeting notes, using the speaker/meeting ontology. Builds on the Memory feature's meeting-context/knowledge side (F1, kind 2).
+- Why: turns accumulated meeting knowledge into a browsable, durable KB instead of isolated note summaries.
+- Owner / next step: Hansoo to share reference LLM-wiki materials (video shared 2026-08-05). Speaker A to fold into Memory design.
+- Effort: feature-scale. Sequenced with/after F1's knowledge-memory half.
 
 ---
 
@@ -189,6 +198,22 @@ These are feature/deploy/cleanup items already in flight or deferred, unrelated 
 
 ### R8 Commit OPS_BACKLOG.md
 - This file is currently untracked/uncommitted. Commit when ready.
+
+### R9 Raise the 50 MB upload limit (Supabase Pro) — IN PROGRESS 2026-08-05
+- Problem (2026-08-05 standup, ASAP): recordings/uploads over ~50 MB fail. Root cause is NOT in code and NOT Render — it is the **Supabase free-tier per-file storage upload cap (50 MB)**. Both web and mobile upload the audio to the `meeting-recordings` bucket, then hand only a signed URL to workflow-server; AssemblyAI fetches the URL itself, so Render never touches the bytes. So the only limiter is Supabase storage.
+- Now unblocked: project moved to **Supabase Pro** (cap raisable to 50 GB).
+- Work on branch `fix/supabase-upload-limit`:
+  1. Migration `20260805120000_raise_meeting_recordings_upload_limit.sql` → bucket `meeting-recordings` file_size_limit = 200 MB (209715200).
+  2. Web client `MAX_FILE_SIZE` 100→200 MB, single `oversizedFileMessage` helper, size check enforced in `uploadToSupabase` for BOTH file-picker and recording paths + a Supabase-413 backstop → clear "File too large" message to the user.
+  3. Web recording bitrate 32→64 kbps (`RecorderContext.tsx`) — the 32 kbps was only to fit the old 50 MB cap; 64 kbps improves transcription fidelity (esp. AAC/Safari, noisy rooms), transcription cost is per-hour not per-byte, and 200 MB ≈ 7 h at 64 kbps.
+- REQUIRED external step (dashboard, not code): raise the **project-wide** storage Upload file size limit to ≥ 200 MB (Storage > Settings). The effective cap is min(project, bucket); until this is done the migration has no effect.
+- Follow-up (mobile, separate release): bump `recording_service.dart` bitrate 32→64 kbps and the audio guard (`notes_repository.dart:443`, currently 100 MB) to 200 MB, and consider resumable upload — mobile currently `readAsBytes()` buffers the whole file in memory (unsafe for very large files).
+- Verify E2E after the dashboard step: a >50 MB recording/upload uploads AND transcribes.
+
+### R10 Admin dashboard access (2026-08-05 standup)
+- What: Speaker A (Andrew) cannot access the admin dashboard; a permission/role setup issue. Owner: Hansoo to confirm the account's role/permission.
+- Why: needed to operate/monitor via the dashboard (`AdminControls` / `AdminAnalytics` gated by `adminAccess`).
+- Effort: small (permission/config).
 
 ---
 
