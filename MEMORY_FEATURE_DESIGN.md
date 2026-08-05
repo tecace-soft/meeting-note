@@ -91,8 +91,19 @@ First consumer — a personal "Memory" screen + personalized nudges built on the
 
 Boundary vs. F3: F1c is USER-centered across all their meetings; F3 (meeting-series analysis) is trend analysis WITHIN a specific recurring meeting. F1c's base can later feed F3.
 
-Schema decision (deferred to F1c kickoff): a new `user_memory` table keyed by `microsoft_id`/`user_id` (RLS-isolated), holding a structured context base (not view-specific), vs. reusing the self-speaker ontology with a flag. Lean toward a dedicated general-purpose store given the "reusable base" principle.
 - Privacy (Q4): user can view and delete this record.
+
+**F1c decisions RESOLVED 2026-08-04 (kickoff, implementation not started):**
+1. Population = per-meeting user-centric LLM extraction. After a summary, one LLM call over the whole transcript pulls user-centered items — the user's action items/commitments (including ones others assigned to them), decisions made in their meetings, and frequent collaborators — and MERGES them into `user_memory`. Chosen over the cheap "roll up the self-speaker profile" option because the user's vision explicitly includes what OTHERS said about them, which the self profile (self utterances only) misses.
+2. Storage = a dedicated `user_memory` table, keyed by `user_id` (RLS-isolated), holding a general/view-agnostic structured context base. One new migration. NOT reusing the self-speaker ontology (keeps the "reusable base" principle intact).
+3. UI = minimal read-only surface for v1 (e.g., a read-only section/tab in existing settings), with the polished "Memory" dashboard left to the designer later. Respects the designer-owns-UI rule and the "store is the primary asset" principle.
+
+**Next steps for tomorrow (F1c build order):**
+- Design the `user_memory` schema (columns for a structured base: open_action_items[], collaborators[], active_projects[], recurring_topics[], last_updated_at; each item carries source/confidence like the speaker ontology). Write the Supabase migration + RLS (mirror the `speaker` RLS: `user_id = auth.jwt()->>'sub'`).
+- New edge function `update-user-memory` (auth-gated like generate-profile/identify-speakers): input = transcript + existing user_memory + self identity; output = merged user_memory. Reuse the shared Gemini call chain.
+- Trigger: auto after summary generation (Q3), best-effort background, deduped per note (mirror F1a's approach).
+- Minimal read-only view of the base (settings tab) + user delete action (Q4).
+- Verify on web with a real note; then measure.
 
 ## Explicitly out of scope (v1)
 - Voice biometrics / speaker embeddings for identification.
