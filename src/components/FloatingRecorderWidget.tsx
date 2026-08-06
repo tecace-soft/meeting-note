@@ -19,12 +19,74 @@ const FloatingRecorderWidget: React.FC = () => {
     wakeLockWarning,
     recoverabilityStatus,
     recoveryWarning,
+    recordingLimitWarning,
+    recordingAutoStopped,
+    acknowledgeAutoStop,
+    maxRecordingSeconds,
     stopRecording,
     discardRecording,
   } = useRecorder();
   const confirm = useConfirm();
 
-  if (!isRecording || location.pathname === '/transcription-summary') return null;
+  // The transcription-summary page renders its own inline recorder UI (timer,
+  // warning, and auto-stop notice), so this floating widget stays out of its way.
+  if (location.pathname === '/transcription-summary') return null;
+
+  // After a 2-hour auto-stop the user may be on another page; surface a small
+  // dismissible notice pointing them to the saved recording.
+  if (!isRecording && recordingAutoStopped) {
+    return (
+      <div
+        className="fixed z-50 w-[min(calc(100vw-1.5rem),22rem)] rounded-lg border p-3 shadow-lg"
+        style={{
+          right: 'max(0.75rem, env(safe-area-inset-right))',
+          bottom: 'max(0.75rem, env(safe-area-inset-bottom))',
+          backgroundColor: 'var(--card)',
+          borderColor: 'var(--border)',
+          color: 'var(--text)',
+        }}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+              Recording stopped at the 2-hour limit
+            </p>
+            <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              Your recording was saved. Start a new recording to keep going.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                acknowledgeAutoStop();
+                navigate('/transcription-summary');
+              }}
+              className="mt-2 text-xs font-semibold"
+              style={{ color: 'var(--primary)' }}
+            >
+              Review recording
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={acknowledgeAutoStop}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-opacity hover:opacity-80"
+            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            <CloseMd className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isRecording) return null;
+
+  const secondsRemaining = Math.max(0, maxRecordingSeconds - recordingTime);
+  const minutesRemaining = Math.ceil(secondsRemaining / 60);
 
   return (
     <div
@@ -89,6 +151,11 @@ const FloatingRecorderWidget: React.FC = () => {
           <CloseMd className="h-4 w-4" aria-hidden />
         </button>
       </div>
+      {recordingLimitWarning ? (
+        <p className="mt-2 text-xs font-medium" style={{ color: 'var(--error)' }}>
+          {`Approaching the 2-hour limit. Recording will stop automatically in about ${minutesRemaining} min.`}
+        </p>
+      ) : null}
       {wakeLockWarning ? (
         <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
           {wakeLockWarning}

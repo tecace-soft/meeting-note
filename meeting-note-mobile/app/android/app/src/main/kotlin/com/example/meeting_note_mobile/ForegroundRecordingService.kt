@@ -77,6 +77,17 @@ class ForegroundRecordingService : Service() {
             setAudioSamplingRate(16000)
             setAudioChannels(1)
             setOutputFile(path)
+            // Hard 2-hour cap enforced natively, so a backgrounded recording
+            // still stops even if the Dart-side timer is throttled. Stop off the
+            // callback thread to avoid reentrancy on MediaRecorder.stop().
+            setMaxDuration(MAX_RECORDING_DURATION_MS)
+            setOnInfoListener { _, what, _ ->
+                if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        stopRecording()
+                    }
+                }
+            }
             prepare()
             start()
         }
@@ -182,6 +193,9 @@ class ForegroundRecordingService : Service() {
         }
 
     companion object {
+        // 2-hour hard cap on a single recording (milliseconds).
+        private const val MAX_RECORDING_DURATION_MS = 2 * 60 * 60 * 1000
+
         private const val ACTION_START = "meeting_note.START_RECORDING"
         private const val ACTION_STOP = "meeting_note.STOP_RECORDING"
         private const val EXTRA_PATH = "path"

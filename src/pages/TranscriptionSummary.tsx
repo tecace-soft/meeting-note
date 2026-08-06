@@ -300,6 +300,10 @@ const TranscriptionSummary: React.FC = () => {
     wakeLockWarning,
     recoverabilityStatus,
     recoveryWarning,
+    recordingLimitWarning,
+    recordingAutoStopped,
+    acknowledgeAutoStop,
+    maxRecordingSeconds,
     recoverableSession,
     recorderError,
     clearRecorderError,
@@ -1892,6 +1896,45 @@ const TranscriptionSummary: React.FC = () => {
               >
                 {recoveryWarning ??
                   'Recording recovery is protected with local chunks and cloud draft backup.'}
+              </div>
+            ) : null}
+            {isRecording && recordingLimitWarning ? (
+              <div
+                className="mb-4 rounded-lg border px-4 py-3 text-sm font-medium"
+                style={{
+                  backgroundColor: 'var(--error-light, var(--bg-secondary))',
+                  borderColor: 'var(--error)',
+                  color: 'var(--error)',
+                }}
+                role="alert"
+              >
+                {appLanguage === 'ko'
+                  ? `2시간 녹음 제한에 곧 도달합니다. 약 ${Math.ceil(Math.max(0, maxRecordingSeconds - recordingTime) / 60)}분 후 자동으로 종료되고 저장됩니다.`
+                  : `Approaching the 2-hour recording limit. It will stop and save automatically in about ${Math.ceil(Math.max(0, maxRecordingSeconds - recordingTime) / 60)} min.`}
+              </div>
+            ) : null}
+            {recordingAutoStopped ? (
+              <div
+                className="mb-4 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm"
+                style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+                role="status"
+              >
+                <span>
+                  {appLanguage === 'ko'
+                    ? '2시간 제한에 도달해 녹음이 종료되고 저장되었습니다. 계속하려면 새로 녹음을 시작하세요.'
+                    : 'Recording stopped at the 2-hour limit and was saved. Start a new recording to continue.'}
+                </span>
+                <button
+                  type="button"
+                  onClick={acknowledgeAutoStop}
+                  className="shrink-0 underline"
+                >
+                  {appLanguage === 'ko' ? '닫기' : 'Dismiss'}
+                </button>
               </div>
             ) : null}
             {recoverableSession && !isRecording && !recordedAudioUrl ? (

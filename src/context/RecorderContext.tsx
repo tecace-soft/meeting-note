@@ -39,6 +39,14 @@ interface RecorderContextValue {
   wakeLockWarning: string | null;
   recoverabilityStatus: RecordingRecoverabilityStatus;
   recoveryWarning: string | null;
+  /** True during the final minutes before the 2-hour cap (non-blocking warning). */
+  recordingLimitWarning: boolean;
+  /** True when the last recording was auto-stopped because it hit the 2-hour cap. */
+  recordingAutoStopped: boolean;
+  /** Dismiss the "recording stopped at the 2-hour limit" notice. */
+  acknowledgeAutoStop: () => void;
+  /** The hard recording cap in seconds (2 hours), for consumers to show a countdown. */
+  maxRecordingSeconds: number;
   /** Error from a failed start (mic permission, or an unresolved recovery), shown inline by consumers. */
   recorderError: string | null;
   clearRecorderError: () => void;
@@ -69,6 +77,12 @@ const SESSION_STORE = 'session';
 const CHUNK_STORE = 'chunks';
 const ACTIVE_SESSION_ID = 'active';
 const RECORDING_TIMESLICE_MS = 2000;
+
+// Hard cap on a single recording: 2 hours. At the cap the recording auto-stops
+// and is saved, and the user must start a new recording to continue. A
+// non-blocking warning is surfaced RECORDING_LIMIT_WARNING_SECONDS before it.
+export const MAX_RECORDING_SECONDS = 2 * 60 * 60;
+export const RECORDING_LIMIT_WARNING_SECONDS = 5 * 60;
 
 const RecorderContext = createContext<RecorderContextValue | null>(null);
 
@@ -369,6 +383,9 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [wakeLockWarning, setWakeLockWarning] = useState<string | null>(null);
   const [recoverabilityStatus, setRecoverabilityStatus] = useState<RecordingRecoverabilityStatus>('local-only');
   const [recoveryWarning, setRecoveryWarning] = useState<string | null>(null);
+  const [recordingLimitWarning, setRecordingLimitWarning] = useState(false);
+  const [recordingAutoStopped, setRecordingAutoStopped] = useState(false);
+  const acknowledgeAutoStop = useCallback(() => setRecordingAutoStopped(false), []);
   const [recorderError, setRecorderError] = useState<string | null>(null);
   const clearRecorderError = useCallback(() => setRecorderError(null), []);
   const [recoverableSession, setRecoverableSession] = useState<RecoverableRecordingSession | null>(null);
@@ -384,6 +401,8 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const recordingSessionRef = useRef<RecoverableRecordingSession | null>(null);
   const recordedSessionRef = useRef<RecoverableRecordingSession | null>(null);
   const chunkIndexRef = useRef(0);
+  // Guards the 2-hour auto-stop so it fires exactly once per recording.
+  const autoStopFiredRef = useRef(false);
   const stopResolveRef = useRef<(() => void) | null>(null);
   const cloudDraftFailuresRef = useRef(0);
   // Tracks the latest recordedAudioUrl so the unmount-only teardown can revoke
@@ -666,6 +685,9 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
 
       mediaRecorder.start(RECORDING_TIMESLICE_MS);
+      autoStopFiredRef.current = false;
+      setRecordingLimitWarning(false);
+      setRecordingAutoStopped(false);
       setIsRecording(true);
       setRecordingTime(0);
       setRecordedAudioUrl((prev) => {
@@ -703,6 +725,22 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     await stopped;
   }, [finalizeRecording]);
 
+  // Enforce the 2-hour recording cap. Warn during the final minutes, then
+  // auto-stop and save at the cap (the user starts a new recording to
+  // continue). The ref guard makes the stop fire exactly once even though this
+  // effect re-runs on every 1-second recordingTime tick.
+  useEffect(() => {
+    if (!isRecording) return;
+    const remaining = MAX_RECORDING_SECONDS - recordingTime;
+    setRecordingLimitWarning(remaining <= RECORDING_LIMIT_WARNING_SECONDS && remaining > 0);
+    if (recordingTime >= MAX_RECORDING_SECONDS && !autoStopFiredRef.current) {
+      autoStopFiredRef.current = true;
+      setRecordingLimitWarning(false);
+      setRecordingAutoStopped(true);
+      void stopRecording();
+    }
+  }, [isRecording, recordingTime, stopRecording]);
+
   const clearRecording = useCallback((options?: { discardDraft?: boolean }) => {
     clearPlayback();
     const sessionToDelete = recordedSessionRef.current ?? recoverableSession ?? recordingSessionRef.current;
@@ -714,6 +752,8 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setRecordedFileName('Recording.m4a');
     setRecordedMimeType('audio/mp4');
     setRecordingTime(0);
+    setRecordingLimitWarning(false);
+    setRecordingAutoStopped(false);
     recordedSessionRef.current = null;
     if (options?.discardDraft) {
       clearDraftBackups(sessionToDelete);
@@ -897,6 +937,10 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         wakeLockWarning,
         recoverabilityStatus,
         recoveryWarning,
+        recordingLimitWarning,
+        recordingAutoStopped,
+        acknowledgeAutoStop,
+        maxRecordingSeconds: MAX_RECORDING_SECONDS,
         recorderError,
         clearRecorderError,
         recoverableSession,

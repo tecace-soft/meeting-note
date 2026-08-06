@@ -26,6 +26,31 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   Widget build(BuildContext context) {
     final rec = ref.watch(recordingProvider);
     final notifier = ref.read(recordingProvider.notifier);
+
+    // When a recording auto-stops at the 2-hour cap, move the user into the
+    // new-note flow with the saved audio and tell them what happened.
+    ref.listen<RecordingState>(recordingProvider, (prev, next) {
+      final path = next.autoStoppedFilePath;
+      if (path == null || prev?.autoStoppedFilePath == path) return;
+      notifier.clearAutoStoppedFlag();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Reached the 2-hour limit. Recording stopped and saved. Start a new recording to continue.',
+          ),
+        ),
+      );
+      context.push(
+        '/record/new-note',
+        extra: NewNoteDraft(
+          audioPath: path,
+          attachmentPaths: List.of(_capturedAttachmentPaths),
+        ),
+      );
+      _capturedAttachmentPaths.clear();
+    });
+
     final recoverableSession = rec.state == RecordState.idle
         ? rec.recoverableSession
         : null;
@@ -35,6 +60,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
         state: rec.state,
         elapsed: rec.elapsed,
         amplitude: rec.amplitude,
+        limitWarning: rec.limitWarning,
         onPauseResume: () => _handleRecordTap(context, notifier, rec.state),
         attachmentCount: _capturedAttachmentPaths.length,
         onCamera: () => _capturePhoto(context),
@@ -308,6 +334,7 @@ class _ActiveRecordingScreen extends StatelessWidget {
     required this.state,
     required this.elapsed,
     required this.amplitude,
+    required this.limitWarning,
     required this.onPauseResume,
     required this.onCamera,
     required this.onDone,
@@ -317,6 +344,7 @@ class _ActiveRecordingScreen extends StatelessWidget {
   final RecordState state;
   final Duration elapsed;
   final double amplitude;
+  final bool limitWarning;
   final VoidCallback onPauseResume;
   final VoidCallback onCamera;
   final VoidCallback onDone;
@@ -404,6 +432,26 @@ class _ActiveRecordingScreen extends StatelessWidget {
                       color: palette.textSecondary,
                     ),
                   ),
+                  if (limitWarning) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0x1AE5484D),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: const Text(
+                        'Approaching the 2-hour limit. Recording will stop soon.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFFE5484D),
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 52),
                   _WaveformBars(
                     level: amplitude,

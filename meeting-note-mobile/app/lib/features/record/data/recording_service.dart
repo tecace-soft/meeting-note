@@ -18,6 +18,8 @@ class RecordingState {
     this.filePath,
     this.recoverableSession,
     this.loadingRecovery = true,
+    this.limitWarning = false,
+    this.autoStoppedFilePath,
   });
 
   final RecordState state;
@@ -27,6 +29,13 @@ class RecordingState {
   final RecoverableRecordingSession? recoverableSession;
   final bool loadingRecovery;
 
+  /// True during the final minutes before the 2-hour cap (non-blocking warning).
+  final bool limitWarning;
+
+  /// Set to the saved file path when a recording was auto-stopped at the 2-hour
+  /// cap, so the UI can navigate to the new-note flow. Cleared after handling.
+  final String? autoStoppedFilePath;
+
   RecordingState copyWith({
     RecordState? state,
     Duration? elapsed,
@@ -35,6 +44,9 @@ class RecordingState {
     RecoverableRecordingSession? recoverableSession,
     bool clearRecoverableSession = false,
     bool? loadingRecovery,
+    bool? limitWarning,
+    String? autoStoppedFilePath,
+    bool clearAutoStopped = false,
   }) =>
       RecordingState(
         state: state ?? this.state,
@@ -45,6 +57,10 @@ class RecordingState {
             ? null
             : recoverableSession ?? this.recoverableSession,
         loadingRecovery: loadingRecovery ?? this.loadingRecovery,
+        limitWarning: limitWarning ?? this.limitWarning,
+        autoStoppedFilePath: clearAutoStopped
+            ? null
+            : autoStoppedFilePath ?? this.autoStoppedFilePath,
       );
 }
 
@@ -119,12 +135,19 @@ final recordingProvider =
 class RecordingNotifier extends Notifier<RecordingState> {
   static const _recoveryKey = 'meeting_note_active_recording_session';
   static const _mimeType = 'audio/mp4';
+  // Hard cap on a single recording: 2 hours. At the cap the recording auto-stops
+  // and is saved; the user starts a new recording to continue. A non-blocking
+  // warning is surfaced recordingLimitWarningSeconds before the cap.
+  static const maxRecordingSeconds = 2 * 60 * 60;
+  static const recordingLimitWarningSeconds = 5 * 60;
   static const _nativeRecorder =
       MethodChannel('meeting_note_mobile/foreground_recorder');
 
   final _recorder = AudioRecorder();
   final _storage = const FlutterSecureStorage();
   Timer? _ticker;
+  // Guards the 2-hour auto-stop so it runs once even if ticks overlap.
+  bool _stoppingAtLimit = false;
   StreamSubscription<Amplitude>? _ampSub;
 
   @override
@@ -150,6 +173,7 @@ class RecordingNotifier extends Notifier<RecordingState> {
 
   Future<bool> start() async {
     if (!await _recorder.hasPermission()) return false;
+    _stoppingAtLimit = false;
 
     final dir = await getApplicationDocumentsDirectory();
     final startedAt = DateTime.now();
@@ -338,12 +362,36 @@ class RecordingNotifier extends Notifier<RecordingState> {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) async {
       final elapsed = state.elapsed + const Duration(seconds: 1);
-      state = state.copyWith(elapsed: elapsed);
+      final seconds = elapsed.inSeconds;
+      final warn = seconds >= (maxRecordingSeconds - recordingLimitWarningSeconds);
+      state = state.copyWith(elapsed: elapsed, limitWarning: warn);
 
-      if (elapsed.inSeconds % 2 == 0) {
+      if (seconds >= maxRecordingSeconds && !_stoppingAtLimit) {
+        _stoppingAtLimit = true;
+        await _handleAutoStopAtLimit();
+        return;
+      }
+
+      if (seconds % 2 == 0) {
         await _heartbeatRecoverySession(elapsed);
       }
     });
+  }
+
+  /// Auto-stop at the 2-hour cap: finalize/save the recording, then surface the
+  /// saved path via [RecordingState.autoStoppedFilePath] so the UI can move the
+  /// user into the new-note flow. The user starts a fresh recording to continue.
+  Future<void> _handleAutoStopAtLimit() async {
+    final path = await stop(); // resets state to idle and returns the saved path
+    if (path != null) {
+      state = state.copyWith(autoStoppedFilePath: path);
+    }
+  }
+
+  /// Clears the auto-stop marker once the UI has navigated, so it is not
+  /// handled twice.
+  void clearAutoStoppedFlag() {
+    state = state.copyWith(clearAutoStopped: true);
   }
 
   Future<void> _heartbeatRecoverySession(Duration elapsed) async {
