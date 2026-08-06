@@ -56,7 +56,10 @@ class NotesRepository {
         _workflow = Dio(
           BaseOptions(
             baseUrl: workflowApiUrl.replaceAll(RegExp(r'/$'), ''),
-            connectTimeout: const Duration(seconds: 30),
+            // 60s connect: the free-tier backend spins down after ~15 min idle
+            // and a cold start can take up to ~60s; a shorter timeout surfaces
+            // as a spurious "could not reach" on the first request.
+            connectTimeout: const Duration(seconds: 60),
             receiveTimeout: const Duration(minutes: 2),
             sendTimeout: const Duration(minutes: 5),
           ),
@@ -265,31 +268,54 @@ class NotesRepository {
       final prompt = await _resolvePromptId(promptId);
       final attachments = await _workflowAttachments(attachmentPaths);
 
-      final response = await _workflow.post<Map<String, dynamic>>(
-        '/summarize-audio/jobs',
-        data: {
-          'downloadUrl': audio.downloadUrl,
-          'fileName': audio.fileName,
-          'fileId': audio.fileId,
-          'meetingAt': audio.recordedAt,
-          'userTimeZone': DateTime.now().timeZoneName,
-          'instructions': instructions ?? '',
-          'promptId': prompt.promptId,
-          if (prompt.summaryRulesOverride != null)
-            'summaryRulesOverride': prompt.summaryRulesOverride,
-          'userId': auth.userId,
-          'userName': userName?.trim() ?? '',
-          'noteId': resolvedNoteId,
-          'language': appLanguage,
-          'attachments': attachments,
+      final requestData = <String, dynamic>{
+        'downloadUrl': audio.downloadUrl,
+        'fileName': audio.fileName,
+        'fileId': audio.fileId,
+        'meetingAt': audio.recordedAt,
+        'userTimeZone': DateTime.now().timeZoneName,
+        'instructions': instructions ?? '',
+        'promptId': prompt.promptId,
+        if (prompt.summaryRulesOverride != null)
+          'summaryRulesOverride': prompt.summaryRulesOverride,
+        'userId': auth.userId,
+        'userName': userName?.trim() ?? '',
+        'noteId': resolvedNoteId,
+        'language': appLanguage,
+        'attachments': attachments,
+      };
+      final requestOptions = Options(
+        headers: {
+          'content-type': 'application/json',
+          'authorization': 'Bearer $microsoftToken',
         },
-        options: Options(
-          headers: {
-            'content-type': 'application/json',
-            'authorization': 'Bearer $microsoftToken',
-          },
-        ),
       );
+      // Retry on cold-start connect failures: the free-tier backend spins down
+      // after ~15 min idle, and the first request wakes it (~12-60s). Resubmit
+      // is safe because noteId + fileId are stable idempotency keys, so the
+      // server dedupes instead of creating a duplicate note.
+      Response<Map<String, dynamic>> response;
+      var attempt = 0;
+      while (true) {
+        try {
+          response = await _workflow.post<Map<String, dynamic>>(
+            '/summarize-audio/jobs',
+            data: requestData,
+            options: requestOptions,
+          );
+          break;
+        } on DioException catch (error) {
+          final coldStart =
+              error.type == DioExceptionType.connectionTimeout ||
+                  error.type == DioExceptionType.connectionError;
+          if (coldStart && attempt < 2) {
+            attempt++;
+            await Future.delayed(Duration(seconds: 3 * attempt));
+            continue;
+          }
+          rethrow;
+        }
+      }
       final jobId = response.data?['jobId'];
       if (jobId is String && jobId.trim().isNotEmpty) {
         // Persist the in-flight job so a cold restart can resume polling and
@@ -311,6 +337,14 @@ class NotesRepository {
       }
       throw StateError('Workflow server did not return a job id.');
     } on DioException catch (error) {
+      final coldStart = error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.connectionError;
+      if (coldStart) {
+        throw StateError(
+          'The server is waking up and did not respond in time. '
+          'Please tap Try again in a moment.',
+        );
+      }
       throw StateError(
         _dioMessage(
           error,
