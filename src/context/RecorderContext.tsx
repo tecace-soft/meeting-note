@@ -63,12 +63,20 @@ interface RecorderContextValue {
   releaseScreenWakeLock: () => Promise<void>;
 }
 
+// Order matters: prefer webm/opus first. Chromium browsers (Chrome, Edge, Arc,
+// Atlas, Brave) on macOS report `isTypeSupported('audio/mp4') === true` because
+// the OS has an AAC encoder, but their MediaRecorder mp4 path produces NO data
+// (empty chunks) — so recording "works" then yields no file. webm/opus records
+// reliably on every Chromium/Firefox. Safari does not support webm, so it falls
+// through to mp4/aac (which Safari records correctly). This keeps Safari working
+// while fixing macOS Chromium (Windows Chrome already fell back to webm because
+// it has no mp4 muxer).
 const RECORDING_FORMATS: RecordingFormat[] = [
+  { mimeType: 'audio/webm;codecs=opus', extension: 'webm' },
+  { mimeType: 'audio/webm', extension: 'webm' },
   { mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'm4a' },
   { mimeType: 'audio/mp4', extension: 'm4a' },
   { mimeType: 'audio/aac', extension: 'm4a' },
-  { mimeType: 'audio/webm;codecs=opus', extension: 'webm' },
-  { mimeType: 'audio/webm', extension: 'webm' },
 ];
 
 const DB_NAME = 'meeting-note-recorder';
