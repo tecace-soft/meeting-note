@@ -1,10 +1,10 @@
 # Operations Backlog
 
-Last updated: 2026-08-04.
+Last updated: 2026-08-06.
 Goal: make running and maintaining Meeting Note easier and calmer, at (near) zero cost.
-Boss's actual ask, as understood: operational peace of mind — e.g. "when the Render server goes down, a warning email arrives at the company address."
+Boss's actual ask, as understood: operational peace of mind (e.g. "when the Render server goes down, a warning email arrives at the company address").
 So the backlog is ordered by that: visibility/alerting first (what the boss wants now), then removing the things that break (durable fixes), then distribution/maintenance chores.
-The 2026-08-04 standup added a product-feature track (section F) and re-prioritized: the "Memory" feature is now prioritized over meeting-series analysis, and the 2-hour recording cutoff is promoted from deferred to immediate.
+The 2026-08-04 standup added a product-feature track (section F). The **2026-08-06 meeting** (Hansoo Lee, Andrew Yoo, Eun Seok Lee) set a hard sprint: memory (dynamic ontology), metadata indexing, and context-based diarization each need an **alpha/beta by 2026-08-13 (next Wed)**. Immediate this-week items: **200MB upload cap + 2-hour recording cutoff** (both due 2026-08-06), and the **app package rename to `com.tecace.*` + Azure auth**.
 
 Priority tiers: P0 = boss-visible, low effort, do first. P1 = durable root-cause fixes. P2 = quality-of-life. F = product features (2026-08-04 standup).
 
@@ -119,76 +119,95 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 
 ---
 
-## F — Product features (from 2026-08-04 standup)
+## F — Product features
 
-Feature track surfaced at the 2026-08-04 standup. Ordered by the standup's stated priority: Memory feature first (explicitly prioritized over meeting-series analysis), then the support/feedback loop, then series-level analytics. Speaker A = the user (Andrew); Speaker B = the boss.
+Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (Hansoo Lee, Andrew Yoo, Eun Seok Lee).
 
-### F1 "Memory" feature — per-user accumulated context [IMMEDIATE, prioritized over meeting analysis]
-- What: accumulate individual user context over time (across their meetings) so the system can (a) automatically identify/label speakers and (b) surface personalized insights. A durable per-user memory store that grows with each meeting.
-- Why: standup called this the near-term priority, ahead of meeting-series analysis. Auto speaker identification directly improves the transcript/summary quality and reduces manual speaker labeling.
-- Owner / next step: Speaker A (user) begins architecture research + initiates development.
-- Effort: feature-scale (research → design → build). Needs a requirements-clarification pass before coding.
-- Open questions to resolve first: where the memory lives (Supabase table vs. vector store), scope (per-user vs. per-tenant), how speaker identity is keyed and matched, privacy/retention.
+> **SPRINT — alpha/beta by 2026-08-13 (next Wed):** F1' dynamic-ontology memory, F4 metadata index layer, F5 context-based diarization. These three are the committed near-term deliverables.
+
+### F1 "Memory" feature — SHIPPED (F1a + F1b + F1c) 2026-08-05, verified E2E on prod
+- Per-user accumulated context: F1a auto-accumulate speaker profiles, F1b auto speaker-ID suggestion (suggestion-only), F1c personal `user_memory` rollup (open action items / collaborators / active projects / recurring topics). Live on prod: `user_memory` table, `update-user-memory` edge fn, minimal read-only Memory tab in AccountSettings. Full detail in `MEMORY_FEATURE_DESIGN.md`.
+- Minor polish TODO: collaborators sometimes include the user themselves (prompt says exclude).
+- **F1' — dynamic ontology learning [SPRINT, due 2026-08-13].** Owner: Andrew + Eun Seok Lee. Move the ontology from simple field-overwrite updates to a dynamic system that learns conversational **context and relationships** across meetings and reflects them, not just append/replace. This is the "durable, reusable per-user context base / KB" direction from the standup.
+
+### F4 Metadata index layer [SPRINT, due 2026-08-13]
+- What: a metadata-based index layer over meeting-note data so search is efficient and token consumption drops (retrieve by index instead of feeding whole transcripts to the LLM).
+- Why: turns stored notes into a queryable knowledge base and cuts Gemini token cost.
+- Owner: Hansoo Lee is researching the approach; Andrew + Eun Seok Lee design and implement.
+
+### F5 Context-based diarization [SPRINT, due 2026-08-13] — CORE GOAL
+- What: shift speaker separation from pure voice-pattern matching to **context-based** identification (infer who is speaking from conversational context, not only acoustic signature). Builds on F1b's text/context speaker-ID.
+- Why: diarization accuracy is central to UX; the strategic move is voice-centric to context-centric.
+- Owner: Andrew.
 
 ### F2 User feedback + support section, with AI bug-report analysis
-- What: an in-app user feedback/support section. Speaker B's suggestion: feed submitted bug reports to an AI that produces actionable repair steps for engineers. Overlaps the self-healing/error-reporting direction (P0.3) — the AI-analysis layer on top of raw error capture.
-- Why: shortens the report → diagnosis → fix loop; gives users a support channel.
+- What: an in-app user feedback/support section. Boss's suggestion: feed submitted bug reports to an AI that produces actionable repair steps for engineers. Overlaps the self-healing/error-reporting direction (P0.3): the AI-analysis layer on top of raw error capture.
+- Why: shortens the report-to-diagnosis-to-fix loop and gives users a support channel.
 - Effort: medium (UI + intake pipeline + AI analysis step).
-- Note: reality-check from prior discussion — AI can triage/summarize a report and suggest steps, but cannot auto-fix infra-class failures (e.g. quota/suspension). Scope it as triage assistance, not auto-remediation.
+- Note: reality-check. AI can triage/summarize a report and suggest steps, but cannot auto-fix infra-class failures (e.g. quota/suspension). Scope it as triage assistance, not auto-remediation.
+
+### F6 Personal voice-memo feature [new, exploratory]
+- What: a personal voice-memo capture in the app. Discussed as a stepping stone toward agent-driven auto report generation (F7).
+- Owner: TBD.
+
+### F7 Agent-based auto report generation [future]
+- What: an agent over accumulated memo/meeting data that auto-generates reports. Confirmed as a future expansion path of F6.
 
 ### F3 Meeting-series analysis / trend + frequent-topic tracking [future]
-- What: metadata aggregation across a series of related meetings — track trends and frequently mentioned topics over time.
+- What: metadata aggregation across a series of related meetings; track trends and frequently mentioned topics over time. Overlaps F4's index layer.
 - Why: higher-level insight across recurring meetings, not just single-note summaries.
-- Owner: Speaker A to explore metadata aggregation.
-- Effort: feature-scale. Explicitly sequenced AFTER F1 per standup.
+- Owner: Andrew to explore. Sequenced after the F1'/F4/F5 sprint.
 
 ---
 
 ## Recommended sequence
-1. P0.1 + P0.2 now — cheap, and directly answers the boss's "warn me when it's down."
-2. P1.2 (idle MCP) — quick relief on the free-hour cap.
-3. P1.1 (webhook-ization) — the big one; schedule it deliberately, it removes most future ops pain.
+Current top priority (per 2026-08-06 meeting) is the product sprint due 2026-08-13: F1' (dynamic ontology), F4 (index layer), F5 (context diarization). In parallel, close the due-today items: R6 (2-hour cutoff), R9 (200MB cap), and unblock R11 (Azure access via Gene).
+Ops track runs in the background (the boss's peace-of-mind ask):
+1. P0.1 + P0.2 now: cheap, and directly answers the boss's "warn me when it's down."
+2. P1.2 (idle MCP): quick relief on the free-hour cap.
+3. P1.1 (webhook-ization): the big one; schedule it deliberately, it removes most future ops pain.
 4. P1.3 conversation + P2 chores alongside.
-
-Standup 2026-08-04 immediate work (parallel to ops track): R6 (2-hour cutoff + measure impact), R1 web positive test (deploy done), and F1 (Memory feature research/architecture — the standup's top feature priority).
 
 ---
 
-## Outstanding project items (non-ops, parked here for one source of truth)
+## Recently shipped (2026-08-04 → 08-06)
 
-These are feature/deploy/cleanup items already in flight or deferred, unrelated to the ops-simplification themes above but tracked here so nothing is lost.
+Condensed from full entries; details live in git history + `MEMORY_FEATURE_DESIGN.md` + Claude memory.
+- **generate-profile auth gate** (was R1): deployed to prod, verified both directions (anon-key POST 401, app-JWT accepted). Unauth Gemini-quota burn blocked.
+- **dark-mode theme + 32 kbps audio cap + iOS build skill** (was R2/R3): merged to main, live on web.
+- **APK rollout** (was R4): Z Fold (vc2003), boss phone, and S23 on the JWT build.
+- **Memory feature F1a+F1b+F1c**: per-user memory shipped + verified E2E on prod (see F1 above).
+- **Admin dashboard access for Andrew Yoo** (`andrewyoo@tecace.com`, oid `31d79bfe-...`): granted in all 3 places (client `adminAccess.ts` + `admin-analytics` + `admin-controls`), deployed.
+- **Supabase Pro**: paid; storage upload cap is now raiseable (see R9).
+- **OPS_BACKLOG committed + tracked** (was R8).
 
-### R1 Deploy the generate-profile auth gate — DONE 2026-08-04
-- DEPLOYED 2026-08-04 to project `smnnlamrwisqaquymsdl` via `npx supabase functions deploy generate-profile --project-ref smnnlamrwisqaquymsdl`. Standup 2026-08-04 approved.
-- Deploy auth note: Windows Credential Manager keyring read was broken (`supabase login` stored a token the CLI could not read back), so deploy required a Personal Access Token in the `SUPABASE_ACCESS_TOKEN` env var. If redeploying, use a PAT.
-- Verified BOTH directions: negative — anon-key-only POST → HTTP 401 `{"error":"Invalid JWT format."}` from our own gate; positive — logged-in web session (Sync Profile on an existing note) generated speaker profiles successfully. Unauth Gemini-quota burn is now blocked; real app JWT is accepted. R1 CLOSED.
-- Rollback if ever needed: `git checkout <prev> -- supabase/functions/generate-profile/index.ts && npx supabase functions deploy generate-profile`.
-- Residual risk: any active phone still on the old anon-key build gets 401 on profile-gen only (rest of app unaffected). Web ✅, Z Fold ✅ (vc2003). Boss phone / S23 = still unconfirmed → see R4.
-- See pending-generate-profile-gate memory.
+---
 
-### R2 Merge ui/dark-mode-theming → main — DONE 2026-08-04
-- Fast-forwarded main to 305c811 and pushed to origin. Brought in dark theme (8db861c), 32 kbps cap (99b336f), iOS skill (fed1b06), vc2004 bump (70fd21c), alerts dual-recipient (9361e84), OPS_BACKLOG (305c811). Push triggered the Render static-frontend auto-deploy (dark mode + 32 kbps now live on web).
+## Active / near-term (non-ops)
 
-### R3 Push the two unpushed commits — DONE 2026-08-04
-- `99b336f` (recording 32 kbps cap) and `fed1b06` (iOS IPA skill + .gitignore) reached origin via the R2 merge/push. Web bitrate cap is now deploying to web testers with the R2 frontend redeploy.
+### R6 Two-hour auto-stop recording — DUE TODAY (2026-08-06)
+- 2026-08-06 meeting reconfirmed: cap recording at 2h; on overrun, stop and save, with an in-app guide message. Andrew to implement on app + web AND measure the file-size / storage-cost impact on Supabase.
+- Suggested: Android `MediaRecorder.setMaxDuration(7200000)` + OnInfoListener (works in background); web/iOS timer. Pairs with the 32 kbps cap as a storage-cost lever.
 
-### R4 APK rollout to boss phone + S23
-- Z Fold has vc2003 (JWT app). Boss phone and the user's S23 need the new APK. Ties into R1's precondition and P2.1 (Firebase App Distribution would make this a link).
+### R9 200MB upload limit + clear over-limit error — DUE TODAY (2026-08-06)
+- Decision (2026-08-06 meeting): cap uploads at 200MB for cost/perf; show the user a clear error when a file exceeds it.
+- Root cause of the old ~50MB failure was the Supabase free-tier per-file storage cap (not Render, not code); now on Supabase Pro so it is raiseable.
+- Code READY on branch `fix/supabase-upload-limit`: bucket→200MB migration, web-side guard + clear error message, mobile 64 kbps. NOT merged to main.
+- Remaining: raise the Supabase project-wide "Upload file size limit" to ≥200MB in the dashboard (effective bucket limit = min(global, bucket)), merge the branch, then E2E-verify a >50MB file end to end. Mobile follow-up: guard 100→200MB, resumable upload.
 
-### R5 iOS test build (free 7-day personal team)
-- Runbook exists: `.claude/skills/build-ios-ipa/SKILL.md`. Needs a Mac (hand to the designer) + an Apple ID; free personal-team install is USB-tethered, 7-day. No paid account (boss won't pay $99/yr).
-- Standup 2026-08-04: Speaker B (boss) will coordinate with **TGX** for the iOS **release account** to streamline the current manual build process. So a proper (paid/managed) iOS release path may be unblocked via TGX rather than the free personal-team route above.
+### R11 App package rename `com.example.*` → `com.tecace.*` + Azure auth — IN PROGRESS (Andrew)
+- Why: `com.example.*` is rejected by both the App Store and Google Play, so it must change before either release. Nothing is store-published yet, so now is the cheapest time (no Play applicationId lock).
+- IDs: iOS bundle `com.tecace.meetingNoteMobile` (another dev owns iOS); Android applicationId/package `com.tecace.meeting_note_mobile` (Andrew builds Android).
+- Must change together or Android login breaks: `auth_config.dart` `microsoftAndroidRedirectUri`, `AndroidManifest.xml` `android:host`, kotlin `package` declarations (MainActivity + ForegroundRecordingService), plus the iOS bundle id in the Xcode project.
+- Signing unchanged: same debug keystore Andrew holds → the Android redirect **signature hash stays** `guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D`, only the package prefix changes. No new keystore needed for a rename.
+- **BLOCKER**: the Azure app registration (`f81ec595-e95f-4b99-8143-fb4b198df787`, tenant `a141d6e8-...`) sits under the **predecessor Gene's PERSONAL account** — Andrew has no access. Sent Gene a request to either add Andrew as Owner or add 2 new redirects (iOS `msauth.com.tecace.meetingNoteMobile://auth`, Android `msauth://com.tecace.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D`; keep the old ones during migration).
+- **RISK to escalate**: prod authentication is tied to an ex/individual's personal account. Push to transfer ownership to a TecAce org account.
 
-### R6 Two-hour auto-stop recording — PROMOTED to immediate (2026-08-04 standup)
-- No longer deferred. Standup made this an immediate task; Speaker A (user) to implement the 2-hour cutoff AND measure the file-size / storage-cost impact on Supabase. Motivation restated at standup: optimize file size and storage cost.
-- Auto-stop recording at 2h on app + web. Suggested: Android `MediaRecorder.setMaxDuration(7200000)` + OnInfoListener (works in background); web/iOS timer. Behavior: auto-stop + save, light on-stop notification.
-- Pairs with the recent 32 kbps audio cap (commit 99b336f) — both are storage-cost levers.
+### R5 iOS release path (via TGX)
+- Runbook: `.claude/skills/build-ios-ipa/SKILL.md`. Free personal-team install is USB-tethered, 7-day, no paid account. Boss to coordinate with **TGX** for the iOS **release account** to replace the manual build. Bundle id finalizing under R11.
 
 ### R7 Correct the handoff doc
 - `.claude/handoffs/2026-07-29-reliability-darkmode-handoff.md` records R5CWB1HN1XN as the boss's phone; it is actually the user's phone.
-
-### R8 Commit OPS_BACKLOG.md
-- This file is currently untracked/uncommitted. Commit when ready.
 
 ---
 
