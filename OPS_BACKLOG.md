@@ -193,7 +193,14 @@ Condensed from full entries; details live in git history + `MEMORY_FEATURE_DESIG
 ### R9 200MB upload limit + clear over-limit error — SHIPPED 2026-08-06 (E2E verify left)
 - Decision (2026-08-06 meeting): cap uploads at 200MB for cost/perf; show a clear error when a file exceeds it. Root cause of the old ~50MB failure was the Supabase free-tier per-file storage cap (not Render, not code); Supabase Pro made it raiseable.
 - DONE: prod caps set to 200MB (209715200) on BOTH the project-wide storage config AND the `meeting-recordings` bucket, applied via the Management API (`/config/storage` PATCH + a `storage.buckets` UPDATE) and verified. Web guard (`MAX_FILE_SIZE` 200MB) + `oversizedFileMessage` + Supabase-413 backstop + 64 kbps web recording, merged to main (`21a4f05`) and deployed.
-- Remaining: E2E-verify a >50MB file uploads AND transcribes end to end. Mobile follow-up (separate): still 32 kbps, audio guard `notes_repository.dart:443` 100→200MB, consider resumable upload.
+- Remaining: E2E-verify a >50MB file uploads AND transcribes end to end. (Mobile 64 kbps + audio guard 200MB already shipped: `154ac33`, `b8f68e7`. Resumable upload moved to R12.)
+
+### R12 Mobile upload/processing robustness (from the 2026-08-06 backgrounding analysis)
+- Context: on Android the upload + job-submit path has NO background protection (no foreground service, wake lock, WorkManager, or notification — unlike recording, which has a foreground service). Pressing power during "Uploading..." (before the job is submitted) risks a throttled/killed upload with no resume, because `ActiveJob` is persisted only AFTER the jobId is returned. Once the job is submitted it is safe: the work is server-side and the app resumes to `/processing/{jobId}` on reopen (`main.dart`). The upload is also `file.readAsBytes()` (whole file in memory, single PUT).
+- **R12.1 Keep the upload alive when the screen is off**: a wake lock or a short foreground service during upload so a backgrounded upload still completes.
+- **R12.2 Real completion notification**: the processing screen says "we'll notify you" but there is NO notification code. Add a local notification (`flutter_local_notifications`) on job completion so the copy is honest and the user need not reopen the app. Cheapest of the three; pure honesty fix.
+- **R12.3 Resumable/chunked upload**: replace `file.readAsBytes()` + single PUT with a streamed/resumable upload. Fixes both the RAM cost on large (up to 200MB) files and mid-upload interruption tolerance.
+- All mobile; reach devices only via a build. Low urgency (the cold-start "Could not reach" was a first-in-months event, and phase-2 is already safe), but R12.2 is cheap and worth doing.
 
 ### R11 App package rename `com.example.*` → `com.tecace.*` + Azure auth — WAITING on the Korea dev's rename commit
 - Why: `com.example.*` is rejected by both the App Store and Google Play, so it must change before either release. Nothing is store-published yet, so now is the cheapest time (no Play applicationId lock).
