@@ -1,6 +1,6 @@
 # Memory Feature — Design & Decisions (F1)
 
-Status: F1b + F1a implemented & verified on web 2026-08-04. F1c backend + minimal UI implemented 2026-08-05 (branch `memory/user-context`), NOT yet deployed/verified — see the F1c "Implemented 2026-08-05" note below.
+Status: F1a + F1b + F1c ALL shipped to prod (main) and F1c VERIFIED E2E 2026-08-05 (a real standup folded into user_memory: 7 action items / 2 collaborators / 5 projects / 6 topics). See the F1c "Implemented 2026-08-05" note below for the deploy/verify gotchas.
 Branch: `memory/user-context`.
 
 Progress (2026-08-04):
@@ -104,7 +104,11 @@ Boundary vs. F3: F1c is USER-centered across all their meetings; F3 (meeting-ser
 - Client `src/lib/userMemory.ts`: `fetchUserMemory` / `updateUserMemoryFromNote` (best-effort, deduped via processed_note_ids) / `clearUserMemory`, plus `coerceMemory` guard.
 - Trigger: fire-and-forget in `applySummaryResult` (TranscriptionSummary.tsx) after a summary completes — never blocks/fails the summary UI.
 - Minimal read-only UI: new `Memory` tab in AccountSettings rendering `src/components/UserMemoryView.tsx` (lists + delete-my-memory with inline confirm). Intentionally plain; polished dashboard is the designer's later work.
-- STILL TODO: deploy the edge function (`npx supabase functions deploy update-user-memory --project-ref smnnlamrwisqaquymsdl`), apply the migration (`supabase db push`), then verify on web that a real summary populates `user_memory`.
+- SHIPPED + VERIFIED 2026-08-05: merged to main + deployed. Migration applied to prod via the Management API `/database/query` (NOT `supabase db push`, which needs project linking). Edge fn deployed. Verified E2E on Andrew's account.
+- Deploy/verify gotchas (recorded so we don't relearn them):
+  - The fold trigger must live on EVERY summary path. Initially only in `applySummaryResult` (fresh summary); regenerate never calls it. Added to `TranscriptionSummary.handleRegenerateSummary` AND `SummaryHistory.handleRegenerateNoteSummary` (the history-list regenerate is the common path for an existing meeting). Shared helper `foldNoteIntoUserMemory` in TranscriptionSummary; SummaryHistory calls `updateUserMemoryFromNote` directly.
+  - The edge fn 502'd with "Could not parse the updated memory" because gemini-2.5 thinking tokens consumed `maxOutputTokens` and truncated the JSON. Fix: `thinkingConfig: { thinkingBudget: 0 }`, cap list sizes in the prompt, tolerant JSON parsing (fences/prose/first-brace-to-last-brace), and a `debug` rawText preview in the 502 body.
+- Minor polish TODO: collaborators sometimes include the user themselves although the prompt says to exclude them.
 
 **Next steps for tomorrow (F1c build order):**
 - Design the `user_memory` schema (columns for a structured base: open_action_items[], collaborators[], active_projects[], recurring_topics[], last_updated_at; each item carries source/confidence like the speaker ontology). Write the Supabase migration + RLS (mirror the `speaker` RLS: `user_id = auth.jwt()->>'sub'`).
