@@ -128,12 +128,12 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 ### F1 "Memory" feature — SHIPPED (F1a + F1b + F1c) 2026-08-05, verified E2E on prod
 - Per-user accumulated context: F1a auto-accumulate speaker profiles, F1b auto speaker-ID suggestion (suggestion-only), F1c personal `user_memory` rollup (open action items / collaborators / active projects / recurring topics). Live on prod: `user_memory` table, `update-user-memory` edge fn, minimal read-only Memory tab in AccountSettings. Full detail in `MEMORY_FEATURE_DESIGN.md`.
 - Minor polish TODO: collaborators sometimes include the user themselves (prompt says exclude).
-- **F1' — dynamic ontology learning [SPRINT, due 2026-08-13].** Owner: Andrew + Eun Seok Lee. Move the ontology from simple field-overwrite updates to a dynamic system that learns conversational **context and relationships** across meetings and reflects them, not just append/replace. This is the "durable, reusable per-user context base / KB" direction from the standup.
+- **F1' — dynamic relational memory [SPRINT, due 2026-08-13].** Owner: Andrew (all software). Boss feedback 2026-08-06: the shipped F1c memory is too fact-oriented (flat buckets); the boss wants "long-term memory like ChatGPT" that is context + relation oriented. Direction locked = **hybrid**: narrative memory notes (ChatGPT/Claude-MEMORY.md style) with **update/supersede** dynamic learning, backed later by a light entity-relation graph that feeds F4/F5. Alpha = narrative + supersede layer (no new UI design → Andrew-solo). Full design in `MEMORY_FEATURE_DESIGN.md` ("F1' — Dynamic relational memory").
 
 ### F4 Metadata index layer [SPRINT, due 2026-08-13]
 - What: a metadata-based index layer over meeting-note data so search is efficient and token consumption drops (retrieve by index instead of feeding whole transcripts to the LLM).
 - Why: turns stored notes into a queryable knowledge base and cuts Gemini token cost.
-- Owner: Hansoo Lee is researching the approach; Andrew + Eun Seok Lee design and implement.
+- Owner: Hansoo Lee is researching the approach; Andrew implements (all software). Eun Seok Lee is the designer, involved only if a screen needs new design.
 
 ### F5 Context-based diarization [SPRINT, due 2026-08-13] — CORE GOAL
 - What: shift speaker separation from pure voice-pattern matching to **context-based** identification (infer who is speaking from conversational context, not only acoustic signature). Builds on F1b's text/context speaker-ID.

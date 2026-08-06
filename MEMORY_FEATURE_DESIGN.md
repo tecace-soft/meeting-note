@@ -2,6 +2,7 @@
 
 Status: F1a + F1b + F1c ALL shipped to prod (main) and F1c VERIFIED E2E 2026-08-05 (a real standup folded into user_memory: 7 action items / 2 collaborators / 5 projects / 6 topics). See the F1c "Implemented 2026-08-05" note below for the deploy/verify gotchas.
 Branch: `memory/user-context`.
+F1' (dynamic relational memory) designed 2026-08-06 from boss feedback; see the "F1' — Dynamic relational memory" section at the end.
 
 Progress (2026-08-04):
 - F1b (suggestion-based ID): shipped. New edge function `identify-speakers` (deployed), client lib `src/lib/identifySpeakers.ts`, "Suggest" banner in `TranscriptDiarizedEditor.tsx`. Verified: identifies the logged-in user (self prior); other people were NOT identified — root cause diagnosed as EMPTY profiles (nothing to match against), not a prompt bug. Sends original-language transcript; "Apply all" removed (per-row confirm only) since LLM confidence is uncalibrated.
@@ -135,3 +136,92 @@ Boundary vs. F3: F1c is USER-centered across all their meetings; F3 (meeting-ser
 - Speaker identity helpers: `src/lib/matchSpeakerIdentity.ts`, `src/lib/ensureSelfSpeakerRow.ts`.
 - Manual trigger UIs: `src/pages/TranscriptionSummary.tsx`, `src/pages/SummaryHistory.tsx`, `src/pages/AccountSettings.tsx` (Speaker tab).
 - Standup roadmap: `OPS_BACKLOG.md` section F.
+
+---
+
+## F1' — Dynamic relational memory (design, 2026-08-06)
+
+Status: designed 2026-08-06, not yet built.
+Alpha target 2026-08-13.
+Builds on F1c (the `user_memory` table + `update-user-memory` edge function), on branch `memory/user-context`.
+Ownership: Andrew implements all of it (software).
+Eun Seok is the designer and is involved only when a screen needs new design; F1' needs none, so it is Andrew-solo.
+
+### Why (boss feedback 2026-08-06, Hansoo via Andrew)
+The shipped F1c memory works but is too fact-oriented.
+It stores flat typed buckets (`open_action_items` / `collaborators` / `active_projects` / `recurring_topics`) and reads like a CRM dump.
+The boss wants "long-term memory like ChatGPT uses" that is context and relation oriented, not fact oriented.
+
+### Direction (locked 2026-08-06)
+Hybrid: narrative memory notes (ChatGPT / Claude-`MEMORY.md` style) as the primary human-readable layer, backed later by a light entity-relation layer that will power F4 (KB/index) and F5 (speaker-ID).
+Sequence: ship the narrative + supersede layer first (this alpha), then layer the entity-relation graph underneath as F4 lands.
+Update semantics: update/supersede (dynamic learning), not append-only.
+
+### Scope
+In (alpha, 2026-08-13): narrative memory items, the supersede update flow, the UI list swap, and migration.
+Out (follow-on): the entity-relation graph, KB/index (F4), and any cross-user querying.
+
+### Schema
+Keep the `user_memory` table as-is (`user_id` PK, `processed_note_ids[]` dedup, `created_at`/`updated_at`).
+Change only the shape of the `memory` jsonb.
+
+Old (F1c): `{ open_action_items[], collaborators[], active_projects[], recurring_topics[] }`.
+
+New (F1'): a versioned list of memory items.
+```
+memory: {
+  version: 2,
+  items: [
+    {
+      id: string,              // stable uuid
+      text: string,            // one natural-language memory, with its context/relations in prose
+      entities: string[],      // light tags (people / projects / topics) -> seeds the future graph
+      status: "active" | "archived",
+      createdAt: iso,
+      updatedAt: iso,
+      sourceNoteIds: string[]  // provenance
+    }
+  ]
+}
+```
+`version` lets the reader tell the old shape from the new one during migration.
+`entities[]` is the only concession to the future graph: no typed relations yet, just tags to build on later.
+
+### Operation contract (the dynamic-learning core)
+`update-user-memory` changes from "merge buckets" to "emit ops over the existing items".
+Input: the existing `items`, the new meeting transcript, and `selfName`.
+Output: an ordered op list that the server applies deterministically.
+```
+ops: [
+  { op: "add",       text, entities, sourceNoteId },
+  { op: "update",    id, text, entities },   // refine an existing memory
+  { op: "supersede", id, text, entities },   // replace a stale or contradicted memory
+  { op: "archive",   id }                    // no longer relevant
+]
+```
+Prompt rules for the LLM:
+- Prefer update/supersede over adding near-duplicates.
+- Supersede when new info contradicts or resolves an old memory (for example "50MB limit under investigation" becomes "50MB limit fixed via Supabase Pro, now 200MB").
+- Keep each item one self-contained sentence with its context and relations in prose.
+- Bound the list (cap N items; archive the least-recently-updated beyond the cap).
+- Do not include the user themselves as a collaborator (carry-over from the F1c polish item).
+The server applies the ops, stamps timestamps, dedupes by id, and enforces the cap.
+Reuse the F1c robustness: `thinkingBudget: 0`, tolerant JSON parse, output caps, auth-gated, 502 debug preview.
+
+### Update flow / triggers
+Unchanged from F1c: fire-and-forget after the summary on all three paths (`applySummaryResult` plus both regenerate handlers), deduped via `processed_note_ids`.
+
+### UI
+`UserMemoryView` swaps the 4 typed sections for a single list of `items[].text`, most-recently-updated first.
+Keep the read-only behavior and the delete-all action.
+No new design and no designer (Eun Seok) needed: this is a rendering change inside the existing Memory tab, and it is simpler than the current 4-section view.
+
+### Migration
+`memory.version` gates the reader.
+On the first F1' write for a user, either fold the old buckets into seed `items` (one memory sentence per bucket entry) or start empty (data volume is small today).
+Rows without `version` are treated as v1 and re-seeded lazily on the next update.
+
+### Open questions (product, resolve with the boss; none are design)
+- The entity-relation schema for the later graph layer and how it feeds F4's index.
+- Whether items should carry a `kind` (decision / task / preference / relationship) for filtering, or stay untyped prose.
+- The item cap N and the archival policy.
