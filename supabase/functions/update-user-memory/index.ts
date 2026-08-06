@@ -158,6 +158,10 @@ async function callGeminiGenerateContent(
         temperature: 0.1,
         maxOutputTokens: 8192,
         responseMimeType: 'application/json',
+        // Disable "thinking" so the whole token budget goes to the JSON output.
+        // On 2.5 models, thinking tokens can consume maxOutputTokens and truncate
+        // the JSON mid-object, which then fails to parse.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
   });
@@ -254,6 +258,7 @@ Merge rules:
 - confidence is 0.0–1.0. Be conservative; prefer omitting over inventing. Never fabricate names or commitments not supported by the transcript.
 - source_note_id: for a NEW action item, set it to the provided current note id; otherwise keep the existing value.
 - Preserve existing entries that this meeting does not contradict.
+- Keep each list to its most relevant entries only: at most 25 open_action_items, 40 collaborators, 25 active_projects, 25 recurring_topics. Drop the least relevant beyond that.
 
 Return ONLY JSON of the exact shape (no prose, no markdown):
 {"memory":{"open_action_items":[{"text":"","assigned_by":null,"source_note_id":null,"confidence":0.0}],"collaborators":[{"name":"","speaker_id":null,"meeting_count":1,"last_seen":null,"confidence":0.0}],"active_projects":[{"name":"","status":null,"confidence":0.0}],"recurring_topics":[{"topic":"","confidence":0.0}]}}`;
@@ -366,14 +371,29 @@ function normalizeMemory(input: unknown): UserMemory {
   return { open_action_items, collaborators, active_projects, recurring_topics };
 }
 
+/** Parse JSON, tolerating markdown fences and leading/trailing prose. */
+function tryParseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    /* fall through to substring extraction */
+  }
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      /* give up */
+    }
+  }
+  return undefined;
+}
+
 function parseMergedMemory(rawText: string): UserMemory | null {
   const stripped = rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripped);
-  } catch {
-    return null;
-  }
+  const parsed = tryParseJson(stripped);
+  if (parsed === undefined) return null;
   const mem = (parsed as { memory?: unknown }).memory ?? parsed;
   return normalizeMemory(mem);
 }
@@ -441,7 +461,16 @@ serve(async (req) => {
 
   const merged = parseMergedMemory(result.rawText);
   if (!merged) {
-    return jsonResponse({ error: 'Could not parse the updated memory from the model output.' }, 502);
+    // Include a short preview of the raw model output so a parse failure can be
+    // diagnosed from the client console without server log access.
+    return jsonResponse(
+      {
+        error: 'Could not parse the updated memory from the model output.',
+        debug: (result.rawText || '').slice(0, 600),
+        model: result.model ?? null,
+      },
+      502
+    );
   }
 
   return jsonResponse({ memory: merged });
