@@ -440,9 +440,11 @@ class NotesRepository {
     if (stat.size <= 0) {
       throw StateError('Audio file is empty.');
     }
-    const maxBytes = 100 * 1024 * 1024;
+    // Matches the web guard and the 200 MB Supabase storage cap
+    // (meeting-recordings bucket + project-wide upload limit).
+    const maxBytes = 200 * 1024 * 1024;
     if (stat.size > maxBytes) {
-      throw StateError('File too large. Maximum size is 100 MB.');
+      throw StateError('File too large. Maximum size is 200 MB.');
     }
 
     // Reuse the caller's stable fileId across retries so the storage object and
