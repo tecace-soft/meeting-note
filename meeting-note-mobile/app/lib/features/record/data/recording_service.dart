@@ -229,10 +229,12 @@ class RecordingNotifier extends Notifier<RecordingState> {
     await _recorder.start(
       RecordConfig(
         encoder: encoder,
-        // 32 kbps mono / 16 kHz: speech-optimal, keeps a 2-hour meeting near
-        // ~29 MB so it stays under the storage cap. Applies to the AAC fallback
-        // too (iOS has no Opus encoder), which previously used 64 kbps.
-        bitRate: 32000,
+        // 64 kbps mono / 16 kHz: speech-optimal, matches the web recorder for
+        // consistent fidelity and gives AssemblyAI more headroom (AAC/Safari,
+        // noisy rooms). A 2-hour meeting is ~58 MB, well under the 200 MB cap,
+        // and the 2-hour auto-stop bounds it. Applies to the AAC fallback too
+        // (iOS has no Opus encoder).
+        bitRate: 64000,
         sampleRate: 16000,
         numChannels: 1,
       ),
