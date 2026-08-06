@@ -1126,6 +1126,33 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
+  // F1c: fold a note's transcript into the user's personal memory in the
+  // background (best-effort, deduped per note). Called after a fresh summary AND
+  // after a regenerate, so the note is folded once either way. Never blocks or
+  // fails the caller.
+  const foldNoteIntoUserMemory = (noteId: string, segments: TranscriptSegment[]): void => {
+    if (!user?.id || segments.length === 0) return;
+    const memoryUserId = user.id;
+    const memorySelfName = user.displayName ?? null;
+    void (async () => {
+      try {
+        const auth = {
+          appToken: await getSupabaseAccessTokenForRequest().catch(() => null),
+          msToken: await getAccessToken().catch(() => null),
+        };
+        await updateUserMemoryFromNote({
+          userId: memoryUserId,
+          noteId,
+          segments,
+          selfName: memorySelfName,
+          auth,
+        });
+      } catch (memoryError) {
+        console.error('Failed to update user memory:', memoryError);
+      }
+    })();
+  };
+
   const applySummaryResult = async (completedJob: WorkflowJobStatus, noteId: string) => {
     const result = completedJob.result ?? {};
     const summaryTranslations = result.summaryTranslations && typeof result.summaryTranslations === 'object'
@@ -1178,29 +1205,8 @@ const TranscriptionSummary: React.FC = () => {
     setResultsTab('summary');
 
     // F1c: fold this meeting into the user's personal memory (durable per-user
-    // context base). Best-effort and fully in the background — it must never
-    // block or fail the summary UI. Deduped per note inside updateUserMemoryFromNote.
-    if (user?.id && transcript.length > 0) {
-      const memoryUserId = user.id;
-      const memorySelfName = user.displayName ?? null;
-      void (async () => {
-        try {
-          const auth = {
-            appToken: await getSupabaseAccessTokenForRequest().catch(() => null),
-            msToken: await getAccessToken().catch(() => null),
-          };
-          await updateUserMemoryFromNote({
-            userId: memoryUserId,
-            noteId,
-            segments: transcript,
-            selfName: memorySelfName,
-            auth,
-          });
-        } catch (memoryError) {
-          console.error('Failed to update user memory:', memoryError);
-        }
-      })();
-    }
+    // context base). Best-effort, fully in the background — never blocks the UI.
+    foldNoteIntoUserMemory(noteId, transcript);
   };
 
   // Poll a created job to completion and apply its result. Persists the job id
@@ -1797,6 +1803,10 @@ const TranscriptionSummary: React.FC = () => {
       setEditedSummary(newSummary);
       setSummaryResult((prev) => (prev ? { ...prev, summary: newSummary } : prev));
       setResultsTab('summary');
+
+      // F1c: a regenerate also finalizes this note's transcript/summary, so fold
+      // it into the user's memory too (deduped — a note already folded is skipped).
+      foldNoteIntoUserMemory(currentNoteId, summaryResult.transcript);
     } catch (err: unknown) {
       console.error('Regenerate summary failed:', err);
       setRegenerateError(err instanceof Error ? err.message : 'Regeneration failed');
