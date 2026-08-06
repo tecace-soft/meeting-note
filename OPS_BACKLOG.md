@@ -161,7 +161,7 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 ---
 
 ## Recommended sequence
-Current top priority (per 2026-08-06 meeting) is the product sprint due 2026-08-13: F1' (dynamic ontology), F4 (index layer), F5 (context diarization). In parallel, close the due-today items: R6 (2-hour cutoff), R9 (200MB cap), and unblock R11 (Azure access via Gene).
+Current top priority (per 2026-08-06 meeting) is the product sprint due 2026-08-13: F1' (dynamic ontology), F4 (index layer), F5 (context diarization). The due-today items (R6 2-hour cutoff, R9 200MB cap) shipped + deployed 2026-08-06; what remains on them is E2E verification and a mobile device build. Also unblock R11 (Azure access via Gene).
 Ops track runs in the background (the boss's peace-of-mind ask):
 1. P0.1 + P0.2 now: cheap, and directly answers the boss's "warn me when it's down."
 2. P1.2 (idle MCP): quick relief on the free-hour cap.
@@ -185,15 +185,15 @@ Condensed from full entries; details live in git history + `MEMORY_FEATURE_DESIG
 
 ## Active / near-term (non-ops)
 
-### R6 Two-hour auto-stop recording — DUE TODAY (2026-08-06)
-- 2026-08-06 meeting reconfirmed: cap recording at 2h; on overrun, stop and save, with an in-app guide message. Andrew to implement on app + web AND measure the file-size / storage-cost impact on Supabase.
-- Suggested: Android `MediaRecorder.setMaxDuration(7200000)` + OnInfoListener (works in background); web/iOS timer. Pairs with the 32 kbps cap as a storage-cost lever.
+### R6 Two-hour auto-stop recording — SHIPPED 2026-08-06 (web deployed; mobile needs build)
+- Web + mobile: at 2h a recording auto-stops and saves, a non-blocking warning shows in the final 5 min, and the user starts a new recording to continue. Commit `e1f9629`, merged to main (`21a4f05`).
+- Web (`RecorderContext` timer + `FloatingRecorderWidget`/`TranscriptionSummary` UI) is live via the Render redeploy. Mobile (Dart ticker in `recording_service.dart` + `ForegroundRecordingService.kt` `setMaxDuration(7200000)` native backstop for backgrounded Android) is in `main` but NOT on devices until an APK/IPA build ships (pair with the R11 rename build).
+- Remaining: E2E verify (smoke-test by temporarily lowering `MAX_RECORDING_SECONDS`); measure real file-size/storage impact.
 
-### R9 200MB upload limit + clear over-limit error — DUE TODAY (2026-08-06)
-- Decision (2026-08-06 meeting): cap uploads at 200MB for cost/perf; show the user a clear error when a file exceeds it.
-- Root cause of the old ~50MB failure was the Supabase free-tier per-file storage cap (not Render, not code); now on Supabase Pro so it is raiseable.
-- Code READY on branch `fix/supabase-upload-limit`: bucket→200MB migration, web-side guard + clear error message, mobile 64 kbps. NOT merged to main.
-- Remaining: raise the Supabase project-wide "Upload file size limit" to ≥200MB in the dashboard (effective bucket limit = min(global, bucket)), merge the branch, then E2E-verify a >50MB file end to end. Mobile follow-up: guard 100→200MB, resumable upload.
+### R9 200MB upload limit + clear over-limit error — SHIPPED 2026-08-06 (E2E verify left)
+- Decision (2026-08-06 meeting): cap uploads at 200MB for cost/perf; show a clear error when a file exceeds it. Root cause of the old ~50MB failure was the Supabase free-tier per-file storage cap (not Render, not code); Supabase Pro made it raiseable.
+- DONE: prod caps set to 200MB (209715200) on BOTH the project-wide storage config AND the `meeting-recordings` bucket, applied via the Management API (`/config/storage` PATCH + a `storage.buckets` UPDATE) and verified. Web guard (`MAX_FILE_SIZE` 200MB) + `oversizedFileMessage` + Supabase-413 backstop + 64 kbps web recording, merged to main (`21a4f05`) and deployed.
+- Remaining: E2E-verify a >50MB file uploads AND transcribes end to end. Mobile follow-up (separate): still 32 kbps, audio guard `notes_repository.dart:443` 100→200MB, consider resumable upload.
 
 ### R11 App package rename `com.example.*` → `com.tecace.*` + Azure auth — IN PROGRESS (Andrew)
 - Why: `com.example.*` is rejected by both the App Store and Google Play, so it must change before either release. Nothing is store-published yet, so now is the cheapest time (no Play applicationId lock).
