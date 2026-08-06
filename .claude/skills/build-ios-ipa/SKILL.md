@@ -99,7 +99,7 @@ This is the current plan. The iPhone being tested **must be physically connected
 6. On the iPhone: Settings → General → VPN & Device Management → trust the developer profile.
 
 Caveats:
-- **Bundle id collision:** a free personal team needs a bundle id unique to that Apple ID. `com.example.meetingNoteMobile` may be rejected as already taken. If so you must change it (for example `com.tecace.meetingnote.test`), which **breaks MSAL login** because the redirect scheme is derived from the bundle id. To still log in after changing it, add the matching `msauth.<newid>://auth` redirect to the Azure app registration `f81ec595-e95f-4b99-8143-fb4b198df787` (iOS/macOS platform). For a build-and-UI-only smoke test that skips login, changing the id is fine as-is.
+- **Bundle id collision:** a free personal team needs a bundle id unique to that Apple ID. `com.tecace.meetingNoteMobile` may be rejected as already taken. If so you must change it (for example `com.tecace.meetingnote.test`), which **breaks MSAL login** because the redirect scheme is derived from the bundle id. To still log in after changing it, add the matching `msauth.<newid>://auth` redirect to the Azure app registration `f81ec595-e95f-4b99-8143-fb4b198df787` (iOS/macOS platform). For a build-and-UI-only smoke test that skips login, changing the id is fine as-is.
 - 7-day expiry, one Mac, USB-tethered devices only. Not a distribution method. For ongoing boss testing without re-tethering every week, a paid account + TestFlight (Path C) is the real answer.
 
 ## Path C — Distributable IPA (requires the paid Apple Developer account)
@@ -128,8 +128,8 @@ Build numbers:
 
 ## Gotchas / prerequisites specific to this app
 
-- **MSAL Azure iOS redirect (login blocker to verify):** the iOS URL scheme is already wired in `ios/Runner/Info.plist` (`msauth.$(PRODUCT_BUNDLE_IDENTIFIER)`), but the Azure app registration `f81ec595-e95f-4b99-8143-fb4b198df787` (TecAce tenant) must have an **iOS/macOS platform** redirect `msauth.com.example.meetingNoteMobile://auth`. iOS does **not** need a signature hash like Android did; the bundle id is enough. If login fails, check this in the Azure portal first.
-- **Bundle id is a placeholder** (`com.example.meetingNoteMobile`). For a real TestFlight/App Store release under the paid account, register a proper id (for example `com.tecace.meetingnote`), update it in Xcode, and add the matching `msauth.<newid>://auth` redirect in Azure. Do this once, at the paid-account switch, not before.
+- **MSAL Azure iOS redirect (login blocker to verify):** the iOS URL scheme is already wired in `ios/Runner/Info.plist` (`msauth.$(PRODUCT_BUNDLE_IDENTIFIER)`), but the Azure app registration `f81ec595-e95f-4b99-8143-fb4b198df787` (TecAce tenant) must have an **iOS/macOS platform** redirect `msauth.com.tecace.meetingNoteMobile://auth`. iOS does **not** need a signature hash like Android did; the bundle id is enough. If login fails, check this in the Azure portal first.
+- **Bundle id** is `com.tecace.meetingNoteMobile` (changed from `com.example.meetingNoteMobile` on 2026-08-06). It is a valid TecAce-owned id, but it has never been registered with Apple or Azure. Before a real TestFlight/App Store release under the paid account, confirm this is the final id (or pick e.g. `com.tecace.meetingnote`), set it in Xcode, and add the matching `msauth.<id>://auth` redirect in Azure.
 - **Config writes to prod.** Same live Supabase and backend as the Android testers. Creating a note is fine; do not delete or bulk-edit data.
 - **Which branch:** reliability fixes and P4 are on `main`. The dark-mode fix is on `ui/dark-mode-theming` (pending merge to `main` as of 2026-07-30). To include dark mode, build from `ui/dark-mode-theming`; otherwise `main`. After the merge, always build from `main`.
 - If a build gets into a weird state: `flutter clean && flutter pub get`, then rebuild.

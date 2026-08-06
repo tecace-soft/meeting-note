@@ -1,4 +1,4 @@
-package com.example.meeting_note_mobile
+package com.tecace.meeting_note_mobile
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

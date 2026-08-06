@@ -194,7 +194,11 @@ UI 렌더링 결과를 바꾸지 않는 코드 구조 개선만 기술한다.
 - 영향: 낮음(`pii_enabled:false`로 토큰/PII는 제외). 다만 auth 메타데이터가 logcat에 기록.
 - 방향: release 빌드에서 `WARNING`으로 낮추거나 logcat 비활성.
 
-### S4. 리다이렉트 URI에 플레이스홀더 앱 ID (Low)
+### S4. 리다이렉트 URI에 플레이스홀더 앱 ID (Low) — 2026-08-06 해결
+
+> 해결: `applicationId`/번들 ID를 `com.example.*` → `com.tecace.*`로 변경(`com.tecace.meeting_note_mobile`, `com.tecace.meetingNoteMobile`).
+> 아래는 감사 시점(커밋 `6400d79`) 기준 원문. Azure 리다이렉트 URI 재등록이 남은 후속 작업.
+
 - 위치: `auth_config.dart:8`(`msauth://com.example.meeting_note_mobile/...`).
 - 영향: 낮음. 출시 `applicationId`가 실제로 `com.example.*`면 패키지명 충돌/스쿼팅 여지. 최종 보안은 등록된 서명 인증서 해시에 의존.
 - 방향: `build.gradle`의 실제 역도메인 applicationId 확인 및 Azure 리다이렉트/서명 해시 일치 확인.

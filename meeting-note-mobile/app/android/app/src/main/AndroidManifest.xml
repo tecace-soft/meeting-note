@@ -42,7 +42,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:host="com.example.meeting_note_mobile"
+                    android:host="com.tecace.meeting_note_mobile"
                     android:path="/guC64kbNdu+bu67b7Ujd62XWb3s="
                     android:scheme="msauth" />
             </intent-filter>

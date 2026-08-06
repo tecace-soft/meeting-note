@@ -41,8 +41,8 @@ These values are public client/runtime config and are currently present in the m
 | Workflow API URL | `https://meeting-note-backend-njfb.onrender.com` |
 | Microsoft client ID | `f81ec595-e95f-4b99-8143-fb4b198df787` |
 | Microsoft tenant ID | `a141d6e8-fddb-4309-8b71-44753a78495a` |
-| Android package name | `com.example.meeting_note_mobile` |
-| Android redirect URI | `msauth://com.example.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D` |
+| Android package name | `com.tecace.meeting_note_mobile` |
+| Android redirect URI | `msauth://com.tecace.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D` |
 
 Relevant files:
 
@@ -75,9 +75,9 @@ The Azure App Registration must include the Android platform configuration below
 
 | Field | Value |
 |---|---|
-| Package name | `com.example.meeting_note_mobile` |
+| Package name | `com.tecace.meeting_note_mobile` |
 | Signature hash | `guC64kbNdu+bu67b7Ujd62XWb3s=` |
-| Redirect URI | `msauth://com.example.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D` |
+| Redirect URI | `msauth://com.tecace.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D` |
 
 Authority must be tenant-specific:
 
@@ -276,7 +276,7 @@ Important files:
 
 ```text
 meeting-note-mobile/app/lib/features/record/data/recording_service.dart
-meeting-note-mobile/app/android/app/src/main/kotlin/com/example/meeting_note_mobile/ForegroundRecordingService.kt
+meeting-note-mobile/app/android/app/src/main/kotlin/com/tecace/meeting_note_mobile/ForegroundRecordingService.kt
 meeting-note-mobile/app/android/app/src/main/AndroidManifest.xml
 ```
 
@@ -333,8 +333,8 @@ Before Play Store or production distribution:
 1. Create a real Android release keystore.
 2. Configure `signingConfigs.release`.
 3. Build a signed release APK or AAB.
-4. Consider changing the package name from `com.example.meeting_note_mobile`.
-5. If package name changes, update Azure Android redirect URI and MSAL config.
+4. Package name is `com.tecace.meeting_note_mobile` (changed from `com.example.*` on 2026-08-06).
+5. The Azure Android redirect URI must match this package name — see the redirect URI above.
 
 ## iOS Status
 
@@ -352,7 +352,7 @@ Before iOS validation/release:
 
 ## Known Caveats / Risks
 
-- Android package name is still `com.example.meeting_note_mobile`.
+- Android package name is `com.tecace.meeting_note_mobile`; the Azure app registration must carry the matching `msauth://com.tecace.meeting_note_mobile/...` redirect URI or sign-in fails.
 - Android release signing is not production-ready.
 - iOS has not been fully configured or validated.
 - Project chat depends on an external n8n webhook.

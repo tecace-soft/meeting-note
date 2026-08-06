@@ -29,7 +29,7 @@ only. Request the broader Teams, calendar, and OneDrive scopes when those
 features are wired.
 
 Android needs a platform entry for package
-`com.example.meeting_note_mobile` and the debug/release signature hash.
+`com.tecace.meeting_note_mobile` and the debug/release signature hash.
 
 Debug signature hash:
 
@@ -40,8 +40,16 @@ guC64kbNdu+bu67b7Ujd62XWb3s=
 Debug redirect URI:
 
 ```text
-msauth://com.example.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D
+msauth://com.tecace.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D
 ```
 
-iOS needs a platform entry for the final bundle ID. The app already declares the
-MSAL URL scheme `msauth.$(PRODUCT_BUNDLE_IDENTIFIER)` in `Info.plist`.
+iOS needs a platform entry for the bundle ID `com.tecace.meetingNoteMobile`,
+i.e. redirect URI `msauth.com.tecace.meetingNoteMobile://auth`. The app already
+declares the MSAL URL scheme `msauth.$(PRODUCT_BUNDLE_IDENTIFIER)` in
+`Info.plist`.
+
+> **2026-08-06 — app ID change.** Both IDs moved from `com.example.*` to
+> `com.tecace.*`. The Azure app registration `f81ec595-e95f-4b99-8143-fb4b198df787`
+> must have the redirect URIs above added (the old `com.example.*` ones no longer
+> match), otherwise Microsoft sign-in fails on both platforms. The Android
+> signature hash is unchanged — it comes from the keystore, not the package name.

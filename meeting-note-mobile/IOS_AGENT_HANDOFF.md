@@ -25,7 +25,7 @@ Android is the currently tested path. iOS exists as a Flutter-generated scaffold
 
 Important current iOS facts:
 
-- iOS bundle identifier is currently `com.example.meetingNoteMobile`.
+- iOS bundle identifier is currently `com.tecace.meetingNoteMobile`.
 - iOS `Info.plist` already has an MSAL URL scheme placeholder based on `$(PRODUCT_BUNDLE_IDENTIFIER)`.
 - iOS `Info.plist` does **not** yet include microphone/camera usage descriptions.
 - iOS `Info.plist` does **not** yet include background audio mode.
@@ -148,28 +148,22 @@ msauth.<BUNDLE_ID>://auth
 The current iOS bundle ID is:
 
 ```text
-com.example.meetingNoteMobile
+com.tecace.meetingNoteMobile
 ```
 
 So the current iOS redirect URI would be:
 
 ```text
-msauth.com.example.meetingNoteMobile://auth
+msauth.com.tecace.meetingNoteMobile://auth
 ```
 
 If the bundle ID is changed before shipping, the redirect URI must change too.
 
-Recommended production bundle ID should be decided before Azure registration. Example:
-
-```text
-com.tecace.meetingnote.mobile
-```
-
-Then the iOS redirect URI would be:
-
-```text
-msauth.com.tecace.meetingnote.mobile://auth
-```
+The bundle ID was changed from `com.example.meetingNoteMobile` to
+`com.tecace.meetingNoteMobile` on 2026-08-06, so the Azure iOS/macOS platform
+entry must use the `msauth.com.tecace.meetingNoteMobile://auth` redirect above.
+If a different production ID is chosen later (for example
+`com.tecace.meetingnote`), register the matching redirect at that time.
 
 ## Azure Steps For iOS
 
@@ -294,7 +288,7 @@ In Xcode:
 Current bundle ID in `project.pbxproj`:
 
 ```text
-com.example.meetingNoteMobile
+com.tecace.meetingNoteMobile
 ```
 
 Recommended: pick the final bundle ID before doing Azure/iPhone validation, because MSAL redirect URI depends on it.
@@ -551,17 +545,17 @@ https://n8n.srv1153481.hstgr.cloud/webhook/9fe1b3b5-9e2e-4b23-8775-b38fc21e4b4d
 
 ## Likely Code Changes Needed For iOS
 
-### 1. Finalize Bundle ID
+### 1. Bundle ID (done)
 
-Change from:
+The bundle ID is now:
 
 ```text
-com.example.meetingNoteMobile
+com.tecace.meetingNoteMobile
 ```
 
-To the final production bundle ID.
-
-Then update Azure iOS/macOS platform registration.
+(changed from `com.example.meetingNoteMobile` on 2026-08-06). Azure iOS/macOS
+platform registration still needs the matching
+`msauth.com.tecace.meetingNoteMobile://auth` redirect URI.
 
 ### 2. Add iOS Permissions
 

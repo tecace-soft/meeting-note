@@ -5,7 +5,7 @@ const microsoftTenantId = 'a141d6e8-fddb-4309-8b71-44753a78495a';
 const microsoftAuthority = 'https://login.microsoftonline.com/$microsoftTenantId';
 
 const microsoftAndroidRedirectUri =
-    'msauth://com.example.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D';
+    'msauth://com.tecace.meeting_note_mobile/guC64kbNdu%2Bbu67b7Ujd62XWb3s%3D';
 
 // Only the scopes the app actually uses are requested: User.Read (sign-in +
 // profile) and User.ReadBasic.All (the TecAce contact directory). The broad
