@@ -214,8 +214,8 @@ Condensed from full entries; details live in git history + `MEMORY_FEATURE_DESIG
 ### R5 iOS release path (via TGX)
 - Runbook: `.claude/skills/build-ios-ipa/SKILL.md`. Free personal-team install is USB-tethered, 7-day, no paid account. Boss to coordinate with **TGX** for the iOS **release account** to replace the manual build. Bundle id finalizing under R11.
 
-### R7 Correct the handoff doc
-- `.claude/handoffs/2026-07-29-reliability-darkmode-handoff.md` records R5CWB1HN1XN as the boss's phone; it is actually the user's phone.
+### R7 Correct the handoff doc — DONE 2026-08-06
+- `.claude/handoffs/2026-07-29-reliability-darkmode-handoff.md` mislabeled adb id `R5CWB1HN1XN` (S23 Ultra) as the boss's phone; it is the user's S23. Added a correction banner at the top of that doc rather than rewriting each historical "boss phone" mention.
 
 ---
 
