@@ -127,16 +127,21 @@ These are findings against the `meeting-note-mcp` server (exposes notes to Claud
 IMPORTANT: findings are AI-generated and not yet independently verified against the current code. Re-confirm each against the live source (line refs are from the review, may have drifted) before fixing.
 Priority: M1 and M2 are size-independent — fix now, ahead of the memory rework. M3/M4 are usage-value. The search/normalization findings are folded into F4 (do not duplicate).
 
-### M1 MCP auth is fail-open [CRITICAL — do first]
-- What: when `MCP_API_KEY` is unset the `/mcp` endpoint is fully open, and any user's meetings are readable from client-supplied headers alone (`transports/http.ts:90`). The `/mcp-chatgpt` endpoint falls back to a default user on token-verification failure. Issued personal MCP tokens have no expiry/scope enforcement in code (schema-only), so they are effectively permanent full-access.
-- Why: this server holds executive meeting transcripts. Fail-closed auth + token expiry/scope enforcement is the highest-risk, lowest-effort fix on the whole backlog.
-- Fix: fail-closed when no key/invalid token (no default-user fallback); enforce token expiry + scope from the schema.
-- Effort: small. Risk reduction: maximum.
+> **MCP deploy facts (learned 2026-08-07, the hard way):**
+> - The Render `meeting-note-mcp` service builds from the **`mcp-server` branch, NOT `main`** (Root Directory = `mcp-server/`). Pushing to `main` does NOT redeploy it. To ship: fast-forward the branch (`git push origin main:mcp-server`); auto-deploy IS on for `mcp-server` (fires within ~40s). A "Manual Deploy → latest commit" before updating the branch just redeploys the branch's stale tip.
+> - **Prod DB migration drift**: repo migrations are not necessarily applied to prod. `20260611120000` (mcp_token expiry/scopes) was in the repo but never applied, which broke the deploy until applied via the Management API. Before deploying code that depends on a schema change, verify the columns exist in prod (`information_schema.columns`). Consider auditing which repo migrations are actually applied.
 
-### M2 List tools falsely report transcript/speaker absence [one-line-class bug]
-- What: the list tools do not select the transcript columns, then report `hasTranscript: false, speakers: []` regardless (`lib/supabase.ts:122`). This is why the live test first (wrongly) concluded "recent notes have no transcript" and then self-corrected.
-- Why: it makes Claude conclude "that meeting has no transcript," directly corrupting the memory/query quality the whole sprint is trying to raise.
-- Fix: select the real transcript/speaker columns (or compute the flag from them). Small change, removes a systematic wrong-answer mode.
+### M1 MCP auth is fail-open [CRITICAL] — SHIPPED + VERIFIED IN PROD 2026-08-07
+- What (was): when `MCP_API_KEY` is unset the `/mcp` endpoint was fully open, and any user's meetings were readable from client-supplied headers alone (`transports/http.ts:90`). The `/mcp-chatgpt` endpoint fell back to a default user on token-verification failure. Issued personal MCP tokens had no expiry enforcement in code (only `revoked_at` was checked), so they were effectively permanent.
+- FIXED (commit `a111fec`): `isAuthorized` fails closed when `MCP_API_KEY` is unset + timing-safe compare; `/mcp-chatgpt` returns 401 when a bearer token does not resolve (no default-user fallback), and the no-token single-user fallback is gated behind `MCP_ALLOW_ANON_CHATGPT_FALLBACK` (default off); the personal-token resolver enforces `expires_at`; the `mcp-token` edge fn now issues 90-day tokens.
+- Verified live against prod: `/mcp` no-auth → 401, `/mcp-chatgpt` no-token → 401, `/mcp-chatgpt` bogus token → 401 (all were served/served-default before). Personal-token path healthy (401 not 500).
+- Prod DB fix required: the repo migration `20260611120000_add_mcp_token_expiry_and_scopes.sql` had **never been applied to prod** — `expires_at`/`scopes` columns did not exist, so the new `select expires_at` briefly broke personal tokens (~3 min) until the migration was applied via the Management API. Active tokens now expire 2026-11-05.
+- Still open (follow-on, not blocking): **scope enforcement** (tools → required scopes) is not implemented; `scopes` column exists but is unused. And the `/mcp` static-key model still trusts the `x-meeting-note-user-id` header (any holder of `MCP_API_KEY` can read any user) — acceptable while the key is a tightly-held secret, revisit if the key is shared more widely.
+
+### M2 List tools falsely report transcript/speaker absence — SHIPPED 2026-08-07
+- What (was): the list tools do not select the transcript columns, then reported `hasTranscript: false, speakers: []` regardless (`lib/supabase.ts:122`). This made Claude conclude "that meeting has no transcript," corrupting query quality.
+- FIXED (commit `a111fec`): `summarizeNote` now reports `transcriptChecked: false` with null flags when the transcript/diarization columns were not fetched (unknown, not false); `get_note` fetches the transcript columns so its availability flags are real; `list_recent_notes` description updated to say availability is not checked in list view. Verified via unit check (list-view → null; fetched-with-data → real speakers; fetched-empty → empty).
+- Follow-on (folded into F4): cheap availability indicators for list views (generated `has_transcription`/`has_diarization` columns) so lists can show availability without downloading transcripts.
 
 ### M3 Project-shared notes invisible via MCP
 - What: notes shared at the project level show in the app but are missing over MCP; the MCP access-control logic is implemented separately from the app RLS and drifts from it.
@@ -214,8 +219,9 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 ## Recommended sequence
 Sprint due 2026-08-13: F1' (dynamic ontology), F4 (index layer), F5 (context diarization). Memory implementation started 2026-08-07.
 Recommended order for the sprint window (per the 2026-08-07 review):
-1. **M1 (MCP fail-closed auth) + M2 (transcript-flag bug)** first: size-independent, M1 is a real security hole and M2 actively corrupts memory/query quality. Close both before the memory rework.
-2. **F8 (eval golden set)**: 2-3 standups snapshotted, so the F1' rewrite has a regression signal.
+1. ~~M1 (MCP fail-closed auth) + M2 (transcript-flag bug)~~ **DONE + verified in prod 2026-08-07** (commit `a111fec`; mcp_token expiry migration applied to prod).
+2. **F8 (eval golden set)**: 2-3 standups snapshotted, so the F1' rewrite has a regression signal. ← next
+3. Optionally **M3/M4** (project-shared parity, `add_note_to_project` write tool) when convenient.
 3. **F1' narrative + `note_insight` unified extraction** (`update-user-memory` rewrite, supersede semantics).
 4. **F4 `note_chunk` + pgvector/pg_trgm hybrid search**: sequence after the extraction lands and when search volume actually bites. M4 write tool (`add_note_to_project`) can slot in here cheaply.
 The due-today items (R6 2-hour cutoff, R9 200MB cap) shipped + deployed 2026-08-06; what remains is E2E verification and a mobile device build (rides the R11 rename build). R11 source rename is waiting on the Korea dev; iOS resumes next week (owner on vacation).
