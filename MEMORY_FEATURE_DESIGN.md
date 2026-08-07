@@ -141,7 +141,7 @@ Boundary vs. F3: F1c is USER-centered across all their meetings; F3 (meeting-ser
 
 ## F1' — Dynamic relational memory (design, 2026-08-06)
 
-Status: designed 2026-08-06, not yet built.
+Status: **alpha SHIPPED 2026-08-07** (ahead of the 2026-08-13 target). Deployed: `update-user-memory` edge fn (v2 ops), frontend `userMemory.ts` + `UserMemoryView` (narrative list). Frontend deployed first, edge fn second (order matters: deploying the edge fn first would make the old client coerce the v2 response to empty buckets and wipe memory). Follow-on (not in alpha): the entity-relation graph, F4 index, cross-user querying. Implementation notes vs. this design: caps are ACTIVE_CAP=50 / TOTAL_CAP=80; supersede is applied as an in-place text replace that keeps the item id and appends provenance; migration folds v1 buckets in code (deterministic), then the LLM runs ops on top; the client also folds legacy v1 rows for display so pre-migration rows render immediately.
 Alpha target 2026-08-13.
 Builds on F1c (the `user_memory` table + `update-user-memory` edge function), on branch `memory/user-context`.
 Ownership: Andrew implements all of it (software).
