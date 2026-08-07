@@ -389,33 +389,34 @@ function foldV1ToItems(input: unknown, selfName: string | null | undefined, now:
     });
   };
 
+  const clean = (x: string): string => x.replace(/[\s.]+$/, '');
   for (const raw of arr(o.open_action_items)) {
     const it = asObject(raw);
     const text = str(it.text, MAX_ITEM_TEXT);
     if (!text) continue;
     const by = str(it.assigned_by, 120);
     const suffix = by && by.toLowerCase() !== 'self' && by.toLowerCase() !== self ? ` (assigned by ${by})` : '';
-    seed(`Open commitment: ${text}${suffix}.`, by && by.toLowerCase() !== 'self' ? [by] : []);
+    seed(`Open commitment: ${clean(text)}${suffix}.`, by && by.toLowerCase() !== 'self' ? [by] : []);
   }
   for (const raw of arr(o.collaborators)) {
     const it = asObject(raw);
     const name = str(it.name, 120);
     if (!name || name.toLowerCase() === self) continue;
     const mc = typeof it.meeting_count === 'number' && it.meeting_count > 1 ? ` (seen across ${Math.floor(it.meeting_count)} meetings)` : '';
-    seed(`${name} is a recurring collaborator of the user${mc}.`, [name]);
+    seed(`${clean(name)} is a recurring collaborator of the user${mc}.`, [name]);
   }
   for (const raw of arr(o.active_projects)) {
     const it = asObject(raw);
     const name = str(it.name, 160);
     if (!name) continue;
     const status = str(it.status, 200);
-    seed(`Active project "${name}"${status ? ` — ${status}` : ''}.`, [name]);
+    seed(`Active project "${clean(name)}"${status ? ` — ${clean(status)}` : ''}.`, [name]);
   }
   for (const raw of arr(o.recurring_topics)) {
     const it = asObject(raw);
     const topic = str(it.topic, 200);
     if (!topic) continue;
-    seed(`Recurring topic: ${topic}.`, [topic]);
+    seed(`Recurring topic: ${clean(topic)}.`, [topic]);
   }
 
   return items;

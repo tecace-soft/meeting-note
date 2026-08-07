@@ -203,33 +203,34 @@ function foldV1ToItems(input: unknown, now: string): MemoryItem[] {
       sourceNoteIds: [],
     });
   };
+  const clean = (x: string): string => x.replace(/[\s.]+$/, '');
   for (const raw of toArray(o.open_action_items)) {
     const it = asObject(raw);
     const text = s(it.text);
     if (!text) continue;
     const by = s(it.assigned_by);
     const suffix = by && by.toLowerCase() !== 'self' ? ` (assigned by ${by})` : '';
-    push(`Open commitment: ${text}${suffix}.`, by && by.toLowerCase() !== 'self' ? [by] : []);
+    push(`Open commitment: ${clean(text)}${suffix}.`, by && by.toLowerCase() !== 'self' ? [by] : []);
   }
   for (const raw of toArray(o.collaborators)) {
     const it = asObject(raw);
     const name = s(it.name);
     if (!name) continue;
     const mc = typeof it.meeting_count === 'number' && it.meeting_count > 1 ? ` (seen across ${Math.floor(it.meeting_count)} meetings)` : '';
-    push(`${name} is a recurring collaborator of the user${mc}.`, [name]);
+    push(`${clean(name)} is a recurring collaborator of the user${mc}.`, [name]);
   }
   for (const raw of toArray(o.active_projects)) {
     const it = asObject(raw);
     const name = s(it.name);
     if (!name) continue;
     const status = s(it.status);
-    push(`Active project "${name}"${status ? ` — ${status}` : ''}.`, [name]);
+    push(`Active project "${clean(name)}"${status ? ` — ${clean(status)}` : ''}.`, [name]);
   }
   for (const raw of toArray(o.recurring_topics)) {
     const it = asObject(raw);
     const topic = s(it.topic);
     if (!topic) continue;
-    push(`Recurring topic: ${topic}.`, [topic]);
+    push(`Recurring topic: ${clean(topic)}.`, [topic]);
   }
   return items;
 }

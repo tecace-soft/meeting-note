@@ -81,11 +81,6 @@ export function UserMemoryView({ userId }: Props): JSX.Element {
           {items!.map((item) => (
             <li key={item.id} className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>
               {item.text}
-              {item.entities.length > 0 ? (
-                <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {item.entities.join(' · ')}
-                </span>
-              ) : null}
             </li>
           ))}
         </ul>
