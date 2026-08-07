@@ -90,6 +90,13 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 - Effort: small–medium.
 - Cost: $0.
 
+### P1.4 Reconcile the Supabase migration ledger with actual prod schema [caused 2 prod incidents]
+- What: `supabase_migrations.schema_migrations` in prod only records migrations up to `20260603113000` (14 rows), but the repo has ~35. Later schema changes were applied out-of-band (dashboard/Management API/direct) without recording, so the ledger cannot tell what is actually applied. Some later migrations ARE live (user_memory, project sharing), some were NOT until fixed manually on 2026-08-07 (`20260611120000` mcp_token expiry, `20260721120000` unique-default).
+- Why: this drift directly caused two incidents on 2026-08-07 (M1 deploy briefly broke personal-token auth because `expires_at` was missing; duplicate "Default" prompts because the unique index was never applied). Any future code that depends on a repo migration can silently break against prod.
+- Fix: (1) audit each repo migration after `20260603` against the real schema (`information_schema` / `pg_indexes`), apply the missing ones idempotently, and backfill `schema_migrations` so the ledger matches reality; (2) fix the deploy process so schema changes go through `supabase db push` (which records the ledger) instead of ad-hoc dashboard/API edits.
+- Effort: half a day for the audit + reconciliation. Cost: $0.
+- Guardrail: destructive prod DB writes (DELETE/DROP) are blocked for Management-API curl by the auto-mode classifier; run them via the Supabase SQL Editor after snapshotting.
+
 ### P1.3 Decide the honest hosting posture (bring to boss)
 - What: Present the free-but-fragile vs. cheap-but-solid choice. A ~$5–7/mo VPS (Hetzner) or Render paid instance removes fragility and self-management. Oracle Cloud Always Free is powerful but self-managed with idle-reclamation/capacity/account caveats (details in the render-free-tier memory).
 - Why: If the boss wants "calm operations," the cheapest reliable answer is often coffee-money hosting, not more free-tier gymnastics.
@@ -243,6 +250,8 @@ Condensed from full entries; details live in git history + `MEMORY_FEATURE_DESIG
 - **Admin dashboard access for Andrew Yoo** (`andrewyoo@tecace.com`, oid `31d79bfe-...`): granted in all 3 places (client `adminAccess.ts` + `admin-analytics` + `admin-controls`), deployed.
 - **Supabase Pro**: paid; storage upload cap is now raiseable (see R9).
 - **OPS_BACKLOG committed + tracked** (was R8).
+- **Custom summary prompt in regenerate** (2026-08-07, `e75e7e6`): regenerate was hardcoded and ignored the user's custom prompt; now injects the requester's selected prompt (fallback: user Default → built-in) while keeping regenerate mechanics. Frontend sends the selected `promptId`. Root of a reporter's "prompt not applied" report; fresh-summary already honored the selected prompt.
+- **Duplicate "Default" summary prompts cleaned** (2026-08-07): applied `20260721120000` to prod (only 1 user had 5 identical dup Defaults → trimmed to 1; unique index added). Surfaced the P1.4 migration-ledger drift.
 
 ---
 
