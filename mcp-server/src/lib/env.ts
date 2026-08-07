@@ -12,6 +12,7 @@ export interface MeetingNoteEnv {
   mcpOAuthResource?: string;
   mcpOAuthScope?: string;
   mcpAzureTenantId?: string;
+  mcpAllowAnonChatgptFallback: boolean;
   mcpTokenPepper?: string;
   mcpAdminClientId?: string;
   mcpAdminTenantId?: string;
@@ -98,6 +99,7 @@ export function getEnv(): MeetingNoteEnv {
     mcpOAuthResource: process.env.MCP_OAUTH_RESOURCE?.trim() || undefined,
     mcpOAuthScope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
     mcpAzureTenantId: process.env.MCP_AZURE_TENANT_ID?.trim() || undefined,
+    mcpAllowAnonChatgptFallback: process.env.MCP_ALLOW_ANON_CHATGPT_FALLBACK?.trim().toLowerCase() === 'true',
     mcpTokenPepper: process.env.MCP_TOKEN_PEPPER?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,
     mcpAdminClientId: process.env.MCP_ADMIN_CLIENT_ID?.trim() || process.env.VITE_MSAL_CLIENT_ID?.trim() || undefined,
     mcpAdminTenantId: process.env.MCP_ADMIN_TENANT_ID?.trim() || process.env.MCP_AZURE_TENANT_ID?.trim() || 'common',

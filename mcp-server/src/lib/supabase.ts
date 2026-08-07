@@ -120,10 +120,15 @@ export function getNoteTags(note: NoteRow): string[] {
 }
 
 export function summarizeNote(note: NoteRow) {
+  const hasTranscriptionField = Object.prototype.hasOwnProperty.call(note, 'transcription');
   const hasDiarizationField = Object.prototype.hasOwnProperty.call(note, 'diarization');
-  const segments = hasDiarizationField ? normalizeTranscript(note.diarization) : [];
-  const transcriptText = note.transcription?.trim() ?? (hasDiarizationField ? getNoteTranscriptText(note) : '');
-  return {
+  // Whether transcript/speaker availability was actually looked up. When a list
+  // query selects only metadata/summary columns, the transcript columns are
+  // absent and we must NOT claim they are empty. Reporting hasTranscript:false /
+  // speakers:[] in that case made Claude wrongly conclude "this meeting has no
+  // transcript." Report null (unknown) instead, so callers fetch when needed.
+  const transcriptChecked = hasTranscriptionField || hasDiarizationField;
+  const base = {
     id: note.id,
     title: getNoteTitle(note),
     createdAt: note.created_at ?? null,
@@ -131,8 +136,26 @@ export function summarizeNote(note: NoteRow) {
     tags: getNoteTags(note),
     projects: note.projects ?? [],
     chatId: note.chat_id ?? null,
-    speakers: uniqueSpeakersFromSegments(segments),
     hasSummary: Boolean(getNoteSummary(note)),
+  };
+
+  if (!transcriptChecked) {
+    return {
+      ...base,
+      transcriptChecked: false as const,
+      speakers: null,
+      hasPlainTranscript: null,
+      hasDiarizedTranscript: null,
+      transcriptCharacters: null,
+    };
+  }
+
+  const segments = hasDiarizationField ? normalizeTranscript(note.diarization) : [];
+  const transcriptText = note.transcription?.trim() ?? (hasDiarizationField ? getNoteTranscriptText(note) : '');
+  return {
+    ...base,
+    transcriptChecked: true as const,
+    speakers: uniqueSpeakersFromSegments(segments),
     hasPlainTranscript: Boolean(note.transcription?.trim()),
     hasDiarizedTranscript: segments.length > 0,
     transcriptCharacters: transcriptText.length,

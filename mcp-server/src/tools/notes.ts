@@ -104,7 +104,7 @@ export function registerNoteTools(server: McpServer): void {
     'list_recent_notes',
     {
       title: 'List Recent Notes',
-      description: 'List recent meeting notes with metadata, tags, projects, and speaker availability.',
+      description: 'List recent meeting notes with metadata, tags, and projects. Transcript/speaker availability is not checked in this list view (fields are null/unknown); use get_note or the transcript tools to confirm a specific note.',
       inputSchema: {
         limit: optionalInt(1, 50),
         projectId: z.string().optional(),
@@ -384,7 +384,10 @@ export function registerNoteTools(server: McpServer): void {
       inputSchema: { noteId: z.string().min(1) },
     },
     async ({ noteId }) => {
-      const note = await fetchNote(noteId, NOTE_SUMMARY_SELECT);
+      // Fetch the transcript columns (cheap for a single note) so the availability
+      // flags this tool exists to report are real, not "unknown". summarizeNote
+      // returns flags/speaker names only, never the full transcript text.
+      const note = await fetchNote(noteId, NOTE_TRANSCRIPT_SELECT);
       if (!note) return errorResult(`Note not found: ${noteId}`);
       return jsonResult({ note: summarizeNote(note) });
     },

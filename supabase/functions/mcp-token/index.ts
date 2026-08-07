@@ -127,6 +127,7 @@ serve(async (req) => {
       const tokenHash = await hashToken(token, tokenPepper);
       const name = body.name?.trim() || 'Claude Desktop';
       const tokenPrefix = `${token.slice(0, 12)}...${token.slice(-4)}`;
+      const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
 
       const { data, error } = await adminClient
         .from('mcp_token')
@@ -135,6 +136,7 @@ serve(async (req) => {
           name,
           token_hash: tokenHash,
           token_prefix: tokenPrefix,
+          expires_at: expiresAt,
         })
         .select('id, name, token_prefix, last_used_at, revoked_at, created_at')
         .single();

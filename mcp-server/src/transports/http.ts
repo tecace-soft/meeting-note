@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Socket } from 'node:net';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { handleAdminRequest } from '../admin/dashboard.js';
@@ -87,9 +87,21 @@ function getJwtRole(token: string): string {
   }
 }
 
+function safeStringEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
+
 function isAuthorized(req: IncomingMessage, apiKey: string | undefined): boolean {
-  if (!apiKey) return true;
-  return req.headers.authorization === `Bearer ${apiKey}`;
+  // Fail closed: when no static key is configured, the static-key path grants
+  // nothing (callers must use a personal MCP token instead). Previously this
+  // returned true when apiKey was unset, which left /mcp fully open.
+  if (!apiKey) return false;
+  const header = getHeaderValue(req, 'authorization');
+  if (!header) return false;
+  return safeStringEqual(header, `Bearer ${apiKey}`);
 }
 
 function hashMcpToken(token: string, pepper: string): string {
@@ -106,7 +118,7 @@ async function resolveUserIdFromPersonalMcpToken(
   const { supabase } = getDataContext();
   const { data, error } = await supabase
     .from('mcp_token')
-    .select('id, user_id')
+    .select('id, user_id, expires_at')
     .eq('token_hash', tokenHash)
     .is('revoked_at', null)
     .maybeSingle();
@@ -115,8 +127,18 @@ async function resolveUserIdFromPersonalMcpToken(
     process.stderr.write(`Failed to resolve personal MCP token: ${describeError(error)}\n`);
     return undefined;
   }
-  const row = data as { id?: string; user_id?: string } | null;
+  const row = data as { id?: string; user_id?: string; expires_at?: string | null } | null;
   if (!row?.id || !row.user_id) return undefined;
+
+  // Enforce expiry in code, not just in the schema. A null expires_at means "no
+  // expiry"; a past expires_at is rejected even though the DB row still exists.
+  if (row.expires_at) {
+    const expiresAtMs = Date.parse(row.expires_at);
+    if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
+      process.stderr.write('Personal MCP token rejected: expired\n');
+      return undefined;
+    }
+  }
 
   void supabase
     .from('mcp_token')
@@ -185,7 +207,12 @@ async function getMicrosoftUserIdFromGraph(accessToken: string): Promise<string 
 }
 
 async function resolveChatGptUserId(bearerToken: string | undefined, env: ReturnType<typeof getEnv>): Promise<string | undefined> {
-  if (!bearerToken) return env.meetingNoteUserId;
+  if (!bearerToken) {
+    // No credential presented. Only fall back to the single-user default when
+    // explicitly opted in (MCP_ALLOW_ANON_CHATGPT_FALLBACK). Default is closed
+    // so a public /mcp-chatgpt does not serve the default user's meetings.
+    return env.mcpAllowAnonChatgptFallback ? env.meetingNoteUserId : undefined;
+  }
 
   const mappedUserId = env.mcpUserTokens.get(bearerToken);
   if (mappedUserId) {
@@ -217,7 +244,10 @@ async function resolveChatGptUserId(bearerToken: string | undefined, env: Return
     return graphUserId;
   }
 
-  return env.meetingNoteUserId;
+  // A token was presented but resolved to no user (invalid/expired/unknown).
+  // Fail closed rather than silently serving the default user's meetings.
+  process.stderr.write('MCP ChatGPT auth rejected: bearer token did not resolve to a user\n');
+  return undefined;
 }
 
 async function checkSupabaseHealth(): Promise<{ ok: true } | { ok: false; error: string }> {

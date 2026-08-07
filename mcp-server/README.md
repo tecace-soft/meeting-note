@@ -53,7 +53,12 @@ Endpoints:
 - `GET /.well-known/oauth-protected-resource`
 - `GET /.well-known/oauth-protected-resource/mcp-chatgpt`
 
-If `MCP_API_KEY` is set, clients must send:
+`/mcp` is **fail-closed**: a request is authorized only by a matching `MCP_API_KEY`
+(static key) or a valid personal MCP token (`mn_live_...`). If `MCP_API_KEY` is not
+set and no valid personal token is presented, `/mcp` returns 401. Set `MCP_API_KEY`
+in any hosted deployment.
+
+Clients send:
 
 ```text
 Authorization: Bearer <MCP_API_KEY>
@@ -168,7 +173,19 @@ The server never trusts a raw `user_id` from ChatGPT. It accepts either:
 - a Microsoft OAuth access token resolvable through Microsoft Graph `/me`
 - an opaque token from `MCP_USER_TOKENS`
 
-If neither works, `/mcp-chatgpt` falls back to `MEETING_NOTE_USER_ID` for single-user testing.
+If a bearer token is presented but does not resolve to a user (invalid/expired/unknown),
+`/mcp-chatgpt` returns 401 — it does **not** fall back to the default user. When no token
+is presented at all, it also returns 401 by default. To allow the single-user
+`MEETING_NOTE_USER_ID` fallback for local testing, set:
+
+```text
+MCP_ALLOW_ANON_CHATGPT_FALLBACK=true
+```
+
+Leave this unset in any deployment where `/mcp-chatgpt` is publicly reachable.
+
+Personal MCP tokens (`mn_live_...`, issued by the `mcp-token` edge function) expire
+90 days after creation and are rejected in code once expired or revoked.
 
 For a public app with self-service onboarding, replace `MCP_USER_TOKENS` with real OAuth and derive the Meeting Note user id from the authenticated account.
 
