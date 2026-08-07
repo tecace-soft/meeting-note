@@ -1,14 +1,19 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 
-// F1c: maintains a durable, per-user "personal memory" base by merging one
-// meeting's transcript into the user's existing memory. USER-centered across all
-// their meetings (open commitments incl. ones OTHERS assigned to them, frequent
-// collaborators, active projects, recurring topics) — distinct from the
-// per-speaker "self" profile (which only captures what the user personally said).
+// F1' (dynamic relational memory): maintains a durable, per-user "personal
+// memory" as a list of natural-language MEMORY ITEMS (ChatGPT / Claude-MEMORY.md
+// style) rather than flat typed buckets. Given the user's existing memory and one
+// new meeting transcript, an LLM emits an ordered list of ops (add / update /
+// supersede / archive) that the server applies deterministically — dynamic
+// learning, not append-only. USER-centered across all their meetings.
 //
 // Stateless like generate-profile: the client passes the existing memory in and
 // writes the merged result back under its own RLS. Mirrors generate-profile /
 // identify-speakers for auth gate, CORS, and the Gemini call chain.
+//
+// Old shape (F1c, version absent): { open_action_items[], collaborators[],
+// active_projects[], recurring_topics[] }. On the first F1' write we fold those
+// buckets into seed narrative items, then run the normal op flow on top.
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -110,11 +115,15 @@ interface RequestBody {
 // Bounds to keep the prompt (and cost) sane, and to stop the base from growing
 // without limit. The transcript and the existing memory are both truncated.
 const MAX_TRANSCRIPT_CHARS = 24000;
-const MAX_MEMORY_CHARS = 12000;
-const MAX_ACTION_ITEMS = 100;
-const MAX_COLLABORATORS = 100;
-const MAX_PROJECTS = 60;
-const MAX_TOPICS = 60;
+const MAX_MEMORY_CHARS = 16000;
+const MAX_ITEM_TEXT = 600;
+const MAX_ENTITY = 80;
+const MAX_ENTITIES_PER_ITEM = 12;
+const MAX_OPS = 80;
+// Item caps: at most ACTIVE_CAP active items (least-recently-updated beyond it are
+// archived); at most TOTAL_CAP items overall (oldest archived beyond it are dropped).
+const ACTIVE_CAP = 50;
+const TOTAL_CAP = 80;
 const MAX_STR = 400;
 
 /** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
@@ -244,134 +253,187 @@ async function callGeminiWithRetryAndFallback(
   };
 }
 
-const MEMORY_SYSTEM_PROMPT = `You maintain a durable PERSONAL MEMORY for a single logged-in user, aggregated across all their meetings. You are given the user's EXISTING memory (JSON) and ONE new meeting transcript. Return the UPDATED memory that folds this meeting into what was already known.
+const MEMORY_SYSTEM_PROMPT = `You maintain a durable PERSONAL MEMORY for a single logged-in user, aggregated across all their meetings. The memory is a list of natural-language MEMORY ITEMS — each one self-contained sentence that captures context and relationships in prose, like a long-term personal memory (ChatGPT / MEMORY.md style). You are given the user's EXISTING memory items (each with an id) and ONE new meeting transcript. Emit an ordered list of OPERATIONS that fold this meeting into the memory.
 
-The memory is USER-CENTERED. Capture:
-- open_action_items: things the user still needs to do or follow up on, INCLUDING items other people assigned to them ("Andrew, can you send the deck?"). Set assigned_by to who assigned it (or "self"). Drop an item if this meeting clearly says it is now done.
-- collaborators: people the user meets with. Increment meeting_count when a person appears again; update last_seen. Do not list the user themselves.
-- active_projects: projects the user is working on, with a short status.
-- recurring_topics: topics/decisions that recur across the user's meetings.
+The memory is USER-CENTERED and durable. Capture things worth remembering across meetings:
+- open commitments the user still owes or is waiting on (including tasks other people assigned to them),
+- who the user works with and the nature of those working relationships,
+- active projects and their current status,
+- recurring topics, decisions, and the WHY/HOW behind them,
+- stable preferences the user expresses.
 
-Merge rules:
-- MERGE, do not duplicate: if a new item/person/project/topic already exists, update it in place (refine text, bump meeting_count, update status) instead of adding a near-duplicate.
-- Keep only what is still relevant. It is fine to drop stale/finished items.
-- confidence is 0.0–1.0. Be conservative; prefer omitting over inventing. Never fabricate names or commitments not supported by the transcript.
-- source_note_id: for a NEW action item, set it to the provided current note id; otherwise keep the existing value.
-- Preserve existing entries that this meeting does not contradict.
-- Keep each list to its most relevant entries only: at most 25 open_action_items, 40 collaborators, 25 active_projects, 25 recurring_topics. Drop the least relevant beyond that.
+Write each memory as ONE natural-language sentence that carries its own context (who / what / why), not a bare keyword. Good: "Andrew owns all software implementation; Eun Seok is the designer and is only pulled in when a screen needs new design." Bad: "Eun Seok: designer".
 
-Return ONLY JSON of the exact shape (no prose, no markdown):
-{"memory":{"open_action_items":[{"text":"","assigned_by":null,"source_note_id":null,"confidence":0.0}],"collaborators":[{"name":"","speaker_id":null,"meeting_count":1,"last_seen":null,"confidence":0.0}],"active_projects":[{"name":"","status":null,"confidence":0.0}],"recurring_topics":[{"topic":"","confidence":0.0}]}}`;
+OPERATIONS (emit an ordered JSON array; the server applies them in order):
+- {"op":"add","text":"...","entities":["..."]}                 add a new memory
+- {"op":"update","id":"...","text":"...","entities":["..."]}   refine an existing memory in place
+- {"op":"supersede","id":"...","text":"...","entities":["..."]} replace a stale or contradicted memory with corrected info
+- {"op":"archive","id":"..."}                                  the memory is no longer relevant
 
-function buildUserPrompt(body: RequestBody, existingMemoryJson: string): string {
-  const transcript = body.transcriptText.slice(0, MAX_TRANSCRIPT_CHARS);
-  const selfLine = body.selfName?.trim()
-    ? `Logged-in user (self) — whose memory this is: "${body.selfName.trim()}"`
+Rules:
+- Prefer update/supersede over adding a near-duplicate of an existing memory.
+- Supersede when the new meeting contradicts or resolves an existing memory (e.g. "the 50MB upload limit is under investigation" becomes "the 50MB limit was fixed via Supabase Pro; the cap is now 200MB").
+- Only emit ops for genuinely durable, meeting-crossing context. Skip one-off small talk.
+- Do NOT record the user themselves as a collaborator or relationship.
+- Never fabricate names, commitments, or facts not supported by the transcript. Be conservative: when unsure, emit nothing for that point.
+- entities: a few light tags (people / projects / topics) named in the item, to seed a future relationship graph. Keep them short.
+- Use ids EXACTLY as given for update/supersede/archive. Never invent an id.
+- If nothing durable is worth changing, return an empty ops array.
+
+Return ONLY JSON of this exact shape (no prose, no markdown):
+{"ops":[{"op":"add","text":"","entities":[""]}]}`;
+
+function buildUserPrompt(itemsJson: string, transcript: string, selfName: string | null | undefined, noteId: string | null | undefined): string {
+  const selfLine = selfName?.trim()
+    ? `Logged-in user (self) — whose memory this is: "${selfName.trim()}"`
     : 'Logged-in user (self): unknown';
-  const noteLine = body.noteId?.trim() ? `Current note id (for new items' source_note_id): "${body.noteId.trim()}"` : 'Current note id: (none)';
+  const noteLine = noteId?.trim()
+    ? `Current note id (provenance for new memories): "${noteId.trim()}"`
+    : 'Current note id: (none)';
 
   return `${selfLine}
 ${noteLine}
 
-EXISTING memory (merge INTO this; empty object means first meeting):
-${existingMemoryJson}
+EXISTING memory items (JSON array; each has an id — reference it in update / supersede / archive):
+${itemsJson}
 
 NEW meeting transcript:
-${transcript}`;
+${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
 }
 
-interface ActionItem { text: string; assigned_by: string | null; source_note_id: string | null; confidence: number }
-interface Collaborator { name: string; speaker_id: string | null; meeting_count: number; last_seen: string | null; confidence: number }
-interface Project { name: string; status: string | null; confidence: number }
-interface Topic { topic: string; confidence: number }
-interface UserMemory {
-  open_action_items: ActionItem[];
-  collaborators: Collaborator[];
-  active_projects: Project[];
-  recurring_topics: Topic[];
+type ItemStatus = 'active' | 'archived';
+
+interface MemoryItem {
+  id: string;
+  text: string;
+  entities: string[];
+  status: ItemStatus;
+  createdAt: string;
+  updatedAt: string;
+  sourceNoteIds: string[];
 }
 
-function clamp01(n: unknown): number {
-  if (typeof n !== 'number' || Number.isNaN(n)) return 0;
-  return Math.min(1, Math.max(0, n));
-}
+type Op =
+  | { op: 'add'; text: string; entities: string[] }
+  | { op: 'update'; id: string; text: string; entities: string[] }
+  | { op: 'supersede'; id: string; text: string; entities: string[] }
+  | { op: 'archive'; id: string };
 
 function str(v: unknown, max = MAX_STR): string {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
-}
-
-function optStr(v: unknown, max = MAX_STR): string | null {
-  const s = str(v, max);
-  return s ? s : null;
 }
 
 function asObject(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-/** Coerce arbitrary input (existing memory or model output) into a bounded, well-typed UserMemory. */
-function normalizeMemory(input: unknown): UserMemory {
-  const o = asObject(input);
-  const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-
-  const open_action_items: ActionItem[] = arr(o.open_action_items)
-    .map((raw) => {
-      const it = asObject(raw);
-      const text = str(it.text);
-      if (!text) return null;
-      return {
-        text,
-        assigned_by: optStr(it.assigned_by, 120),
-        source_note_id: optStr(it.source_note_id, 80),
-        confidence: clamp01(it.confidence),
-      } as ActionItem;
-    })
-    .filter((x): x is ActionItem => x !== null)
-    .slice(0, MAX_ACTION_ITEMS);
-
-  const collaborators: Collaborator[] = arr(o.collaborators)
-    .map((raw) => {
-      const it = asObject(raw);
-      const name = str(it.name, 120);
-      if (!name) return null;
-      const mc = typeof it.meeting_count === 'number' && Number.isFinite(it.meeting_count)
-        ? Math.max(1, Math.min(100000, Math.floor(it.meeting_count)))
-        : 1;
-      return {
-        name,
-        speaker_id: optStr(it.speaker_id, 80),
-        meeting_count: mc,
-        last_seen: optStr(it.last_seen, 40),
-        confidence: clamp01(it.confidence),
-      } as Collaborator;
-    })
-    .filter((x): x is Collaborator => x !== null)
-    .slice(0, MAX_COLLABORATORS);
-
-  const active_projects: Project[] = arr(o.active_projects)
-    .map((raw) => {
-      const it = asObject(raw);
-      const name = str(it.name, 160);
-      if (!name) return null;
-      return { name, status: optStr(it.status, 200), confidence: clamp01(it.confidence) } as Project;
-    })
-    .filter((x): x is Project => x !== null)
-    .slice(0, MAX_PROJECTS);
-
-  const recurring_topics: Topic[] = arr(o.recurring_topics)
-    .map((raw) => {
-      const it = asObject(raw);
-      const topic = str(it.topic, 200);
-      if (!topic) return null;
-      return { topic, confidence: clamp01(it.confidence) } as Topic;
-    })
-    .filter((x): x is Topic => x !== null)
-    .slice(0, MAX_TOPICS);
-
-  return { open_action_items, collaborators, active_projects, recurring_topics };
+function normalizeEntities(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const raw of v) {
+    const s = str(raw, MAX_ENTITY);
+    if (s && !out.includes(s)) out.push(s);
+    if (out.length >= MAX_ENTITIES_PER_ITEM) break;
+  }
+  return out;
 }
 
-/** Parse JSON, tolerating markdown fences and leading/trailing prose. */
+function newId(): string {
+  return crypto.randomUUID();
+}
+
+function addNoteId(existing: string[], noteId: string | null | undefined): string[] {
+  const id = noteId?.trim();
+  if (!id) return existing;
+  return existing.includes(id) ? existing : [...existing, id];
+}
+
+/** Coerce an already-v2 item into a well-typed, bounded MemoryItem. */
+function normalizeItem(raw: unknown, now: string): MemoryItem | null {
+  const o = asObject(raw);
+  const text = str(o.text, MAX_ITEM_TEXT);
+  if (!text) return null;
+  const id = str(o.id, 80) || newId();
+  const status: ItemStatus = o.status === 'archived' ? 'archived' : 'active';
+  const createdAt = str(o.createdAt, 40) || now;
+  const updatedAt = str(o.updatedAt, 40) || createdAt;
+  const sourceNoteIds = Array.isArray(o.sourceNoteIds)
+    ? (o.sourceNoteIds as unknown[]).map((v) => str(v, 80)).filter(Boolean).slice(0, 50)
+    : [];
+  return { id, text, entities: normalizeEntities(o.entities), status, createdAt, updatedAt, sourceNoteIds };
+}
+
+function isV2(input: unknown): boolean {
+  const o = asObject(input);
+  return o.version === 2 && Array.isArray(o.items);
+}
+
+/** Fold the old F1c bucket shape into seed narrative items (run once on migration). */
+function foldV1ToItems(input: unknown, selfName: string | null | undefined, now: string): MemoryItem[] {
+  const o = asObject(input);
+  const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const self = selfName?.trim().toLowerCase() ?? '';
+  const items: MemoryItem[] = [];
+
+  const seed = (text: string, entities: string[]) => {
+    const t = str(text, MAX_ITEM_TEXT);
+    if (!t) return;
+    items.push({
+      id: newId(),
+      text: t,
+      entities: normalizeEntities(entities),
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      sourceNoteIds: [],
+    });
+  };
+
+  for (const raw of arr(o.open_action_items)) {
+    const it = asObject(raw);
+    const text = str(it.text, MAX_ITEM_TEXT);
+    if (!text) continue;
+    const by = str(it.assigned_by, 120);
+    const suffix = by && by.toLowerCase() !== 'self' && by.toLowerCase() !== self ? ` (assigned by ${by})` : '';
+    seed(`Open commitment: ${text}${suffix}.`, by && by.toLowerCase() !== 'self' ? [by] : []);
+  }
+  for (const raw of arr(o.collaborators)) {
+    const it = asObject(raw);
+    const name = str(it.name, 120);
+    if (!name || name.toLowerCase() === self) continue;
+    const mc = typeof it.meeting_count === 'number' && it.meeting_count > 1 ? ` (seen across ${Math.floor(it.meeting_count)} meetings)` : '';
+    seed(`${name} is a recurring collaborator of the user${mc}.`, [name]);
+  }
+  for (const raw of arr(o.active_projects)) {
+    const it = asObject(raw);
+    const name = str(it.name, 160);
+    if (!name) continue;
+    const status = str(it.status, 200);
+    seed(`Active project "${name}"${status ? ` — ${status}` : ''}.`, [name]);
+  }
+  for (const raw of arr(o.recurring_topics)) {
+    const it = asObject(raw);
+    const topic = str(it.topic, 200);
+    if (!topic) continue;
+    seed(`Recurring topic: ${topic}.`, [topic]);
+  }
+
+  return items;
+}
+
+/** Produce the starting item list: normalize if already v2, otherwise migrate v1 buckets. */
+function toStartingItems(existingMemory: unknown, selfName: string | null | undefined, now: string): MemoryItem[] {
+  if (isV2(existingMemory)) {
+    const o = asObject(existingMemory);
+    return (o.items as unknown[])
+      .map((raw) => normalizeItem(raw, now))
+      .filter((x): x is MemoryItem => x !== null)
+      .slice(0, TOTAL_CAP);
+  }
+  return foldV1ToItems(existingMemory, selfName, now).slice(0, TOTAL_CAP);
+}
+
+/** Parse the model's ops array, tolerating markdown fences and stray prose. */
 function tryParseJson(text: string): unknown {
   try {
     return JSON.parse(text);
@@ -390,12 +452,82 @@ function tryParseJson(text: string): unknown {
   return undefined;
 }
 
-function parseMergedMemory(rawText: string): UserMemory | null {
+function parseOps(rawText: string): Op[] | null {
   const stripped = rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   const parsed = tryParseJson(stripped);
   if (parsed === undefined) return null;
-  const mem = (parsed as { memory?: unknown }).memory ?? parsed;
-  return normalizeMemory(mem);
+  const rawOps = (parsed as { ops?: unknown }).ops ?? parsed;
+  if (!Array.isArray(rawOps)) return null;
+
+  const ops: Op[] = [];
+  for (const raw of rawOps.slice(0, MAX_OPS)) {
+    const o = asObject(raw);
+    const kind = str(o.op, 20).toLowerCase();
+    if (kind === 'add') {
+      const text = str(o.text, MAX_ITEM_TEXT);
+      if (text) ops.push({ op: 'add', text, entities: normalizeEntities(o.entities) });
+    } else if (kind === 'update' || kind === 'supersede') {
+      const id = str(o.id, 80);
+      const text = str(o.text, MAX_ITEM_TEXT);
+      if (id && text) ops.push({ op: kind, id, text, entities: normalizeEntities(o.entities) });
+    } else if (kind === 'archive') {
+      const id = str(o.id, 80);
+      if (id) ops.push({ op: 'archive', id });
+    }
+  }
+  return ops;
+}
+
+/** Apply the ops to the item list deterministically. Unknown ids are ignored. */
+function applyOps(items: MemoryItem[], ops: Op[], noteId: string | null | undefined, now: string): MemoryItem[] {
+  const byId = new Map<string, MemoryItem>();
+  for (const it of items) byId.set(it.id, it);
+
+  for (const op of ops) {
+    if (op.op === 'add') {
+      const item: MemoryItem = {
+        id: newId(),
+        text: op.text,
+        entities: op.entities,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+        sourceNoteIds: addNoteId([], noteId),
+      };
+      items.push(item);
+      byId.set(item.id, item);
+    } else if (op.op === 'update' || op.op === 'supersede') {
+      const item = byId.get(op.id);
+      if (!item) continue;
+      item.text = op.text;
+      if (op.entities.length) item.entities = op.entities;
+      item.status = 'active';
+      item.updatedAt = now;
+      item.sourceNoteIds = addNoteId(item.sourceNoteIds, noteId);
+    } else if (op.op === 'archive') {
+      const item = byId.get(op.id);
+      if (!item) continue;
+      item.status = 'archived';
+      item.updatedAt = now;
+    }
+  }
+  return items;
+}
+
+/** Archive least-recently-updated active items beyond ACTIVE_CAP; drop oldest archived beyond TOTAL_CAP. */
+function enforceCaps(items: MemoryItem[]): MemoryItem[] {
+  const activeByRecency = items
+    .filter((i) => i.status === 'active')
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const demote = new Set(activeByRecency.slice(ACTIVE_CAP).map((i) => i.id));
+  for (const it of items) if (demote.has(it.id)) it.status = 'archived';
+
+  if (items.length <= TOTAL_CAP) return items;
+  const archivedOldestFirst = items
+    .filter((i) => i.status === 'archived')
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+  const drop = new Set(archivedOldestFirst.slice(0, items.length - TOTAL_CAP).map((i) => i.id));
+  return items.filter((i) => !drop.has(i.id));
 }
 
 serve(async (req) => {
@@ -443,29 +575,35 @@ serve(async (req) => {
     return jsonResponse({ error: 'No Gemini API key. Set GEMINI_API_KEY (or GOOGLE_API_KEY) as a Supabase secret.' }, 500);
   }
 
-  // Normalize the incoming existing memory before prompting so a malformed base
-  // can never poison the merge, and cap its serialized size.
-  const existingMemory = normalizeMemory(body.existingMemory);
-  let existingMemoryJson = JSON.stringify(existingMemory);
-  if (existingMemoryJson.length > MAX_MEMORY_CHARS) {
-    existingMemoryJson = existingMemoryJson.slice(0, MAX_MEMORY_CHARS);
-  }
+  const now = new Date().toISOString();
+  const selfName = body.selfName ?? null;
+  const noteId = body.noteId ?? null;
 
-  const normalizedBody: RequestBody = { transcriptText, selfName: body.selfName, noteId: body.noteId };
-  const userPrompt = buildUserPrompt(normalizedBody, existingMemoryJson);
+  // Starting items: normalize an existing v2 memory, or fold the old F1c buckets
+  // into seed items on first migration. Then prompt the LLM for ops over the
+  // active items, apply them deterministically, and enforce the caps.
+  const startingItems = toStartingItems(body.existingMemory, selfName, now);
+
+  const activeForPrompt = startingItems
+    .filter((i) => i.status === 'active')
+    .map((i) => ({ id: i.id, text: i.text, entities: i.entities }));
+  let itemsJson = JSON.stringify(activeForPrompt);
+  if (itemsJson.length > MAX_MEMORY_CHARS) itemsJson = itemsJson.slice(0, MAX_MEMORY_CHARS);
+
+  const userPrompt = buildUserPrompt(itemsJson, transcriptText, selfName, noteId);
 
   const result = await callGeminiWithRetryAndFallback(apiKey, model, MEMORY_SYSTEM_PROMPT, userPrompt);
   if (result.error) {
     return jsonResponse({ error: result.error }, result.status ?? 502);
   }
 
-  const merged = parseMergedMemory(result.rawText);
-  if (!merged) {
+  const ops = parseOps(result.rawText);
+  if (ops === null) {
     // Include a short preview of the raw model output so a parse failure can be
     // diagnosed from the client console without server log access.
     return jsonResponse(
       {
-        error: 'Could not parse the updated memory from the model output.',
+        error: 'Could not parse the memory operations from the model output.',
         debug: (result.rawText || '').slice(0, 600),
         model: result.model ?? null,
       },
@@ -473,5 +611,6 @@ serve(async (req) => {
     );
   }
 
-  return jsonResponse({ memory: merged });
+  const items = enforceCaps(applyOps(startingItems, ops, noteId, now));
+  return jsonResponse({ memory: { version: 2, items } });
 });

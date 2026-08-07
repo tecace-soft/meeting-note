@@ -2,57 +2,45 @@ import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseCon
 import { getSegmentText, type TranscriptSegment } from './transcriptSegments';
 import type { IdentifyAuth } from './identifySpeakers';
 
-// F1c: per-user personal memory — a durable, view-agnostic context base
-// aggregated across all of a user's meetings. The `update-user-memory` edge
-// function does the LLM merge; this module reads the current base, calls the
-// function after a summary, and writes the merged result back (best-effort,
-// deduped per note). Mirrors F1a's accumulateSpeakerProfile flow.
+// F1' (dynamic relational memory): per-user personal memory as a list of
+// natural-language MEMORY ITEMS aggregated across all of a user's meetings. The
+// `update-user-memory` edge function does the LLM merge (emit add/update/
+// supersede/archive ops, applied server-side) and migrates the old F1c bucket
+// shape into seed items on the first write. This module reads the current base,
+// calls the function after a summary, and writes the merged result back
+// (best-effort, deduped per note). Mirrors F1a's accumulateSpeakerProfile flow.
 
-export interface MemoryActionItem {
+export interface MemoryItem {
+  id: string;
   text: string;
-  assigned_by: string | null;
-  source_note_id: string | null;
-  confidence: number;
-}
-export interface MemoryCollaborator {
-  name: string;
-  speaker_id: string | null;
-  meeting_count: number;
-  last_seen: string | null;
-  confidence: number;
-}
-export interface MemoryProject {
-  name: string;
-  status: string | null;
-  confidence: number;
-}
-export interface MemoryTopic {
-  topic: string;
-  confidence: number;
-}
-export interface UserMemory {
-  open_action_items: MemoryActionItem[];
-  collaborators: MemoryCollaborator[];
-  active_projects: MemoryProject[];
-  recurring_topics: MemoryTopic[];
+  entities: string[];
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+  sourceNoteIds: string[];
 }
 
-export const EMPTY_USER_MEMORY: UserMemory = {
-  open_action_items: [],
-  collaborators: [],
-  active_projects: [],
-  recurring_topics: [],
-};
+/** The persisted memory shape (version 2). Older rows may still be the F1c bucket shape until re-processed. */
+export interface UserMemory {
+  version: 2;
+  items: MemoryItem[];
+}
+
+export const EMPTY_USER_MEMORY: UserMemory = { version: 2, items: [] };
 
 interface UserMemoryRow {
-  memory: UserMemory | null;
+  memory: unknown;
   processed_note_ids: string[] | null;
 }
 
-/** Read the caller's memory row (RLS-scoped to their user_id). Returns null when none exists yet. */
+/**
+ * Read the caller's memory row (RLS-scoped to their user_id). Returns the raw
+ * stored memory (passed to the edge function untouched so it can migrate v1),
+ * plus the active items for display, and the dedup list. Null when none exists.
+ */
 export async function fetchUserMemory(
   userId: string
-): Promise<{ memory: UserMemory; processedNoteIds: string[] } | null> {
+): Promise<{ rawMemory: unknown; items: MemoryItem[]; processedNoteIds: string[] } | null> {
   const { data, error } = await supabase
     .from('user_memory')
     .select('memory, processed_note_ids')
@@ -61,12 +49,13 @@ export async function fetchUserMemory(
   if (error || !data) return null;
   const row = data as UserMemoryRow;
   return {
-    memory: coerceMemory(row.memory),
+    rawMemory: row.memory ?? null,
+    items: toActiveMemoryItems(row.memory),
     processedNoteIds: Array.isArray(row.processed_note_ids) ? row.processed_note_ids : [],
   };
 }
 
-/** Permanently delete the caller's memory (the F1c "user can delete" control). */
+/** Permanently delete the caller's memory (the "user can delete" control). */
 export async function clearUserMemory(userId: string): Promise<void> {
   const { error } = await supabase.from('user_memory').delete().eq('user_id', userId);
   if (error) throw error;
@@ -78,7 +67,7 @@ interface UpdateMemoryResponse {
 }
 
 async function invokeUpdateUserMemory(
-  body: { transcriptText: string; selfName: string | null; noteId: string | null; existingMemory: UserMemory },
+  body: { transcriptText: string; selfName: string | null; noteId: string | null; existingMemory: unknown },
   auth: IdentifyAuth
 ): Promise<UserMemory> {
   const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/update-user-memory`, {
@@ -103,11 +92,11 @@ async function invokeUpdateUserMemory(
 }
 
 /**
- * F1c — fold ONE note's transcript into the user's personal memory after its
- * summary is generated. Best-effort: the caller runs this in the background and
- * logs failures. Deduped per note via processed_note_ids (durable), so a resumed
- * or repeated summary never double-counts. Returns the merged memory, or null
- * when nothing was done (skipped/deduped).
+ * Fold ONE note's transcript into the user's personal memory after its summary is
+ * generated. Best-effort: the caller runs this in the background and logs
+ * failures. Deduped per note via processed_note_ids (durable), so a resumed or
+ * repeated summary never double-counts. Returns the merged memory, or null when
+ * nothing was done (skipped/deduped).
  */
 export async function updateUserMemoryFromNote(params: {
   userId: string;
@@ -120,7 +109,9 @@ export async function updateUserMemoryFromNote(params: {
   if (!userId || !noteId || segments.length === 0) return null;
 
   const existing = await fetchUserMemory(userId);
-  const existingMemory = existing?.memory ?? EMPTY_USER_MEMORY;
+  // Pass the raw stored memory (v1 buckets or v2 items) — the edge function
+  // migrates v1 into seed items on the first write.
+  const existingMemory = existing?.rawMemory ?? EMPTY_USER_MEMORY;
   const processedNoteIds = existing?.processedNoteIds ?? [];
   if (processedNoteIds.includes(noteId)) return null; // already folded in
 
@@ -156,61 +147,105 @@ function toArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function clamp01(n: unknown): number {
-  return typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
+function asObject(v: unknown): Record<string, unknown> {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-/** Defensive client-side coercion so a malformed row/response can never break the UI. */
-function coerceMemory(input: unknown): UserMemory {
-  const o = (input && typeof input === 'object' && !Array.isArray(input) ? input : {}) as Record<string, unknown>;
-  const obj = (v: unknown): Record<string, unknown> =>
-    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-  const s = (v: unknown): string => (typeof v === 'string' ? v : '');
-  const optS = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
+function s(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
 
-  return {
-    open_action_items: toArray(o.open_action_items)
-      .map((raw) => {
-        const it = obj(raw);
-        const text = s(it.text).trim();
-        return text
-          ? {
-              text,
-              assigned_by: optS(it.assigned_by),
-              source_note_id: optS(it.source_note_id),
-              confidence: clamp01(it.confidence),
-            }
-          : null;
-      })
-      .filter((x): x is MemoryActionItem => x !== null),
-    collaborators: toArray(o.collaborators)
-      .map((raw) => {
-        const it = obj(raw);
-        const name = s(it.name).trim();
-        return name
-          ? {
-              name,
-              speaker_id: optS(it.speaker_id),
-              meeting_count: typeof it.meeting_count === 'number' && Number.isFinite(it.meeting_count) ? it.meeting_count : 1,
-              last_seen: optS(it.last_seen),
-              confidence: clamp01(it.confidence),
-            }
-          : null;
-      })
-      .filter((x): x is MemoryCollaborator => x !== null),
-    active_projects: toArray(o.active_projects)
-      .map((raw) => {
-        const it = obj(raw);
-        const name = s(it.name).trim();
-        return name ? { name, status: optS(it.status), confidence: clamp01(it.confidence) } : null;
-      })
-      .filter((x): x is MemoryProject => x !== null),
-    recurring_topics: toArray(o.recurring_topics)
-      .map((raw) => {
-        const it = obj(raw);
-        const topic = s(it.topic).trim();
-        return topic ? { topic, confidence: clamp01(it.confidence) } : null;
-      })
-      .filter((x): x is MemoryTopic => x !== null),
+function isV2(input: unknown): boolean {
+  const o = asObject(input);
+  return o.version === 2 && Array.isArray(o.items);
+}
+
+/** Defensive client-side coercion of a v2 memory response so a malformed row/response can never break the UI. */
+function coerceMemory(input: unknown): UserMemory {
+  const now = new Date().toISOString();
+  if (isV2(input)) {
+    const items = toArray(asObject(input).items)
+      .map((raw) => normalizeItem(raw, now))
+      .filter((x): x is MemoryItem => x !== null);
+    return { version: 2, items };
+  }
+  // A v1 payload (or garbage) coerces to seed items so nothing is lost in the UI.
+  return { version: 2, items: foldV1ToItems(input, now) };
+}
+
+function normalizeItem(raw: unknown, now: string): MemoryItem | null {
+  const o = asObject(raw);
+  const text = s(o.text).slice(0, 600);
+  if (!text) return null;
+  const id = s(o.id).slice(0, 80) || `local-${Math.abs(hashString(text))}`;
+  const status: MemoryItem['status'] = o.status === 'archived' ? 'archived' : 'active';
+  const createdAt = s(o.createdAt) || now;
+  const updatedAt = s(o.updatedAt) || createdAt;
+  const entities = toArray(o.entities).map((e) => s(e).slice(0, 80)).filter(Boolean).slice(0, 12);
+  const sourceNoteIds = toArray(o.sourceNoteIds).map((e) => s(e).slice(0, 80)).filter(Boolean).slice(0, 50);
+  return { id, text, entities, status, createdAt, updatedAt, sourceNoteIds };
+}
+
+/** Client-side v1 -> display-items fold, mirroring the edge function, so pre-migration rows still render. */
+function foldV1ToItems(input: unknown, now: string): MemoryItem[] {
+  const o = asObject(input);
+  const items: MemoryItem[] = [];
+  const push = (text: string, entities: string[]) => {
+    const t = text.trim().slice(0, 600);
+    if (!t) return;
+    items.push({
+      id: `local-${Math.abs(hashString(t))}`,
+      text: t,
+      entities: entities.filter(Boolean).slice(0, 12),
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      sourceNoteIds: [],
+    });
   };
+  for (const raw of toArray(o.open_action_items)) {
+    const it = asObject(raw);
+    const text = s(it.text);
+    if (!text) continue;
+    const by = s(it.assigned_by);
+    const suffix = by && by.toLowerCase() !== 'self' ? ` (assigned by ${by})` : '';
+    push(`Open commitment: ${text}${suffix}.`, by && by.toLowerCase() !== 'self' ? [by] : []);
+  }
+  for (const raw of toArray(o.collaborators)) {
+    const it = asObject(raw);
+    const name = s(it.name);
+    if (!name) continue;
+    const mc = typeof it.meeting_count === 'number' && it.meeting_count > 1 ? ` (seen across ${Math.floor(it.meeting_count)} meetings)` : '';
+    push(`${name} is a recurring collaborator of the user${mc}.`, [name]);
+  }
+  for (const raw of toArray(o.active_projects)) {
+    const it = asObject(raw);
+    const name = s(it.name);
+    if (!name) continue;
+    const status = s(it.status);
+    push(`Active project "${name}"${status ? ` — ${status}` : ''}.`, [name]);
+  }
+  for (const raw of toArray(o.recurring_topics)) {
+    const it = asObject(raw);
+    const topic = s(it.topic);
+    if (!topic) continue;
+    push(`Recurring topic: ${topic}.`, [topic]);
+  }
+  return items;
+}
+
+/** Active items for display, most-recently-updated first. Handles both v2 and legacy v1 rows. */
+export function toActiveMemoryItems(input: unknown): MemoryItem[] {
+  return coerceMemory(input)
+    .items.filter((i) => i.status === 'active')
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function hashString(value: string): number {
+  let h = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    h = (h << 5) - h + value.charCodeAt(i);
+    h |= 0;
+  }
+  return h;
 }

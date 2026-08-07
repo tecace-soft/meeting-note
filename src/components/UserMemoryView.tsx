@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
-import { clearUserMemory, fetchUserMemory, type UserMemory } from '../lib/userMemory';
+import { clearUserMemory, fetchUserMemory, type MemoryItem } from '../lib/userMemory';
 
-// F1c minimal read-only surface for the per-user "personal memory" base. This is
-// an intentionally plain v1 (the polished dashboard is the designer's later work):
-// it shows what the memory currently holds and lets the user delete it. The base
-// is populated automatically in the background after each meeting summary.
+// F1' minimal read-only surface for the per-user "personal memory" base. It shows
+// the memory as a single list of natural-language items (most-recently-updated
+// first) and lets the user delete it. The base is populated automatically in the
+// background after each meeting summary. A polished dashboard is later design work.
 
 interface Props {
   userId: string;
@@ -16,7 +16,7 @@ type LoadStatus = 'loading' | 'loaded' | 'error';
 export function UserMemoryView({ userId }: Props): JSX.Element {
   const { appLanguage } = useLanguage();
   const ko = appLanguage === 'ko';
-  const [memory, setMemory] = useState<UserMemory | null>(null);
+  const [items, setItems] = useState<MemoryItem[] | null>(null);
   const [status, setStatus] = useState<LoadStatus>('loading');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -25,7 +25,7 @@ export function UserMemoryView({ userId }: Props): JSX.Element {
     setStatus('loading');
     try {
       const result = await fetchUserMemory(userId);
-      setMemory(result?.memory ?? null);
+      setItems(result?.items ?? null);
       setStatus('loaded');
     } catch {
       setStatus('error');
@@ -40,7 +40,7 @@ export function UserMemoryView({ userId }: Props): JSX.Element {
     setDeleting(true);
     try {
       await clearUserMemory(userId);
-      setMemory(null);
+      setItems(null);
       setConfirmingDelete(false);
     } catch {
       setStatus('error');
@@ -49,12 +49,7 @@ export function UserMemoryView({ userId }: Props): JSX.Element {
     }
   }, [userId]);
 
-  const isEmpty =
-    !memory ||
-    (memory.open_action_items.length === 0 &&
-      memory.collaborators.length === 0 &&
-      memory.active_projects.length === 0 &&
-      memory.recurring_topics.length === 0);
+  const isEmpty = !items || items.length === 0;
 
   return (
     <div>
@@ -82,44 +77,18 @@ export function UserMemoryView({ userId }: Props): JSX.Element {
             : 'No memory yet. It fills in automatically once you summarize a meeting.'}
         </p>
       ) : (
-        <div className="mt-5 space-y-5">
-          <MemorySection title={ko ? '열린 할 일 / 약속' : 'Open action items'} show={memory!.open_action_items.length > 0}>
-            {memory!.open_action_items.map((item, i) => (
-              <li key={`ai-${i}`} className="text-sm" style={{ color: 'var(--text)' }}>
-                {item.text}
-                {item.assigned_by ? (
-                  <span style={{ color: 'var(--text-muted)' }}> {ko ? `— ${item.assigned_by} 배정` : `— by ${item.assigned_by}`}</span>
-                ) : null}
-              </li>
-            ))}
-          </MemorySection>
-
-          <MemorySection title={ko ? '자주 함께한 사람' : 'Frequent collaborators'} show={memory!.collaborators.length > 0}>
-            {memory!.collaborators.map((c, i) => (
-              <li key={`co-${i}`} className="text-sm" style={{ color: 'var(--text)' }}>
-                {c.name}
-                <span style={{ color: 'var(--text-muted)' }}> {ko ? `· 회의 ${c.meeting_count}회` : `· ${c.meeting_count} meetings`}</span>
-              </li>
-            ))}
-          </MemorySection>
-
-          <MemorySection title={ko ? '진행 중인 프로젝트' : 'Active projects'} show={memory!.active_projects.length > 0}>
-            {memory!.active_projects.map((p, i) => (
-              <li key={`pr-${i}`} className="text-sm" style={{ color: 'var(--text)' }}>
-                {p.name}
-                {p.status ? <span style={{ color: 'var(--text-muted)' }}> · {p.status}</span> : null}
-              </li>
-            ))}
-          </MemorySection>
-
-          <MemorySection title={ko ? '반복 주제' : 'Recurring topics'} show={memory!.recurring_topics.length > 0}>
-            {memory!.recurring_topics.map((topic, i) => (
-              <li key={`tp-${i}`} className="text-sm" style={{ color: 'var(--text)' }}>
-                {topic.topic}
-              </li>
-            ))}
-          </MemorySection>
-        </div>
+        <ul className="mt-5 space-y-2.5 pl-4" style={{ listStyleType: 'disc' }}>
+          {items!.map((item) => (
+            <li key={item.id} className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>
+              {item.text}
+              {item.entities.length > 0 ? (
+                <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {item.entities.join(' · ')}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       )}
 
       {status === 'loaded' && !isEmpty ? (
@@ -160,20 +129,6 @@ export function UserMemoryView({ userId }: Props): JSX.Element {
           )}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function MemorySection({ title, show, children }: { title: string; show: boolean; children: ReactNode }): JSX.Element | null {
-  if (!show) return null;
-  return (
-    <div>
-      <h4 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-        {title}
-      </h4>
-      <ul className="mt-2 space-y-1.5 pl-4" style={{ listStyleType: 'disc' }}>
-        {children}
-      </ul>
     </div>
   );
 }
