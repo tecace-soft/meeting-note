@@ -1818,6 +1818,7 @@ const TranscriptionSummary: React.FC = () => {
           previousSummary: editedSummary,
           speakerProfiles,
           instructions: optionalInstructions,
+          promptId: selectedSummaryPromptId ? String(selectedSummaryPromptId) : undefined,
         }),
       });
 

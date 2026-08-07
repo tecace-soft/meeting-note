@@ -249,6 +249,7 @@ ${JSON.stringify({ segments: input.segments }).slice(0, 180000)}`;
 export function buildRegenerateSummaryPrompt(input: {
   now: string;
   instructions?: string;
+  summaryRules: string;
   diarizedTranscript: string;
   previousSummary: string;
   speakerProfiles: unknown;
@@ -263,16 +264,15 @@ export function buildRegenerateSummaryPrompt(input: {
 <important>
 TASK
 You are regenerating an improved meeting summary using:
-1. A diarized transcript with speaker labels
-2. The previously generated summary
-3. Speaker ontology profiles
-4. The original/additional user instructions
+1. A diarized transcript with speaker labels (the primary source of truth)
+2. The previously generated summary (reference only)
+3. Speaker ontology profiles (context only)
+4. The user instructions and the SUMMARIZATION RULES below
 
-Your goal is to produce a better, more accurate, more context-aware meeting summary.
+Your goal is to produce a better, more accurate, more context-aware meeting summary that follows the SUMMARIZATION RULES.
 
-USER INSTRUCTIONS
-The following instructions came from the user and must be followed when regenerating the summary:
-
+USER INPUT NON-NEGOTIABLE INSTRUCTIONS
+Below in quotes are non-negotiable instructions sent by the user. These must be prioritized above all else and followed even if they conflict with the rules below. This field may be empty; if so, simply follow the SUMMARIZATION RULES.
 "${userInstructions}"
 
 JSON RESPONSE STRUCTURE
@@ -282,7 +282,7 @@ The output must be valid JSON only:
 
 {
   "title": "<concise descriptive title, max 6 words, English only>",
-  "summary": "<regenerated meeting notes in markdown>",
+  "summary": "<regenerated meeting notes in markdown, following the SUMMARIZATION RULES>",
   "tags": [
     "single",
     "word",
@@ -294,11 +294,23 @@ Do not include any text outside the JSON object.
 Do not wrap the JSON in markdown.
 </important>
 
+SUMMARIZATION RULES
+${input.summaryRules}
+
 <meeting_context>
 This meeting is related to TecAce business unless the transcript clearly indicates otherwise.
 
 TecAce is a technology consulting and software development company specializing in AI solutions, cloud infrastructure/operation, and device optimization. Founded over 25 years ago and headquartered in Bellevue, Washington, it operates globally with additional offices in Korea, offering full-stack development and enterprise-grade tech services.
 </meeting_context>
+
+REGENERATION GROUNDING RULES
+- Structure and content of the summary must follow the SUMMARIZATION RULES above. These grounding rules govern sourcing, not layout.
+- Use the diarized transcript as the primary source of truth.
+- Use the previous summary only as a reference; if it contains information not supported by the diarized transcript, remove or correct it.
+- Use speaker profiles only to improve context, speaker attribution, role understanding, relationship understanding, and action item ownership. Do not add facts from speaker profiles unless they help interpret something actually discussed in the transcript. If speaker profiles conflict with the transcript, trust the transcript.
+- Do not expose raw ontology JSON in the summary, and do not mention "ontology" or "speaker profile" unless the meeting itself discussed them.
+- Do not hallucinate. If speaker identity is uncertain, write "Speaker 1", "Speaker 2", etc. rather than guessing.
+- Write the summary in the meeting's original language (Korean meeting → Korean, English meeting → English, mixed → dominant language) unless the SUMMARIZATION RULES specify otherwise.
 
 <inputs>
 DIARIZED TRANSCRIPT:
@@ -317,88 +329,12 @@ ${speakerProfiles}
 '''
 </inputs>
 
-<regeneration_rules>
-You are an Insightful Meeting Notes Writer.
-
-Use the diarized transcript as the primary source of truth.
-Use the previous summary only as a reference.
-Use speaker profiles only to improve context, speaker attribution, role understanding, relationship understanding, and action item ownership.
-Do not add facts from speaker profiles unless they help interpret something actually discussed in the transcript.
-Do not hallucinate.
-If the previous summary contains information not supported by the diarized transcript, remove or correct it.
-If speaker profiles conflict with the transcript, trust the transcript.
-If speaker identity is uncertain, write “Speaker 1”, “Speaker 2”, etc. rather than guessing.
-
-The final summary must be organized by topic, not by speaker.
-Use speaker attributions inside topic sections only when helpful.
-Clearly summarize all schedule/timeline discussions in a dedicated “일정 정리 (Schedule Summary)” section if relevant.
-The summary should follow the original meeting language:
-- Korean meeting → Korean summary
-- English meeting → English summary
-- Mixed meeting → use the dominant language
-
-Keep the summary concise but decision-useful.
-Focus on:
-- Meeting purpose
-- Key topics
-- Decisions
-- Risks/issues
-- Responsibilities
-- Action items
-- Timelines
-- Executive-level insights when useful
-</regeneration_rules>
-
-<summary_structure>
-The summary field should be markdown and follow this structure when applicable:
-
-# 요약
-
-## 회의 개요
-- 날짜:
-- 참석자:
-- 목적:
-
-## 논의 항목 / 주제별 요약
-Organize by topic. Include key points, decisions, and speaker perspectives where useful.
-
-## 일정 정리 (Schedule Summary)
-Include only if schedule, timeline, deadline, or milestone information appears.
-
-## 실행 항목 / 다음 단계
-Use a table when possible:
-| Action Item | Owner | Due Date | Notes |
-
-## 인사이트
-Include only if useful for management or project decision-making.
-</summary_structure>
-
-<speaker_profile_usage>
-Speaker profiles may contain ontology-style fields such as:
-- summary_for_meeting_context
-- professional_context
-- active_projects
-- relationships
-- responsibilities
-- open_threads
-
-Use these fields to:
-- identify likely responsibilities
-- understand recurring projects
-- clarify speaker roles
-- improve action item ownership
-- connect unresolved topics to current discussion
-
-Do not expose raw ontology JSON in the summary.
-Do not mention “ontology” or “speaker profile” unless the meeting itself discussed them.
-</speaker_profile_usage>
-
 <final_check>
 Before responding:
 - Confirm the output is valid JSON.
 - Confirm title is English and no more than 6 words.
 - Confirm tags are single-word strings.
-- Confirm summary is markdown inside the JSON string.
+- Confirm summary is markdown inside the JSON string and follows the SUMMARIZATION RULES.
 - Confirm the summary is based on the diarized transcript.
 - Confirm no unsupported claims were added.
 </final_check>`;

@@ -2047,6 +2047,13 @@ const SummaryHistory: React.FC = () => {
           profile: (() => { try { return JSON.parse(s.profile!); } catch { return s.profile; } })(),
         }));
 
+      // Regenerate with the user's currently-selected summary prompt (same choice
+      // as the summarize screen dropdown, persisted per user in localStorage), so
+      // a custom prompt applies here too. Server falls back to the user's Default.
+      const selectedPromptId = typeof localStorage !== 'undefined'
+        ? localStorage.getItem(`mn.selectedSummaryPrompt.${user.id}`)
+        : null;
+
       const response = await fetch(`${WORKFLOW_API_URL}/regenerate-summary`, {
         method: 'POST',
         headers: {
@@ -2059,6 +2066,7 @@ const SummaryHistory: React.FC = () => {
           previousSummary: getLocalizedSummary(note, appLanguage),
           speakerProfiles,
           instructions: '',
+          promptId: selectedPromptId || undefined,
         }),
       });
 

@@ -48,6 +48,7 @@ interface RegenerateSummaryRequest {
   previousSummary?: unknown;
   speakerProfiles?: unknown;
   instructions?: unknown;
+  promptId?: unknown;
 }
 
 interface ProjectChatRequest {
@@ -520,6 +521,7 @@ function parseRegenerateSummaryInput(body: RegenerateSummaryRequest): {
   previousSummary: string;
   speakerProfiles: unknown;
   instructions: string;
+  promptId?: string;
 } {
   const noteId = typeof body.noteId === 'string' && body.noteId.trim() ? body.noteId.trim() : '';
   if (!noteId) throw new Error('noteId is required.');
@@ -531,12 +533,20 @@ function parseRegenerateSummaryInput(body: RegenerateSummaryRequest): {
     .filter((segment): segment is TranscriptSegment => Boolean(segment));
   if (segments.length === 0) throw new Error('diarization must include at least one transcript segment.');
 
+  const promptIdRaw =
+    typeof body.promptId === 'string'
+      ? body.promptId.trim()
+      : typeof body.promptId === 'number'
+        ? String(body.promptId)
+        : '';
+
   return {
     noteId,
     segments,
     previousSummary: typeof body.previousSummary === 'string' ? body.previousSummary.trim() : '',
     speakerProfiles: body.speakerProfiles ?? [],
     instructions: typeof body.instructions === 'string' ? body.instructions : '',
+    promptId: promptIdRaw || undefined,
   };
 }
 
@@ -753,6 +763,40 @@ async function resolveSummaryPromptForAndroid(input: { promptId?: string; userId
     promptId: 'android-default',
     summaryRulesOverride: DEFAULT_SUMMARY_PROMPT,
   };
+}
+
+/**
+ * Summary rules to use when regenerating a note. Prefers the prompt the user
+ * currently has selected (promptId), then the user's "Default" prompt, then the
+ * earliest prompt, and finally the built-in default. Regenerate previously used
+ * a hardcoded structure and ignored the user's custom prompt entirely.
+ */
+async function resolveRegenerateSummaryRules(promptId: string | undefined, userId: string): Promise<string> {
+  if (promptId) {
+    try {
+      return await loadSummaryPrompt(promptId, userId);
+    } catch (error) {
+      console.warn(`Regenerate: selected prompt ${promptId} not usable for user, falling back to default. ${(error as Error).message}`);
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('summary_prompt')
+    .select('name, prompt, created_at')
+    .eq('user_id', userId);
+  if (error) {
+    console.warn(`Regenerate: failed to load user summary prompts, using built-in default. ${error.message}`);
+    return DEFAULT_SUMMARY_PROMPT;
+  }
+
+  const rows = ((data as Array<{ name?: unknown; prompt?: unknown; created_at?: unknown }>) ?? [])
+    .filter((row): row is { name: string; prompt: string; created_at: string | null } =>
+      typeof row.prompt === 'string' && row.prompt.trim().length > 0)
+    .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+
+  const defaultRow = rows.find((row) => (row.name ?? '').trim().toLowerCase() === DEFAULT_SUMMARY_PROMPT_NAME.toLowerCase());
+  const chosen = defaultRow ?? rows[0];
+  return chosen ? chosen.prompt.trim() : DEFAULT_SUMMARY_PROMPT;
 }
 
 async function createAudioSignedUrl(storagePath: string): Promise<string> {
@@ -2367,6 +2411,10 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
 
   if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
 
+  // Regenerate with the requester's selected summary prompt (custom prompts now
+  // apply here too, not just on fresh summaries).
+  const summaryRules = await resolveRegenerateSummaryRules(input.promptId, tokenUserId);
+
   const result = await callGeminiWithFallback({
     stage: 'Summary regeneration',
     model: env.regenerateSummaryModel,
@@ -2377,6 +2425,7 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
       text: buildRegenerateSummaryPrompt({
         now: new Date().toISOString(),
         instructions: input.instructions,
+        summaryRules,
         diarizedTranscript: formatTranscriptText(input.segments, 'original'),
         previousSummary: input.previousSummary,
         speakerProfiles: input.speakerProfiles,
