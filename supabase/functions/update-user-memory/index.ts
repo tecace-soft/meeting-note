@@ -253,30 +253,39 @@ async function callGeminiWithRetryAndFallback(
   };
 }
 
-const MEMORY_SYSTEM_PROMPT = `You maintain a durable PERSONAL MEMORY for a single logged-in user, aggregated across all their meetings. The memory is a list of natural-language MEMORY ITEMS — each one self-contained sentence that captures context and relationships in prose, like a long-term personal memory (ChatGPT / MEMORY.md style). You are given the user's EXISTING memory items (each with an id) and ONE new meeting transcript. Emit an ordered list of OPERATIONS that fold this meeting into the memory.
+const MEMORY_SYSTEM_PROMPT = `You maintain a durable PERSONAL MEMORY for a single logged-in user, accumulated across all their meetings. Think of it as the user's evolving long-term UNDERSTANDING of their own work (ChatGPT / MEMORY.md style) — NOT a to-do list, and NOT a CRM dump of names and topics. You are given the user's EXISTING memory items (each with an id) and ONE new meeting transcript. Emit an ordered list of OPERATIONS that fold this meeting into the memory.
 
-The memory is USER-CENTERED and durable. Capture things worth remembering across meetings:
-- open commitments the user still owes or is waiting on (including tasks other people assigned to them),
-- who the user works with and the nature of those working relationships,
-- active projects and their current status,
-- recurring topics, decisions, and the WHY/HOW behind them,
-- stable preferences the user expresses.
+WHAT TO CAPTURE — prioritize CONTEXT and RELATIONSHIPS over bare facts:
+- Decisions and the REASONING behind them: what was decided, WHY, what was rejected, and the constraint or trade-off that drove it.
+- How things CONNECT: how a project, person, problem, or topic relates to another; dependencies; how one thing led to, unblocked, or blocks another.
+- How things EVOLVED: what changed since before and why (record this with a supersede).
+- The nature of working RELATIONSHIPS: not "X is a collaborator", but what the user and X are doing together and who owns what.
+- The user's priorities, direction, and stable preferences.
+Open commitments still matter, but record them WITH their context and why — never as a bare task line.
 
-Write each memory as ONE natural-language sentence that carries its own context (who / what / why), not a bare keyword. Good: "Andrew owns all software implementation; Eun Seok is the designer and is only pulled in when a screen needs new design." Bad: "Eun Seok: designer".
+STYLE:
+- Prefer FEWER, RICHER, connected memories over many shallow ones. One sentence that ties a decision to its reason beats three fact fragments.
+- Each memory is one self-contained sentence carrying who / what / WHY.
+  Good: "The team is moving memory from flat fact-buckets to a narrative + relational store because the boss wants ChatGPT-style memory that captures why decisions were made, not just a CRM-like list."
+  Bad: "Memory feature development.", "50MB limit.", "Admin dashboard: no permission."
+- Do NOT split one subject across several items (one storage-limit topic → ONE memory, not four). Do NOT emit a roadmap/summary item that just restates other items.
 
 OPERATIONS (emit an ordered JSON array; the server applies them in order):
 - {"op":"add","text":"...","entities":["..."]}                 add a new memory
-- {"op":"update","id":"...","text":"...","entities":["..."]}   refine an existing memory in place
+- {"op":"update","id":"...","text":"...","entities":["..."]}   refine/enrich an existing memory in place
 - {"op":"supersede","id":"...","text":"...","entities":["..."]} replace a stale or contradicted memory with corrected info
 - {"op":"archive","id":"..."}                                  the memory is no longer relevant
 
-Rules:
-- Prefer update/supersede over adding a near-duplicate of an existing memory.
-- Supersede when the new meeting contradicts or resolves an existing memory (e.g. "the 50MB upload limit is under investigation" becomes "the 50MB limit was fixed via Supabase Pro; the cap is now 200MB").
-- Only emit ops for genuinely durable, meeting-crossing context. Skip one-off small talk.
+DEDUP (critical — the memory must not accumulate duplicates):
+- Before you "add", scan the EXISTING items for one about the same subject, project, person, decision, or problem. If one exists, "update" or "supersede" THAT id to fold in the new detail — do NOT add a parallel item.
+- Merge related facts into a single richer memory rather than listing them separately.
+- Supersede when the new meeting resolves or contradicts an existing memory (e.g. "the 50MB upload limit is under investigation" becomes "the 50MB limit was a Supabase free-tier cap, fixed by upgrading to Supabase Pro; the cap is now 200MB").
+
+GROUNDING:
+- Only durable, meeting-crossing understanding. Skip one-off small talk and pure logistics.
 - Do NOT record the user themselves as a collaborator or relationship.
-- Never fabricate names, commitments, or facts not supported by the transcript. Be conservative: when unsure, emit nothing for that point.
-- entities: a few light tags (people / projects / topics) named in the item, to seed a future relationship graph. Keep them short.
+- Never fabricate names, decisions, or facts not supported by the transcript or existing memory. When unsure, say nothing.
+- entities: a few short tags (people / projects / topics) named in the item, to seed a future relationship graph.
 - Use ids EXACTLY as given for update/supersede/archive. Never invent an id.
 - If nothing durable is worth changing, return an empty ops array.
 
