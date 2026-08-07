@@ -1,12 +1,13 @@
 # Operations Backlog
 
-Last updated: 2026-08-06.
+Last updated: 2026-08-07.
 Goal: make running and maintaining Meeting Note easier and calmer, at (near) zero cost.
 Boss's actual ask, as understood: operational peace of mind (e.g. "when the Render server goes down, a warning email arrives at the company address").
 So the backlog is ordered by that: visibility/alerting first (what the boss wants now), then removing the things that break (durable fixes), then distribution/maintenance chores.
 The 2026-08-04 standup added a product-feature track (section F). The **2026-08-06 meeting** (Hansoo Lee, Andrew Yoo, Eun Seok Lee) set a hard sprint: memory (dynamic ontology), metadata indexing, and context-based diarization each need an **alpha/beta by 2026-08-13 (next Wed)**. Immediate this-week items: **200MB upload cap + 2-hour recording cutoff** (both due 2026-08-06), and the **app package rename to `com.tecace.*` + Azure auth**.
+The **2026-08-07 meeting** (Hansoo Lee, Andrew Yoo) reviewed the shipped bug fixes, locked the memory rework as a **2-layer system** (narrative ChatGPT-style + relational event/reason store), agreed the **index layer** (F4) is needed for MCP-driven multi-meeting queries, and added two new work items: an **evaluation procedure** for the new memory/diarization (F8) and an **MCP audit** (new section M). The audit was seeded by a Claude-run code review the boss shared: it found a **critical fail-open auth hole** and a **transcript-flag bug** in the MCP server, plus scalability limits that F4 subsumes. Memory implementation starts today; iOS work resumes next week (owner on vacation).
 
-Priority tiers: P0 = boss-visible, low effort, do first. P1 = durable root-cause fixes. P2 = quality-of-life. F = product features (2026-08-04 standup).
+Priority tiers: P0 = boss-visible, low effort, do first. P1 = durable root-cause fixes. P2 = quality-of-life. M = MCP server audit fixes. F = product features (2026-08-04 standup).
 
 > Time-sensitive facts below (backend suspended, unpushed commits, device versions, Render reset date) reflect 2026-07-31. Before acting on any of them, re-verify against the live source: `git status`/`git log` for commit state, the Render dashboard for service/usage state, and `adb devices` + the installed app version for phones.
 
@@ -119,6 +120,42 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 
 ---
 
+## M — MCP server audit (from the 2026-08-07 boss-shared Claude review)
+
+Source: a Claude-run code review + live MCP test the boss shared 2026-08-06.
+These are findings against the `meeting-note-mcp` server (exposes notes to Claude / claude.ai), which is now the boss's primary way to query past meetings.
+IMPORTANT: findings are AI-generated and not yet independently verified against the current code. Re-confirm each against the live source (line refs are from the review, may have drifted) before fixing.
+Priority: M1 and M2 are size-independent — fix now, ahead of the memory rework. M3/M4 are usage-value. The search/normalization findings are folded into F4 (do not duplicate).
+
+### M1 MCP auth is fail-open [CRITICAL — do first]
+- What: when `MCP_API_KEY` is unset the `/mcp` endpoint is fully open, and any user's meetings are readable from client-supplied headers alone (`transports/http.ts:90`). The `/mcp-chatgpt` endpoint falls back to a default user on token-verification failure. Issued personal MCP tokens have no expiry/scope enforcement in code (schema-only), so they are effectively permanent full-access.
+- Why: this server holds executive meeting transcripts. Fail-closed auth + token expiry/scope enforcement is the highest-risk, lowest-effort fix on the whole backlog.
+- Fix: fail-closed when no key/invalid token (no default-user fallback); enforce token expiry + scope from the schema.
+- Effort: small. Risk reduction: maximum.
+
+### M2 List tools falsely report transcript/speaker absence [one-line-class bug]
+- What: the list tools do not select the transcript columns, then report `hasTranscript: false, speakers: []` regardless (`lib/supabase.ts:122`). This is why the live test first (wrongly) concluded "recent notes have no transcript" and then self-corrected.
+- Why: it makes Claude conclude "that meeting has no transcript," directly corrupting the memory/query quality the whole sprint is trying to raise.
+- Fix: select the real transcript/speaker columns (or compute the flag from them). Small change, removes a systematic wrong-answer mode.
+
+### M3 Project-shared notes invisible via MCP
+- What: notes shared at the project level show in the app but are missing over MCP; the MCP access-control logic is implemented separately from the app RLS and drifts from it.
+- Fix: unify MCP access control with the app's sharing/RLS rules so owned + project-shared + directly-shared notes all resolve.
+- Effort: medium.
+
+### M4 No write/"organize" tools (MCP is 100% read-only)
+- What: the boss's actual usage is organizing meetings ("put these meetings into a project"), but MCP exposes no write tool, so Claude cannot do it. Safe RPCs already exist in the DB.
+- Fix: expose narrow write tools (e.g. `add_note_to_project`) backed by the existing RPCs, guarded by the M1 fail-closed auth.
+- Why: directly matches how the boss uses MCP; low effort given the RPCs exist.
+
+### M-folded (tracked under F4, listed here for traceability)
+- Search scalability (200-note JS scan → Postgres FTS / pg_trgm GIN + pgvector): F4 `note_chunk` + hybrid RPC.
+- `find_action_items` regex mis-extraction (picks up markdown table headers as action items at "high" confidence): F1'/F4 structured `note_insight` extraction.
+- Speaker queries scan whole diarization JSON; `note_segment` normalization: F4 `note_chunk` / F5.
+- Missing GIN indexes on `note.shared_users` / `note.projects`; bidirectional-array note↔project denormalization drift; duplicate tracking-table migration conflict: schema cleanup, sequence after F4 lands.
+
+---
+
 ## F — Product features
 
 Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (Hansoo Lee, Andrew Yoo, Eun Seok Lee).
@@ -128,12 +165,26 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 ### F1 "Memory" feature — SHIPPED (F1a + F1b + F1c) 2026-08-05, verified E2E on prod
 - Per-user accumulated context: F1a auto-accumulate speaker profiles, F1b auto speaker-ID suggestion (suggestion-only), F1c personal `user_memory` rollup (open action items / collaborators / active projects / recurring topics). Live on prod: `user_memory` table, `update-user-memory` edge fn, minimal read-only Memory tab in AccountSettings. Full detail in `MEMORY_FEATURE_DESIGN.md`.
 - Minor polish TODO: collaborators sometimes include the user themselves (prompt says exclude).
-- **F1' — dynamic relational memory [SPRINT, due 2026-08-13].** Owner: Andrew (all software). Boss feedback 2026-08-06: the shipped F1c memory is too fact-oriented (flat buckets); the boss wants "long-term memory like ChatGPT" that is context + relation oriented. Direction locked = **hybrid**: narrative memory notes (ChatGPT/Claude-MEMORY.md style) with **update/supersede** dynamic learning, backed later by a light entity-relation graph that feeds F4/F5. Alpha = narrative + supersede layer (no new UI design → Andrew-solo). Full design in `MEMORY_FEATURE_DESIGN.md` ("F1' — Dynamic relational memory").
+- **F1' — dynamic relational memory [SPRINT, due 2026-08-13]. Implementation started 2026-08-07.** Owner: Andrew (all software). Boss feedback 2026-08-06: the shipped F1c memory is too fact-oriented (flat buckets); the boss wants "long-term memory like ChatGPT" that is context + relation oriented. Direction locked = **hybrid**: narrative memory notes (ChatGPT/Claude-MEMORY.md style) with **update/supersede** dynamic learning, backed later by a light entity-relation graph that feeds F4/F5. **2026-08-07 meeting confirmed the 2-layer framing**: layer 1 = narrative (per-user, ChatGPT-style), layer 2 = relational (stores events + the *reason/why* behind decisions, so past decisions stay traceable as a knowledge base). Alpha = narrative + supersede layer (no new UI design → Andrew-solo).
+  - **Design note (2026-08-07): unify the relational extraction with F4's `note_insight`.** The relational "event/reason" layer the boss wants is the same per-note structured extraction F4 needs (actions/decisions/topics/people). Do it as ONE LLM extraction step at summary time (extend the existing `update-user-memory` call), not two passes over the same transcript. This also root-fixes the MCP `find_action_items` regex mis-extraction (M-track) by replacing heuristics with structured extraction.
+  - Full design in `MEMORY_FEATURE_DESIGN.md` ("F1' — Dynamic relational memory").
 
 ### F4 Metadata index layer [SPRINT, due 2026-08-13]
 - What: a metadata-based index layer over meeting-note data so search is efficient and token consumption drops (retrieve by index instead of feeding whole transcripts to the LLM).
-- Why: turns stored notes into a queryable knowledge base and cuts Gemini token cost.
-- Owner: Hansoo Lee is researching the approach; Andrew implements (all software). Eun Seok Lee is the designer, involved only if a screen needs new design.
+- Why: turns stored notes into a queryable knowledge base and cuts Gemini token cost. Also the root fix for the MCP scalability finding (M-track): today `search_notes` downloads the last 200 notes' full transcripts and string-matches in JS, so once notes exceed 200 old meetings silently drop out of search.
+- Owner: Hansoo Lee researches the approach; Andrew implements (all software). Eun Seok Lee is the designer, involved only if a screen needs new design.
+- **Direction locked = Approach A (Postgres-native hybrid), 2026-08-07 brainstorm.** No new infra (all inside Supabase); embedding cost is a few cents per meeting; covers all four query types (keyword/name, topic/insight, action/commit, period/project browse); MCP-first, apps later.
+  - **`note_chunk`** table: transcript split into speaker-turn chunks (~500 chars): `note_id, seq, speaker_label, speaker_id, content, embedding (pgvector), pg_trgm GIN`. One table serves keyword search + semantic search + "who said what". Also the base table for F5 context diarization and the M-track `note_segment` normalization ask.
+  - **`note_insight`** table: per-note structured LLM extraction at summary time (actions with owner/due/status, decisions, topics, mentioned companies/people). Shared with F1' relational layer (same extraction call). Replaces `find_action_items` regex heuristics.
+  - **Hybrid search RPC**: fuse pg_trgm keyword ranking + pgvector similarity via RRF, return snippets. MCP `search_notes` calls this instead of the 200-note JS scan.
+  - Alternatives rejected: (B) LLM index cards = not real search, breaks at scale; (C) external engine (Meilisearch/Typesense) = needs an always-on server, violates the no-server-budget rule. Revisit C only at thousands of meetings.
+  - **Convergence note**: `note_chunk` + `note_insight` are the single shared substrate for F1', F4, F5, and the M-track normalization/search findings. Build the data model once, deliberately, not as three parallel efforts.
+
+### F8 Evaluation harness for memory + diarization [SPRINT-adjacent, from 2026-08-07 meeting]
+- What: a lightweight evaluation procedure to verify the new memory system's quality and context-diarization accuracy before/after the rework.
+- Why: F1' rewrites the memory extraction wholesale; without a regression signal there is no way to tell if narrative memory actually beats the flat buckets. Same for F5 diarization accuracy.
+- Scope (keep small): a golden set of 2-3 real standups snapshotted, with expected memory/insight/diarization outputs, run as a repeatable check.
+- Owner: Andrew. Do this early (before/alongside F1') so the rework has a signal.
 
 ### F5 Context-based diarization [SPRINT, due 2026-08-13] — CORE GOAL
 - What: shift speaker separation from pure voice-pattern matching to **context-based** identification (infer who is speaking from conversational context, not only acoustic signature). Builds on F1b's text/context speaker-ID.
@@ -161,7 +212,13 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 ---
 
 ## Recommended sequence
-Current top priority (per 2026-08-06 meeting) is the product sprint due 2026-08-13: F1' (dynamic ontology), F4 (index layer), F5 (context diarization). The due-today items (R6 2-hour cutoff, R9 200MB cap) shipped + deployed 2026-08-06; what remains on them is E2E verification and a mobile device build. Also unblock R11 (Azure access via Gene).
+Sprint due 2026-08-13: F1' (dynamic ontology), F4 (index layer), F5 (context diarization). Memory implementation started 2026-08-07.
+Recommended order for the sprint window (per the 2026-08-07 review):
+1. **M1 (MCP fail-closed auth) + M2 (transcript-flag bug)** first: size-independent, M1 is a real security hole and M2 actively corrupts memory/query quality. Close both before the memory rework.
+2. **F8 (eval golden set)**: 2-3 standups snapshotted, so the F1' rewrite has a regression signal.
+3. **F1' narrative + `note_insight` unified extraction** (`update-user-memory` rewrite, supersede semantics).
+4. **F4 `note_chunk` + pgvector/pg_trgm hybrid search**: sequence after the extraction lands and when search volume actually bites. M4 write tool (`add_note_to_project`) can slot in here cheaply.
+The due-today items (R6 2-hour cutoff, R9 200MB cap) shipped + deployed 2026-08-06; what remains is E2E verification and a mobile device build (rides the R11 rename build). R11 source rename is waiting on the Korea dev; iOS resumes next week (owner on vacation).
 Ops track runs in the background (the boss's peace-of-mind ask):
 1. P0.1 + P0.2 now: cheap, and directly answers the boss's "warn me when it's down."
 2. P1.2 (idle MCP): quick relief on the free-hour cap.
