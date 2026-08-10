@@ -405,7 +405,10 @@ async function callJsonModel(input: {
           model,
           parts: [{ text: `${input.systemPrompt}\n\n${input.userPrompt}` }],
           responseMimeType: 'application/json',
-          maxOutputTokens: 8192,
+          // 16384 (matching the summary path): 8192 truncated the JSON mid-object on
+          // longer meetings, which then failed to parse ("unparseable"). thinkingBudget
+          // 0 keeps the whole budget on the output JSON.
+          maxOutputTokens: 16384,
           temperature: 0.1,
           thinkingBudget: 0,
         });
