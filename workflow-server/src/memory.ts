@@ -477,7 +477,7 @@ export async function extractAndStoreInsight(input: {
   });
   if (!('text' in out)) return { ok: false, reason: `gemini: ${out.error.slice(0, 240)}` };
   const insight = parseInsight(out.text, out.model);
-  if (!insight) return { ok: false, reason: `unparseable: ${out.text.slice(0, 140)}` };
+  if (!insight) return { ok: false, reason: `unparseable len=${out.text.length} tail=<<${out.text.slice(-180)}>>` };
   const wrote = await writeNoteInsight(input.supabase, input.userId, input.noteId, insight, new Date().toISOString());
   return wrote ? { ok: true } : { ok: false, reason: 'db upsert failed' };
 }
