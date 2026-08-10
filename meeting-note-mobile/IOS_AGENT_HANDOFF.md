@@ -613,30 +613,37 @@ flutter run -d DEVICE_ID
 flutter build ios --debug
 flutter build ios --release --no-codesign
 
-# Required before building/running from Xcode (see note below)
-flutter build ios --config-only
 ```
 
-### Before building from Xcode: `flutter build ios --config-only`
+### iOS plugins use CocoaPods, not Swift Package Manager
 
-Xcode-driven builds (Run / Archive) fail at package resolution right after
-`flutter pub get`, `flutter clean`, or a fresh clone:
+`pubspec.yaml` contains:
+
+```yaml
+flutter:
+  config:
+    enable-swift-package-manager: false
+```
+
+Do not remove it. With SPM enabled, Xcode Run/Archive fails at package
+resolution:
 
 ```text
 The package product 'msal-auth' requires minimum platform version 16.0
 for the iOS platform, but this target supports 13.0
 ```
 
-`msal_auth` requires iOS 16 and the app target is set to 16.0, but Flutter
-generates `ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/Package.swift`
+`msal_auth` requires iOS 16 and the app target is 16.0, but Flutter generates
+`ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/Package.swift`
 with its own default of 13.0 and only rewrites it to the project's value from
-inside its own build pipeline. `flutter pub get` regenerates it at 13.0 without
-that rewrite. The file is generated and gitignored, so this can only be handled
-as a pre-step. `flutter run` and `flutter build ios` are unaffected.
+inside the `flutter build` pipeline. `flutter pub get` and Xcode-driven builds
+regenerate it at 13.0, so the failure keeps coming back. That file is generated
+and gitignored, so it cannot be fixed by committing anything. CocoaPods reads
+each pod's own minimum, so the mismatch cannot happen.
 
-`--config-only` also rewrites parts of `project.pbxproj` (`objectVersion`
-60 → 54 and a few Xcode-added keys). That diff is harmless; discard it unless
-the project change was intentional.
+Trade-off: native MSAL is now pinned by the pod (`MSAL 2.11.0` via
+`msal_auth 2.0.2`) instead of the newer version SPM resolved. Re-verify
+Microsoft sign-in if this setting is ever changed.
 
 ## Notes For Claude Code
 

@@ -132,18 +132,16 @@ Build numbers:
 - **Bundle id** is `com.tecace.meetingNoteMobile` (changed from `com.example.meetingNoteMobile` on 2026-08-06). It is a valid TecAce-owned id, but it has never been registered with Apple or Azure. Before a real TestFlight/App Store release under the paid account, confirm this is the final id (or pick e.g. `com.tecace.meetingnote`), set it in Xcode, and add the matching `msauth.<id>://auth` redirect in Azure.
 - **Config writes to prod.** Same live Supabase and backend as the Android testers. Creating a note is fine; do not delete or bulk-edit data.
 - **Which branch:** reliability fixes and P4 are on `main`. The dark-mode fix is on `ui/dark-mode-theming` (pending merge to `main` as of 2026-07-30). To include dark mode, build from `ui/dark-mode-theming`; otherwise `main`. After the merge, always build from `main`.
-- **Run `flutter build ios --config-only` before building from Xcode** — especially right after `flutter pub get`, `flutter clean`, or a fresh clone. Without it Xcode fails at package resolution with:
+- **iOS plugins go through CocoaPods, not Swift Package Manager** — `pubspec.yaml` sets `flutter: config: enable-swift-package-manager: false`. Do not remove it. With SPM on, Xcode-driven builds fail at package resolution:
 
   ```text
   The package product 'msal-auth' requires minimum platform version 16.0
   for the iOS platform, but this target supports 13.0
   ```
 
-  Why: `msal_auth` needs iOS 16, and the app target is set to 16.0, but Flutter generates `ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/Package.swift` with its own default of **13.0**. Flutter only rewrites it to match the project (16.0) inside its own build pipeline (`updateMinimumDeployment`). `flutter pub get` regenerates the file back to 13.0 and does *not* rewrite it, so an Xcode build started at that point resolves packages against 13.0 and fails. The file is generated and gitignored, so this cannot be fixed by committing anything — it is a required pre-step. Building with `flutter run` / `flutter build ios` is unaffected.
-
-  Side effect: `--config-only` rewrites parts of `project.pbxproj` (drops `objectVersion` 60 → 54 and a few Xcode-added keys). Harmless, but it shows up as a diff — discard it with `git checkout -- "ios/Meeting Note.xcodeproj/project.pbxproj"` unless you meant to change the project.
-- **iOS version is set in Xcode, not pubspec.** `Info.plist` reads `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)` (currently `1.0.0` / `1`), so `flutter build --build-name/--build-number` no longer affects iOS. `pubspec.yaml` stays at `0.1.1+2004` to preserve the Android `versionCode`. Bump the iOS build number in Xcode (or `xcrun agvtool new-version -all N`) before each TestFlight upload — TestFlight rejects a re-used build number.
-- If a build gets into a weird state: `flutter clean && flutter pub get`, then rebuild — and re-run `flutter build ios --config-only` afterwards (see above).
+  `msal_auth` needs iOS 16 and the app target is 16.0, but Flutter generates `ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/Package.swift` with its own default of 13.0 and only rewrites it to the project's value from inside the `flutter build` pipeline. `flutter pub get` and Xcode-driven builds regenerate it at 13.0, so Xcode Run/Archive keeps breaking. That file is generated and gitignored, so it cannot be fixed by committing anything. CocoaPods reads each pod's own minimum instead, so the mismatch cannot occur. Note this pins native MSAL to the pod's version (`MSAL 2.11.0` via `msal_auth 2.0.2`) rather than the newer version SPM resolved — re-check Microsoft sign-in after any change here.
+- **iOS version is set in Xcode, not pubspec.** `Info.plist` reads `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`, so `flutter build --build-name/--build-number` no longer affects iOS. `pubspec.yaml` stays at `0.1.1+2004` to preserve the Android `versionCode`. Bump the iOS build number in Xcode (or `xcrun agvtool new-version -all N`) before each TestFlight upload — TestFlight rejects a re-used build number.
+- If a build gets into a weird state: `flutter clean && flutter pub get && (cd ios && pod install)`, then rebuild.
 
 ## What to report back
 

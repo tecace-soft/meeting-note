@@ -27,6 +27,17 @@ dev_dependencies:
   flutter_lints: ^4.0.0
 
 flutter:
+  # Integrate iOS plugins through CocoaPods, not Swift Package Manager.
+  # msal_auth requires iOS 16, but Flutter generates its plugin SwiftPackage
+  # with its own default of iOS 13 and only rewrites it to the project's
+  # deployment target from inside the flutter build pipeline. Anything that
+  # regenerates that file (flutter pub get, an Xcode-driven build) leaves it at
+  # 13 and Xcode then fails package resolution with "The package product
+  # 'msal-auth' requires minimum platform version 16.0 ... but this target
+  # supports 13.0". CocoaPods reads each pod's own minimum, so the mismatch
+  # cannot happen.
+  config:
+    enable-swift-package-manager: false
   uses-material-design: true
   assets:
     - assets/msal_config.json
