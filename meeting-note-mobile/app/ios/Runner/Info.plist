@@ -39,6 +39,8 @@
 	<string>Meeting Note records the meeting audio you choose to capture, so it can be transcribed and summarized.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take photos of whiteboards or documents to attach them to a meeting note.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose photos from your photo library to attach them to a meeting note.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
