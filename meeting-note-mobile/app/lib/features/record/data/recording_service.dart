@@ -20,6 +20,7 @@ class RecordingState {
     this.loadingRecovery = true,
     this.limitWarning = false,
     this.autoStoppedFilePath,
+    this.captureFailed = false,
   });
 
   final RecordState state;
@@ -36,6 +37,11 @@ class RecordingState {
   /// cap, so the UI can navigate to the new-note flow. Cleared after handling.
   final String? autoStoppedFilePath;
 
+  /// True when the capture watchdog stopped a recording that was producing no
+  /// audio. The recording is already discarded; the UI only has to tell the
+  /// user. Cleared after handling.
+  final bool captureFailed;
+
   RecordingState copyWith({
     RecordState? state,
     Duration? elapsed,
@@ -47,6 +53,7 @@ class RecordingState {
     bool? limitWarning,
     String? autoStoppedFilePath,
     bool clearAutoStopped = false,
+    bool? captureFailed,
   }) =>
       RecordingState(
         state: state ?? this.state,
@@ -61,6 +68,7 @@ class RecordingState {
         autoStoppedFilePath: clearAutoStopped
             ? null
             : autoStoppedFilePath ?? this.autoStoppedFilePath,
+        captureFailed: captureFailed ?? this.captureFailed,
       );
 }
 
@@ -156,6 +164,9 @@ class RecordingNotifier extends Notifier<RecordingState> {
   // warning is surfaced recordingLimitWarningSeconds before the cap.
   static const maxRecordingSeconds = 2 * 60 * 60;
   static const recordingLimitWarningSeconds = 5 * 60;
+  // An m4a that only holds its `ftyp` box is 28 bytes. Anything at or below
+  // this means the encoder never wrote audio.
+  static const _headerOnlyBytes = 64;
   static const _nativeRecorder =
       MethodChannel('meeting_note_mobile/foreground_recorder');
 
@@ -254,12 +265,19 @@ class RecordingNotifier extends Notifier<RecordingState> {
     await _recorder.start(
       RecordConfig(
         encoder: encoder,
-        // 64 kbps mono / 16 kHz: speech-optimal, matches the web recorder for
-        // consistent fidelity and gives AssemblyAI more headroom (AAC/Safari,
-        // noisy rooms). A 2-hour meeting is ~58 MB, well under the 200 MB cap,
-        // and the 2-hour auto-stop bounds it. Applies to the AAC path too,
-        // which is the only path on iOS (see the encoder note above).
-        bitRate: 64000,
+        // 16 kHz mono is speech-optimal and keeps a 2-hour meeting well under
+        // the 200 MB cap (the 2-hour auto-stop bounds it too).
+        //
+        // Bitrate is platform-specific on purpose. 64 kbps matches the web
+        // recorder and gives AssemblyAI more headroom, but iOS's AAC-LC
+        // encoder does not accept 64 kbps at 16 kHz mono: AVAudioRecorder
+        // reports isRecording == true, the microphone never engages (no orange
+        // indicator, flat waveform) and the file stays at its 28-byte ftyp
+        // header until the upload rejects it as empty. 32 kbps at 16 kHz is
+        // the configuration that verifiably produces audio on device.
+        // Android is unaffected — it records through the native
+        // MediaRecorder in ForegroundRecordingService, not this path.
+        bitRate: Platform.isIOS ? 48000 : 64000,
         sampleRate: 16000,
         numChannels: 1,
       ),
@@ -300,6 +318,7 @@ class RecordingNotifier extends Notifier<RecordingState> {
       final level = ((a.current + 45) / 45).clamp(0.0, 1.0);
       state = state.copyWith(amplitude: level);
     });
+    unawaited(_watchForCapture(path, sessionId));
     return RecordStartResult.started;
   }
 
@@ -439,6 +458,50 @@ class RecordingNotifier extends Notifier<RecordingState> {
   /// handled twice.
   void clearAutoStoppedFlag() {
     state = state.copyWith(clearAutoStopped: true);
+  }
+
+  void clearCaptureFailedFlag() {
+    state = state.copyWith(captureFailed: false);
+  }
+
+  /// Watches a just-started recording and aborts it if the encoder is producing
+  /// nothing.
+  ///
+  /// A misconfigured encoder (see the bitrate note in [start]) leaves
+  /// AVAudioRecorder reporting isRecording == true while the file never grows
+  /// past its ~28 byte `ftyp` header — no microphone indicator, flat waveform,
+  /// and the loss only surfaces at upload time. Left unchecked that can throw
+  /// away a two-hour meeting. Checked off the start path so the UI is not
+  /// blocked, and re-checked once before aborting so a slow first flush is not
+  /// mistaken for a dead encoder.
+  Future<void> _watchForCapture(String path, String sessionId) async {
+    Future<bool> hasAudio() async {
+      try {
+        return await File(path).length() > _headerOnlyBytes;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    await Future<void>.delayed(const Duration(seconds: 3));
+    if (state.state == RecordState.idle ||
+        state.recoverableSession?.id != sessionId) {
+      return; // already stopped by the user
+    }
+    if (await hasAudio()) return;
+
+    await Future<void>.delayed(const Duration(seconds: 3));
+    if (state.state == RecordState.idle ||
+        state.recoverableSession?.id != sessionId) {
+      return;
+    }
+    if (await hasAudio()) return;
+
+    _ticker?.cancel();
+    await _ampSub?.cancel();
+    await _recorder.stop();
+    await clearRecoverableSession(deleteFile: true);
+    state = const RecordingState(loadingRecovery: false, captureFailed: true);
   }
 
   Future<void> _heartbeatRecoverySession(Duration elapsed) async {

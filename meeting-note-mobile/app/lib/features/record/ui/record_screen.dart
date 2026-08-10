@@ -29,6 +29,22 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
 
     // When a recording auto-stops at the 2-hour cap, move the user into the
     // new-note flow with the saved audio and tell them what happened.
+    // The capture watchdog aborted a recording that produced no audio. The file
+    // is already discarded, so this only has to explain what happened.
+    ref.listen<RecordingState>(recordingProvider, (prev, next) {
+      if (!next.captureFailed || (prev?.captureFailed ?? false)) return;
+      notifier.clearCaptureFailedFlag();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Recording stopped: no audio was being captured. Close any app '
+            'using the microphone and try again.',
+          ),
+        ),
+      );
+    });
+
     ref.listen<RecordingState>(recordingProvider, (prev, next) {
       final path = next.autoStoppedFilePath;
       if (path == null || prev?.autoStoppedFilePath == path) return;

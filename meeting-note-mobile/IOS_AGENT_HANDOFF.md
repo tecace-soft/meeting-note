@@ -304,8 +304,40 @@ meeting_note_mobile/foreground_recorder
 ```
 
 - iOS/non-Android uses the Flutter `record` package directly.
-- iOS records either Opus `.ogg` if supported, otherwise AAC `.m4a`.
+- iOS always records AAC `.m4a`. It must not use Opus: `record_ios` reports
+  opus as supported but hands `kAudioFormatOpus` to `AVAudioRecorder`, which
+  picks its container from the file extension — and CoreAudio has no OGG
+  container, so the recorder writes a 0-byte file.
 - The app persists a local recoverable recording session in secure storage.
+
+### Do not raise the iOS recording bitrate above 48 kbps
+
+`recording_service.dart` sets `bitRate: Platform.isIOS ? 48000 : 64000` at
+16 kHz mono. **The iOS value is a hard encoder limit, not a preference.**
+
+iOS's AAC-LC encoder rejects 64 kbps at 16 kHz mono, and it fails *silently*:
+`AVAudioRecorder.isRecording` stays `true`, the timer runs, but the microphone
+never engages (no orange indicator, flat waveform) and the file never grows past
+its 28-byte `ftyp` header. Nothing surfaces until upload rejects it as empty —
+so a two-hour meeting can be lost with no warning at the time.
+
+Measured on iPhone 15 Pro Max / iOS 26.6, same session, back to back:
+
+| Setting | Result |
+|---|---|
+| 32 kbps | 32,098 bps actual — valid audio |
+| 48 kbps | 48,980 bps actual — valid audio |
+| 64 kbps | no capture, 28-byte header only (reproduced 3×) |
+
+This is why the value is platform-split. Android is unaffected: it records
+through `MediaRecorder` in `ForegroundRecordingService.kt`, which sets its own
+`setAudioEncodingBitRate(64000)`. An upstream change that raises the Dart
+bitrate "to match web" only affects iOS and will break it again — that is
+exactly how this bug was introduced.
+
+A watchdog in `RecordingNotifier._watchForCapture` now aborts a recording whose
+file has not grown past the header after 3s (re-checked once at 6s), so a future
+regression is caught seconds in rather than at upload.
 
 Relevant file:
 
