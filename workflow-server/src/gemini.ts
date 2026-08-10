@@ -63,6 +63,10 @@ export async function callGemini(input: {
   responseMimeType?: 'application/json' | 'text/plain';
   maxOutputTokens?: number;
   temperature?: number;
+  // When set (e.g. 0), disables "thinking" on 2.5 models so the whole output
+  // budget goes to the JSON. Thinking tokens can otherwise consume maxOutputTokens
+  // and truncate structured JSON mid-object, which then fails to parse.
+  thinkingBudget?: number;
 }): Promise<GeminiCallResult> {
   let response: Response;
   try {
@@ -80,6 +84,9 @@ export async function callGemini(input: {
             temperature: input.temperature ?? 0.2,
             maxOutputTokens: input.maxOutputTokens ?? 8192,
             responseMimeType: input.responseMimeType ?? 'application/json',
+            ...(input.thinkingBudget !== undefined
+              ? { thinkingConfig: { thinkingBudget: input.thinkingBudget } }
+              : {}),
           },
         }),
       },

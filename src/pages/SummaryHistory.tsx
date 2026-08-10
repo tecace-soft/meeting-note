@@ -54,7 +54,6 @@ import {
   updateTranslationMap,
 } from '../lib/transcriptTranslationDisplay';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
-import { updateUserMemoryFromNote } from '../lib/userMemory';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { getNoteImageCounts } from '../lib/noteImages';
 import { getOutlookCalendarEvents, getTeamsChats, sendChatMessage, type OutlookCalendarEvent, type TeamsChat } from '../services/graphService';
@@ -2081,27 +2080,8 @@ const SummaryHistory: React.FC = () => {
       setNotes((prev) => prev.map((n) => n.id === note.id ? { ...n, summary_edit: newSummary } : n));
       setNoteExpandedTab((prev) => ({ ...prev, [note.id]: 'summary' }));
 
-      // F1c: fold this note into the user's personal memory (best-effort,
-      // background, deduped per note). Never blocks the regenerate result.
-      const memoryUserId = user.id;
-      const memorySelfName = user.displayName ?? null;
-      void (async () => {
-        try {
-          const auth = {
-            appToken: await getSupabaseAccessTokenForRequest().catch(() => null),
-            msToken: await getAccessToken().catch(() => null),
-          };
-          await updateUserMemoryFromNote({
-            userId: memoryUserId,
-            noteId: note.id,
-            segments,
-            selfName: memorySelfName,
-            auth,
-          });
-        } catch (memoryError) {
-          console.error('Failed to update user memory:', memoryError);
-        }
-      })();
+      // Personal-memory folding now runs server-side in the workflow-server
+      // regenerate handler (covers web + mobile), so the client no longer folds here.
     } catch (err: unknown) {
       console.error('Regenerate summary failed:', err);
       setRegenerateNoteError((prev) => ({ ...prev, [note.id]: err instanceof Error ? err.message : 'Regeneration failed' }));

@@ -13,6 +13,7 @@ import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
+import { foldNoteIntoMemory } from './memory.js';
 import { sendWorkflowAlert } from './alerts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1928,6 +1929,26 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     audioDurationSeconds,
   });
 
+  // Fold this note into the owner's personal memory (F1') and write its
+  // note_insight index (F4). Done server-side so it runs for EVERY note regardless
+  // of client — the web client used to do this, which left mobile-created notes and
+  // their owners' memory empty. Best-effort: never fail the summary job over a
+  // memory/insight hiccup. Idempotent: foldNoteIntoMemory skips already-folded notes.
+  await updateWorkflowJob(jobId, { stage: 'updating memory', progress: 96 });
+  try {
+    const fold = await foldNoteIntoMemory({
+      supabase,
+      apiKey: env.geminiApiKey,
+      userId: input.userId,
+      noteId: input.noteId,
+      transcript: transcriptText,
+      selfName: input.userName ?? null,
+    });
+    console.log(`Memory fold note=${input.noteId} items=${fold.memoryItemCount} insight=${fold.insightWritten} skipped=${fold.skipped}`);
+  } catch (memoryError) {
+    console.warn(`Memory fold failed for note ${input.noteId}:`, memoryError);
+  }
+
   return {
     transcript: segments,
     summary: parsedSummary.summary,
@@ -2451,6 +2472,23 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
   if (updateError) throw updateError;
 
   sendJson(res, 200, parsedSummary);
+
+  // After responding (so the user is not blocked), fold this note into the owner's
+  // memory + refresh its note_insight, best-effort. foldNoteIntoMemory is idempotent:
+  // an already-folded note is skipped, so this mainly backfills notes that predate
+  // server-side folding (e.g. earlier mobile notes) when they are regenerated.
+  try {
+    await foldNoteIntoMemory({
+      supabase,
+      apiKey: env.geminiApiKey,
+      userId: tokenUserId,
+      noteId: input.noteId,
+      transcript: formatTranscriptText(input.segments, 'original'),
+      selfName: null,
+    });
+  } catch (memoryError) {
+    console.warn(`Memory fold (regenerate) failed for note ${input.noteId}:`, memoryError);
+  }
 }
 
 async function runTranscriptionTest(req: IncomingMessage, res: ServerResponse): Promise<void> {

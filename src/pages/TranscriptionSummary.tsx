@@ -65,7 +65,6 @@ import {
 } from '../lib/transcriptTranslationDisplay';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta } from '../lib/noteDuration';
-import { updateUserMemoryFromNote } from '../lib/userMemory';
 import {
   uploadNoteImage,
   type NoteImage,
@@ -1164,32 +1163,10 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
-  // F1c: fold a note's transcript into the user's personal memory in the
-  // background (best-effort, deduped per note). Called after a fresh summary AND
-  // after a regenerate, so the note is folded once either way. Never blocks or
-  // fails the caller.
-  const foldNoteIntoUserMemory = (noteId: string, segments: TranscriptSegment[]): void => {
-    if (!user?.id || segments.length === 0) return;
-    const memoryUserId = user.id;
-    const memorySelfName = user.displayName ?? null;
-    void (async () => {
-      try {
-        const auth = {
-          appToken: await getSupabaseAccessTokenForRequest().catch(() => null),
-          msToken: await getAccessToken().catch(() => null),
-        };
-        await updateUserMemoryFromNote({
-          userId: memoryUserId,
-          noteId,
-          segments,
-          selfName: memorySelfName,
-          auth,
-        });
-      } catch (memoryError) {
-        console.error('Failed to update user memory:', memoryError);
-      }
-    })();
-  };
+  // Personal-memory folding (F1') and note_insight extraction (F4) now run
+  // server-side in the workflow-server summarize pipeline, so they cover every
+  // note regardless of client (web or mobile). The web client no longer folds
+  // memory itself; it only reads/displays the memory (see fetchUserMemory).
 
   const applySummaryResult = async (completedJob: WorkflowJobStatus, noteId: string) => {
     const result = completedJob.result ?? {};
@@ -1241,10 +1218,6 @@ const TranscriptionSummary: React.FC = () => {
     setGeneratedTitleDraft(noteTitle);
     setEditedSummary(summaryText);
     setResultsTab('summary');
-
-    // F1c: fold this meeting into the user's personal memory (durable per-user
-    // context base). Best-effort, fully in the background — never blocks the UI.
-    foldNoteIntoUserMemory(noteId, transcript);
   };
 
   // Poll a created job to completion and apply its result. Persists the job id
@@ -1845,10 +1818,6 @@ const TranscriptionSummary: React.FC = () => {
       setEditedSummary(newSummary);
       setSummaryResult((prev) => (prev ? { ...prev, summary: newSummary } : prev));
       setResultsTab('summary');
-
-      // F1c: a regenerate also finalizes this note's transcript/summary, so fold
-      // it into the user's memory too (deduped — a note already folded is skipped).
-      foldNoteIntoUserMemory(currentNoteId, summaryResult.transcript);
     } catch (err: unknown) {
       console.error('Regenerate summary failed:', err);
       setRegenerateError(err instanceof Error ? err.message : 'Regeneration failed');
