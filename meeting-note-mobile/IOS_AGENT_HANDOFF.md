@@ -74,7 +74,7 @@ meeting-note-mobile/app/lib/core/network/workflow_config.dart
 meeting-note-mobile/app/lib/features/auth/data/auth_config.dart
 meeting-note-mobile/app/assets/msal_config.json
 meeting-note-mobile/app/ios/Runner/Info.plist
-meeting-note-mobile/app/ios/Runner.xcodeproj/project.pbxproj
+meeting-note-mobile/app/ios/Meeting Note.xcodeproj/project.pbxproj
 ```
 
 ## Sensitive Credentials
@@ -272,7 +272,7 @@ Open the workspace on macOS:
 
 ```bash
 cd meeting-note-mobile/app
-open ios/Runner.xcworkspace
+open "ios/Meeting Note.xcworkspace"
 ```
 
 In Xcode:
@@ -378,7 +378,7 @@ Simulator can validate UI and basic navigation, but it is not enough for final r
 3. Open:
 
 ```bash
-open ios/Runner.xcworkspace
+open "ios/Meeting Note.xcworkspace"
 ```
 
 4. Configure signing in Xcode.

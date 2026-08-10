@@ -90,7 +90,7 @@ This is the current plan. The iPhone being tested **must be physically connected
 
 1. Open the workspace in Xcode:
    ```bash
-   open ios/Runner.xcworkspace
+   open "ios/Meeting Note.xcworkspace"
    ```
 2. Select the **Runner** target → **Signing & Capabilities**.
 3. Team → **Add an Account** → sign in with a personal Apple ID → select it as the Team.
