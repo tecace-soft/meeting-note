@@ -486,7 +486,14 @@ const TranscriptionSummary: React.FC = () => {
         if (cancelled) return;
         if (error) throw error;
 
-        let list = (rows ?? []) as { id: string; name: string; prompt: string }[];
+        // summary_prompt.id is a bigint; PostgREST serializes it as a JSON number.
+        // Coerce to string at this boundary so every downstream comparison (the
+        // localStorage restore below, the <select> value, and the promptId lookup
+        // in handleSummarize) stays string-vs-string. Without this, a manually
+        // selected prompt (state becomes a string via the DOM) never matches the
+        // numeric row.id and the fresh summary silently falls back to Default.
+        let list = ((rows ?? []) as { id: unknown; name: string; prompt: string }[])
+          .map((r) => ({ id: String(r.id), name: r.name, prompt: r.prompt }));
 
         if (list.length === 0) {
           const { error: insertError } = await supabase.from(SUMMARY_PROMPT_TABLE).insert({
@@ -508,7 +515,8 @@ const TranscriptionSummary: React.FC = () => {
             .order('name', { ascending: true });
           if (cancelled) return;
           if (refetchError) throw refetchError;
-          list = (rowsAfter ?? []) as typeof list;
+          list = ((rowsAfter ?? []) as { id: unknown; name: string; prompt: string }[])
+            .map((r) => ({ id: String(r.id), name: r.name, prompt: r.prompt }));
         }
 
         setSummaryPromptRows(list);
@@ -1270,7 +1278,10 @@ const TranscriptionSummary: React.FC = () => {
 
   const handleSummarize = async () => {
     if (!hasCompletedFiles) return;
-    const selectedPrompt = summaryPromptRows.find((row) => row.id === selectedSummaryPromptId) ?? summaryPromptRows[0] ?? null;
+    const selectedPrompt =
+      summaryPromptRows.find((row) => String(row.id) === String(selectedSummaryPromptId)) ??
+      summaryPromptRows[0] ??
+      null;
     if (!selectedPrompt?.id) {
       setSummaryError('Select a summarization prompt.');
       return;
