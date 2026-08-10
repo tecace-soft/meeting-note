@@ -382,18 +382,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type JsonModelResult = { text: string; model: string } | { error: string };
+
 /**
  * Call Gemini for a JSON extraction. Retries transient failures (429/5xx) up to 3
  * times per model with backoff, then falls through to the next fallback model. This
  * resilience matters for backfill, where transient rate limits would otherwise show
- * up as a high "failed" count. Returns text + the model used, or null if all fail.
+ * up as a high "failed" count. Returns the text + model, or the last error message.
  */
 async function callJsonModel(input: {
   apiKey: string;
   models: string[];
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ text: string; model: string } | null> {
+}): Promise<JsonModelResult> {
+  let lastError = 'no models attempted';
   for (const model of input.models) {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
@@ -408,13 +411,14 @@ async function callJsonModel(input: {
         });
         return { text: result.text, model };
       } catch (error) {
+        lastError = `${model}: ${(error as Error).message}`;
         const retryable = error instanceof GeminiApiError && error.retryable;
         if (!retryable || attempt === 3) break; // non-retryable or exhausted → next model
         await sleep(600 * attempt + Math.floor(Math.random() * 300));
       }
     }
   }
-  return null;
+  return { error: lastError };
 }
 
 /** Upsert one note's structured index (one row per note). Returns whether it wrote. */
@@ -459,18 +463,20 @@ export async function extractAndStoreInsight(input: {
   userId: string;
   noteId: string;
   transcript: string;
-}): Promise<boolean> {
+}): Promise<{ ok: boolean; reason?: string }> {
   const transcript = input.transcript.trim();
-  if (!input.userId || !input.noteId || !transcript) return false;
+  if (!input.userId || !input.noteId || !transcript) return { ok: false, reason: 'empty transcript' };
   const out = await callJsonModel({
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
     systemPrompt: INSIGHT_SYSTEM_PROMPT,
     userPrompt: buildInsightUserPrompt(transcript, input.noteId),
   });
-  const insight = out ? parseInsight(out.text, out.model) : null;
-  if (!insight) return false;
-  return writeNoteInsight(input.supabase, input.userId, input.noteId, insight, new Date().toISOString());
+  if (!('text' in out)) return { ok: false, reason: `gemini: ${out.error.slice(0, 240)}` };
+  const insight = parseInsight(out.text, out.model);
+  if (!insight) return { ok: false, reason: `unparseable: ${out.text.slice(0, 140)}` };
+  const wrote = await writeNoteInsight(input.supabase, input.userId, input.noteId, insight, new Date().toISOString());
+  return wrote ? { ok: true } : { ok: false, reason: 'db upsert failed' };
 }
 
 export interface FoldNoteResult {
@@ -532,7 +538,7 @@ export async function foldNoteIntoMemory(input: {
   // untouched AND does not mark the note processed, so a later run can retry.
   let memoryItemCount = 0;
   let memoryProcessed = false;
-  if (memoryOut) {
+  if ('text' in memoryOut) {
     const ops = parseOps(memoryOut.text);
     if (ops !== null) {
       const items = enforceCaps(applyOps(startingItems, ops, noteId, now));
@@ -548,7 +554,7 @@ export async function foldNoteIntoMemory(input: {
   }
 
   // Insight (F4): one row per note, best-effort. Written even if memory failed.
-  const insight = insightOut ? parseInsight(insightOut.text, insightOut.model) : null;
+  const insight = 'text' in insightOut ? parseInsight(insightOut.text, insightOut.model) : null;
   const insightWritten = insight ? await writeNoteInsight(supabase, userId, noteId, insight, now) : false;
 
   return { memoryItemCount, insightWritten, skipped: !memoryProcessed && !insightWritten };

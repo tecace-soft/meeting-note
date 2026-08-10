@@ -2519,24 +2519,30 @@ async function backfillInsight(req: IncomingMessage, res: ServerResponse): Promi
 
   let written = 0;
   let failed = 0;
+  const sampleFailures: string[] = [];
   for (const note of notes) {
     try {
-      const ok = await extractAndStoreInsight({
+      const result = await extractAndStoreInsight({
         supabase,
         apiKey: env.geminiApiKey,
         userId: note.user_id,
         noteId: note.id,
         transcript: note.transcription ?? '',
       });
-      if (ok) written += 1;
-      else failed += 1;
+      if (result.ok) {
+        written += 1;
+      } else {
+        failed += 1;
+        if (sampleFailures.length < 5 && result.reason) sampleFailures.push(`${note.id.slice(0, 8)}: ${result.reason}`);
+      }
     } catch (backfillError) {
       failed += 1;
+      if (sampleFailures.length < 5) sampleFailures.push(`${note.id.slice(0, 8)}: threw ${(backfillError as Error).message.slice(0, 160)}`);
       console.warn(`Backfill insight failed for note ${note.id}:`, backfillError);
     }
   }
 
-  sendJson(res, 200, { processed: notes.length, written, failed });
+  sendJson(res, 200, { processed: notes.length, written, failed, sampleFailures });
 }
 
 async function runTranscriptionTest(req: IncomingMessage, res: ServerResponse): Promise<void> {
