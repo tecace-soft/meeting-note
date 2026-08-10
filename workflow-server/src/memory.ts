@@ -353,6 +353,7 @@ RULES:
 - Keep the meeting's ORIGINAL LANGUAGE (Korean stays Korean). Do NOT translate.
 - Only what the transcript supports. Never invent names, decisions, or deadlines. When unsure, omit.
 - Keep each entry short. Deduplicate within each list. Any list may be empty; return them all.
+- BE SELECTIVE, NOT EXHAUSTIVE. Hard limits: at most 20 actions, 15 decisions, 15 topics, 20 people, 15 companies. Keep only the most important/salient items. Do NOT turn every noun into a topic, or every mention into a person/company — a short, high-signal list is the goal.
 
 Return ONLY JSON of this exact shape (no prose, no markdown):
 {"actions":[{"text":"","owner":"","due":"","status":""}],"decisions":[{"text":"","rationale":""}],"topics":[""],"people":[""],"companies":[""]}`;
@@ -405,10 +406,11 @@ async function callJsonModel(input: {
           model,
           parts: [{ text: `${input.systemPrompt}\n\n${input.userPrompt}` }],
           responseMimeType: 'application/json',
-          // 16384 (matching the summary path): 8192 truncated the JSON mid-object on
-          // longer meetings, which then failed to parse ("unparseable"). thinkingBudget
-          // 0 keeps the whole budget on the output JSON.
-          maxOutputTokens: 16384,
+          // Bounded output (the INSIGHT prompt caps list sizes; the MEMORY prompt caps
+          // ops), so 8192 is ample. The earlier truncation was a runaway topic list,
+          // fixed in the prompt, not a budget shortfall. thinkingBudget 0 → all budget
+          // to the JSON.
+          maxOutputTokens: 8192,
           temperature: 0.1,
           thinkingBudget: 0,
         });
