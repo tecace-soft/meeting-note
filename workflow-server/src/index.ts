@@ -2475,6 +2475,18 @@ async function runTranscriptionTest(req: IncomingMessage, res: ServerResponse): 
   });
 }
 
+// Git-derived build identity. Render injects RENDER_GIT_COMMIT / RENDER_GIT_BRANCH
+// at build + runtime; locally they are unset so we report 'dev'/'local'. This is a
+// per-service traceability stamp (which commit is live right now), NOT a shared
+// version number across the web/mobile/mcp apps — each deployable reports its own.
+const VERSION_INFO = {
+  service: 'meeting-note-workflow-server',
+  sha: process.env.RENDER_GIT_COMMIT ?? 'dev',
+  shortSha: (process.env.RENDER_GIT_COMMIT ?? 'dev').slice(0, 7),
+  branch: process.env.RENDER_GIT_BRANCH ?? 'local',
+  deployedAt: new Date().toISOString(),
+} as const;
+
 const server = createServer((req, res) => {
   void (async () => {
     if (req.method === 'OPTIONS') {
@@ -2486,6 +2498,7 @@ const server = createServer((req, res) => {
       sendJson(res, 200, {
         ok: true,
         service: 'meeting-note-workflow-server',
+        version: VERSION_INFO,
         transcriptionProvider: 'assemblyai',
         transcriptionModel: ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL,
         transcriptionLanguageMode: 'no explicit AssemblyAI language settings',
@@ -2495,6 +2508,10 @@ const server = createServer((req, res) => {
         regenerateSummaryModel: env.regenerateSummaryModel,
         projectChatModel: PROJECT_CHAT_MODEL,
       });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/version') {
+      sendJson(res, 200, VERSION_INFO);
       return;
     }
     if (req.method === 'POST' && req.url === '/summarize-audio') {

@@ -264,10 +264,22 @@ async function checkSupabaseHealth(): Promise<{ ok: true } | { ok: false; error:
   }
 }
 
+// Git-derived build identity. Render injects RENDER_GIT_COMMIT / RENDER_GIT_BRANCH
+// at build + runtime; locally they are unset so we report 'dev'/'local'. Per-service
+// traceability stamp (which commit is live), NOT a shared version across the apps.
+const VERSION_INFO = {
+  service: 'meeting-note-mcp',
+  sha: process.env.RENDER_GIT_COMMIT ?? 'dev',
+  shortSha: (process.env.RENDER_GIT_COMMIT ?? 'dev').slice(0, 7),
+  branch: process.env.RENDER_GIT_BRANCH ?? 'local',
+  deployedAt: startedAt.toISOString(),
+} as const;
+
 function healthPayload(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     ok: true,
     service: 'meeting-note-mcp',
+    version: VERSION_INFO,
     startedAt: startedAt.toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
     memory: process.memoryUsage(),
@@ -420,6 +432,11 @@ export async function startHttpServer(): Promise<void> {
             supabase: deep ? dependency : { ok: 'not_checked' },
           },
         }));
+        return;
+      }
+
+      if (url.pathname === '/version') {
+        sendJson(res, 200, VERSION_INFO);
         return;
       }
 

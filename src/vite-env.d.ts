@@ -10,3 +10,13 @@ interface ImportMeta {
   readonly env: ImportMetaEnv
 }
 
+// Git-derived build identity, injected by vite.config.ts `define`. See
+// scripts/gen-version.cjs. Lets the console/devtools show which commit is live.
+declare const __APP_VERSION__: {
+  service: string
+  sha: string
+  shortSha: string
+  branch: string
+  deployedAt: string
+}
+

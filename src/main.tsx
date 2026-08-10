@@ -5,6 +5,18 @@ import { getMissingEnvVars } from './config/validateEnv'
 import './index.css'
 import './styles/theme.css'
 
+// Surface which commit the deployed web app is running (no visible UI chrome, to
+// stay out of the design surface). Read it in devtools or via `window.__APP_VERSION__`,
+// and externally at `/version.json`.
+;(window as unknown as { __APP_VERSION__: typeof __APP_VERSION__ }).__APP_VERSION__ = __APP_VERSION__
+// Intentional one-time startup banner so the live commit is discoverable in
+// devtools without opening /version.json. eslint's no-console allows only
+// warn/error, but info is the right level for a non-error diagnostic here.
+// eslint-disable-next-line no-console
+console.info(
+  `[meeting-note] frontend ${__APP_VERSION__.shortSha} (${__APP_VERSION__.branch}), built ${__APP_VERSION__.deployedAt}`,
+)
+
 // Fail fast on misconfiguration: booting with placeholder credentials only fails
 // later with cryptic auth/DB errors, so show a clear message up front instead.
 const missingEnvVars = getMissingEnvVars()

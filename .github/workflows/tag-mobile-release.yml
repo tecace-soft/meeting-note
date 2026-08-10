@@ -1,0 +1,54 @@
+# Auto-tag a mobile release when its marketing version is bumped.
+#
+# The mobile pubspec `version:` (e.g. 0.1.2) is the only human-bumped release
+# number in this monorepo (web/backend/mcp are traced by commit SHA, not a
+# version). When a push to main changes that file, this workflow reads the
+# current version and, if no matching tag exists yet, creates and pushes
+# `mobile-v<version>`. Idempotent: an unchanged version already has its tag, so
+# nothing happens.
+name: tag-mobile-release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'meeting-note-mobile/app/pubspec.yaml'
+
+# Allow the built-in token to push the new tag.
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read mobile marketing version
+        id: version
+        run: |
+          version="$(grep -E '^version:' meeting-note-mobile/app/pubspec.yaml \
+            | sed -E 's/^version:[[:space:]]*([^+ ]+).*/\1/')"
+          if [ -z "$version" ]; then
+            echo "Could not parse a version from pubspec.yaml" >&2
+            exit 1
+          fi
+          echo "tag=mobile-v${version}" >> "$GITHUB_OUTPUT"
+          echo "Mobile version: ${version} -> tag mobile-v${version}"
+
+      - name: Create and push tag if it does not exist
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists on origin; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Mobile release ${TAG}" "${GITHUB_SHA}"
+          git push origin "${TAG}"
+          echo "Created and pushed ${TAG} at ${GITHUB_SHA}"

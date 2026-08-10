@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5174",
+    "prebuild": "node scripts/gen-version.cjs",
     "build": "tsc && vite build",
+    "versions": "node scripts/versions.cjs",
     "preview": "vite preview",
     "start": "serve -s dist -l ${PORT:-3000}",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",

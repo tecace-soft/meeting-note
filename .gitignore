@@ -56,3 +56,6 @@ meeting-note-mobile-handoff/
 .claude/settings.local.json
 .claude/handoffs/
 
+
+# Generated build-identity stamp (scripts/gen-version.cjs)
+public/version.json
