@@ -13,7 +13,7 @@ import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
-import { foldNoteIntoMemory } from './memory.js';
+import { extractAndStoreInsight, foldNoteIntoMemory } from './memory.js';
 import { sendWorkflowAlert } from './alerts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -2491,6 +2491,47 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
   }
 }
 
+// F4 backfill: populate note_insight for existing notes (insight only, no memory
+// fold). Admin-gated and batched — call repeatedly until `processed` is 0. Each
+// call pulls a batch of notes still lacking a note_insight row (server-side filter
+// via notes_needing_insight) and extracts one row each.
+async function backfillInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  if (tokenUserId !== TRANSCRIPTION_MODEL_TEST_USER_ID) {
+    sendJson(res, 403, { error: 'Insight backfill is not available for this user.' });
+    return;
+  }
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+
+  const body = (await readBody(req, 1_000_000)) as { limit?: unknown } | null;
+  const limit = Math.max(1, Math.min(Math.floor(Number(body?.limit) || 25), 50));
+
+  const { data, error } = await supabase.rpc('notes_needing_insight', { p_limit: limit });
+  if (error) throw error;
+  const notes = (data as Array<{ id: string; user_id: string; transcription: string }>) ?? [];
+
+  let written = 0;
+  let failed = 0;
+  for (const note of notes) {
+    try {
+      const ok = await extractAndStoreInsight({
+        supabase,
+        apiKey: env.geminiApiKey,
+        userId: note.user_id,
+        noteId: note.id,
+        transcript: note.transcription ?? '',
+      });
+      if (ok) written += 1;
+      else failed += 1;
+    } catch (backfillError) {
+      failed += 1;
+      console.warn(`Backfill insight failed for note ${note.id}:`, backfillError);
+    }
+  }
+
+  sendJson(res, 200, { processed: notes.length, written, failed });
+}
+
 async function runTranscriptionTest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== TRANSCRIPTION_MODEL_TEST_USER_ID) {
@@ -2558,6 +2599,10 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'POST' && req.url === '/transcription-test') {
       await runTranscriptionTest(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/admin/backfill-insight') {
+      await backfillInsight(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/regenerate-summary') {

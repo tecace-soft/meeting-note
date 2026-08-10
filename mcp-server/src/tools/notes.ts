@@ -31,31 +31,17 @@ function optionalInt(min: number, max: number) {
   return z.preprocess((value) => (value === '' ? undefined : value), z.coerce.number().int().min(min).max(max).optional());
 }
 
-function noteMatchesQuery(note: NoteRow, query: string, scope: 'metadata' | 'summary' | 'transcript' | 'all' = 'all'): boolean {
-  const needle = query.toLowerCase();
-  const metadataFields = [
-    note.name,
-    note.user_name,
-    JSON.stringify(note.tags ?? ''),
-  ];
-  const summaryFields = [
-    note.summary,
-    note.summary_edit,
-  ];
-  const transcriptFields = [
-    note.transcription,
-    JSON.stringify(note.diarization ?? ''),
-  ];
-  const fields =
-    scope === 'metadata'
-      ? metadataFields
-      : scope === 'summary'
-        ? [...metadataFields, ...summaryFields]
-        : scope === 'transcript'
-          ? transcriptFields
-          : [...metadataFields, ...summaryFields, ...transcriptFields];
-  const haystack = fields.filter(Boolean).join('\n').toLowerCase();
-  return haystack.includes(needle);
+// Row shape returned by the search_notes SQL RPC (F4 hybrid search).
+interface SearchNoteRow {
+  note_id: string;
+  name: string | null;
+  summary: string | null;
+  created_at: string | null;
+  meeting_at: string | null;
+  score: number;
+  matched_people: string[] | null;
+  matched_topics: string[] | null;
+  matched_companies: string[] | null;
 }
 
 function normalizeOwnerName(value: string): string {
@@ -242,29 +228,48 @@ export function registerNoteTools(server: McpServer): void {
     'search_notes',
     {
       title: 'Search Notes',
-      description: 'Search notes by title, tags, summary, transcription, or diarized transcript content.',
+      description: 'Search accessible notes by title, summary, transcript, and structured index (people, topics, companies). Ranked, index-backed (covers all notes, not a capped scan). Returns matched people/topics/companies per hit.',
       inputSchema: {
         query: z.string().min(1),
         projectId: z.string().optional(),
         limit: optionalInt(1, 50),
-        scope: z.enum(['metadata', 'summary', 'transcript', 'all']).optional(),
         ...dateFilterSchema,
       },
     },
-    async ({ query, projectId, limit, scope = 'all', date, startDate, endDate }) => {
+    async ({ query, projectId, limit, date, startDate, endDate }) => {
       const { supabase } = getDataContext();
       const userId = getScopedUserId();
+      if (!userId) return errorResult('No user in scope for search.');
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
-      const select = scope === 'metadata' || scope === 'summary' ? NOTE_SUMMARY_SELECT : NOTE_TRANSCRIPT_SELECT;
-      let dbQuery = supabase.from('note').select(select as string).order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(200);
-      dbQuery = applyNoteAccessScope(dbQuery, userId);
-      if (projectId) dbQuery = dbQuery.contains('projects', [toIdValue(projectId)]);
-      dbQuery = applyMeetingDateFilter(dbQuery, dateFilter);
-      const { data, error } = await dbQuery;
+      // Index-backed hybrid search: keyword (pg_trgm) over note text + structured
+      // matching over note_insight, access-scoped (owner + shared) in SQL. Replaces
+      // the old fetch-200-then-filter-in-JS scan.
+      const { data, error } = await supabase.rpc('search_notes', {
+        p_user_id: userId,
+        p_query: query,
+        p_limit: resolvedLimit,
+        p_project_id: projectId ?? null,
+        p_start: dateFilter.startIso ?? null,
+        p_end: dateFilter.endIso ?? null,
+      });
       if (error) return errorResult(error.message);
-      const notes = (((data as unknown) as NoteRow[]) ?? []).filter((note) => noteMatchesQuery(note, query, scope)).slice(0, resolvedLimit);
-      return jsonResult({ query, scope, dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter), notes: notes.map(summarizeNote) });
+      const rows = (data as SearchNoteRow[] | null) ?? [];
+      return jsonResult({
+        query,
+        dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
+        notes: rows.map((row) => ({
+          noteId: row.note_id,
+          name: row.name,
+          summary: row.summary,
+          createdAt: row.created_at,
+          meetingAt: row.meeting_at,
+          score: row.score,
+          matchedPeople: row.matched_people ?? [],
+          matchedTopics: row.matched_topics ?? [],
+          matchedCompanies: row.matched_companies ?? [],
+        })),
+      });
     },
   );
 

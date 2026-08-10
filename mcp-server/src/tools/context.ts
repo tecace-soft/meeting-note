@@ -200,7 +200,7 @@ export function registerContextTools(_server: McpServer): void {
     'find_action_items',
     {
       title: 'Find Action Items',
-      description: 'Find likely action items and follow-ups from accessible meeting summaries, with source note evidence.',
+      description: 'Find action items and follow-ups from accessible meetings, with source note evidence. Uses the structured note_insight index (owner/due/status) when available, falling back to a summary-text heuristic for notes not yet indexed.',
       inputSchema: {
         projectId: z.string().optional(),
         limit: optionalInt(1, 100),
@@ -228,16 +228,45 @@ export function registerContextTools(_server: McpServer): void {
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
-
-      const items = [];
       const notes = ((data as unknown) as NoteRow[]) ?? [];
+
+      // Prefer the structured note_insight.actions (server-extracted: text/owner/
+      // due/status) over the summary-text heuristic. Fetch insight rows for the
+      // notes in scope; notes without a row yet (not backfilled) use the heuristic.
+      const noteIds = notes.map((note) => note.id).filter(Boolean);
+      const actionsByNote = new Map<string, Array<{ text?: unknown; owner?: unknown; due?: unknown; status?: unknown }>>();
+      if (noteIds.length > 0) {
+        const { data: insightRows } = await supabase.from('note_insight').select('note_id, actions').in('note_id', noteIds);
+        for (const row of (insightRows as Array<{ note_id: string; actions: unknown }> | null) ?? []) {
+          if (Array.isArray(row.actions) && row.actions.length > 0) {
+            actionsByNote.set(row.note_id, row.actions as Array<{ text?: unknown }>);
+          }
+        }
+      }
+
+      const items: Array<Record<string, unknown>> = [];
       for (const note of notes) {
-        for (const candidate of extractActionItemCandidates(note, resolvedMaxItemsPerNote)) {
-          items.push({
-            ...candidate,
-            sourceNote: summarizeNote(note),
-          });
-          if (items.length >= resolvedLimit) break;
+        const sourceNote = summarizeNote(note);
+        const structured = actionsByNote.get(note.id);
+        if (structured) {
+          for (const action of structured.slice(0, resolvedMaxItemsPerNote)) {
+            const text = typeof action.text === 'string' ? action.text.trim() : '';
+            if (!text) continue;
+            items.push({
+              text,
+              owner: typeof action.owner === 'string' && action.owner.trim() ? action.owner.trim() : null,
+              due: typeof action.due === 'string' && action.due.trim() ? action.due.trim() : null,
+              status: typeof action.status === 'string' && action.status.trim() ? action.status.trim() : 'open',
+              source: 'insight',
+              sourceNote,
+            });
+            if (items.length >= resolvedLimit) break;
+          }
+        } else {
+          for (const candidate of extractActionItemCandidates(note, resolvedMaxItemsPerNote)) {
+            items.push({ ...candidate, source: 'summary-heuristic', sourceNote });
+            if (items.length >= resolvedLimit) break;
+          }
         }
         if (items.length >= resolvedLimit) break;
       }

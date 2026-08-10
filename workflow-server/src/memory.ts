@@ -404,6 +404,62 @@ async function callJsonModel(input: {
   return null;
 }
 
+/** Upsert one note's structured index (one row per note). Returns whether it wrote. */
+async function writeNoteInsight(
+  supabase: SupabaseClient,
+  userId: string,
+  noteId: string,
+  insight: NoteInsight,
+  now: string,
+): Promise<boolean> {
+  const { error } = await supabase.from('note_insight').upsert(
+    {
+      note_id: noteId,
+      user_id: userId,
+      actions: insight.actions,
+      decisions: insight.decisions,
+      topics: insight.topics,
+      people: insight.people,
+      companies: insight.companies,
+      source_model: insight.sourceModel,
+      updated_at: now,
+    },
+    { onConflict: 'note_id' },
+  );
+  return !error;
+}
+
+function resolveModels(model: string | undefined, fallbackModels: string[] | undefined): string[] {
+  const primary = (model ?? DEFAULT_MEMORY_MODEL).trim() || DEFAULT_MEMORY_MODEL;
+  return [primary, ...(fallbackModels ?? DEFAULT_MEMORY_FALLBACK_MODELS)].filter((m, i, all) => m && all.indexOf(m) === i);
+}
+
+/**
+ * Insight-only extraction (no memory fold). Used by the backfill path to populate
+ * note_insight for existing notes without touching anyone's personal memory.
+ */
+export async function extractAndStoreInsight(input: {
+  supabase: SupabaseClient;
+  apiKey: string;
+  model?: string;
+  fallbackModels?: string[];
+  userId: string;
+  noteId: string;
+  transcript: string;
+}): Promise<boolean> {
+  const transcript = input.transcript.trim();
+  if (!input.userId || !input.noteId || !transcript) return false;
+  const out = await callJsonModel({
+    apiKey: input.apiKey,
+    models: resolveModels(input.model, input.fallbackModels),
+    systemPrompt: INSIGHT_SYSTEM_PROMPT,
+    userPrompt: buildInsightUserPrompt(transcript, input.noteId),
+  });
+  const insight = out ? parseInsight(out.text, out.model) : null;
+  if (!insight) return false;
+  return writeNoteInsight(input.supabase, input.userId, input.noteId, insight, new Date().toISOString());
+}
+
 export interface FoldNoteResult {
   memoryItemCount: number;
   insightWritten: boolean;
@@ -430,9 +486,7 @@ export async function foldNoteIntoMemory(input: {
   const transcript = input.transcript.trim();
   if (!userId || !noteId || !transcript) return { memoryItemCount: 0, insightWritten: false, skipped: true };
 
-  const primary = (input.model ?? DEFAULT_MEMORY_MODEL).trim() || DEFAULT_MEMORY_MODEL;
-  const models = [primary, ...(input.fallbackModels ?? DEFAULT_MEMORY_FALLBACK_MODELS)]
-    .filter((m, i, all) => m && all.indexOf(m) === i);
+  const models = resolveModels(input.model, input.fallbackModels);
 
   const { data: row } = await supabase
     .from('user_memory')
@@ -481,25 +535,8 @@ export async function foldNoteIntoMemory(input: {
   }
 
   // Insight (F4): one row per note, best-effort. Written even if memory failed.
-  let insightWritten = false;
   const insight = insightOut ? parseInsight(insightOut.text, insightOut.model) : null;
-  if (insight) {
-    const { error } = await supabase.from('note_insight').upsert(
-      {
-        note_id: noteId,
-        user_id: userId,
-        actions: insight.actions,
-        decisions: insight.decisions,
-        topics: insight.topics,
-        people: insight.people,
-        companies: insight.companies,
-        source_model: insight.sourceModel,
-        updated_at: now,
-      },
-      { onConflict: 'note_id' },
-    );
-    insightWritten = !error;
-  }
+  const insightWritten = insight ? await writeNoteInsight(supabase, userId, noteId, insight, now) : false;
 
   return { memoryItemCount, insightWritten, skipped: !memoryProcessed && !insightWritten };
 }
