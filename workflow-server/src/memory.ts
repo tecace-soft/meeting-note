@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { callGemini } from './gemini.js';
+import { callGemini, GeminiApiError } from './gemini.js';
 
 // Bounds to keep prompt/cost sane and the base from growing without limit.
 const MAX_TRANSCRIPT_CHARS = 24000;
@@ -378,7 +378,16 @@ MEETING transcript:
 ${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
 }
 
-/** Call Gemini for a JSON extraction, trying fallback models on transient failure. Returns text + the model used. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Call Gemini for a JSON extraction. Retries transient failures (429/5xx) up to 3
+ * times per model with backoff, then falls through to the next fallback model. This
+ * resilience matters for backfill, where transient rate limits would otherwise show
+ * up as a high "failed" count. Returns text + the model used, or null if all fail.
+ */
 async function callJsonModel(input: {
   apiKey: string;
   models: string[];
@@ -386,19 +395,23 @@ async function callJsonModel(input: {
   userPrompt: string;
 }): Promise<{ text: string; model: string } | null> {
   for (const model of input.models) {
-    try {
-      const result = await callGemini({
-        apiKey: input.apiKey,
-        model,
-        parts: [{ text: `${input.systemPrompt}\n\n${input.userPrompt}` }],
-        responseMimeType: 'application/json',
-        maxOutputTokens: 8192,
-        temperature: 0.1,
-        thinkingBudget: 0,
-      });
-      return { text: result.text, model };
-    } catch {
-      // Try the next fallback model. All models failing yields null (best-effort).
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const result = await callGemini({
+          apiKey: input.apiKey,
+          model,
+          parts: [{ text: `${input.systemPrompt}\n\n${input.userPrompt}` }],
+          responseMimeType: 'application/json',
+          maxOutputTokens: 8192,
+          temperature: 0.1,
+          thinkingBudget: 0,
+        });
+        return { text: result.text, model };
+      } catch (error) {
+        const retryable = error instanceof GeminiApiError && error.retryable;
+        if (!retryable || attempt === 3) break; // non-retryable or exhausted → next model
+        await sleep(600 * attempt + Math.floor(Math.random() * 300));
+      }
     }
   }
   return null;
