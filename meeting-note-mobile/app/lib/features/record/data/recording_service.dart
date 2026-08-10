@@ -127,6 +127,22 @@ class RecoverableRecordingSession {
       );
 }
 
+/// Why [RecordingNotifier.start] did or did not begin recording.
+///
+/// The two failures need different fixes from the user, so they are reported
+/// separately instead of collapsing into a single `false`.
+enum RecordStartResult {
+  started,
+
+  /// The OS denied microphone access.
+  permissionDenied,
+
+  /// Permission was granted but the audio engine never engaged — typically the
+  /// audio session could not be activated (another app holds the microphone,
+  /// or an interruption is in progress).
+  engineFailed,
+}
+
 final recordingProvider =
     NotifierProvider<RecordingNotifier, RecordingState>(RecordingNotifier.new);
 
@@ -171,8 +187,10 @@ class RecordingNotifier extends Notifier<RecordingState> {
     }
   }
 
-  Future<bool> start() async {
-    if (!await _recorder.hasPermission()) return false;
+  Future<RecordStartResult> start() async {
+    if (!await _recorder.hasPermission()) {
+      return RecordStartResult.permissionDenied;
+    }
     _stoppingAtLimit = false;
 
     final dir = await getApplicationDocumentsDirectory();
@@ -205,7 +223,7 @@ class RecordingNotifier extends Notifier<RecordingState> {
         loadingRecovery: false,
       );
       _startTicker();
-      return true;
+      return RecordStartResult.started;
     }
 
     // record_ios answers `true` for opus, but it maps opus to kAudioFormatOpus
@@ -248,6 +266,26 @@ class RecordingNotifier extends Notifier<RecordingState> {
       path: path,
     );
 
+    // record_ios throws away AVAudioRecorder.record()'s Bool result, so a
+    // failed start is still reported as success. What is left behind is a
+    // header-only ~28 byte .m4a (prepareToRecord writes the ftyp box; no audio
+    // ever follows). Without this check the UI runs its timer for the whole
+    // meeting and the loss only surfaces at upload time as "Audio file is
+    // empty." Confirm the recorder actually engaged before claiming success.
+    // Re-checked once before giving up: a real failure is permanent, so the
+    // retry only costs 150ms in the failing case, while making it very unlikely
+    // that a slow-to-report engine is mistaken for a broken one and healthy
+    // recordings get refused.
+    if (!await _recorder.isRecording()) {
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      if (!await _recorder.isRecording()) {
+        await _recorder.stop();
+        await clearRecoverableSession(deleteFile: true);
+        state = const RecordingState(loadingRecovery: false);
+        return RecordStartResult.engineFailed;
+      }
+    }
+
     state = RecordingState(
       state: RecordState.recording,
       filePath: path,
@@ -262,7 +300,7 @@ class RecordingNotifier extends Notifier<RecordingState> {
       final level = ((a.current + 45) / 45).clamp(0.0, 1.0);
       state = state.copyWith(amplitude: level);
     });
-    return true;
+    return RecordStartResult.started;
   }
 
   Future<void> pause() async {

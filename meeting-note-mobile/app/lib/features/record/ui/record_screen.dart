@@ -146,11 +146,16 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   ) async {
     if (state == RecordState.idle) {
       _capturedAttachmentPaths.clear();
-      final ok = await notifier.start();
-      if (!ok && context.mounted) {
+      final result = await notifier.start();
+      if (result != RecordStartResult.started && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Microphone permission is required. Enable it in Settings.'),
+          SnackBar(
+            content: Text(
+              result == RecordStartResult.permissionDenied
+                  ? 'Microphone permission is required. Enable it in Settings.'
+                  : 'Could not start recording. Close any app using the '
+                      'microphone (call, voice memo) and try again.',
+            ),
           ),
         );
       }
