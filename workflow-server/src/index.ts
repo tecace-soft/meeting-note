@@ -2495,9 +2495,16 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
 // fold). Admin-gated and batched — call repeatedly until `processed` is 0. Each
 // call pulls a batch of notes still lacking a note_insight row (server-side filter
 // via notes_needing_insight) and extracts one row each.
+// Admins allowed to run maintenance backfills (validated via the Microsoft Graph
+// token, same as the other workflow-server endpoints).
+const INSIGHT_BACKFILL_ADMIN_IDS = new Set<string>([
+  '31d79bfe-2488-47c2-aa45-949375e93bde', // Andrew (andrewyoo@tecace.com)
+  TRANSCRIPTION_MODEL_TEST_USER_ID,
+]);
+
 async function backfillInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
-  if (tokenUserId !== TRANSCRIPTION_MODEL_TEST_USER_ID) {
+  if (!tokenUserId || !INSIGHT_BACKFILL_ADMIN_IDS.has(tokenUserId)) {
     sendJson(res, 403, { error: 'Insight backfill is not available for this user.' });
     return;
   }
