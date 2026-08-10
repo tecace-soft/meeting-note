@@ -14,7 +14,7 @@ class RecordingState {
   const RecordingState({
     this.state = RecordState.idle,
     this.elapsed = Duration.zero,
-    this.amplitude = 0,
+    this.amplitudeHistory = const <double>[],
     this.filePath,
     this.recoverableSession,
     this.loadingRecovery = true,
@@ -25,7 +25,10 @@ class RecordingState {
 
   final RecordState state;
   final Duration elapsed;
-  final double amplitude; // 0..1 for waveform UI
+  /// Most recent normalised levels (0..1), oldest first, capped at
+  /// [RecordingNotifier.waveformBarCount]. The waveform draws one bar per
+  /// entry, so it scrolls right-to-left instead of scaling a fixed shape.
+  final List<double> amplitudeHistory;
   final String? filePath;
   final RecoverableRecordingSession? recoverableSession;
   final bool loadingRecovery;
@@ -45,7 +48,7 @@ class RecordingState {
   RecordingState copyWith({
     RecordState? state,
     Duration? elapsed,
-    double? amplitude,
+    List<double>? amplitudeHistory,
     String? filePath,
     RecoverableRecordingSession? recoverableSession,
     bool clearRecoverableSession = false,
@@ -58,7 +61,7 @@ class RecordingState {
       RecordingState(
         state: state ?? this.state,
         elapsed: elapsed ?? this.elapsed,
-        amplitude: amplitude ?? this.amplitude,
+        amplitudeHistory: amplitudeHistory ?? this.amplitudeHistory,
         filePath: filePath ?? this.filePath,
         recoverableSession: clearRecoverableSession
             ? null
@@ -167,6 +170,18 @@ class RecordingNotifier extends Notifier<RecordingState> {
   // An m4a that only holds its `ftyp` box is 28 bytes. Anything at or below
   // this means the encoder never wrote audio.
   static const _headerOnlyBytes = 64;
+  /// Number of bars the waveform draws, and so how many levels to keep.
+  static const waveformBarCount = 18;
+  /// dBFS window the bars are drawn across. `record` reports averagePower on
+  /// iOS, which for meeting speech sits roughly between -45 (room tone) and
+  /// -15 (someone talking near the phone). Mapping the full -60..0 range
+  /// instead left every bar bunched in the middle with barely visible motion,
+  /// so the window is clamped to the part speech actually uses. The floor also
+  /// sets how flat the bars go in a quiet room: anything at or below it maps
+  /// to zero, so room tone rests at the minimum bar height instead of
+  /// hovering.
+  static const _amplitudeFloorDb = -45.0;
+  static const _amplitudeCeilDb = -15.0;
   static const _nativeRecorder =
       MethodChannel('meeting_note_mobile/foreground_recorder');
 
@@ -311,12 +326,13 @@ class RecordingNotifier extends Notifier<RecordingState> {
       loadingRecovery: false,
     );
     _startTicker();
+    // 100ms keeps the bars moving with speech; 200ms read as a slideshow.
     _ampSub = _recorder
-        .onAmplitudeChanged(const Duration(milliseconds: 200))
+        .onAmplitudeChanged(const Duration(milliseconds: 100))
         .listen((a) {
-      // dBFS (-45..0) → 0..1
-      final level = ((a.current + 45) / 45).clamp(0.0, 1.0);
-      state = state.copyWith(amplitude: level);
+      state = state.copyWith(
+        amplitudeHistory: _pushAmplitude(state.amplitudeHistory, a.current),
+      );
     });
     unawaited(_watchForCapture(path, sessionId));
     return RecordStartResult.started;
@@ -458,6 +474,32 @@ class RecordingNotifier extends Notifier<RecordingState> {
   /// handled twice.
   void clearAutoStoppedFlag() {
     state = state.copyWith(clearAutoStopped: true);
+  }
+
+  /// Appends one amplitude reading, keeping only the newest
+  /// [waveformBarCount] entries.
+  ///
+  /// `current` is dBFS (0 = full scale, -160 = silence), mapped across
+  /// [_amplitudeFloorDb]..[_amplitudeCeilDb] and then shaped by a smootherstep
+  /// curve.
+  ///
+  /// The curve is there for the middle of the range. Straight linear mapping
+  /// left the quiet floor and the loud peaks reading well, but everything
+  /// between roughly 30% and 80% — which is where normal conversation sits —
+  /// rose to a similar height regardless of how loud the speaker actually was.
+  /// Smootherstep keeps both endpoints exactly where they are (so the flat
+  /// quiet baseline and the full-height peaks are unchanged) while nearly
+  /// doubling the slope through the middle, so a louder voice visibly
+  /// out-climbs a softer one.
+  static List<double> _pushAmplitude(List<double> history, double dbfs) {
+    const span = _amplitudeCeilDb - _amplitudeFloorDb;
+    final t = ((dbfs - _amplitudeFloorDb) / span).clamp(0.0, 1.0);
+    final shaped = t * t * t * (t * (t * 6 - 15) + 10);
+    final next = <double>[...history, shaped];
+    if (next.length > waveformBarCount) {
+      next.removeRange(0, next.length - waveformBarCount);
+    }
+    return next;
   }
 
   void clearCaptureFailedFlag() {

@@ -75,7 +75,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
       return _ActiveRecordingScreen(
         state: rec.state,
         elapsed: rec.elapsed,
-        amplitude: rec.amplitude,
+        amplitudeHistory: rec.amplitudeHistory,
         limitWarning: rec.limitWarning,
         onPauseResume: () => _handleRecordTap(context, notifier, rec.state),
         attachmentCount: _capturedAttachmentPaths.length,
@@ -354,7 +354,7 @@ class _ActiveRecordingScreen extends StatelessWidget {
   const _ActiveRecordingScreen({
     required this.state,
     required this.elapsed,
-    required this.amplitude,
+    required this.amplitudeHistory,
     required this.limitWarning,
     required this.onPauseResume,
     required this.onCamera,
@@ -364,7 +364,7 @@ class _ActiveRecordingScreen extends StatelessWidget {
 
   final RecordState state;
   final Duration elapsed;
-  final double amplitude;
+  final List<double> amplitudeHistory;
   final bool limitWarning;
   final VoidCallback onPauseResume;
   final VoidCallback onCamera;
@@ -475,7 +475,7 @@ class _ActiveRecordingScreen extends StatelessWidget {
                   ],
                   const SizedBox(height: 52),
                   _WaveformBars(
-                    level: amplitude,
+                    levels: amplitudeHistory,
                     active: state == RecordState.recording,
                   ),
                   const Spacer(flex: 7),
@@ -1055,23 +1055,29 @@ class _RecordingTimer extends StatelessWidget {
   }
 }
 
+/// One bar per recent amplitude reading, oldest on the left, so the shape
+/// scrolls with the audio instead of scaling a fixed pattern.
 class _WaveformBars extends StatelessWidget {
-  const _WaveformBars({required this.level, required this.active});
+  const _WaveformBars({required this.levels, required this.active});
 
-  final double level;
+  final List<double> levels;
   final bool active;
 
   @override
   Widget build(BuildContext context) {
+    const barCount = RecordingNotifier.waveformBarCount;
+    // Before enough samples exist the row fills from the right, so a new
+    // recording grows into the bars instead of starting mid-shape.
+    final offset = barCount - levels.length;
     return SizedBox(
       height: 48,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(18, (i) {
-          final t = (i % 5 + 1) / 5;
-          final h = active ? (10 + 34 * level * t) : 12.0;
+        children: List.generate(barCount, (i) {
+          final level = i < offset ? 0.0 : levels[i - offset];
+          final h = active ? (3 + 45 * level) : 12.0;
           return AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
+            duration: const Duration(milliseconds: 120),
             margin: const EdgeInsets.symmetric(horizontal: 2.5),
             width: 4,
             height: h,
