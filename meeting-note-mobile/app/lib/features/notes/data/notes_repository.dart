@@ -487,7 +487,7 @@ class NotesRepository {
     final fileName = _fileName(localAudioPath, fallback: '$title.m4a');
     if (_isMpeg4Audio(fileName) && !await _hasFinalizedMp4Metadata(file)) {
       throw StateError(
-        'This recovered recording was interrupted before Android finalized the audio file. Please discard it and record again.',
+        'This recovered recording was interrupted before the device finalized the audio file. Please discard it and record again.',
       );
     }
     final storagePath = '$fileId-${_sanitizeStorageFileName(fileName)}';

@@ -208,7 +208,14 @@ class RecordingNotifier extends Notifier<RecordingState> {
       return true;
     }
 
-    final useOpus = await _recorder.isEncoderSupported(AudioEncoder.opus);
+    // record_ios answers `true` for opus, but it maps opus to kAudioFormatOpus
+    // on AVAudioRecorder, which picks the container from the file extension —
+    // and CoreAudio has no OGG container. The recorder then writes nothing and
+    // leaves a 0-byte .ogg behind, which only surfaces later as "Audio file is
+    // empty." at upload time. iOS therefore always takes the AAC/m4a path.
+    final useOpus = Platform.isIOS
+        ? false
+        : await _recorder.isEncoderSupported(AudioEncoder.opus);
     final encoder = useOpus ? AudioEncoder.opus : AudioEncoder.aacLc;
     final extension = useOpus ? 'ogg' : 'm4a';
     final mimeType = useOpus ? 'audio/ogg' : _mimeType;
@@ -232,8 +239,8 @@ class RecordingNotifier extends Notifier<RecordingState> {
         // 64 kbps mono / 16 kHz: speech-optimal, matches the web recorder for
         // consistent fidelity and gives AssemblyAI more headroom (AAC/Safari,
         // noisy rooms). A 2-hour meeting is ~58 MB, well under the 200 MB cap,
-        // and the 2-hour auto-stop bounds it. Applies to the AAC fallback too
-        // (iOS has no Opus encoder).
+        // and the 2-hour auto-stop bounds it. Applies to the AAC path too,
+        // which is the only path on iOS (see the encoder note above).
         bitRate: 64000,
         sampleRate: 16000,
         numChannels: 1,
