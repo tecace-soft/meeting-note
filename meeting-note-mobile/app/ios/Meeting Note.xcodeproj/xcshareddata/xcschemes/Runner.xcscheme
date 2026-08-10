@@ -114,6 +114,7 @@
    </AnalyzeAction>
    <ArchiveAction
       buildConfiguration = "Release"
+      customArchiveName = "Meeting Note"
       revealArchiveInOrganizer = "YES">
    </ArchiveAction>
 </Scheme>
