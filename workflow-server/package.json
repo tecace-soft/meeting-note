@@ -7,7 +7,10 @@
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/**/*.test.ts",
+    "eval": "tsx eval/run.ts",
+    "eval:stability": "tsx eval/stability.ts",
+    "typecheck:eval": "tsc -p eval/tsconfig.json"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",

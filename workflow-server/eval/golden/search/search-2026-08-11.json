@@ -1,0 +1,24 @@
+{
+  "name": "2026-08-11-queries",
+  "userId": "31d79bfe-2488-47c2-aa45-949375e93bde",
+  "queries": [
+    {
+      "query": "인덱싱",
+      "expectedNoteIds": [
+        "718ba3ad-4beb-4fd4-8452-176d85b18210"
+      ]
+    },
+    {
+      "query": "평가",
+      "expectedNoteIds": [
+        "718ba3ad-4beb-4fd4-8452-176d85b18210"
+      ]
+    },
+    {
+      "query": "버전 관리 자동화",
+      "expectedNoteIds": [
+        "718ba3ad-4beb-4fd4-8452-176d85b18210"
+      ]
+    }
+  ]
+}

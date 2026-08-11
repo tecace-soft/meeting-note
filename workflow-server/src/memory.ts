@@ -39,7 +39,7 @@ const DEFAULT_MEMORY_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash-li
 
 type ItemStatus = 'active' | 'archived';
 
-interface MemoryItem {
+export interface MemoryItem {
   id: string;
   text: string;
   entities: string[];
@@ -49,23 +49,23 @@ interface MemoryItem {
   sourceNoteIds: string[];
 }
 
-type Op =
+export type Op =
   | { op: 'add'; text: string; entities: string[] }
   | { op: 'update'; id: string; text: string; entities: string[] }
   | { op: 'supersede'; id: string; text: string; entities: string[] }
   | { op: 'archive'; id: string };
 
-interface InsightAction {
+export interface InsightAction {
   text: string;
   owner: string;
   due: string;
   status: string;
 }
-interface InsightDecision {
+export interface InsightDecision {
   text: string;
   rationale: string;
 }
-interface NoteInsight {
+export interface NoteInsight {
   actions: InsightAction[];
   decisions: InsightDecision[];
   topics: string[];
@@ -457,6 +457,33 @@ function resolveModels(model: string | undefined, fallbackModels: string[] | und
 }
 
 /**
+ * Pure insight extraction: one Gemini call + parse, NO DB write. This is the exact
+ * producer both the store path (extractAndStoreInsight / foldNoteIntoMemory) and the
+ * F8 eval harness run, so the eval measures the real logic, not a copy. Returns the
+ * parsed insight or an error reason.
+ */
+export async function extractInsight(input: {
+  apiKey: string;
+  model?: string;
+  fallbackModels?: string[];
+  transcript: string;
+  noteId?: string | null;
+}): Promise<{ insight: NoteInsight } | { error: string }> {
+  const transcript = input.transcript.trim();
+  if (!transcript) return { error: 'empty transcript' };
+  const out = await callJsonModel({
+    apiKey: input.apiKey,
+    models: resolveModels(input.model, input.fallbackModels),
+    systemPrompt: INSIGHT_SYSTEM_PROMPT,
+    userPrompt: buildInsightUserPrompt(transcript, input.noteId ?? null),
+  });
+  if (!('text' in out)) return { error: `gemini: ${out.error.slice(0, 240)}` };
+  const insight = parseInsight(out.text, out.model);
+  if (!insight) return { error: `unparseable len=${out.text.length} tail=<<${out.text.slice(-180)}>>` };
+  return { insight };
+}
+
+/**
  * Insight-only extraction (no memory fold). Used by the backfill path to populate
  * note_insight for existing notes without touching anyone's personal memory.
  */
@@ -469,19 +496,64 @@ export async function extractAndStoreInsight(input: {
   noteId: string;
   transcript: string;
 }): Promise<{ ok: boolean; reason?: string }> {
+  if (!input.userId || !input.noteId || !input.transcript.trim()) return { ok: false, reason: 'empty transcript' };
+  const res = await extractInsight({
+    apiKey: input.apiKey,
+    model: input.model,
+    fallbackModels: input.fallbackModels,
+    transcript: input.transcript,
+    noteId: input.noteId,
+  });
+  if ('error' in res) return { ok: false, reason: res.error };
+  const wrote = await writeNoteInsight(input.supabase, input.userId, input.noteId, res.insight, new Date().toISOString());
+  return wrote ? { ok: true } : { ok: false, reason: 'db upsert failed' };
+}
+
+export interface MemoryFoldComputation {
+  priorActiveCount: number;
+  ops: Op[];
+  items: MemoryItem[];
+}
+
+/**
+ * Pure memory fold: given the prior memory (v2 items, v1 buckets, or empty) and one
+ * transcript, run the memory model and apply its ops deterministically. NO DB read or
+ * write. Shared by foldNoteIntoMemory and the F8 eval so both fold identically. `now`
+ * is injectable so eval runs are deterministic (Power-of-Ten rule 9).
+ */
+export async function computeMemoryFold(input: {
+  apiKey: string;
+  model?: string;
+  fallbackModels?: string[];
+  priorMemory: unknown;
+  transcript: string;
+  selfName: string | null;
+  noteId?: string | null;
+  now?: string;
+}): Promise<MemoryFoldComputation | { error: string }> {
   const transcript = input.transcript.trim();
-  if (!input.userId || !input.noteId || !transcript) return { ok: false, reason: 'empty transcript' };
+  if (!transcript) return { error: 'empty transcript' };
+  const now = input.now ?? new Date().toISOString();
+  const noteId = input.noteId ?? null;
+  const startingItems = toStartingItems(input.priorMemory ?? { version: 2, items: [] }, input.selfName, now);
+
+  const activeForPrompt = startingItems
+    .filter((i) => i.status === 'active')
+    .map((i) => ({ id: i.id, text: i.text, entities: i.entities }));
+  let itemsJson = JSON.stringify(activeForPrompt);
+  if (itemsJson.length > MAX_MEMORY_CHARS) itemsJson = itemsJson.slice(0, MAX_MEMORY_CHARS);
+
   const out = await callJsonModel({
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
-    systemPrompt: INSIGHT_SYSTEM_PROMPT,
-    userPrompt: buildInsightUserPrompt(transcript, input.noteId),
+    systemPrompt: MEMORY_SYSTEM_PROMPT,
+    userPrompt: buildMemoryUserPrompt(itemsJson, transcript, input.selfName, noteId),
   });
-  if (!('text' in out)) return { ok: false, reason: `gemini: ${out.error.slice(0, 240)}` };
-  const insight = parseInsight(out.text, out.model);
-  if (!insight) return { ok: false, reason: `unparseable len=${out.text.length} tail=<<${out.text.slice(-180)}>>` };
-  const wrote = await writeNoteInsight(input.supabase, input.userId, input.noteId, insight, new Date().toISOString());
-  return wrote ? { ok: true } : { ok: false, reason: 'db upsert failed' };
+  if (!('text' in out)) return { error: `gemini: ${out.error.slice(0, 240)}` };
+  const ops = parseOps(out.text);
+  if (ops === null) return { error: `unparseable ops len=${out.text.length}` };
+  const items = enforceCaps(applyOps(startingItems, ops, noteId, now));
+  return { priorActiveCount: activeForPrompt.length, ops, items };
 }
 
 export interface FoldNoteResult {
@@ -510,8 +582,6 @@ export async function foldNoteIntoMemory(input: {
   const transcript = input.transcript.trim();
   if (!userId || !noteId || !transcript) return { memoryItemCount: 0, insightWritten: false, skipped: true };
 
-  const models = resolveModels(input.model, input.fallbackModels);
-
   const { data: row } = await supabase
     .from('user_memory')
     .select('memory, processed_note_ids')
@@ -525,42 +595,31 @@ export async function foldNoteIntoMemory(input: {
   const now = new Date().toISOString();
   const selfName = input.selfName ?? null;
   const existingMemory = (row as { memory?: unknown } | null)?.memory ?? { version: 2, items: [] };
-  const startingItems = toStartingItems(existingMemory, selfName, now);
 
-  const activeForPrompt = startingItems
-    .filter((i) => i.status === 'active')
-    .map((i) => ({ id: i.id, text: i.text, entities: i.entities }));
-  let itemsJson = JSON.stringify(activeForPrompt);
-  if (itemsJson.length > MAX_MEMORY_CHARS) itemsJson = itemsJson.slice(0, MAX_MEMORY_CHARS);
-
-  // Two focused calls, concurrently: memory ops + note_insight extraction.
-  const [memoryOut, insightOut] = await Promise.all([
-    callJsonModel({ apiKey, models, systemPrompt: MEMORY_SYSTEM_PROMPT, userPrompt: buildMemoryUserPrompt(itemsJson, transcript, selfName, noteId) }),
-    callJsonModel({ apiKey, models, systemPrompt: INSIGHT_SYSTEM_PROMPT, userPrompt: buildInsightUserPrompt(transcript, noteId) }),
+  // Two focused producers, concurrently: memory fold + note_insight extraction.
+  // These are the exact pure functions the F8 eval harness measures.
+  const [memoryRes, insightRes] = await Promise.all([
+    computeMemoryFold({ apiKey, model: input.model, fallbackModels: input.fallbackModels, priorMemory: existingMemory, transcript, selfName, noteId, now }),
+    extractInsight({ apiKey, model: input.model, fallbackModels: input.fallbackModels, transcript, noteId }),
   ]);
 
-  // Memory: only write when we parsed valid ops. A model failure leaves memory
+  // Memory: only write when the fold produced valid ops. A model failure leaves memory
   // untouched AND does not mark the note processed, so a later run can retry.
   let memoryItemCount = 0;
   let memoryProcessed = false;
-  if ('text' in memoryOut) {
-    const ops = parseOps(memoryOut.text);
-    if (ops !== null) {
-      const items = enforceCaps(applyOps(startingItems, ops, noteId, now));
-      const nextProcessed = [...processedNoteIds, noteId].slice(-PROCESSED_CAP);
-      const { error } = await supabase
-        .from('user_memory')
-        .upsert({ user_id: userId, memory: { version: 2, items }, processed_note_ids: nextProcessed, updated_at: now }, { onConflict: 'user_id' });
-      if (!error) {
-        memoryItemCount = items.length;
-        memoryProcessed = true;
-      }
+  if (!('error' in memoryRes)) {
+    const nextProcessed = [...processedNoteIds, noteId].slice(-PROCESSED_CAP);
+    const { error } = await supabase
+      .from('user_memory')
+      .upsert({ user_id: userId, memory: { version: 2, items: memoryRes.items }, processed_note_ids: nextProcessed, updated_at: now }, { onConflict: 'user_id' });
+    if (!error) {
+      memoryItemCount = memoryRes.items.length;
+      memoryProcessed = true;
     }
   }
 
   // Insight (F4): one row per note, best-effort. Written even if memory failed.
-  const insight = 'text' in insightOut ? parseInsight(insightOut.text, insightOut.model) : null;
-  const insightWritten = insight ? await writeNoteInsight(supabase, userId, noteId, insight, now) : false;
+  const insightWritten = 'insight' in insightRes ? await writeNoteInsight(supabase, userId, noteId, insightRes.insight, now) : false;
 
   return { memoryItemCount, insightWritten, skipped: !memoryProcessed && !insightWritten };
 }

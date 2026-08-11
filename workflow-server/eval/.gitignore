@@ -1,0 +1,2 @@
+# Eval run artifacts (snapshots) are local; the harness + golden set are the committed assets.
+results/
