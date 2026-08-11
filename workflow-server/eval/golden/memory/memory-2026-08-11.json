@@ -35,6 +35,70 @@
           "upload limit",
           "Supabase"
         ]
+      },
+      {
+        "id": "p5",
+        "text": "Recording is capped at 2 hours and the audio bitrate was raised to 64kbps (it had been lowered earlier to fit a 50MB/2-hour budget, no longer a hard constraint after the Supabase Pro upgrade).",
+        "entities": [
+          "recording limit",
+          "audio bitrate"
+        ]
+      },
+      {
+        "id": "p6",
+        "text": "Speaker diarization should move from pure voice-pattern matching to context-based identification using accumulated per-person memory, with an alpha/beta targeted for next Wednesday.",
+        "entities": [
+          "diarization",
+          "speaker ID"
+        ]
+      },
+      {
+        "id": "p7",
+        "text": "The user-profile ontology (built by Jin) should auto-update as memory accumulates so a person's role and relationships get clearer over time, instead of being redefined per meeting.",
+        "entities": [
+          "ontology",
+          "Jin"
+        ]
+      },
+      {
+        "id": "p8",
+        "text": "Meeting memory belongs to the user (not the note) and accumulates chronologically per user, so it builds into a per-person knowledge base.",
+        "entities": [
+          "memory",
+          "knowledge base"
+        ]
+      },
+      {
+        "id": "p9",
+        "text": "The app package is being renamed from com.example.* to com.tecace.* to enable Azure MS Authentication; the source rename is waiting on the Korea developer.",
+        "entities": [
+          "package rename",
+          "Azure"
+        ]
+      },
+      {
+        "id": "p10",
+        "text": "The MCP server had a critical fail-open auth hole and a transcript-flag bug; both were fixed and verified in prod.",
+        "entities": [
+          "MCP",
+          "auth"
+        ]
+      },
+      {
+        "id": "p11",
+        "text": "iOS release goes through TGX's account; each build lasts about a week and currently needs a manual rebuild and reinstall.",
+        "entities": [
+          "iOS",
+          "TGX"
+        ]
+      },
+      {
+        "id": "p12",
+        "text": "The admin/monitoring dashboard is a separate Vercel site; the user's account lacks permission and it sits on someone's personal account, needing an org transfer.",
+        "entities": [
+          "admin dashboard",
+          "Vercel"
+        ]
       }
     ]
   },

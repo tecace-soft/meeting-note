@@ -318,15 +318,20 @@ STYLE:
   Bad: "Memory feature development.", "50MB limit.", "Admin dashboard: no permission."
 - Do NOT split one subject across several items (one storage-limit topic → ONE memory, not four). Do NOT emit a roadmap/summary item that just restates other items.
 
+HOW TO FOLD (follow this order — it is what prevents duplicate build-up):
+1. FIRST walk the EXISTING items one by one. For each, ask: does this meeting add detail to it, change it, or resolve/contradict it? If yes, emit an "update" (enrich in place) or "supersede" (replace stale/contradicted) on THAT id — reuse the id EXACTLY. Most meetings mostly CONTINUE existing threads, so expect more update/supersede than add.
+2. THEN "add" a new memory ONLY for a subject that NO existing item already covers.
+3. It is a DEFECT to "add" an item whose subject / project / person / entities already match an existing item — that creates a duplicate. When a subject already exists, you MUST update/supersede its id instead. When unsure whether something is new, treat it as an update to the closest existing item.
+
 OPERATIONS (emit an ordered JSON array; the server applies them in order):
-- {"op":"add","text":"...","entities":["..."]}                 add a new memory
-- {"op":"update","id":"...","text":"...","entities":["..."]}   refine/enrich an existing memory in place
+- {"op":"update","id":"...","text":"...","entities":["..."]}   PREFER THIS: refine/enrich an existing memory in place
 - {"op":"supersede","id":"...","text":"...","entities":["..."]} replace a stale or contradicted memory with corrected info
+- {"op":"add","text":"...","entities":["..."]}                 add a memory for a genuinely NEW subject only
 - {"op":"archive","id":"..."}                                  the memory is no longer relevant
 
 DEDUP (critical — the memory must not accumulate duplicates):
-- Before you "add", scan the EXISTING items for one about the same subject, project, person, decision, or problem. If one exists, "update" or "supersede" THAT id to fold in the new detail — do NOT add a parallel item.
-- Merge related facts into a single richer memory rather than listing them separately.
+- ONE subject = ONE memory item. Fold every related sub-fact about a subject into that single item via update; never emit sibling items for the same subject (e.g. "an index layer is needed", "backfilling long notes is hard", "search filtering exists" are all the SAME subject → update ONE item, do not add three).
+- FOCUS each item on ITS OWN subject. Update an item ONLY when the meeting genuinely changes or adds detail to THAT specific subject. Do NOT touch items the meeting does not actually discuss, and NEVER append a generic cross-cutting clause (e.g. "the focus is now on X", "this relates to the broader effort") to several items — that smears unrelated memories together and makes them look duplicate.
 - Supersede when the new meeting resolves or contradicts an existing memory (e.g. "the 50MB upload limit is under investigation" becomes "the 50MB limit was a Supabase free-tier cap, fixed by upgrading to Supabase Pro; the cap is now 200MB").
 
 BOUNDS:
@@ -338,10 +343,10 @@ GROUNDING:
 - Never fabricate names, decisions, or facts not supported by the transcript or existing memory. When unsure, say nothing.
 - entities: a few short tags (people / projects / topics) named in the item, to seed a future relationship graph.
 - Use ids EXACTLY as given for update/supersede/archive. Never invent an id.
-- If nothing durable is worth changing, return an empty ops array.
+- A content-rich meeting almost ALWAYS yields several ops (updates to existing threads + adds for genuinely new subjects). Return an empty ops array ONLY when the meeting has no durable content at all (pure logistics / small talk). Do not go empty just to avoid duplicates — fold via update instead.
 
-Return ONLY JSON of this exact shape (no prose, no markdown):
-{"ops":[{"op":"add","text":"","entities":[""]}]}`;
+Return ONLY JSON of this exact shape (no prose, no markdown; update/supersede reuse an existing id, add has no id):
+{"ops":[{"op":"update","id":"","text":"","entities":[""]},{"op":"add","text":"","entities":[""]}]}`;
 
 const INSIGHT_SYSTEM_PROMPT = `You extract a STRUCTURED INDEX of ONE meeting, for later search and filtering. Scope is THIS meeting only — capture what THIS transcript contains, not cross-meeting understanding.
 

@@ -39,6 +39,11 @@ async function main(): Promise<void> {
   const insightFails: string[] = [];
   const memoryFails: string[] = [];
   const memoryOps: number[] = [];
+  // Aggregate ops mix across runs — fold-share (update+supersede vs add) is the
+  // deterministic before/after signal for the F1' supersede work (no judge needed).
+  let totAdd = 0;
+  let totFold = 0; // update + supersede
+  let totArchive = 0;
 
   process.stdout.write(`\n=== F8 stability probe (N=${N}, model=gemini-2.5-flash-lite) ===\n`);
   for (let i = 1; i <= N; i += 1) {
@@ -50,18 +55,29 @@ async function main(): Promise<void> {
       insightFails.push(ins.error);
     }
     const mem = await computeMemoryFold({ apiKey, priorMemory: memory.priorMemory, transcript: memory.transcript, selfName: memory.selfName, noteId: memory.noteId ?? null, now });
+    let mix = 'FAIL';
     if ('error' in mem) {
       memoryFails.push(mem.error);
     } else {
       memoryOk += 1;
       memoryOps.push(mem.ops.length);
+      const add = mem.ops.filter((o) => o.op === 'add').length;
+      const fold = mem.ops.filter((o) => o.op === 'update' || o.op === 'supersede').length;
+      const archive = mem.ops.filter((o) => o.op === 'archive').length;
+      totAdd += add;
+      totFold += fold;
+      totArchive += archive;
+      mix = `${add} add / ${fold} upd+sup / ${archive} arch`;
     }
-    process.stdout.write(`  run ${i}/${N}: insight ${'insight' in ins ? 'ok' : 'FAIL'}, memory ${'error' in mem ? 'FAIL' : `ok(${mem.ops.length} ops)`}\n`);
+    process.stdout.write(`  run ${i}/${N}: insight ${'insight' in ins ? 'ok' : 'FAIL'}, memory ${'error' in mem ? 'FAIL' : `ok(${mix})`}\n`);
   }
 
+  const totOps = totAdd + totFold + totArchive;
   process.stdout.write(`\ninsight parse-success: ${insightOk}/${N} (${((insightOk / N) * 100).toFixed(0)}%)\n`);
   process.stdout.write(`memory  parse-success: ${memoryOk}/${N} (${((memoryOk / N) * 100).toFixed(0)}%)\n`);
   if (memoryOps.length) process.stdout.write(`memory ops when ok: [${memoryOps.join(', ')}]\n`);
+  process.stdout.write(`memory ops mix (all runs): ${totAdd} add, ${totFold} update+supersede, ${totArchive} archive\n`);
+  process.stdout.write(`memory FOLD-SHARE (update+supersede / total): ${totOps ? ((totFold / totOps) * 100).toFixed(0) : '—'}% ${totOps ? `(${totFold}/${totOps})` : ''}\n`);
   for (const f of insightFails) process.stdout.write(`  insight FAIL: ${f.slice(0, 160)}\n`);
   for (const f of memoryFails) process.stdout.write(`  memory  FAIL: ${f.slice(0, 160)}\n`);
 }
