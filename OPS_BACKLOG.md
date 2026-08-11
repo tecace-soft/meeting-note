@@ -213,11 +213,14 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
   - Alternatives rejected: (B) LLM index cards = not real search, breaks at scale; (C) external engine (Meilisearch/Typesense) = needs an always-on server, violates the no-server-budget rule. Revisit C only at thousands of meetings.
   - **Convergence note**: `note_chunk` + `note_insight` are the single shared substrate for F1', F4, F5, and the M-track normalization/search findings. Build the data model once, deliberately, not as three parallel efforts.
 
-### F8 Evaluation harness for memory + diarization [SPRINT-adjacent, from 2026-08-07 meeting]
+### F8 Evaluation harness for memory + diarization [ELEVATED to gating framework — boss-directed 2026-08-11]
 - What: a lightweight evaluation procedure to verify the new memory system's quality and context-diarization accuracy before/after the rework.
 - Why: F1' rewrites the memory extraction wholesale; without a regression signal there is no way to tell if narrative memory actually beats the flat buckets. Same for F5 diarization accuracy.
 - Scope (keep small): a golden set of 2-3 real standups snapshotted, with expected memory/insight/diarization outputs, run as a repeatable check.
 - Owner: Andrew. Do this early (before/alongside F1') so the rework has a signal.
+- **Boss directive (2026-08-11 meeting, Hansoo): make evaluation a first-class, hypothesis-driven process, not an afterthought.** Every feature update should state a hypothesis and be validated against this eval framework before shipping. This raises F8 from "SPRINT-adjacent nice-to-have" to the **gating discipline** for the memory/indexing rework.
+  - Concrete first target the boss called out: a **measurable eval framework for memory + indexing performance** (F1'/F4 quality), so the rework has a quantitative before/after, not just a golden-set diff. Andrew committed to standing this up first.
+  - Practical starting point: reuse the recently-shipped `note_insight` extraction as the measurable surface (actions/decisions/topics/people/companies precision-recall against a hand-labeled golden set), plus retrieval quality for `search_notes` (does the right note rank first for a known query).
 
 ### F5 Context-based diarization [SPRINT, due 2026-08-13] — CORE GOAL
 - What: shift speaker separation from pure voice-pattern matching to **context-based** identification (infer who is speaking from conversational context, not only acoustic signature). Builds on F1b's text/context speaker-ID.
@@ -229,6 +232,7 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 - Why: shortens the report-to-diagnosis-to-fix loop and gives users a support channel.
 - Effort: medium (UI + intake pipeline + AI analysis step).
 - Note: reality-check. AI can triage/summarize a report and suggest steps, but cannot auto-fix infra-class failures (e.g. quota/suspension). Scope it as triage assistance, not auto-remediation.
+- **2026-08-11 refinement (boss): support-ticket automation loop.** User reports an issue with a screenshot → AI reads the screenshot + context and drafts a concrete **fix prompt / repair diff proposal** → a developer reviews and approves → the change lands in code. This is the same F2 intake pipeline, extended one step: from "AI suggests repair steps" to "AI drafts an approvable code change." Keep the human-approval gate (no auto-merge). Sequence after the memory/indexing sprint; the screenshot→prompt step is the near-term, low-risk piece to prototype first.
 
 ### F6 Personal voice-memo feature [new, exploratory]
 - What: a personal voice-memo capture in the app. Discussed as a stepping stone toward agent-driven auto report generation (F7).
@@ -248,7 +252,7 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 Sprint due 2026-08-13: F1' (dynamic ontology), F4 (index layer), F5 (context diarization). Memory implementation started 2026-08-07.
 Recommended order for the sprint window (per the 2026-08-07 review):
 1. ~~M1 (MCP fail-closed auth) + M2 (transcript-flag bug)~~ **DONE + verified in prod 2026-08-07** (commit `a111fec`; mcp_token expiry migration applied to prod).
-2. **F8 (eval golden set)**: 2-3 standups snapshotted, so the F1' rewrite has a regression signal. ← next
+2. **F8 (eval framework)**: 2-3 standups snapshotted, so the F1' rewrite has a regression signal. ← next; **boss elevated 2026-08-11 to the gating, hypothesis-driven discipline for all memory/indexing work** — measurable memory + indexing performance framework comes first (see F8).
 3. Optionally **M3/M4** (project-shared parity, `add_note_to_project` write tool) when convenient.
 3. **F1' narrative + `note_insight` unified extraction** (`update-user-memory` rewrite, supersede semantics).
 4. **F4 `note_chunk` + pgvector/pg_trgm hybrid search**: sequence after the extraction lands and when search volume actually bites. M4 write tool (`add_note_to_project`) can slot in here cheaply.
