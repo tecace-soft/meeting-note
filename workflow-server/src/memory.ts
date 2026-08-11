@@ -367,6 +367,31 @@ RULES:
 Return ONLY JSON of this exact shape (no prose, no markdown):
 {"actions":[{"text":"","owner":"","due":"","status":""}],"decisions":[{"text":"","rationale":""}],"topics":[""],"people":[""],"companies":[""]}`;
 
+// Gemini responseSchema (OpenAPI subset). Forces structurally-valid JSON so the model
+// cannot emit the malformed / runaway JSON that used to fail parsing (~60% of the time).
+// Semantics are still validated by parseInsight / parseOps afterward.
+const INSIGHT_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    actions: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { text: { type: 'STRING' }, owner: { type: 'STRING' }, due: { type: 'STRING' }, status: { type: 'STRING' } },
+        required: ['text'],
+      },
+    },
+    decisions: {
+      type: 'ARRAY',
+      items: { type: 'OBJECT', properties: { text: { type: 'STRING' }, rationale: { type: 'STRING' } }, required: ['text'] },
+    },
+    topics: { type: 'ARRAY', items: { type: 'STRING' } },
+    people: { type: 'ARRAY', items: { type: 'STRING' } },
+    companies: { type: 'ARRAY', items: { type: 'STRING' } },
+  },
+  required: ['actions', 'decisions', 'topics', 'people', 'companies'],
+} as const;
+
 function buildMemoryUserPrompt(itemsJson: string, transcript: string, selfName: string | null | undefined, noteId: string | null | undefined): string {
   const selfLine = selfName?.trim() ? `Logged-in user (self) — whose memory this is: "${selfName.trim()}"` : 'Logged-in user (self): unknown';
   const noteLine = noteId?.trim() ? `Current note id (provenance for new memories): "${noteId.trim()}"` : 'Current note id: (none)';
@@ -415,6 +440,7 @@ async function callJsonModel<T>(input: {
   userPrompt: string;
   parse: (text: string) => T | null;
   maxOutputTokens?: number;
+  responseSchema?: unknown;
 }): Promise<{ value: T; model: string } | { error: string }> {
   let lastError = 'no models attempted';
   for (const model of input.models) {
@@ -425,6 +451,7 @@ async function callJsonModel<T>(input: {
           model,
           parts: [{ text: `${input.systemPrompt}\n\n${input.userPrompt}` }],
           responseMimeType: 'application/json',
+          responseSchema: input.responseSchema,
           // thinkingBudget 0 → all output budget goes to the JSON.
           maxOutputTokens: input.maxOutputTokens ?? 8192,
           temperature: 0.1,
@@ -497,6 +524,7 @@ export async function extractInsight(input: {
     systemPrompt: INSIGHT_SYSTEM_PROMPT,
     userPrompt: buildInsightUserPrompt(transcript, input.noteId ?? null),
     parse: (text) => parseInsight(text, null),
+    responseSchema: INSIGHT_SCHEMA,
   });
   if ('error' in out) return { error: `gemini: ${out.error.slice(0, 240)}` };
   return { insight: { ...out.value, sourceModel: out.model } };
@@ -568,6 +596,10 @@ export async function computeMemoryFold(input: {
     systemPrompt: MEMORY_SYSTEM_PROMPT,
     userPrompt: buildMemoryUserPrompt(itemsJson, transcript, input.selfName, noteId),
     parse: (text) => parseOps(text),
+    // NOTE: no responseSchema for memory — constraining the ops-union schema made
+    // flash-lite very slow (10s+ vs 2s for insight) on the fold task, for no
+    // reliability gain (retry + the ops cap already give 100% here). Insight, whose
+    // fixed shape the model satisfies instantly, keeps its schema. See F8 notes.
   });
   if ('error' in out) return { error: `gemini: ${out.error.slice(0, 240)}` };
   const ops = out.value;

@@ -67,6 +67,10 @@ export async function callGemini(input: {
   // budget goes to the JSON. Thinking tokens can otherwise consume maxOutputTokens
   // and truncate structured JSON mid-object, which then fails to parse.
   thinkingBudget?: number;
+  // Gemini responseSchema (OpenAPI-subset). With responseMimeType application/json
+  // this forces structurally-valid JSON of the given shape, eliminating the malformed
+  // / runaway JSON that otherwise fails to parse. Caller still validates semantics.
+  responseSchema?: unknown;
 }): Promise<GeminiCallResult> {
   let response: Response;
   try {
@@ -84,6 +88,7 @@ export async function callGemini(input: {
             temperature: input.temperature ?? 0.2,
             maxOutputTokens: input.maxOutputTokens ?? 8192,
             responseMimeType: input.responseMimeType ?? 'application/json',
+            ...(input.responseSchema !== undefined ? { responseSchema: input.responseSchema } : {}),
             ...(input.thinkingBudget !== undefined
               ? { thinkingConfig: { thinkingBudget: input.thinkingBudget } }
               : {}),
