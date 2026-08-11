@@ -352,7 +352,7 @@ const INSIGHT_SYSTEM_PROMPT = `You extract a STRUCTURED INDEX of ONE meeting, fo
 
 Extract:
 - actions: concrete action items / tasks / commitments stated in the meeting. Each: text (what), owner (who is responsible, or "" if unclear), due (deadline/timeframe, or ""), status ("open" unless the transcript says it is done or blocked).
-- decisions: decisions the meeting reached. Each: text (what was decided), rationale (the stated reason, or "" if none given).
+- decisions: FIRM choices the meeting reached that RESOLVE an open question — one option picked over an alternative, or something explicitly rejected ("decided NOT to build X"). Each: text (what was decided), rationale (the stated reason, or ""). Decisions are RARE — most meetings have 0-3; a long list means you are mislabeling. STRICT exclusions, these are NOT decisions (leave them out): status/progress ("X is done / implemented / completed"), needs and tasks ("X is needed", "will do X", "should build X" → those are actions), and ideas merely being discussed or explored. When in doubt, it is NOT a decision.
 - topics: short topic/keyword tags discussed (products, features, problems, themes).
 - people: names of real people mentioned or participating (skip generic labels like "Speaker 1").
 - companies: organizations / companies mentioned.
