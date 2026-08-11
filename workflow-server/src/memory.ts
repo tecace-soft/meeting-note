@@ -329,6 +329,9 @@ DEDUP (critical — the memory must not accumulate duplicates):
 - Merge related facts into a single richer memory rather than listing them separately.
 - Supersede when the new meeting resolves or contradicts an existing memory (e.g. "the 50MB upload limit is under investigation" becomes "the 50MB limit was a Supabase free-tier cap, fixed by upgrading to Supabase Pro; the cap is now 200MB").
 
+BOUNDS:
+- Emit AT MOST 20 operations total. Prefer a few high-value update/supersede ops over many adds. NEVER pad the array, repeat an op, or emit empty/placeholder ops.
+
 GROUNDING:
 - Only durable, meeting-crossing understanding. Skip one-off small talk and pure logistics.
 - Do NOT record the user themselves as a collaborator or relationship.
@@ -354,6 +357,7 @@ RULES:
 - Only what the transcript supports. Never invent names, decisions, or deadlines. When unsure, omit.
 - Keep each entry short. Deduplicate within each list. Any list may be empty; return them all.
 - BE SELECTIVE, NOT EXHAUSTIVE. Hard limits: at most 20 actions, 15 decisions, 15 topics, 20 people, 15 companies. Keep only the most important/salient items. Do NOT turn every noun into a topic, or every mention into a person/company — a short, high-signal list is the goal.
+- NEVER output empty-string ("") entries and NEVER pad a list to a length. If a list has nothing, return []. Never output a speaker label (e.g. "Speaker A", "Speaker 1") as a person.
 
 Return ONLY JSON of this exact shape (no prose, no markdown):
 {"actions":[{"text":"","owner":"","due":"","status":""}],"decisions":[{"text":"","rationale":""}],"topics":[""],"people":[""],"companies":[""]}`;
@@ -383,42 +387,53 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type JsonModelResult = { text: string; model: string } | { error: string };
+const MAX_ATTEMPTS_PER_MODEL = 3;
 
 /**
- * Call Gemini for a JSON extraction. Retries transient failures (429/5xx) up to 3
- * times per model with backoff, then falls through to the next fallback model. This
- * resilience matters for backfill, where transient rate limits would otherwise show
- * up as a high "failed" count. Returns the text + model, or the last error message.
+ * Call Gemini for a JSON extraction and PARSE it inside the retry loop. Retries up to
+ * 3 times per model, then falls through to the next fallback model, on BOTH:
+ *  - transient HTTP failures (429/5xx/network), with backoff; and
+ *  - an HTTP 200 whose body does not parse/validate (parse() returns null).
+ *
+ * The second case is the reliability fix (F8 stability finding 2026-08-11): flash-lite
+ * intermittently emits malformed or runaway JSON, and the old code returned that 200 as
+ * success so the caller silently dropped the note (no insight/memory, ~60% of the time).
+ * Now an unparseable body is treated as a retryable failure, so a re-attempt or a
+ * fallback model can produce valid JSON. `parse` MUST return null only for
+ * unparseable/invalid output — a legitimately empty result (e.g. zero memory ops) is a
+ * non-null value and is NOT retried.
  */
-async function callJsonModel(input: {
+async function callJsonModel<T>(input: {
   apiKey: string;
   models: string[];
   systemPrompt: string;
   userPrompt: string;
-}): Promise<JsonModelResult> {
+  parse: (text: string) => T | null;
+  maxOutputTokens?: number;
+}): Promise<{ value: T; model: string } | { error: string }> {
   let lastError = 'no models attempted';
   for (const model of input.models) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt += 1) {
       try {
         const result = await callGemini({
           apiKey: input.apiKey,
           model,
           parts: [{ text: `${input.systemPrompt}\n\n${input.userPrompt}` }],
           responseMimeType: 'application/json',
-          // Bounded output (the INSIGHT prompt caps list sizes; the MEMORY prompt caps
-          // ops), so 8192 is ample. The earlier truncation was a runaway topic list,
-          // fixed in the prompt, not a budget shortfall. thinkingBudget 0 → all budget
-          // to the JSON.
-          maxOutputTokens: 8192,
+          // thinkingBudget 0 → all output budget goes to the JSON.
+          maxOutputTokens: input.maxOutputTokens ?? 8192,
           temperature: 0.1,
           thinkingBudget: 0,
         });
-        return { text: result.text, model };
+        const parsed = input.parse(result.text);
+        if (parsed !== null) return { value: parsed, model };
+        // HTTP 200 but unparseable/invalid body → retryable (try again / next model).
+        lastError = `${model}: unparseable output len=${result.text.length}`;
+        if (attempt === MAX_ATTEMPTS_PER_MODEL) break; // exhausted this model → next model
       } catch (error) {
         lastError = `${model}: ${(error as Error).message}`;
         const retryable = error instanceof GeminiApiError && error.retryable;
-        if (!retryable || attempt === 3) break; // non-retryable or exhausted → next model
+        if (!retryable || attempt === MAX_ATTEMPTS_PER_MODEL) break; // non-retryable or exhausted → next model
         await sleep(600 * attempt + Math.floor(Math.random() * 300));
       }
     }
@@ -471,16 +486,15 @@ export async function extractInsight(input: {
 }): Promise<{ insight: NoteInsight } | { error: string }> {
   const transcript = input.transcript.trim();
   if (!transcript) return { error: 'empty transcript' };
-  const out = await callJsonModel({
+  const out = await callJsonModel<NoteInsight>({
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
     systemPrompt: INSIGHT_SYSTEM_PROMPT,
     userPrompt: buildInsightUserPrompt(transcript, input.noteId ?? null),
+    parse: (text) => parseInsight(text, null),
   });
-  if (!('text' in out)) return { error: `gemini: ${out.error.slice(0, 240)}` };
-  const insight = parseInsight(out.text, out.model);
-  if (!insight) return { error: `unparseable len=${out.text.length} tail=<<${out.text.slice(-180)}>>` };
-  return { insight };
+  if ('error' in out) return { error: `gemini: ${out.error.slice(0, 240)}` };
+  return { insight: { ...out.value, sourceModel: out.model } };
 }
 
 /**
@@ -543,15 +557,15 @@ export async function computeMemoryFold(input: {
   let itemsJson = JSON.stringify(activeForPrompt);
   if (itemsJson.length > MAX_MEMORY_CHARS) itemsJson = itemsJson.slice(0, MAX_MEMORY_CHARS);
 
-  const out = await callJsonModel({
+  const out = await callJsonModel<Op[]>({
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
     systemPrompt: MEMORY_SYSTEM_PROMPT,
     userPrompt: buildMemoryUserPrompt(itemsJson, transcript, input.selfName, noteId),
+    parse: (text) => parseOps(text),
   });
-  if (!('text' in out)) return { error: `gemini: ${out.error.slice(0, 240)}` };
-  const ops = parseOps(out.text);
-  if (ops === null) return { error: `unparseable ops len=${out.text.length}` };
+  if ('error' in out) return { error: `gemini: ${out.error.slice(0, 240)}` };
+  const ops = out.value;
   const items = enforceCaps(applyOps(startingItems, ops, noteId, now));
   return { priorActiveCount: activeForPrompt.length, ops, items };
 }
