@@ -1943,6 +1943,9 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
       noteId: input.noteId,
       transcript: transcriptText,
       selfName: input.userName ?? null,
+      // Same speaker-name hint the summary uses, so action owners resolve to real
+      // names instead of "" (transcript labels are generic "Speaker A/B" at this stage).
+      speakerContext: input.speakerContext || null,
     });
     console.log(`Memory fold note=${input.noteId} items=${fold.memoryItemCount} insight=${fold.insightWritten} skipped=${fold.skipped}`);
   } catch (memoryError) {
@@ -2485,6 +2488,12 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
       noteId: input.noteId,
       transcript: formatTranscriptText(input.segments, 'original'),
       selfName: null,
+      // Speaker ontology profiles double as the owner-attribution hint on regenerate.
+      speakerContext: typeof input.speakerProfiles === 'string'
+        ? input.speakerProfiles
+        : (Array.isArray(input.speakerProfiles) && input.speakerProfiles.length > 0
+            ? JSON.stringify(input.speakerProfiles)
+            : null),
     });
   } catch (memoryError) {
     console.warn(`Memory fold (regenerate) failed for note ${input.noteId}:`, memoryError);

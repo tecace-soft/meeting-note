@@ -351,11 +351,15 @@ Return ONLY JSON of this exact shape (no prose, no markdown; update/supersede re
 const INSIGHT_SYSTEM_PROMPT = `You extract a STRUCTURED INDEX of ONE meeting, for later search and filtering. Scope is THIS meeting only — capture what THIS transcript contains, not cross-meeting understanding.
 
 Extract:
-- actions: concrete action items / tasks / commitments stated in the meeting. Each: text (what), owner (who is responsible, or "" if unclear), due (deadline/timeframe, or ""), status ("open" unless the transcript says it is done or blocked).
+- actions: concrete action items / tasks / commitments stated in the meeting. Each: text (what), owner (the REAL NAME of the person responsible, see OWNER ATTRIBUTION below, or "" if genuinely unattributable), due (deadline/timeframe, or ""), status ("open" unless the transcript says it is done or blocked).
 - decisions: FIRM choices the meeting reached that RESOLVE an open question — one option picked over an alternative, or something explicitly rejected ("decided NOT to build X"). Each: text (what was decided), rationale (the stated reason, or ""). Decisions are RARE — most meetings have 0-3; a long list means you are mislabeling. STRICT exclusions, these are NOT decisions (leave them out): status/progress ("X is done / implemented / completed"), needs and tasks ("X is needed", "will do X", "should build X" → those are actions), and ideas merely being discussed or explored. When in doubt, it is NOT a decision.
 - topics: short topic/keyword tags discussed (products, features, problems, themes).
-- people: names of real people mentioned or participating (skip generic labels like "Speaker 1").
+- people: real people mentioned OR participating in the meeting. Use SPEAKER CONTEXT (when given) to include the actual participants by their real names. Skip generic labels like "Speaker 1" / "Speaker A".
 - companies: organizations / companies mentioned.
+
+OWNER ATTRIBUTION (fill action "owner"):
+- Each transcript line is prefixed with its speaker. First-person commitments ("I'll do X", "제가/저는 ~ 할게요", "제가 ~ 드릴게요") → owner is the SPEAKER of that line. Explicit assignment ("Andrew, can you ~", "~님이 해주세요") → owner is the named/assigned person.
+- Resolve the responsible speaker to a REAL NAME via SPEAKER CONTEXT. If the speaker is a generic label (e.g. "Speaker B") and no context resolves it to a real name, leave owner "" — NEVER output a bare "Speaker A/B" label as owner.
 
 RULES:
 - Keep the meeting's ORIGINAL LANGUAGE (Korean stays Korean). Do NOT translate.
@@ -405,11 +409,21 @@ NEW meeting transcript:
 ${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
 }
 
-function buildInsightUserPrompt(transcript: string, noteId: string | null | undefined): string {
+function buildInsightUserPrompt(
+  transcript: string,
+  noteId: string | null | undefined,
+  speakerContext: string | null | undefined,
+): string {
   const noteLine = noteId?.trim() ? `Meeting note id: "${noteId.trim()}"` : 'Meeting note id: (none)';
+  // Transcript lines are prefixed with a speaker (a real name, or a generic "Speaker A/B"
+  // when diarization has not been named yet). SPEAKER CONTEXT, when present, maps those
+  // labels to real people so the model can attribute action owners by name.
+  const speakerLine = speakerContext?.trim()
+    ? `\nSPEAKER CONTEXT (maps transcript speaker labels to real people — use it to fill action "owner"):\n'''\n${speakerContext.trim()}\n'''\n`
+    : '';
   return `${noteLine}
-
-MEETING transcript:
+${speakerLine}
+MEETING transcript (each line is prefixed with its speaker):
 ${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
 }
 
@@ -515,6 +529,7 @@ export async function extractInsight(input: {
   fallbackModels?: string[];
   transcript: string;
   noteId?: string | null;
+  speakerContext?: string | null;
 }): Promise<{ insight: NoteInsight } | { error: string }> {
   const transcript = input.transcript.trim();
   if (!transcript) return { error: 'empty transcript' };
@@ -522,7 +537,7 @@ export async function extractInsight(input: {
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
     systemPrompt: INSIGHT_SYSTEM_PROMPT,
-    userPrompt: buildInsightUserPrompt(transcript, input.noteId ?? null),
+    userPrompt: buildInsightUserPrompt(transcript, input.noteId ?? null, input.speakerContext ?? null),
     parse: (text) => parseInsight(text, null),
     responseSchema: INSIGHT_SCHEMA,
   });
@@ -542,6 +557,7 @@ export async function extractAndStoreInsight(input: {
   userId: string;
   noteId: string;
   transcript: string;
+  speakerContext?: string | null;
 }): Promise<{ ok: boolean; reason?: string }> {
   if (!input.userId || !input.noteId || !input.transcript.trim()) return { ok: false, reason: 'empty transcript' };
   const res = await extractInsight({
@@ -550,6 +566,7 @@ export async function extractAndStoreInsight(input: {
     fallbackModels: input.fallbackModels,
     transcript: input.transcript,
     noteId: input.noteId,
+    speakerContext: input.speakerContext ?? null,
   });
   if ('error' in res) return { ok: false, reason: res.error };
   const wrote = await writeNoteInsight(input.supabase, input.userId, input.noteId, res.insight, new Date().toISOString());
@@ -628,6 +645,7 @@ export async function foldNoteIntoMemory(input: {
   noteId: string;
   transcript: string;
   selfName: string | null;
+  speakerContext?: string | null;
 }): Promise<FoldNoteResult> {
   const { supabase, apiKey, userId, noteId } = input;
   const transcript = input.transcript.trim();
@@ -651,7 +669,7 @@ export async function foldNoteIntoMemory(input: {
   // These are the exact pure functions the F8 eval harness measures.
   const [memoryRes, insightRes] = await Promise.all([
     computeMemoryFold({ apiKey, model: input.model, fallbackModels: input.fallbackModels, priorMemory: existingMemory, transcript, selfName, noteId, now }),
-    extractInsight({ apiKey, model: input.model, fallbackModels: input.fallbackModels, transcript, noteId }),
+    extractInsight({ apiKey, model: input.model, fallbackModels: input.fallbackModels, transcript, noteId, speakerContext: input.speakerContext ?? null }),
   ]);
 
   // Memory: only write when the fold produced valid ops. A model failure leaves memory

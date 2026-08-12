@@ -15,7 +15,12 @@ function metricOf(label: string, p: PRF1): Metric {
 
 export async function runInsightSurface(golden: InsightGolden, deps: EvalDeps): Promise<SurfaceScore> {
   const surface = `insight:${golden.name}`;
-  const res = await extractInsight({ apiKey: deps.geminiApiKey, transcript: golden.transcript, noteId: golden.noteId ?? null });
+  const res = await extractInsight({
+    apiKey: deps.geminiApiKey,
+    transcript: golden.transcript,
+    noteId: golden.noteId ?? null,
+    speakerContext: golden.speakerContext ?? null,
+  });
   if ('error' in res) {
     // Extraction failure IS a result (this is exactly what the runaway bug produced).
     return { surface, ran: true, metrics: [{ label: 'extraction succeeded', value: 0 }], notes: [`extraction FAILED: ${res.error}`] };
@@ -37,10 +42,30 @@ export async function runInsightSurface(golden: InsightGolden, deps: EvalDeps): 
   ];
   const macroF1 = fieldMetrics.reduce((acc, m) => acc + m.value, 0) / fieldMetrics.length;
 
+  // Owner-attribution signal — only when the golden supplies speaker context (that is
+  // when owners are recoverable). Coverage = share of actions with a non-empty owner;
+  // recall = expected real names that own at least one action. Regression guard for the
+  // speakerContext→owner fix.
+  const ownerMetrics: Metric[] = [];
+  if (golden.speakerContext) {
+    const owned = ins.actions.filter((a) => (a.owner || '').trim());
+    const coverage = ins.actions.length ? owned.length / ins.actions.length : 0;
+    ownerMetrics.push({
+      label: 'owner coverage (share of actions owned)',
+      value: coverage,
+      detail: `${owned.length}/${ins.actions.length} actions have an owner`,
+    });
+    if (golden.expectedOwners && golden.expectedOwners.length > 0) {
+      const distinctOwners = Array.from(new Set(owned.map((a) => a.owner)));
+      const ownerRecall = prf1(golden.expectedOwners, distinctOwners, containsMatch);
+      ownerMetrics.push(metricOf('owner recall (exact)', ownerRecall));
+    }
+  }
+
   return {
     surface,
     ran: true,
-    metrics: [{ label: 'macro F1 (mean of fields)', value: macroF1 }, ...fieldMetrics],
+    metrics: [{ label: 'macro F1 (mean of fields)', value: macroF1 }, ...fieldMetrics, ...ownerMetrics],
     notes: [
       `extracted ${ins.actions.length} actions / ${ins.decisions.length} decisions / ${ins.topics.length} topics / ${ins.people.length} people / ${ins.companies.length} companies (model ${ins.sourceModel})`,
     ],

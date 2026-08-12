@@ -9,6 +9,12 @@ export interface InsightGolden {
   name: string;
   noteId?: string;
   transcript: string;
+  // Optional speaker-name hint (maps generic "Speaker A/B" labels to real people), the
+  // same context the summary path passes. When present, the surface scores action-owner
+  // attribution (owner coverage + owner recall vs expectedOwners) — the regression signal
+  // for the owner-attribution fix.
+  speakerContext?: string;
+  expectedOwners?: string[];
   // Expected values are hand-authored from the transcript. actions/decisions/topics
   // are graded semantically (LLM judge, paraphrase/translation OK); people/companies
   // are graded deterministically (names are exact-ish).
