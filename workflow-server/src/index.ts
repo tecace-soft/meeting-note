@@ -1009,7 +1009,7 @@ async function generateAttachmentSummarySection(input: {
   return callGeminiWithFallback({
     stage: 'Attachment section generation',
     model: env.summaryModel,
-    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'application/json',
     maxOutputTokens: 4096,
     parts: [
@@ -1550,7 +1550,7 @@ async function translateTranscriptSegments(input: {
   const result = await callGeminiWithFallback({
     stage: `Transcript translation (${input.targetLanguage})`,
     model: env.summaryModel,
-    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'application/json',
     maxOutputTokens: 32768,
     parts: [{
@@ -1594,7 +1594,7 @@ async function transcribeGeminiForTest(input: {
   const result = await callGeminiWithFallback({
     stage: 'Transcription test',
     model: env.transcriptionTestGeminiModel,
-    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'application/json',
     maxOutputTokens: 16384,
     parts: [
@@ -1634,7 +1634,7 @@ Return only JSON:
       const repair = await callGeminiWithFallback({
         stage: 'Transcription test JSON repair',
         model: env.transcriptionTestGeminiModel,
-        fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+        fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
         responseMimeType: 'application/json',
         maxOutputTokens: 16384,
         parts: [{ text: buildTranscriptRepairPrompt(result.text) }],
@@ -1798,7 +1798,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   const summaryRaw = await callGeminiWithFallback({
     stage: 'Summarization',
     model: env.summaryModel,
-    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'application/json',
     maxOutputTokens: 16384,
     parts: [
@@ -1868,7 +1868,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     const alternateSummaryRaw = await callGeminiWithFallback({
       stage: `Summarization (${alternateLanguage})`,
       model: env.summaryModel,
-      fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+      fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
       responseMimeType: 'application/json',
       maxOutputTokens: 16384,
       parts: [
@@ -2323,7 +2323,7 @@ async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<v
   const result = await callGeminiWithFallback({
     stage: 'Project chat',
     model: PROJECT_CHAT_MODEL,
-    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'text/plain',
     maxOutputTokens: 4096,
     parts: [{ text: prompt }],
@@ -2367,7 +2367,7 @@ async function streamProjectChat(req: IncomingMessage, res: ServerResponse): Pro
     return;
   }
 
-  const models = [PROJECT_CHAT_MODEL, 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+  const models = [PROJECT_CHAT_MODEL, 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
   let response: Response | null = null;
   let lastError = '';
   for (const model of models) {
@@ -2456,7 +2456,7 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
   const result = await callGeminiWithFallback({
     stage: 'Summary regeneration',
     model: env.regenerateSummaryModel,
-    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'],
+    fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'application/json',
     maxOutputTokens: 16384,
     parts: [{

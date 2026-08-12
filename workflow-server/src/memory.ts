@@ -35,7 +35,8 @@ const MAX_INSIGHT_TEXT = 400;
 const MAX_INSIGHT_FIELD = 120;
 
 const DEFAULT_MEMORY_MODEL = 'gemini-2.5-flash-lite';
-const DEFAULT_MEMORY_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+// Fallbacks after the primary. Both gemini-2.0-* were retired (404) — kept only live models.
+const DEFAULT_MEMORY_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite'];
 
 type ItemStatus = 'active' | 'archived';
 
