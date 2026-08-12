@@ -14,7 +14,7 @@ import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata 
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
 import { extractAndStoreInsight, foldNoteIntoMemory, identifySpeakers } from './memory.js';
-import { sendWorkflowAlert } from './alerts.js';
+import { sendWorkflowAlert, sendEmail, alertRecipients } from './alerts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -693,6 +693,7 @@ async function callGeminiWithFallback(input: {
   fallbackModels: string[];
   parts: Parameters<typeof callGemini>[0]['parts'];
   responseMimeType?: 'application/json' | 'text/plain';
+  responseSchema?: unknown;
   maxOutputTokens?: number;
 }): Promise<GeminiWorkflowCallResult> {
   const models = [input.model, ...input.fallbackModels].filter((model, index, all) => model && all.indexOf(model) === index);
@@ -707,6 +708,7 @@ async function callGeminiWithFallback(input: {
           model,
           parts: input.parts,
           responseMimeType: input.responseMimeType,
+          responseSchema: input.responseSchema,
           maxOutputTokens: input.maxOutputTokens,
         });
         return {
@@ -2663,6 +2665,192 @@ async function refreshNoteInsight(req: IncomingMessage, res: ServerResponse): Pr
   sendJson(res, 200, { ok: true, noteId });
 }
 
+// ── F2: feedback / issue tracker — LLM resolution + email notify ────────────
+
+const ISSUE_ATTACHMENT_BUCKET = 'feedback-attachments';
+
+// OpenAPI-subset schema forcing a structurally-valid IssueResolution (matches the client type).
+const ISSUE_RESOLUTION_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    summary: { type: 'STRING' },
+    rootCauses: { type: 'ARRAY', items: { type: 'STRING' } },
+    checks: { type: 'ARRAY', items: { type: 'STRING' } },
+    fixPlan: { type: 'ARRAY', items: { type: 'STRING' } },
+    verification: { type: 'ARRAY', items: { type: 'STRING' } },
+    confidence: { type: 'STRING' },
+  },
+  required: ['summary', 'rootCauses', 'checks', 'fixPlan', 'verification', 'confidence'],
+} as const;
+
+const ISSUE_RESOLUTION_SYSTEM_PROMPT = `너는 사내 "Meeting Note"(회의 녹음 → AI 전사·요약·메모리·검색 앱)를 유지보수하는 시니어 엔지니어다.
+스택: 프론트 React + TypeScript + Vite (Tailwind + CSS 토큰), DB Supabase(Postgres + RLS + Storage), 모델 백엔드는 Node workflow-server(Render)에서 Gemini 호출, 인증 Azure MSAL SSO, 모바일은 Flutter.
+주요 화면: 회의 노트(녹음/전사/요약), 히스토리(검색/목록), 프로젝트, OneDrive 저장, 계정 설정, 화자 편집(diarization).
+
+접수된 이슈(및 첨부 스크린샷)를 읽고 담당자가 바로 착수할 수 있는 해결책을 작성한다. 규칙:
+- 한국어로, 각 항목(배열 원소)은 한 문장씩. 실행 가능한 내용만 쓴다.
+- rootCauses 는 확인되지 않은 가설임을 전제로 가능성이 높은 순서로 쓴다.
+- checks 는 담당자가 실제로 눌러보거나 조회해 볼 수 있는 절차로 쓴다.
+- fixPlan 은 손대야 할 위치와 방향을 순서대로 쓴다. 확실하지 않은 파일명을 지어내지 않는다.
+- verification 은 수정 후 무엇이 어떻게 보이면 해결로 볼 수 있는지 쓴다.
+- 정보가 부족하면 추측을 늘리지 말고 confidence 를 "low" 로 두고 checks 에 무엇을 더 확인해야 하는지 적는다.
+- confidence 는 정확히 "low" | "medium" | "high" 중 하나.`;
+
+function strArray(v: unknown, cap = 12): string[] {
+  return (Array.isArray(v) ? v : []).map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).slice(0, cap);
+}
+
+function parseIssueResolution(raw: string): {
+  summary: string; rootCauses: string[]; checks: string[]; fixPlan: string[]; verification: string[]; confidence: 'low' | 'medium' | 'high';
+} | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonCodeFences(raw));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const o = parsed as Record<string, unknown>;
+  const summary = typeof o.summary === 'string' ? o.summary.trim() : '';
+  if (!summary) return null;
+  const conf = typeof o.confidence === 'string' ? o.confidence.toLowerCase() : '';
+  const confidence = conf === 'high' || conf === 'medium' ? conf : 'low';
+  return {
+    summary,
+    rootCauses: strArray(o.rootCauses),
+    checks: strArray(o.checks),
+    fixPlan: strArray(o.fixPlan),
+    verification: strArray(o.verification),
+    confidence,
+  };
+}
+
+// Download up to 3 image attachments from private storage and return them as Gemini inline
+// image parts so the model can analyze the screenshots (service role bypasses RLS).
+async function issueAttachmentImageParts(paths: string[]): Promise<Array<{ inlineData: { mimeType: string; data: string } }>> {
+  const parts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
+  for (const path of paths.slice(0, 3)) {
+    if (typeof path !== 'string' || !path.trim()) continue;
+    try {
+      const { data, error } = await supabase.storage.from(ISSUE_ATTACHMENT_BUCKET).download(path);
+      if (error || !data) continue;
+      const mimeType = data.type || 'image/png';
+      if (!mimeType.startsWith('image/')) continue; // vision inline images only
+      const buffer = Buffer.from(await data.arrayBuffer());
+      if (buffer.length > 8 * 1024 * 1024) continue;
+      parts.push({ inlineData: { mimeType, data: buffer.toString('base64') } });
+    } catch (error) {
+      console.warn(`Issue attachment fetch failed (${path}):`, error);
+    }
+  }
+  return parts;
+}
+
+async function issueResolution(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  await getMicrosoftUserId(getBearerToken(req)); // authenticate (any org user may triage)
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+  const body = (await readBody(req, 2_000_000)) as Record<string, unknown> | null;
+  const title = typeof body?.title === 'string' ? body.title.trim() : '';
+  const description = typeof body?.description === 'string' ? body.description.trim() : '';
+  if (!title && !description) {
+    sendJson(res, 400, { error: 'title 또는 description이 필요합니다.' });
+    return;
+  }
+  const attachmentPaths = Array.isArray(body?.attachmentPaths) ? (body!.attachmentPaths as unknown[]).map((p) => String(p)) : [];
+
+  const userText = `이슈 키: ${typeof body?.issueKey === 'string' ? body.issueKey : '(없음)'}
+목적: ${typeof body?.purpose === 'string' ? body.purpose : '(미정)'}
+영역: ${typeof body?.area === 'string' ? body.area : '(미정)'}
+제목: ${title}
+설명:
+${description}
+
+위 이슈에 대한 해결책을 지정된 JSON 스키마로만 작성하라.`;
+  const imageParts = await issueAttachmentImageParts(attachmentPaths);
+
+  const result = await callGeminiWithFallback({
+    stage: 'Issue resolution',
+    model: env.summaryModel,
+    fallbackModels: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'],
+    responseMimeType: 'application/json',
+    responseSchema: ISSUE_RESOLUTION_SCHEMA,
+    maxOutputTokens: 4096,
+    parts: [{ text: `${ISSUE_RESOLUTION_SYSTEM_PROMPT}\n\n${userText}` }, ...imageParts],
+  });
+  const resolution = parseIssueResolution(result.text);
+  if (!resolution) {
+    sendJson(res, 502, { error: '해결책 생성 결과를 파싱하지 못했습니다. 다시 시도해주세요.' });
+    return;
+  }
+  sendJson(res, 200, { resolution, model: result.model });
+}
+
+function esc(v: unknown): string {
+  return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function issueEmailHtml(input: {
+  kind: string; issueKey: string; title: string; description: string; purpose: string; area: string; priority: string;
+  assigneeName?: string | null; resolution?: unknown; imageUrls: string[]; deepLink: string;
+}): string {
+  const r = input.resolution as { summary?: string; rootCauses?: string[]; checks?: string[]; fixPlan?: string[]; verification?: string[]; confidence?: string } | null;
+  const section = (label: string, items?: string[]) =>
+    items && items.length ? `<p style="margin:12px 0 4px;font-weight:600">${esc(label)}</p><ul style="margin:0;padding-left:18px">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
+  const heading = input.kind === 'assigned'
+    ? `이슈가 ${esc(input.assigneeName || '')}님에게 배정되었습니다`
+    : '새 이슈가 등록되었습니다';
+  const images = input.imageUrls.map((u) => `<img src="${esc(u)}" alt="screenshot" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;margin:6px 0" />`).join('');
+  const resolutionBlock = r?.summary
+    ? `<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/><p style="font-weight:600">AI 해결책 (confidence: ${esc(r.confidence)})</p><p>${esc(r.summary)}</p>${section('원인 가설', r.rootCauses)}${section('확인 절차', r.checks)}${section('수정 방향', r.fixPlan)}${section('검증 방법', r.verification)}`
+    : '';
+  return `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#111827;max-width:640px">
+<h2 style="margin:0 0 4px">${esc(heading)}</h2>
+<p style="color:#6b7280;margin:0 0 12px">${esc(input.issueKey)} · ${esc(input.purpose)} · ${esc(input.area)} · ${esc(input.priority)}</p>
+<p style="font-weight:600;margin:0 0 4px">${esc(input.title)}</p>
+<p style="white-space:pre-wrap;margin:0 0 8px">${esc(input.description)}</p>
+${images}
+${resolutionBlock}
+<p style="margin:18px 0 0"><a href="${esc(input.deepLink)}" style="background:#2563eb;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600">이슈 열기</a></p>
+</div>`;
+}
+
+async function issueNotify(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  await getMicrosoftUserId(getBearerToken(req));
+  const body = (await readBody(req, 1_000_000)) as Record<string, unknown> | null;
+  const kind = body?.kind === 'assigned' ? 'assigned' : 'created';
+  const assigneeEmail = typeof body?.assigneeEmail === 'string' ? body.assigneeEmail.trim() : '';
+  const recipients = kind === 'assigned' ? (assigneeEmail ? [assigneeEmail] : []) : alertRecipients();
+  if (recipients.length === 0) {
+    sendJson(res, 200, { ok: true, sent: false, reason: 'no recipients' });
+    return;
+  }
+
+  const paths = Array.isArray(body?.attachmentPaths) ? (body!.attachmentPaths as unknown[]).map((p) => String(p)).slice(0, 3) : [];
+  let imageUrls: string[] = [];
+  if (paths.length > 0) {
+    const { data } = await supabase.storage.from(ISSUE_ATTACHMENT_BUCKET).createSignedUrls(paths, 60 * 60 * 24 * 7);
+    imageUrls = (data ?? []).map((d) => d.signedUrl).filter((u): u is string => Boolean(u));
+  }
+  const issueKey = typeof body?.issueKey === 'string' ? body.issueKey : '';
+  const deepLink = `${(env.frontendOrigin && env.frontendOrigin !== '*' ? env.frontendOrigin : '')}/issues`;
+  const html = issueEmailHtml({
+    kind,
+    issueKey,
+    title: typeof body?.title === 'string' ? body.title : '',
+    description: typeof body?.description === 'string' ? body.description : '',
+    purpose: typeof body?.purpose === 'string' ? body.purpose : '',
+    area: typeof body?.area === 'string' ? body.area : '',
+    priority: typeof body?.priority === 'string' ? body.priority : '',
+    assigneeName: typeof body?.assigneeName === 'string' ? body.assigneeName : '',
+    resolution: body?.resolution ?? null,
+    imageUrls,
+    deepLink,
+  });
+  const subject = kind === 'assigned' ? `[이슈 배정] ${issueKey} ${typeof body?.title === 'string' ? body.title : ''}` : `[새 이슈] ${issueKey} ${typeof body?.title === 'string' ? body.title : ''}`;
+  const sent = await sendEmail({ to: recipients, subject, html });
+  sendJson(res, 200, { ok: true, sent });
+}
+
 // F4 backfill: populate note_insight for existing notes (insight only, no memory
 // fold). Admin-gated and batched — call repeatedly until `processed` is 0. Each
 // call pulls a batch of notes still lacking a note_insight row (server-side filter
@@ -2796,6 +2984,14 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'POST' && req.url === '/refresh-note-insight') {
       await refreshNoteInsight(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/issue-resolution') {
+      await issueResolution(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/issue-notify') {
+      await issueNotify(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/project-chat') {

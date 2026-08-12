@@ -89,6 +89,44 @@ function buildText(input: WorkflowAlertInput, errorFields: Record<string, string
   ].join('\n');
 }
 
+/** Default ops recipients (WORKFLOW_ALERT_TO) — used as the "operations" inbox. */
+export function alertRecipients(): string[] {
+  return parseRecipients(config.to);
+}
+
+/** Generic transactional send via the same Resend plumbing. Returns false on skip/failure. */
+export async function sendEmail(input: { to: string[]; subject: string; html?: string; text?: string }): Promise<boolean> {
+  if (!config.enabled) return false;
+  if (!config.resendApiKey) {
+    console.warn('sendEmail skipped: RESEND_API_KEY is not configured.');
+    return false;
+  }
+  const to = input.to.map((a) => a.trim()).filter(Boolean);
+  if (to.length === 0) return false;
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: config.from,
+        to,
+        subject: input.subject,
+        ...(input.html ? { html: input.html } : {}),
+        ...(input.text ? { text: input.text } : {}),
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.warn(`sendEmail failed (${response.status}): ${detail.slice(0, 500)}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn('sendEmail failed:', error);
+    return false;
+  }
+}
+
 export async function sendWorkflowAlert(input: WorkflowAlertInput): Promise<void> {
   if (!config.enabled) return;
   if (!config.resendApiKey) {

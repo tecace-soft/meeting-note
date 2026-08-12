@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Chat,
   Check,
   CloseMd,
   Cloud,
@@ -142,6 +143,7 @@ const navItems = [
   { to: '/transcription-summary', labelKey: 'meetingNote' as TranslationKey, icon: FileDocument, end: true as const },
   { to: '/history', labelKey: 'history' as TranslationKey, icon: ListOrdered, end: false as const, projects: true as const },
   { to: '/save-summary', label: 'OneDrive', icon: Cloud, end: false as const },
+  { to: '/issues', labelKey: 'issuesNav' as TranslationKey, icon: Chat, end: false as const },
 ] as const;
 
 interface AppSidebarProps {
