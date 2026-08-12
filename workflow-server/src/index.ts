@@ -1332,6 +1332,8 @@ async function transcribeWithAssembly(input: {
         );
         return {
           speaker: `Speaker ${label}`,
+          // Stable original label — never rewritten by a rename (see TranscriptSegment).
+          speakerKey: `Speaker ${label}`,
           text: typeof record.text === 'string' ? record.text.trim() : '',
           start: typeof record.start === 'number' ? record.start / 1000 : undefined,
           end: typeof record.end === 'number' ? record.end / 1000 : undefined,
@@ -1340,6 +1342,7 @@ async function transcribeWithAssembly(input: {
       }).filter((segment) => segment.text)
     : [{
         speaker: 'Unknown Speaker',
+        speakerKey: 'Unknown Speaker',
         text: typeof transcript.text === 'string' ? transcript.text.trim() : '',
       }].filter((segment) => segment.text);
 
@@ -1462,10 +1465,13 @@ function normalizeTranscriptSegment(segment: Record<string, unknown>): Transcrip
   const speaker = typeof segment.speaker === 'string' && segment.speaker.trim()
     ? segment.speaker.trim()
     : 'Unknown Speaker';
+  const rawKey = segment.speakerKey ?? segment.speaker_key;
+  const speakerKey = typeof rawKey === 'string' && rawKey.trim() ? rawKey.trim() : undefined;
   const start = typeof segment.start === 'number' && Number.isFinite(segment.start) ? segment.start : undefined;
   const end = typeof segment.end === 'number' && Number.isFinite(segment.end) ? segment.end : undefined;
   return {
     speaker,
+    ...(speakerKey !== undefined ? { speakerKey } : {}),
     text,
     ...(start !== undefined ? { start } : {}),
     ...(end !== undefined ? { end } : {}),

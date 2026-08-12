@@ -2702,6 +2702,7 @@ const SummaryHistory: React.FC = () => {
                                       onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       noteId={note.id}
+                                      transcription={note.transcription ?? null}
                                       scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
                                       selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
                                       onSelectedSpeakerFiltersChange={(next) => setNoteSpeakerFilters((prev) => ({ ...prev, [note.id]: next }))}
@@ -3204,6 +3205,7 @@ const SummaryHistory: React.FC = () => {
                                                     onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                                     onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                                     noteId={note.id}
+                                                    transcription={note.transcription ?? null}
                                                     scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
                                                     selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
                                                     onSelectedSpeakerFiltersChange={(next) =>
@@ -3502,6 +3504,7 @@ const SummaryHistory: React.FC = () => {
                                       onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       noteId={note.id}
+                                      transcription={note.transcription ?? null}
                                       scrollContainerClassName={NOTE_PANEL_SCROLL_CLASS}
                                       selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
                                       onSelectedSpeakerFiltersChange={(next) =>

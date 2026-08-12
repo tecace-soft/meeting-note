@@ -4,11 +4,20 @@ export type TranscriptLanguage = 'original' | 'en' | 'ko';
 
 export type TranscriptSegment = {
   speaker: string;
+  // Immutable original diarization label (e.g. "Speaker A"). Set at ingest; never changed
+  // by a rename. Renames match on this key so two speakers merged to one display name can
+  // still be told apart and re-assigned. Older notes may not have it (see speakerKeyOf).
+  speakerKey?: string;
   text: string;
   start?: number;
   end?: number;
   translations?: Record<string, string>;
 };
+
+/** Stable identity for matching a rename. Falls back to the display name on legacy notes. */
+export function speakerKeyOf(segment: TranscriptSegment): string {
+  return segment.speakerKey ?? segment.speaker;
+}
 
 export type ReplacementScope = 'single' | 'from_here' | 'all';
 
@@ -74,6 +83,8 @@ function segmentSpeakerText(o: Record<string, unknown>): TranscriptSegment {
     o.body;
   const speaker = typeof sp === 'string' ? sp : String(sp ?? '');
   const text = typeof tx === 'string' ? tx : String(tx ?? '');
+  const rawKey = o.speakerKey ?? o.speaker_key;
+  const speakerKey = typeof rawKey === 'string' && rawKey.trim() ? rawKey : undefined;
   const start = finiteNumber(o.start ?? o.start_time ?? o.startTime);
   const end = finiteNumber(o.end ?? o.end_time ?? o.endTime);
   const rawTranslations = o.translations ?? o.translated_texts ?? o.translatedTexts;
@@ -86,6 +97,7 @@ function segmentSpeakerText(o: Record<string, unknown>): TranscriptSegment {
     : undefined;
   return {
     speaker,
+    ...(speakerKey !== undefined ? { speakerKey } : {}),
     text,
     ...(start !== undefined ? { start } : {}),
     ...(end !== undefined ? { end } : {}),
@@ -155,10 +167,16 @@ export function getTranscriptAvatarLabel(speaker: string): string {
   return (chars[0] ?? '') + (chars[1] ?? '');
 }
 
+/**
+ * Rename a speaker. `originalKey` is the tapped segment's stable key (speakerKeyOf), NOT its
+ * display name — matching by key means two speakers accidentally merged to one display name
+ * are still distinct and can be re-assigned independently. Only the display `speaker`
+ * changes; `speakerKey` is preserved (spread) so identity survives the rename.
+ */
 export function applySpeakerReplacements(
   segments: TranscriptSegment[],
   segmentIndex: number,
-  originalSpeaker: string,
+  originalKey: string,
   newSpeaker: string,
   scope: ReplacementScope
 ): TranscriptSegment[] {
@@ -168,12 +186,52 @@ export function applySpeakerReplacements(
     }
     if (scope === 'from_here') {
       if (i === segmentIndex) return { ...seg, speaker: newSpeaker };
-      if (i > segmentIndex && seg.speaker === originalSpeaker) return { ...seg, speaker: newSpeaker };
+      if (i > segmentIndex && speakerKeyOf(seg) === originalKey) return { ...seg, speaker: newSpeaker };
       return seg;
     }
-    if (seg.speaker !== originalSpeaker) return seg;
+    if (speakerKeyOf(seg) !== originalKey) return seg;
     return { ...seg, speaker: newSpeaker };
   });
+}
+
+/**
+ * Reset speakers back to their original diarization labels ("Speaker A/B"). Prefers each
+ * segment's stored speakerKey; for legacy notes without keys, derives the original labels by
+ * aligning with the frozen `transcription` (its speaker prefixes are never rewritten). If
+ * `onlyKey` is given, only segments of that key/name are reset. Returns the note's segments
+ * unchanged when no original labels can be recovered.
+ */
+export function resetSpeakers(
+  segments: TranscriptSegment[],
+  transcription: string | null | undefined,
+  onlyKey?: string
+): TranscriptSegment[] {
+  const fromTranscript = deriveOriginalLabels(transcription, segments.length);
+  return segments.map((seg, i) => {
+    const original = seg.speakerKey ?? fromTranscript?.[i];
+    if (!original) return seg;
+    if (onlyKey !== undefined && speakerKeyOf(seg) !== onlyKey) return seg;
+    return { ...seg, speaker: original, speakerKey: original };
+  });
+}
+
+/**
+ * Parse the frozen transcription ("Speaker A: ...\nSpeaker B: ...") into one original label
+ * per line. Returns null unless the line count matches the segment count (so we never
+ * mis-align an edited transcript).
+ */
+export function deriveOriginalLabels(transcription: string | null | undefined, segmentCount: number): string[] | null {
+  if (!transcription || !transcription.trim()) return null;
+  const lines = transcription.split('\n').filter((l) => l.trim());
+  if (lines.length !== segmentCount) return null;
+  const labels: string[] = [];
+  for (const line of lines) {
+    const idx = line.indexOf(':');
+    const label = idx > 0 ? line.slice(0, idx).trim() : '';
+    if (!label) return null;
+    labels.push(label);
+  }
+  return labels;
 }
 
 

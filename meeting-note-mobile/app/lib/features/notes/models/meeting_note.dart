@@ -13,24 +13,30 @@ class TranscriptSegment {
     required this.startMs,
     required this.text,
     this.speaker,
+    this.speakerKey,
     this.endMs,
   });
 
   final int startMs;
   final String text;
   final String? speaker;
+  // Immutable original diarization label (e.g. "Speaker A"), set at ingest. Renames match
+  // this key, not the display name, so two speakers merged to one name stay distinct.
+  final String? speakerKey;
   final int? endMs;
 
   TranscriptSegment copyWith({
     int? startMs,
     String? text,
     String? speaker,
+    String? speakerKey,
     int? endMs,
   }) =>
       TranscriptSegment(
         startMs: startMs ?? this.startMs,
         text: text ?? this.text,
         speaker: speaker ?? this.speaker,
+        speakerKey: speakerKey ?? this.speakerKey,
         endMs: endMs ?? this.endMs,
       );
 
@@ -39,6 +45,7 @@ class TranscriptSegment {
         startMs: _timestampMs(json) ?? 0,
         text: json['text'] as String,
         speaker: json['speaker'] as String?,
+        speakerKey: (json['speakerKey'] ?? json['speaker_key']) as String?,
         endMs: _timestampMs(json, end: true),
       );
 
@@ -61,6 +68,7 @@ class TranscriptSegment {
 
   Map<String, dynamic> toJson() => {
         'speaker': speaker ?? '',
+        if (speakerKey != null) 'speakerKey': speakerKey,
         'text': text,
         'start': startMs / 1000,
         if (endMs != null) 'end': endMs! / 1000,

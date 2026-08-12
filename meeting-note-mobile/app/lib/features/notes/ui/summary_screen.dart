@@ -366,7 +366,8 @@ class _TranscriptTab extends ConsumerWidget {
                   segments: segments,
                   currentSharedUserIds: note.sharedUserIds,
                   segmentIndex: originalIndex,
-                  originalSpeaker: _speakerName(entry.$2),
+                  originalSpeaker: _speakerKeyOf(entry.$2),
+                  transcription: note.transcription,
                   repository: ref.read(notesRepositoryProvider),
                 ),
               );
@@ -1251,6 +1252,57 @@ String _speakerName(TranscriptSegment segment) {
   return speaker == null || speaker.isEmpty ? 'Speaker' : speaker;
 }
 
+/// Stable identity for matching a rename. Falls back to the display name on legacy notes.
+String _speakerKeyOf(TranscriptSegment segment) {
+  final key = segment.speakerKey?.trim();
+  if (key != null && key.isNotEmpty) return key;
+  return _speakerName(segment);
+}
+
+/// Parse the frozen transcription ("Speaker A: ...\nSpeaker B: ...") into one original label
+/// per line. Returns null unless the line count matches the segment count.
+List<String>? _deriveOriginalLabels(String? transcription, int segmentCount) {
+  if (transcription == null || transcription.trim().isEmpty) return null;
+  final lines =
+      transcription.split('\n').where((l) => l.trim().isNotEmpty).toList();
+  if (lines.length != segmentCount) return null;
+  final labels = <String>[];
+  for (final line in lines) {
+    final idx = line.indexOf(':');
+    final label = idx > 0 ? line.substring(0, idx).trim() : '';
+    if (label.isEmpty) return null;
+    labels.add(label);
+  }
+  return labels;
+}
+
+/// Reset speakers back to their original diarization labels. Prefers stored speakerKeys;
+/// derives from the frozen transcription for legacy notes. `onlyKey` limits the reset.
+List<TranscriptSegment> _resetSpeakers(
+  List<TranscriptSegment> segments,
+  String? transcription, {
+  String? onlyKey,
+}) {
+  final fromTranscript = _deriveOriginalLabels(transcription, segments.length);
+  return [
+    for (var i = 0; i < segments.length; i++)
+      _resetOne(segments[i], segments[i].speakerKey ?? fromTranscript?[i], onlyKey),
+  ];
+}
+
+TranscriptSegment _resetOne(
+    TranscriptSegment seg, String? original, String? onlyKey) {
+  if (original == null) return seg;
+  if (onlyKey != null && _speakerKeyOf(seg) != onlyKey) return seg;
+  return seg.copyWith(speaker: original, speakerKey: original);
+}
+
+/// True when Reset can recover original labels (stored keys, or an aligned transcription).
+bool _canResetSpeakers(List<TranscriptSegment> segments, String? transcription) {
+  if (segments.any((s) => (s.speakerKey?.trim().isNotEmpty ?? false))) return true;
+  return _deriveOriginalLabels(transcription, segments.length) != null;
+}
+
 enum _ReplacementScope { single, fromHere, all }
 
 List<TranscriptSegment> _applySpeakerReplacement({
@@ -1282,7 +1334,10 @@ bool _shouldReplaceSpeaker({
   required String originalSpeaker,
   required _ReplacementScope scope,
 }) {
-  final sameSpeaker = _speakerName(segment) == originalSpeaker;
+  // Match on the stable key, not the display name, so speakers merged to one name stay
+  // distinct and can be re-assigned independently. `originalSpeaker` is the tapped
+  // segment's key (see picker open).
+  final sameSpeaker = _speakerKeyOf(segment) == originalSpeaker;
   return switch (scope) {
     _ReplacementScope.single => index == segmentIndex,
     _ReplacementScope.fromHere => index >= segmentIndex && sameSpeaker,
@@ -1298,13 +1353,17 @@ class _SpeakerPickerSheet extends StatefulWidget {
     required this.segmentIndex,
     required this.originalSpeaker,
     required this.repository,
+    this.transcription,
   });
 
   final String noteId;
   final List<TranscriptSegment> segments;
   final List<String> currentSharedUserIds;
   final int segmentIndex;
+  // Stable key of the tapped speaker (used for matching), not the display name.
   final String originalSpeaker;
+  // Frozen note.transcription — lets Reset recover original labels on legacy notes.
+  final String? transcription;
   final NotesRepository repository;
 
   @override
@@ -1326,7 +1385,9 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.originalSpeaker);
+    _controller = TextEditingController(
+      text: _speakerName(widget.segments[widget.segmentIndex]),
+    );
     _controller.addListener(_clearPickedSpeaker);
     _load();
   }
@@ -1457,6 +1518,27 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
     }
   }
 
+  // Reset every speaker back to its original diarization label ("Speaker A/B"), undoing all
+  // naming for this note (recovers identities even after two speakers were merged to one).
+  Future<void> _resetSpeakersAction() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final next = _resetSpeakers(widget.segments, widget.transcription);
+      await widget.repository.saveDiarization(widget.noteId, next);
+      if (!mounted) return;
+      Navigator.of(context).pop(next);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = '$error';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final query = _hasEditedSpeakerSearch
@@ -1496,6 +1578,11 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
                       ),
                     ),
                   ),
+                  if (_canResetSpeakers(widget.segments, widget.transcription))
+                    TextButton(
+                      onPressed: _saving ? null : _resetSpeakersAction,
+                      child: const Text('Reset A/B'),
+                    ),
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close_rounded),

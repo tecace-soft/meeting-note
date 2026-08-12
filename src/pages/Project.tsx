@@ -1573,6 +1573,7 @@ const Project: React.FC = () => {
                                               onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                               onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                               noteId={note.id}
+                                              transcription={note.transcription ?? null}
                                               scrollContainerClassName={NOTE_TRANSCRIPT_SCROLL_CLASS}
                                               selectedSpeakerFilters={noteSpeakerFilters[note.id] ?? []}
                                               onSelectedSpeakerFiltersChange={(next) =>

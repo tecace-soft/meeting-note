@@ -18,7 +18,10 @@ import {
   applySpeakerReplacements,
   getSegmentText,
   getTranscriptAvatarLabel,
+  deriveOriginalLabels,
   persistNoteDiarization,
+  resetSpeakers,
+  speakerKeyOf,
   type ReplacementScope,
   type TranscriptLanguage,
   type TranscriptSegment,
@@ -124,6 +127,9 @@ export interface TranscriptDiarizedEditorProps {
   canPlaySegment?: (segment: TranscriptSegment, index: number) => boolean;
   onPlaySegment?: (segment: TranscriptSegment, index: number) => void;
   transcriptLanguage?: TranscriptLanguage;
+  /** Frozen note.transcription — its original "Speaker A/B" prefixes let Reset restore
+   * labels on legacy notes that predate stored speakerKeys. */
+  transcription?: string | null;
   onPersistSegments?: (next: TranscriptSegment[]) => Promise<void>;
   onNoteShared?: (sharedUserIds: string[]) => void;
 }
@@ -224,6 +230,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   canPlaySegment,
   onPlaySegment,
   transcriptLanguage = 'original',
+  transcription = null,
   onPersistSegments,
   onNoteShared,
 }) => {
@@ -555,7 +562,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     }
     setSpeakerMenu({
       segmentIndex,
-      originalSpeaker: seg.speaker,
+      // Match renames on the stable key, not the display name, so two speakers merged to
+      // one name stay distinct and re-assignable.
+      originalSpeaker: speakerKeyOf(seg),
       top,
       left,
     });
@@ -830,6 +839,40 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       setSpeakerChangeSaving(false);
     }
   };
+
+  // Reset every speaker back to its original diarization label ("Speaker A/B"), undoing all
+  // naming for this note. Recovers the original identities even after two speakers were
+  // merged to one name (from stored keys, or the frozen transcription on legacy notes).
+  const handleResetSpeakers = async () => {
+    if (!noteId) return;
+    setSpeakerMenuError(null);
+    setSpeakerChangeSaving(true);
+    try {
+      const nextTranscript = resetSpeakers(segments, transcription);
+      if (onPersistSegments) {
+        await onPersistSegments(nextTranscript);
+      } else {
+        await persistNoteDiarization(noteId, nextTranscript);
+      }
+      startTransition(() => {
+        onSegmentsChange(nextTranscript);
+      });
+      scheduleNoteInsightRefresh(noteId, getAccessToken);
+      closeSpeakerMenu();
+    } catch (err: unknown) {
+      console.error('Speaker reset failed:', err);
+      setSpeakerMenuError(err instanceof Error ? err.message : 'Could not reset speakers');
+    } finally {
+      setSpeakerChangeSaving(false);
+    }
+  };
+
+  // Whether Reset can restore original labels: true when segments carry keys, or the frozen
+  // transcription aligns 1:1 so labels can be derived. Avoids showing a no-op button.
+  const canResetSpeakers = Boolean(
+    noteId &&
+      (segments.some((s) => s.speakerKey) || deriveOriginalLabels(transcription, segments.length) !== null)
+  );
 
   const filteredSavedSpeakers = savedSpeakers.filter((s) =>
     s.name.toLowerCase().includes(speakerNameInput.trim().toLowerCase())
@@ -1352,6 +1395,18 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                   'Change'
                 )}
               </button>
+              {canResetSpeakers ? (
+                <button
+                  type="button"
+                  disabled={speakerChangeSaving}
+                  onClick={() => void handleResetSpeakers()}
+                  className="mt-2 w-full shrink-0 rounded-lg py-2 text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-50"
+                  style={{ color: 'var(--text-muted)', border: '1px solid var(--border)' }}
+                  title="Undo all speaker naming and restore the original Speaker A / Speaker B labels"
+                >
+                  {t('resetSpeakers')}
+                </button>
+              ) : null}
             </div>
           </div>,
           document.body

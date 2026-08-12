@@ -1,5 +1,8 @@
 export interface TranscriptSegment {
   speaker: string;
+  // Immutable original diarization label (e.g. "Speaker A"), set at ingest. Renames on the
+  // clients match this key, not the display name, so merged speakers stay distinguishable.
+  speakerKey?: string;
   text: string;
   start?: number;
   end?: number;
