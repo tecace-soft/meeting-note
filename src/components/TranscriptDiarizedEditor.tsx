@@ -23,6 +23,7 @@ import {
   type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
+import { scheduleNoteInsightRefresh } from '../lib/refreshNoteInsight';
 
 type DbSpeaker = { id: string; name: string; profile?: string | null; email?: string | null; microsoft_id?: string | null };
 
@@ -483,12 +484,13 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       startTransition(() => { onSegmentsChange(next); });
       setSuggestions((prev) => prev?.filter((s) => s.label !== suggestion.label) ?? null);
       void accumulateProfileInBackground(suggestion.name, suggestion.speakerId, next);
+      scheduleNoteInsightRefresh(noteId, getAccessToken);
     } catch (err: unknown) {
       setSuggestError(err instanceof Error ? err.message : 'Could not apply the suggestion');
     } finally {
       setApplyingSuggestions(false);
     }
-  }, [applyingSuggestions, segments, noteId, onPersistSegments, onSegmentsChange, accumulateProfileInBackground]);
+  }, [applyingSuggestions, segments, noteId, onPersistSegments, onSegmentsChange, accumulateProfileInBackground, getAccessToken]);
 
   const loadMicrosoftContactsForMenu = useCallback(async () => {
     setContactsLoading(true);
@@ -730,6 +732,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         onSegmentsChange(nextTranscript);
       });
       void accumulateProfileInBackground(chosenName, selectedSpeaker?.id ?? pickedSpeakerId ?? null, nextTranscript);
+      scheduleNoteInsightRefresh(noteId, getAccessToken);
       closeSpeakerMenu();
     } catch (err: unknown) {
       console.error('Speaker change failed:', err);
@@ -818,6 +821,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         onSegmentsChange(nextTranscript);
       });
       void accumulateProfileInBackground(speakerRow.name, speakerRow.id, nextTranscript);
+      scheduleNoteInsightRefresh(noteId, getAccessToken);
       closeSpeakerMenu();
     } catch (err: unknown) {
       console.error('Microsoft contact speaker change failed:', err);

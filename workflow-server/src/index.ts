@@ -2500,6 +2500,85 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
   }
 }
 
+// F5.0: build a speaker-context hint from a NAMED diarization — the distinct real
+// speaker names present (generic "Speaker A/B" / "Unknown Speaker" labels are dropped).
+// Lets insight extraction resolve action owners and participants to real names.
+function buildSpeakerContextFromSegments(segments: TranscriptSegment[]): string | null {
+  const names = Array.from(
+    new Set(
+      segments
+        .map((segment) => segment.speaker)
+        .filter((name) => name && name !== 'Unknown Speaker' && !/^speaker\s/i.test(name)),
+    ),
+  );
+  if (names.length === 0) return null;
+  return `Meeting participants (the transcript's speaker labels are these real names): ${names.join(', ')}.`;
+}
+
+// F5.0: re-extract note_insight for a note from its NAMED diarization, so action owners
+// and participant names resolve to real people after a speaker rename. Insight-only — it
+// does NOT re-fold personal memory (that path is idempotent per note and needs a
+// supersede design; deferred). Auth mirrors regenerate-summary (Microsoft Graph token,
+// owner-or-shared access).
+async function refreshNoteInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
+  const body = (await readBody(req, 1_000_000)) as { noteId?: unknown } | null;
+  const noteId = typeof body?.noteId === 'string' ? body.noteId.trim() : '';
+  if (!noteId) {
+    sendJson(res, 400, { error: 'noteId is required.' });
+    return;
+  }
+
+  const { data: noteRow, error: noteError } = await supabase
+    .from('note')
+    .select('id, user_id, shared_users, diarization, transcription')
+    .eq('id', noteId)
+    .maybeSingle();
+  if (noteError) throw noteError;
+  if (!noteRow) {
+    sendJson(res, 404, { error: 'Note not found.' });
+    return;
+  }
+  const note = noteRow as { user_id?: unknown; shared_users?: unknown; diarization?: unknown; transcription?: unknown };
+  const ownerId = typeof note.user_id === 'string' ? note.user_id : '';
+  const sharedUsers = Array.isArray(note.shared_users) ? note.shared_users.map((value) => String(value)) : [];
+  if (ownerId !== tokenUserId && !sharedUsers.includes(tokenUserId)) {
+    sendJson(res, 403, { error: 'You do not have access to this note.' });
+    return;
+  }
+  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
+
+  // Prefer the named diarization (real speaker names) over the frozen "Speaker A/B"
+  // transcription column — that asymmetry is why owners were unattributed before.
+  const segments = Array.isArray(note.diarization)
+    ? (note.diarization as unknown[])
+        .filter((segment): segment is Record<string, unknown> => Boolean(segment) && typeof segment === 'object' && !Array.isArray(segment))
+        .map(normalizeTranscriptSegment)
+        .filter((segment): segment is TranscriptSegment => Boolean(segment))
+    : [];
+  const transcript = segments.length
+    ? formatTranscriptText(segments, 'original')
+    : (typeof note.transcription === 'string' ? note.transcription : '');
+  if (!transcript.trim()) {
+    sendJson(res, 422, { error: 'Note has no transcript to index.' });
+    return;
+  }
+
+  const result = await extractAndStoreInsight({
+    supabase,
+    apiKey: env.geminiApiKey,
+    userId: ownerId,
+    noteId,
+    transcript,
+    speakerContext: buildSpeakerContextFromSegments(segments),
+  });
+  if (!result.ok) {
+    sendJson(res, 502, { error: `Insight extraction failed: ${result.reason ?? 'unknown'}` });
+    return;
+  }
+  sendJson(res, 200, { ok: true, noteId });
+}
+
 // F4 backfill: populate note_insight for existing notes (insight only, no memory
 // fold). Admin-gated and batched — call repeatedly until `processed` is 0. Each
 // call pulls a batch of notes still lacking a note_insight row (server-side filter
@@ -2629,6 +2708,10 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'POST' && req.url === '/regenerate-summary') {
       await regenerateSummary(req, res);
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/refresh-note-insight') {
+      await refreshNoteInsight(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/project-chat') {
