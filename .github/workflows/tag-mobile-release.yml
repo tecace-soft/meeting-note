@@ -6,6 +6,21 @@
 # current version and, if no matching tag exists yet, creates and pushes
 # `mobile-v<version>`. Idempotent: an unchanged version already has its tag, so
 # nothing happens.
+#
+# Scope: this tag tracks the **Android** release line, which is what
+# `meeting-note-mobile/build_apk.sh` derives its versionName/versionCode from.
+#
+# iOS is deliberately outside it. `ios/Runner/Info.plist` reads
+# `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)` from the Xcode project
+# instead of pubspec, so bumping pubspec does not move the iOS build and a
+# `mobile-v*` tag does not describe what shipped to TestFlight. The reason is
+# that Xcode-driven builds (Run, Archive) never see `--build-name`/
+# `--build-number`: those only reach `ios/Flutter/Generated.xcconfig`, which is
+# gitignored and gets rewritten to the pubspec values by any `flutter pub get`.
+# Archiving after that silently produced the wrong version. Keeping the iOS
+# numbers in `project.pbxproj` puts them under version control and removes that
+# trap. Bump the iOS build number in Xcode (or `xcrun agvtool new-version -all
+# N`) before each TestFlight upload. See `meeting-note-mobile/IOS_AGENT_HANDOFF.md`.
 name: tag-mobile-release
 
 on:

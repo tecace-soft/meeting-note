@@ -310,6 +310,28 @@ meeting_note_mobile/foreground_recorder
   container, so the recorder writes a 0-byte file.
 - The app persists a local recoverable recording session in secure storage.
 
+### iOS versioning is separate from the pubspec / `mobile-v*` release line
+
+`ios/Runner/Info.plist` reads `$(MARKETING_VERSION)` and
+`$(CURRENT_PROJECT_VERSION)` from the Xcode project, **not** from
+`pubspec.yaml`. `flutter build --build-name` / `--build-number` therefore have
+no effect on iOS. Bump the iOS numbers in Xcode, or with
+`xcrun agvtool new-version -all N`, before each TestFlight upload.
+
+This is an intentional exception to the repo convention.
+`.github/workflows/tag-mobile-release.yml` treats the pubspec `version:` as the
+one human-bumped mobile release number and auto-tags `mobile-v<version>`;
+`meeting-note-mobile/build_apk.sh` derives Android's versionName/versionCode
+from the same value. **That line tracks Android only** — a `mobile-v*` tag says
+nothing about what shipped to TestFlight.
+
+Do not "fix" the divergence by pointing `Info.plist` back at
+`$(FLUTTER_BUILD_NAME)` / `$(FLUTTER_BUILD_NUMBER)`. Those resolve from
+`ios/Flutter/Generated.xcconfig`, which is gitignored and is rewritten from
+pubspec by any `flutter pub get`. An Xcode Archive taken after that silently
+carries the pubspec version instead of the intended one, with nothing in the
+repo recording what the iOS build was supposed to be.
+
 ### Do not raise the iOS recording bitrate above 48 kbps
 
 `recording_service.dart` sets `bitRate: Platform.isIOS ? 48000 : 64000` at
