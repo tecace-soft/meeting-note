@@ -42,8 +42,9 @@ create index if not exists idx_feedback_issues_created on public.feedback_issues
 create index if not exists idx_feedback_issues_status on public.feedback_issues(status);
 create index if not exists idx_feedback_issues_assignee on public.feedback_issues(assignee_email);
 
--- Reuse the app's shared updated_at trigger if present, else define one.
-create or replace function public.set_updated_at()
+-- Own, uniquely-named trigger function so this migration cannot possibly overwrite any
+-- existing shared function in prod (keeps it fully isolated / non-destructive).
+create or replace function public.feedback_issues_set_updated_at()
 returns trigger language plpgsql as $$
 begin
   new.updated_at = now();
@@ -54,7 +55,7 @@ $$;
 drop trigger if exists trg_feedback_issues_updated_at on public.feedback_issues;
 create trigger trg_feedback_issues_updated_at
   before update on public.feedback_issues
-  for each row execute function public.set_updated_at();
+  for each row execute function public.feedback_issues_set_updated_at();
 
 alter table public.feedback_issues enable row level security;
 grant select, insert, update on public.feedback_issues to authenticated;
