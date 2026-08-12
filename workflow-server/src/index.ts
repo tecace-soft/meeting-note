@@ -13,7 +13,7 @@ import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
-import { extractAndStoreInsight, foldNoteIntoMemory } from './memory.js';
+import { extractAndStoreInsight, foldNoteIntoMemory, identifySpeakers } from './memory.js';
 import { sendWorkflowAlert } from './alerts.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1952,6 +1952,20 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     console.warn(`Memory fold failed for note ${input.noteId}:`, memoryError);
   }
 
+  // F5.1: auto-identify speakers from context and (high-confidence only) name the
+  // diarization + refresh note_insight. Best-effort; never fails the job. Runs AFTER the
+  // memory fold so an auto-ID cannot flow into personal memory (conservative scope).
+  try {
+    await autoIdentifySpeakersAtIngest({
+      noteId: input.noteId,
+      userId: input.userId,
+      selfName: input.userName ?? null,
+      segments,
+    });
+  } catch (identifyError) {
+    console.warn(`Auto speaker identify failed for note ${input.noteId}:`, identifyError);
+  }
+
   return {
     transcript: segments,
     summary: parsedSummary.summary,
@@ -2513,6 +2527,70 @@ function buildSpeakerContextFromSegments(segments: TranscriptSegment[]): string 
   );
   if (names.length === 0) return null;
   return `Meeting participants (the transcript's speaker labels are these real names): ${names.join(', ')}.`;
+}
+
+// F5.1: at ingest, auto-identify anonymous speakers from context (text signals + the
+// owner's saved-speaker roster) and apply ONLY high-confidence names to the diarization,
+// then refresh note_insight from the named transcript so owners/people resolve without any
+// manual rename. Conservative: it does NOT re-fold personal memory (the memory fold above
+// kept the generic labels, so a misidentification can't corrupt memory). Best-effort.
+const AUTO_IDENTIFY_CONFIDENCE = 0.8;
+
+async function autoIdentifySpeakersAtIngest(input: {
+  noteId: string;
+  userId: string;
+  selfName: string | null;
+  segments: TranscriptSegment[];
+}): Promise<void> {
+  if (!env.geminiApiKey) return;
+  const { noteId, userId, selfName, segments } = input;
+  const anonLabels = Array.from(new Set(segments.map((s) => s.speaker).filter((name) => /^speaker\s/i.test(name))));
+  if (anonLabels.length === 0) return;
+
+  const { data: rosterRows } = await supabase.from('speaker').select('id, name, profile').eq('user_id', userId);
+  const roster = ((rosterRows ?? []) as Array<{ id: string; name: string; profile: string | null }>)
+    .filter((r) => r.name)
+    .map((r) => ({ speakerId: r.id, name: r.name, summary: r.profile ?? '' }));
+
+  const identified = await identifySpeakers({
+    apiKey: env.geminiApiKey,
+    transcript: formatTranscriptText(segments, 'original'),
+    labels: anonLabels,
+    roster,
+    selfName,
+  });
+  if ('error' in identified) {
+    console.warn(`Speaker identify failed for note ${noteId}: ${identified.error}`);
+    return;
+  }
+
+  // Auto-apply only high-confidence, named suggestions. isSelf resolves to the owner name.
+  const nameByLabel = new Map<string, string>();
+  for (const s of identified.suggestions) {
+    const name = s.isSelf && selfName?.trim() ? selfName.trim() : s.name;
+    if (name && s.confidence >= AUTO_IDENTIFY_CONFIDENCE) nameByLabel.set(s.label, name);
+  }
+  if (nameByLabel.size === 0) return;
+
+  const namedSegments = segments.map((seg) => {
+    const name = nameByLabel.get(seg.speaker);
+    return name ? { ...seg, speaker: name } : seg;
+  });
+
+  const { error: updateError } = await supabase.from('note').update({ diarization: namedSegments }).eq('id', noteId);
+  if (updateError) {
+    console.warn(`Diarization update failed for note ${noteId}: ${updateError.message}`);
+    return;
+  }
+  await extractAndStoreInsight({
+    supabase,
+    apiKey: env.geminiApiKey,
+    userId,
+    noteId,
+    transcript: formatTranscriptText(namedSegments, 'original'),
+    speakerContext: buildSpeakerContextFromSegments(namedSegments),
+  });
+  console.log(`Auto-identified ${nameByLabel.size}/${anonLabels.length} speakers for note ${noteId}: ${Array.from(nameByLabel.values()).join(', ')}`);
 }
 
 // F5.0: re-extract note_insight for a note from its NAMED diarization, so action owners

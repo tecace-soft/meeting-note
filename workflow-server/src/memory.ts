@@ -573,6 +573,147 @@ export async function extractAndStoreInsight(input: {
   return wrote ? { ok: true } : { ok: false, reason: 'db upsert failed' };
 }
 
+// ---------------------------------------------------------------------------
+// F5.1: context-based speaker identification (text signals only). Ported from the
+// identify-speakers edge function so it can run server-side at ingest and be measured by
+// the F8 harness. Suggestion-only — the caller decides what to auto-apply (by confidence).
+// ---------------------------------------------------------------------------
+
+const MAX_IDENTIFY_LABELS = 20;
+const MAX_ROSTER_ENTRIES = 40;
+const MAX_ROSTER_SUMMARY = 800;
+
+export interface SpeakerRosterEntry {
+  speakerId: string;
+  name: string;
+  summary?: string;
+}
+
+export interface SpeakerSuggestion {
+  label: string;
+  speakerId: string | null;
+  name: string | null;
+  confidence: number;
+  isSelf: boolean;
+  rationale: string;
+}
+
+const IDENTIFY_SYSTEM_PROMPT = `You identify who each anonymous speaker in a meeting transcript most likely is.
+You are given: (1) a transcript whose speakers are anonymous labels like "Speaker A", "Speaker B"; (2) a roster of the user's KNOWN speakers, each with a short profile summary; (3) the display name of the logged-in user ("self"), who is usually present in their own meetings.
+
+For EACH distinct anonymous label, decide the single most likely identity using text signals only:
+- Direct address / vocatives ("Thanks, Hansoo", "Andrew, what do you think?") and self-introductions ("this is Jin") — these are strong.
+- Topic / project / responsibility overlap with a roster profile.
+- The self prior: if address or context indicates the logged-in user, mark isSelf true.
+
+Rules:
+- If the label best matches a roster entry, return its exact speakerId and name.
+- If the transcript clearly NAMES a person who is NOT in the roster, return speakerId=null and that name (a new-name suggestion).
+- If you cannot tell, return speakerId=null, name=null (unknown). Do NOT guess to fill every slot.
+- confidence is 0.0-1.0 reflecting how sure you are. Be conservative: prefer a lower confidence or unknown over a wrong identity.
+- Never invent a speakerId that is not in the roster.
+- rationale: one short sentence citing the evidence (a quote or the matched topic).
+
+Return ONLY JSON of the exact shape:
+{"suggestions":[{"label":"Speaker A","speakerId":"<roster id or null>","name":"<name or null>","confidence":0.0,"isSelf":false,"rationale":"..."}]}
+Include exactly one object per distinct label given, in the same order.`;
+
+// NOTE: no responseSchema here on purpose. A nested object-array schema makes
+// gemini-2.5-flash-lite hang/slow badly (the same failure that kept MEMORY schema-less);
+// parseSuggestions + callJsonModel's parse-retry already guarantee reliability.
+
+function clamp01(n: unknown): number {
+  if (typeof n !== 'number' || Number.isNaN(n)) return 0;
+  return Math.min(1, Math.max(0, n));
+}
+
+function buildIdentifyUserPrompt(
+  transcript: string,
+  labels: string[],
+  roster: SpeakerRosterEntry[],
+  selfName: string | null,
+): string {
+  const rosterText = roster.length
+    ? roster
+        .map((entry, index) => {
+          const summary = (entry.summary || '').slice(0, MAX_ROSTER_SUMMARY).trim() || '(no profile yet)';
+          return `${index + 1}. speakerId="${entry.speakerId}" name="${entry.name}"\n${summary}`;
+        })
+        .join('\n\n')
+    : '(the user has no saved speakers yet)';
+  const selfLine = selfName?.trim()
+    ? `Logged-in user (self), usually present: "${selfName.trim()}"`
+    : 'Logged-in user (self): unknown';
+  return `${selfLine}
+
+Anonymous labels to identify (return one suggestion per label, in this order):
+${labels.map((l) => `- ${l}`).join('\n')}
+
+Known speaker roster:
+${rosterText}
+
+Transcript (speakers are anonymous):
+${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
+}
+
+// Returns null ONLY for unparseable output (so callJsonModel retries); a parsed-but-empty
+// result is a valid []. Drops any speakerId not in the roster (never trust an invented id).
+function parseSuggestions(rawText: string, validSpeakerIds: Set<string>, requestedLabels: string[]): SpeakerSuggestion[] | null {
+  const parsed = tryParseJson(rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim());
+  if (parsed === undefined) return null;
+  const arr = asArray(asObject(parsed).suggestions);
+  const allowed = new Set(requestedLabels);
+  const seen = new Set<string>();
+  const out: SpeakerSuggestion[] = [];
+  for (const item of arr) {
+    const o = asObject(item);
+    const label = typeof o.label === 'string' ? o.label.trim() : '';
+    if (!label || !allowed.has(label) || seen.has(label)) continue;
+    seen.add(label);
+    let speakerId = typeof o.speakerId === 'string' && o.speakerId.trim() ? o.speakerId.trim() : null;
+    if (speakerId && !validSpeakerIds.has(speakerId)) speakerId = null;
+    const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
+    out.push({
+      label,
+      speakerId,
+      name,
+      confidence: clamp01(o.confidence),
+      isSelf: o.isSelf === true,
+      rationale: typeof o.rationale === 'string' ? o.rationale.slice(0, 300) : '',
+    });
+  }
+  return out;
+}
+
+/**
+ * Identify who each anonymous speaker label most likely is, from text signals + the user's
+ * saved-speaker roster. Pure (no DB). Suggestion-only; confidence-based auto-apply is the
+ * caller's decision. Shared by the ingest pipeline and the F8 speaker-id eval surface.
+ */
+export async function identifySpeakers(input: {
+  apiKey: string;
+  model?: string;
+  fallbackModels?: string[];
+  transcript: string;
+  labels: string[];
+  roster: SpeakerRosterEntry[];
+  selfName?: string | null;
+}): Promise<{ suggestions: SpeakerSuggestion[] } | { error: string }> {
+  const labels = Array.from(new Set(input.labels.map((l) => l.trim()).filter(Boolean))).slice(0, MAX_IDENTIFY_LABELS);
+  if (labels.length === 0) return { suggestions: [] };
+  const roster = input.roster.slice(0, MAX_ROSTER_ENTRIES);
+  const validIds = new Set(roster.map((r) => r.speakerId));
+  const out = await callJsonModel<SpeakerSuggestion[]>({
+    apiKey: input.apiKey,
+    models: resolveModels(input.model, input.fallbackModels),
+    systemPrompt: IDENTIFY_SYSTEM_PROMPT,
+    userPrompt: buildIdentifyUserPrompt(input.transcript.trim(), labels, roster, input.selfName ?? null),
+    parse: (text) => parseSuggestions(text, validIds, labels),
+  });
+  if ('error' in out) return { error: out.error };
+  return { suggestions: out.value };
+}
+
 export interface MemoryFoldComputation {
   priorActiveCount: number;
   ops: Op[];
