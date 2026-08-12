@@ -8,10 +8,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printReport, writeSnapshot } from './lib/report.js';
-import type { EvalDeps, InsightGolden, MemoryGolden, SearchGolden, SurfaceScore } from './lib/types.js';
+import type { EvalDeps, InsightGolden, MemoryGolden, SearchGolden, SpeakerIdGolden, SurfaceScore } from './lib/types.js';
 import { runInsightSurface } from './surfaces/insight.js';
 import { runMemorySurface } from './surfaces/memory.js';
 import { runSearchSurface } from './surfaces/search.js';
+import { runSpeakerIdSurface } from './surfaces/speakerId.js';
 
 config();
 
@@ -49,11 +50,13 @@ async function main(): Promise<void> {
   const insightGolden = loadGolden<InsightGolden>('insight');
   const memoryGolden = loadGolden<MemoryGolden>('memory');
   const searchGolden = loadGolden<SearchGolden>('search');
+  const speakerGolden = loadGolden<SpeakerIdGolden>('speaker');
 
   const scores: SurfaceScore[] = [];
   // Surfaces run sequentially to keep Gemini concurrency (and rate-limit risk) low.
   for (const g of insightGolden) scores.push(await runInsightSurface(g, deps));
   for (const g of memoryGolden) scores.push(await runMemorySurface(g, deps));
+  for (const g of speakerGolden) scores.push(await runSpeakerIdSurface(g, deps));
   for (const g of searchGolden) scores.push(await runSearchSurface(g, deps));
 
   if (scores.length === 0) {

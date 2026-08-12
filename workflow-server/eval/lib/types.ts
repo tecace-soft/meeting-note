@@ -44,6 +44,19 @@ export interface MemoryGolden {
   forbiddenAssertions: Array<{ claim: string; why: string }>;
 }
 
+/** Ground truth for the F5 speaker-identification surface. */
+export interface SpeakerIdGolden {
+  name: string;
+  noteId?: string;
+  transcript: string; // generic "Speaker A/B" labeled, as at ingest
+  roster: Array<{ speakerId: string; name: string; summary?: string }>;
+  selfName?: string;
+  labels: string[]; // anonymous labels to identify
+  // Ground-truth identity per label. name = the real person; null = genuinely unknowable
+  // from text, so the identifier SHOULD abstain (leaving it unknown is correct).
+  expected: Array<{ label: string; name: string | null }>;
+}
+
 /** Ground truth for the search_notes retrieval surface. */
 export interface SearchGolden {
   name: string;
