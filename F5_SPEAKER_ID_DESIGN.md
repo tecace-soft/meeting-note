@@ -77,16 +77,25 @@ Feed the identifier beyond the current roster+profile:
 
 This is where "accuracy improves as memory accumulates" becomes real.
 
+**F5.2a attempt — memory-dump context: FAILED, reverted 2026-08-12.**
+Fed the owner's `user_memory` (collaborators/roles) into the identify prompt.
+Measured on the F8 speaker golden (2-person Hansoo/Andrew meeting, no vocatives): precision **100% → 0%**, consistent across runs — the model stopped abstaining and confidently assigned BOTH speakers, but SWAPPED them (A→Andrew, B→Hansoo at 0.9).
+Root cause: the memory context says "both these people exist and their roles" but gives no per-speaker disambiguation for *this* meeting; it just tempts the model to force-assign, and role-inference from content alone is unreliable (it flips A/B).
+Lesson: recall must not be bought with precision — a wrong 0.9 auto-apply corrupts the diarization. A memory dump is the wrong signal.
+**Better F5.2 signals (not yet built):** the meeting's actual MS attendee list mapped to speakers (needs a data-availability check), explicit vocative/self-intro cue extraction, and only then a memory tie-breaker — always keeping the conservative "abstain unless the transcript itself identifies the person" rule. On a no-cue 2-person meeting, safely lifting recall may simply not be possible; that is an acceptable conservative outcome.
+
 ### F5.3 — Cross-note accumulation loop + F8 evaluation
 
 - On confirmed identification, update `speaker.profile` (existing `accumulateSpeakerProfile`) and record identification evidence (text signals: aliases, frequent co-participants, topic affinity) so future matches are stronger. Extend the `speaker.profile` ontology rather than adding a table.
 - F8 "speaker-id accuracy" surface: golden notes with known speaker→name truth; measure P/R of auto-identification, AND whether accuracy rises as roster/memory grow (the time-lagged evaluation the boss explicitly asked for).
 
-### F5.4 — Acoustic voice embeddings [DEFERRED / backlog]
+### F5.4 — Acoustic voice embeddings [DROPPED 2026-08-12 — compute cost]
 
-Per-speaker voiceprint for cross-note voice matching.
-Not in scope (decision: pure context).
-Revisit as F5' only if the context ceiling is hit (AssemblyAI returns no embeddings, so this needs a separate embedding model + vector store).
+Per-speaker voiceprint (store the user's voice, cross-check across notes to identify speakers).
+**Dropped, not deferred (decision 2026-08-12): the compute cost is too high to justify.**
+AssemblyAI returns no embeddings, so this would need a separate embedding model + vector store running over every recording.
+Speaker identification stays permanently pure-context (text signals + memory + profiles).
+Do not revisit unless the compute economics change materially.
 
 ## 6. Risks / trade-offs
 
