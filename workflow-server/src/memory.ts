@@ -66,9 +66,16 @@ export interface InsightDecision {
   text: string;
   rationale: string;
 }
+// F4 refinement (boss 2026-08-13): index the general "because X, therefore Y" chains,
+// not only firm decisions, so reverse "what did I do / what happened" queries resolve.
+export interface InsightEvent {
+  cause: string;
+  effect: string;
+}
 export interface NoteInsight {
   actions: InsightAction[];
   decisions: InsightDecision[];
+  events: InsightEvent[];
   topics: string[];
   people: string[];
   companies: string[];
@@ -292,9 +299,20 @@ function parseInsight(rawText: string, model: string | null): NoteInsight | null
     decisions.push({ text, rationale: str(d.rationale, MAX_INSIGHT_TEXT) });
   }
 
+  const events: InsightEvent[] = [];
+  for (const raw of asArray(o.events).slice(0, MAX_INSIGHT_ITEMS)) {
+    const e = asObject(raw);
+    const cause = str(e.cause, MAX_INSIGHT_TEXT);
+    const effect = str(e.effect, MAX_INSIGHT_TEXT);
+    // A cause->effect pair needs BOTH halves; drop a one-sided fragment.
+    if (!cause || !effect) continue;
+    events.push({ cause, effect });
+  }
+
   return {
     actions,
     decisions,
+    events,
     topics: normalizeInsightStrings(o.topics),
     people: normalizeInsightStrings(o.people),
     companies: normalizeInsightStrings(o.companies),
@@ -354,6 +372,7 @@ const INSIGHT_SYSTEM_PROMPT = `You extract a STRUCTURED INDEX of ONE meeting, fo
 Extract:
 - actions: concrete action items / tasks / commitments stated in the meeting. Each: text (what), owner (the REAL NAME of the person responsible, see OWNER ATTRIBUTION below, or "" if genuinely unattributable), due (deadline/timeframe, or ""), status ("open" unless the transcript says it is done or blocked).
 - decisions: FIRM choices the meeting reached that RESOLVE an open question — one option picked over an alternative, or something explicitly rejected ("decided NOT to build X"). Each: text (what was decided), rationale (the stated reason, or ""). Decisions are RARE — most meetings have 0-3; a long list means you are mislabeling. STRICT exclusions, these are NOT decisions (leave them out): status/progress ("X is done / implemented / completed"), needs and tasks ("X is needed", "will do X", "should build X" → those are actions), and ideas merely being discussed or explored. When in doubt, it is NOT a decision.
+- events: cause->effect chains — what happened / was done and what it led to. This is BROADER than decisions: it is NOT limited to firm choices; it captures the general "what did we do / what happened and why" narrative (a change made and its result, a problem and its fix, an event and its consequence). Each: cause (the trigger / what was done / what happened) and effect (the result / consequence / outcome). Both halves REQUIRED — skip a pair if either side is missing. Prefer concrete, meeting-specific chains; do not restate an action verbatim as an event. CONCISE: write each side as a SHORT paraphrase — a clause, roughly under 15 words. NEVER copy a verbatim transcript sentence, and NEVER put a generic speaker label ("Speaker A/B") in cause or effect; use the person's real name (via SPEAKER CONTEXT) or state the fact with no subject.
 - topics: short topic/keyword tags discussed (products, features, problems, themes).
 - people: real people mentioned OR participating in the meeting. Use SPEAKER CONTEXT (when given) to include the actual participants by their real names. Skip generic labels like "Speaker 1" / "Speaker A".
 - companies: organizations / companies mentioned.
@@ -363,14 +382,14 @@ OWNER ATTRIBUTION (fill action "owner"):
 - Resolve the responsible speaker to a REAL NAME via SPEAKER CONTEXT. If the speaker is a generic label (e.g. "Speaker B") and no context resolves it to a real name, leave owner "" — NEVER output a bare "Speaker A/B" label as owner.
 
 RULES:
-- OUTPUT LANGUAGE (critical): write every field value — actions.text, decisions, topics — in the SAME language the meeting is spoken in. If the transcript is Korean, they MUST be Korean. These instructions and the SPEAKER CONTEXT block are written in English, but they are directions ONLY: do NOT let them switch the output language, and NEVER translate the meeting content into English. (owner/people names may stay in their original script.)
+- OUTPUT LANGUAGE (critical): write every field value — actions.text, decisions, events (cause/effect), topics — in the SAME language the meeting is spoken in. If the transcript is Korean, they MUST be Korean. These instructions and the SPEAKER CONTEXT block are written in English, but they are directions ONLY: do NOT let them switch the output language, and NEVER translate the meeting content into English. (owner/people names may stay in their original script.)
 - Only what the transcript supports. Never invent names, decisions, or deadlines. When unsure, omit.
 - Keep each entry short. Deduplicate within each list. Any list may be empty; return them all.
-- BE SELECTIVE, NOT EXHAUSTIVE. Hard limits: at most 20 actions, 15 decisions, 15 topics, 20 people, 15 companies. Keep only the most important/salient items. Do NOT turn every noun into a topic, or every mention into a person/company — a short, high-signal list is the goal.
+- BE SELECTIVE, NOT EXHAUSTIVE. Hard limits: at most 20 actions, 15 decisions, 15 events, 15 topics, 20 people, 15 companies. Keep only the most important/salient items. Do NOT turn every noun into a topic, or every mention into a person/company — a short, high-signal list is the goal.
 - NEVER output empty-string ("") entries and NEVER pad a list to a length. If a list has nothing, return []. Never output a speaker label (e.g. "Speaker A", "Speaker 1") as a person.
 
 Return ONLY JSON of this exact shape (no prose, no markdown):
-{"actions":[{"text":"","owner":"","due":"","status":""}],"decisions":[{"text":"","rationale":""}],"topics":[""],"people":[""],"companies":[""]}`;
+{"actions":[{"text":"","owner":"","due":"","status":""}],"decisions":[{"text":"","rationale":""}],"events":[{"cause":"","effect":""}],"topics":[""],"people":[""],"companies":[""]}`;
 
 // Gemini responseSchema (OpenAPI subset). Forces structurally-valid JSON so the model
 // cannot emit the malformed / runaway JSON that used to fail parsing (~60% of the time).
@@ -390,11 +409,15 @@ const INSIGHT_SCHEMA = {
       type: 'ARRAY',
       items: { type: 'OBJECT', properties: { text: { type: 'STRING' }, rationale: { type: 'STRING' } }, required: ['text'] },
     },
+    events: {
+      type: 'ARRAY',
+      items: { type: 'OBJECT', properties: { cause: { type: 'STRING' }, effect: { type: 'STRING' } }, required: ['cause', 'effect'] },
+    },
     topics: { type: 'ARRAY', items: { type: 'STRING' } },
     people: { type: 'ARRAY', items: { type: 'STRING' } },
     companies: { type: 'ARRAY', items: { type: 'STRING' } },
   },
-  required: ['actions', 'decisions', 'topics', 'people', 'companies'],
+  required: ['actions', 'decisions', 'events', 'topics', 'people', 'companies'],
 } as const;
 
 function buildMemoryUserPrompt(itemsJson: string, transcript: string, selfName: string | null | undefined, noteId: string | null | undefined): string {
@@ -502,6 +525,8 @@ async function writeNoteInsight(
       user_id: userId,
       actions: insight.actions,
       decisions: insight.decisions,
+      // insight.events is produced and F8-measured but NOT persisted yet: the note_insight
+      // `events` column + MCP retrieval are the next (wiring) step, gated on the F8 lift.
       topics: insight.topics,
       people: insight.people,
       companies: insight.companies,

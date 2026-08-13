@@ -30,6 +30,15 @@ export async function runInsightSurface(golden: InsightGolden, deps: EvalDeps): 
   const actions = await judgeAlignment(deps, 'action item', golden.expected.actions, ins.actions.map((a) => a.text));
   const decisions = await judgeAlignment(deps, 'decision', golden.expected.decisions, ins.decisions.map((d) => d.text));
   const topics = await judgeAlignment(deps, 'topic', golden.expected.topics, ins.topics);
+
+  // F4 refinement: score the new cause->effect index field. Each event is flattened to
+  // "cause → effect" and judged semantically, only when the golden supplies expectations.
+  const eventStrings = ins.events.map((e) => `${e.cause} → ${e.effect}`);
+  const eventMetrics: Metric[] = [];
+  if (golden.expected.events && golden.expected.events.length > 0) {
+    const events = await judgeAlignment(deps, 'cause-and-effect event', golden.expected.events, eventStrings);
+    eventMetrics.push(metricOf('events F1 (judge)', events));
+  }
   const people = prf1(golden.expected.people, ins.people, containsMatch);
   const companies = prf1(golden.expected.companies, ins.companies, containsMatch);
 
@@ -65,9 +74,9 @@ export async function runInsightSurface(golden: InsightGolden, deps: EvalDeps): 
   return {
     surface,
     ran: true,
-    metrics: [{ label: 'macro F1 (mean of fields)', value: macroF1 }, ...fieldMetrics, ...ownerMetrics],
+    metrics: [{ label: 'macro F1 (mean of fields)', value: macroF1 }, ...fieldMetrics, ...eventMetrics, ...ownerMetrics],
     notes: [
-      `extracted ${ins.actions.length} actions / ${ins.decisions.length} decisions / ${ins.topics.length} topics / ${ins.people.length} people / ${ins.companies.length} companies (model ${ins.sourceModel})`,
+      `extracted ${ins.actions.length} actions / ${ins.decisions.length} decisions / ${ins.events.length} events / ${ins.topics.length} topics / ${ins.people.length} people / ${ins.companies.length} companies (model ${ins.sourceModel})`,
     ],
   };
 }

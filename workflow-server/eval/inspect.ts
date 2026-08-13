@@ -21,7 +21,7 @@ async function main(): Promise<void> {
     process.exit(1);
     return;
   }
-  const field = (process.env.EVAL_INSPECT_FIELD?.trim() || 'decisions') as 'actions' | 'decisions' | 'topics' | 'people' | 'companies';
+  const field = (process.env.EVAL_INSPECT_FIELD?.trim() || 'decisions') as 'actions' | 'decisions' | 'events' | 'topics' | 'people' | 'companies';
   const files = readdirSync(DIR).filter((f) => f.endsWith('.json')).sort();
 
   for (const f of files) {
@@ -32,10 +32,14 @@ async function main(): Promise<void> {
       process.stdout.write(`  extraction FAILED: ${res.error}\n`);
       continue;
     }
-    const expected = g.expected[field] as string[];
+    const expected = (g.expected[field] as string[] | undefined) ?? [];
     const actualRaw = res.insight[field];
+    // events is {cause,effect}[]; flatten to "cause → effect" like the surface scorer does.
     const actual = Array.isArray(actualRaw)
-      ? actualRaw.map((x) => (typeof x === 'string' ? x : JSON.stringify(x)))
+      ? actualRaw.map((x) =>
+          typeof x === 'string' ? x
+          : x && typeof x === 'object' && 'cause' in x ? `${(x as { cause: string }).cause} → ${(x as { effect: string }).effect}`
+          : JSON.stringify(x))
       : [];
     process.stdout.write(`  EXPECTED (${expected.length}):\n`);
     for (const e of expected) process.stdout.write(`    - ${e}\n`);

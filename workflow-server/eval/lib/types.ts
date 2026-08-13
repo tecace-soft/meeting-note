@@ -21,6 +21,9 @@ export interface InsightGolden {
   expected: {
     actions: string[];
     decisions: string[];
+    // F4 refinement (2026-08-13): cause->effect chains, each written "cause → effect".
+    // Optional so existing goldens still load; the surface scores events only when present.
+    events?: string[];
     topics: string[];
     people: string[];
     companies: string[];
