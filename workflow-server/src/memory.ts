@@ -384,6 +384,7 @@ OWNER ATTRIBUTION (fill action "owner"):
 RULES:
 - OUTPUT LANGUAGE (critical): write every field value — actions.text, decisions, events (cause/effect), topics — in the SAME language the meeting is spoken in. If the transcript is Korean, they MUST be Korean. These instructions and the SPEAKER CONTEXT block are written in English, but they are directions ONLY: do NOT let them switch the output language, and NEVER translate the meeting content into English. (owner/people names may stay in their original script.)
 - Only what the transcript supports. Never invent names, decisions, or deadlines. When unsure, omit.
+- Do NOT expand or "correct" a transliterated proper noun into a guessed original spelling — keep it as spoken (e.g. "오픈클로어" stays "오픈클로어"; never invent an English form like "OpenChorus"). Applies to every field.
 - Keep each entry short. Deduplicate within each list. Any list may be empty; return them all.
 - BE SELECTIVE, NOT EXHAUSTIVE. Hard limits: at most 20 actions, 15 decisions, 15 events, 15 topics, 20 people, 15 companies. Keep only the most important/salient items. Do NOT turn every noun into a topic, or every mention into a person/company — a short, high-signal list is the goal.
 - NEVER output empty-string ("") entries and NEVER pad a list to a length. If a list has nothing, return []. Never output a speaker label (e.g. "Speaker A", "Speaker 1") as a person.

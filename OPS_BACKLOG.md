@@ -63,6 +63,7 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 - Effort: small (verify + wire recipient).
 - Cost: $0–low (depends on the email channel already in alerts.ts).
 - Status 2026-08-04: recipients now default to BOTH `genekim@tecace.com` and `andrewyoo@tecace.com` (`WORKFLOW_ALERT_TO` overrides). Coverage confirmed comprehensive (500 handler, unhandledRejection, uncaughtException, job failure). ACTIVATION GAP (config, not code): `RESEND_API_KEY` must be set on Render, Resend sender domain must be verified to send to tecace.com addresses, and the backend must be un-suspended. Standup validated the direction (automated error reporting via email). See section F self-healing note (F2) for the AI-analysis extension.
+- **✅ ACTIVATION GAP CLOSED 2026-08-13** (via the F2 email work): `RESEND_API_KEY` is set on Render, `tecace.com` is a verified Resend sender domain (AXKH sends from it; our F2 new-issue email delivered to andrewyoo@tecace.com), and `WORKFLOW_ALERT_FROM=Meeting Note Alerts <alerts@tecace.com>` is set. `sendWorkflowAlert` uses the SAME `sendEmail`/Resend path as F2 (proven delivering) → job-failure/uncaught-error alerts now deliver to `alertRecipients()` (= `WORKFLOW_ALERT_TO`, default genekim+andrewyoo). No code left. Only a real job failure will confirm end-to-end, but the path is identical to the verified F2 send. **P0.3 = effectively done.** The remaining ops-visibility items are host-level (P0.1 Render alerts, P0.2 uptime monitor), which are dashboard tasks, not code.
 
 ---
 
