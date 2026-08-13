@@ -525,8 +525,7 @@ async function writeNoteInsight(
       user_id: userId,
       actions: insight.actions,
       decisions: insight.decisions,
-      // insight.events is produced and F8-measured but NOT persisted yet: the note_insight
-      // `events` column + MCP retrieval are the next (wiring) step, gated on the F8 lift.
+      events: insight.events,
       topics: insight.topics,
       people: insight.people,
       companies: insight.companies,

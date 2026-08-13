@@ -279,4 +279,75 @@ export function registerContextTools(_server: McpServer): void {
       });
     },
   );
+
+  server.registerTool(
+    'find_events',
+    {
+      title: 'Find Events (cause → effect)',
+      description: 'Find cause→effect events (what happened / was done and what it led to) across accessible meetings, with source note evidence. Best for reverse "what did I do / what happened and why" questions. Reads the structured note_insight.events index; notes not yet indexed have no events.',
+      inputSchema: {
+        projectId: z.string().optional(),
+        limit: optionalInt(1, 100),
+        noteLimit: optionalInt(1, 200),
+        maxItemsPerNote: optionalInt(1, 20),
+        ...dateFilterSchema,
+      },
+    },
+    async ({ projectId, limit, noteLimit, maxItemsPerNote, date, startDate, endDate }) => {
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
+      const resolvedLimit = clampLimit(limit, 50, 100);
+      const resolvedNoteLimit = clampLimit(noteLimit, 50, 200);
+      const resolvedMaxItemsPerNote = clampLimit(maxItemsPerNote, 8, 20);
+      const dateFilter = resolveDateFilter({ date, startDate, endDate });
+      let query = supabase
+        .from('note')
+        .select(NOTE_SUMMARY_SELECT as string)
+        .order('meeting_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .limit(resolvedNoteLimit);
+      query = applyNoteAccessScope(query, userId);
+      if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
+      query = applyMeetingDateFilter(query, dateFilter);
+      const { data, error } = await query;
+      if (error) return errorResult(error.message);
+      const notes = ((data as unknown) as NoteRow[]) ?? [];
+
+      // Events live only in the structured note_insight index (no summary-text heuristic
+      // fallback — a cause→effect pair is not recoverable from free text reliably). Notes
+      // without an insight row yet simply contribute no events.
+      const noteIds = notes.map((note) => note.id).filter(Boolean);
+      const eventsByNote = new Map<string, Array<{ cause?: unknown; effect?: unknown }>>();
+      if (noteIds.length > 0) {
+        const { data: insightRows } = await supabase.from('note_insight').select('note_id, events').in('note_id', noteIds);
+        for (const row of (insightRows as Array<{ note_id: string; events: unknown }> | null) ?? []) {
+          if (Array.isArray(row.events) && row.events.length > 0) {
+            eventsByNote.set(row.note_id, row.events as Array<{ cause?: unknown; effect?: unknown }>);
+          }
+        }
+      }
+
+      const items: Array<Record<string, unknown>> = [];
+      for (const note of notes) {
+        const structured = eventsByNote.get(note.id);
+        if (!structured) continue;
+        const sourceNote = summarizeNote(note);
+        for (const ev of structured.slice(0, resolvedMaxItemsPerNote)) {
+          const cause = typeof ev.cause === 'string' ? ev.cause.trim() : '';
+          const effect = typeof ev.effect === 'string' ? ev.effect.trim() : '';
+          if (!cause || !effect) continue;
+          items.push({ cause, effect, source: 'insight', sourceNote });
+          if (items.length >= resolvedLimit) break;
+        }
+        if (items.length >= resolvedLimit) break;
+      }
+
+      return jsonResult({
+        projectId: projectId ?? null,
+        dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
+        searchedNotes: notes.length,
+        events: items,
+      });
+    },
+  );
 }
