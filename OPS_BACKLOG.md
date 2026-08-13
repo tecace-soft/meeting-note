@@ -43,6 +43,8 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 
 ## P0 — Operational visibility / alerting (what the boss wants)
 
+> **PARKED 2026-08-13 (user call): P0.1 + P0.2 deferred on free-tier friction.** Company-address alerting needs either a paid Render Team seat (P0.1) or standing up an external monitor (P0.2); the user chose to skip both for now and accept "free tier can't, move on." The account owner already gets Render's failure/suspension emails (zero-cost floor), and **P0.3 job-failure email IS live** (see below). Revisit P0.1/P0.2 alongside the **P1.3 hosting-posture decision** — if the app moves to a paid host, member seats + monitoring come with it.
+
 ### P0.1 Turn on Render failure/suspension emails to the company address
 - What: Render already emails the account owner on service failure, deploy failure, and free-tier suspension. Point/extend those notifications to the company email (add team members or set the notification email).
 - Why: This is most of the boss's ask ("warn me when it goes down") with almost no work. The current suspension likely already generated an email to the account owner that just is not going to the company inbox.
