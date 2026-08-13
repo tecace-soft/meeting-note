@@ -350,4 +350,35 @@ export function registerContextTools(_server: McpServer): void {
       });
     },
   );
+
+  // M4: the one WRITE tool — organize meetings into projects. Attributed to the scoped
+  // user (no speaker identification involved — the actor is the authenticated caller, not
+  // a transcript speaker). Backed by a service_role-only RPC that re-checks ownership.
+  server.registerTool(
+    'add_note_to_project',
+    {
+      title: 'Add Note to Project',
+      description: 'Organize a meeting: add an accessible note to one of YOUR projects. The note must be owned by or shared with you and the project must be yours. Idempotent (adding a note already in the project is a no-op). After this, project-scoped queries (search_notes / find_action_items / find_events with projectId) include the note.',
+      inputSchema: {
+        noteId: z.string(),
+        projectId: z.string(),
+      },
+    },
+    async ({ noteId, projectId }) => {
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('This write requires an authenticated user (no scoped user resolved).');
+      const noteIdTrimmed = noteId.trim();
+      const projectIdTrimmed = projectId.trim();
+      if (!noteIdTrimmed || !projectIdTrimmed) return errorResult('Both noteId and projectId are required.');
+      // The RPC raises on: project not found / not owned, note not accessible.
+      const { error } = await supabase.rpc('add_note_to_project_for_user', {
+        p_note_id: noteIdTrimmed,
+        p_project_id: projectIdTrimmed,
+        p_user_id: userId,
+      });
+      if (error) return errorResult(error.message);
+      return jsonResult({ ok: true, noteId: noteIdTrimmed, projectId: projectIdTrimmed });
+    },
+  );
 }
