@@ -6,12 +6,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage, type TranslationKey } from '../context/LanguageContext';
 import {
-  AREA_OPTIONS, PURPOSE_OPTIONS, STATUS_OPTIONS, PRIORITY_OPTIONS, SEVERITY_OPTIONS,
+  PURPOSE_OPTIONS, STATUS_OPTIONS, PRIORITY_OPTIONS, SEVERITY_OPTIONS,
   statusColor, priorityColor,
   listIssues, createIssue, updateIssue, softDeleteIssue,
   uploadIssueAttachment, deleteIssueAttachment, signAttachmentUrls,
   generateIssueResolution, notifyIssue, suggestTriage,
-  type FeedbackIssue, type IssueAttachment, type IssuePurpose, type IssueStatus,
+  type FeedbackIssue, type IssueAttachment, type IssueStatus,
   type IssuePriority, type IssueSeverity, type TriageSuggestion,
 } from '../lib/feedbackIssues';
 
@@ -50,6 +50,15 @@ export default function Issues() {
     }
   }, []);
   useEffect(() => { void reload(); }, [reload]);
+
+  // Deep link from the notification email (?issue=<issueKey>): once the list loads,
+  // auto-select and open that ticket. Consumed once so manual selection isn't overridden.
+  const wantIssueKey = useRef<string | null>(new URLSearchParams(window.location.search).get('issue'));
+  useEffect(() => {
+    if (!wantIssueKey.current || selectedId) return;
+    const match = issues.find((i) => i.issueKey === wantIssueKey.current);
+    if (match) { setSelectedId(match.id); wantIssueKey.current = null; }
+  }, [issues, selectedId]);
 
   const selected = issues.find((i) => i.id === selectedId) ?? null;
   const kpi = useMemo(() => ({
@@ -111,19 +120,14 @@ function RegisterPane({ user, getAccessToken, onCreated, setUrls, t }: {
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [override, setOverride] = useState<{ purpose?: IssuePurpose; area?: string; priority?: IssuePriority; severity?: IssueSeverity }>({});
   const [attachments, setAttachments] = useState<IssueAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const suggestion: TriageSuggestion = useMemo(() => suggestTriage(title, description), [title, description]);
-  const val = {
-    purpose: override.purpose ?? suggestion.purpose,
-    area: override.area ?? suggestion.area,
-    priority: override.priority ?? suggestion.priority,
-    severity: override.severity ?? suggestion.severity,
-  };
+  // The reporter only describes the problem; purpose/area/priority/severity are auto-classified
+  // (deterministic, no LLM). A developer can still adjust them later in the triage panel.
+  const val: TriageSuggestion = useMemo(() => suggestTriage(title, description), [title, description]);
 
   const doUpload = useCallback(async (files: File[]) => {
     if (!user?.id) return;
@@ -153,16 +157,18 @@ function RegisterPane({ user, getAccessToken, onCreated, setUrls, t }: {
   };
 
   const submit = async () => {
-    if (!title.trim() || !description.trim() || !user) { setMsg('제목과 설명을 입력하세요.'); return; }
+    if (!description.trim() || !user) { setMsg('문제 설명을 입력하세요.'); return; }
     try {
       setSubmitting(true); setMsg(null);
+      // Title optional: derive it from the first line of the description when left blank.
+      const finalTitle = title.trim() || description.trim().split('\n')[0].slice(0, 60);
       const created = await createIssue({
-        title, description, purpose: val.purpose, area: val.area, priority: val.priority, severity: val.severity,
-        attachments, aiSuggestion: suggestion,
+        title: finalTitle, description, purpose: val.purpose, area: val.area, priority: val.priority, severity: val.severity,
+        attachments, aiSuggestion: val,
         authorEmail: user.email ?? '', authorName: user.displayName ?? null,
       });
       void notifyIssue('created', created, getAccessToken);
-      setTitle(''); setDescription(''); setOverride({}); setAttachments([]);
+      setTitle(''); setDescription(''); setAttachments([]);
       await onCreated();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
@@ -181,19 +187,7 @@ function RegisterPane({ user, getAccessToken, onCreated, setUrls, t }: {
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} style={{ ...inputStyle, resize: 'vertical' }} />
       </Field>
 
-      <div style={{ display: 'flex', gap: 8, margin: '4px 0 8px' }}>
-        <Select value={val.purpose} onChange={(v) => setOverride((o) => ({ ...o, purpose: v as IssuePurpose }))}
-          options={PURPOSE_OPTIONS.map((p) => ({ value: p.value, label: p.labelKo }))} />
-        <Select value={val.area} onChange={(v) => setOverride((o) => ({ ...o, area: v }))}
-          options={AREA_OPTIONS.map((a) => ({ value: a.value, label: a.labelKo }))} />
-      </div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        <Select value={val.priority} onChange={(v) => setOverride((o) => ({ ...o, priority: v as IssuePriority }))}
-          options={PRIORITY_OPTIONS.map((p) => ({ value: p.value, label: p.value }))} />
-        <Select value={val.severity} onChange={(v) => setOverride((o) => ({ ...o, severity: v as IssueSeverity }))}
-          options={SEVERITY_OPTIONS.map((p) => ({ value: p.value, label: p.value }))} />
-      </div>
-      <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>💡 {suggestion.reason}</p>
+      <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 10px' }}>💡 자동 분류: {val.reason}</p>
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
         <button type="button" onClick={() => fileRef.current?.click()} style={ghostBtn}>{t('issuesAttach')}</button>

@@ -2833,7 +2833,7 @@ async function issueNotify(req: IncomingMessage, res: ServerResponse): Promise<v
   }
   const issueKey = typeof body?.issueKey === 'string' ? body.issueKey : '';
   const origin = env.frontendOrigin && env.frontendOrigin !== '*' ? env.frontendOrigin.replace(/\/+$/, '') : '';
-  const deepLink = `${origin}/issues`;
+  const deepLink = `${origin}/issues${issueKey ? `?issue=${encodeURIComponent(issueKey)}` : ''}`;
   const html = issueEmailHtml({
     kind,
     issueKey,
