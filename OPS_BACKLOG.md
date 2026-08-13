@@ -49,6 +49,7 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 - Effort: minutes (dashboard settings).
 - Cost: $0.
 - Note: verify exactly which events Render emails on (failure vs. free-hour suspension may differ).
+- **2026-08-13 finding: adding the company email as a Render notification recipient requires a PAID Team plan** (free tier can't invite members; notifications only go to existing workspace members). Not worth paying just for this. **Resolution: the account owner (Gene's personal account) ALREADY receives Render's failure/suspension emails for free** — that satisfies P0.1's intent at zero cost (confirm the owner's Account → Notifications has "Service failed / Suspended" on). For a COMPANY-address down-alert without a paid seat, use **P0.2 (UptimeRobot)** — it sends to any email freely. So P0.1 = rely on owner-already-notified; route company-address alerting through P0.2. (Member seats come free-of-extra-thought only if P1.3 moves to a paid host.)
 
 ### P0.2 External uptime monitor with email alert
 - What: UptimeRobot free (or Better Stack free) pings the frontend URL and a backend health endpoint every ~5 min; emails on down.
