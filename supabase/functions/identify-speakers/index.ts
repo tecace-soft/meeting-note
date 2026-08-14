@@ -237,30 +237,56 @@ async function callGeminiWithRetryAndFallback(
   };
 }
 
+// NOTE: keep this prompt in sync with workflow-server/src/memory.ts (the ingest + eval copy).
+// Both are text-only speaker identification; they must behave the same.
 const IDENTIFY_SYSTEM_PROMPT = `You identify who each anonymous speaker in a meeting transcript most likely is.
-You are given: (1) a transcript whose speakers are anonymous labels like "Speaker A", "Speaker B"; (2) a roster of the user's KNOWN speakers, each with a short profile summary; (3) the display name of the logged-in user ("self"), who is usually present in their own meetings.
+You are given: (1) a transcript whose speakers are anonymous labels like "Speaker A", "Speaker B"; (2) a roster of the user's KNOWN speakers — the people this user REGULARLY meets with — each with a short profile summary, most-established first; (3) the display name of the logged-in user ("self"), who is usually present in their own meetings.
 
-For EACH distinct anonymous label, decide the single most likely identity using text signals only:
-- Direct address / vocatives ("Thanks, Hansoo", "Andrew, what do you think?") and self-introductions ("this is Jin") — these are strong.
-- Topic / project / responsibility overlap with a roster profile.
-- The self prior: if address or context indicates the logged-in user, mark isSelf true.
+For EACH distinct anonymous label, decide the single most likely identity using text signals + these priors, roughly in this order of reliability:
+- Direct address / vocatives ("Thanks, Hansoo", "Andrew, what do you think?") and self-introductions ("this is Jin") — strongest.
+- INTERACTION ROLE — match each speaker's conversational STANCE to the ROLE described in the roster profile. This is usually MORE reliable than topic overlap, because in a small team everyone discusses the same topics. Signals: who ASKS for progress / SETS direction / REQUESTS features / evaluates ("어때요?", "~해달라는 거예요", "our goal is…") vs who REPORTS what they did / ACCEPTS tasks / defers ("어제 ~ 완성했습니다", "제가 ~ 할게요", "알겠습니다"). A boss/lead asks & directs; a developer reports & accepts. Map the asker to the roster's lead/boss profile and the reporter to the roster's developer profile.
+- The SELF prior: the self is usually present. Decide which ROLE the self plays from the roster (is the self the lead or the developer?) and use the interaction-role signal to place the self on the matching label.
+- The ROSTER / attendance prior: the roster IS this user's usual set of collaborators. In a SMALL meeting (few labels), the participants are almost always the self plus one or a few roster members — so exactly one label is the self and the others most likely map to roster members. Prefer a confident roster assignment there instead of "unknown".
+- Topic / project overlap — WEAKEST signal; use only to break ties, never to override interaction role.
 
 Rules:
 - If the label best matches a roster entry, return its exact speakerId and name.
+- SELF CONSISTENCY (critical): if the person you assign to a label IS the logged-in user (self), you MUST set isSelf=true; and if isSelf=true the name MUST be the self's name. Never name the self person with isSelf=false, and never set isSelf=true for anyone who is not the self.
+- At most ONE label is the self. If two labels look like the self, keep isSelf=true only for the single best one.
 - If the transcript clearly NAMES a person who is NOT in the roster, return speakerId=null and that name (a new-name suggestion).
-- If you cannot tell, return speakerId=null, name=null (unknown). Do NOT guess to fill every slot.
-- confidence is 0.0–1.0 reflecting how sure you are. Be conservative: prefer a lower confidence or unknown over a wrong identity.
+- Only return unknown (speakerId=null, name=null) when there is genuinely no supporting signal AND no small-meeting roster mapping. Do NOT invent an identity from nothing — but in a small meeting whose participants clearly correspond to self + roster members, a confident assignment is EXPECTED, not "unknown".
+- CONFIDENCE (0.0-1.0), calibrated to MAPPING certainty, not just to recognizing the group:
+  - >=0.8 only when a SPECIFIC label has a clear distinguishing signal (direct address, an unambiguous interaction-role match, a name mention).
+  - <=0.5 when you can identify the participant SET but the role/text signals do not clearly say WHICH label is which (e.g. two same-domain speakers, weak or conflicting stance signals). Give your best-guess mapping at low confidence so it is offered as a suggestion, NOT auto-applied. A confident WRONG mapping is worse than a tentative one.
 - Never invent a speakerId that is not in the roster.
-- rationale: one short sentence citing the evidence (a quote or the matched topic).
+- rationale: one short sentence citing the evidence (a quote, the matched interaction role, or the self/roster prior).
 
 Return ONLY JSON of the exact shape:
 {"suggestions":[{"label":"Speaker A","speakerId":"<roster id or null>","name":"<name or null>","confidence":0.0,"isSelf":false,"rationale":"..."}]}
 Include exactly one object per distinct label given, in the same order.`;
 
+// Collapse roster entries that refer to the same person (same name after stripping a
+// parenthetical script variant, e.g. "Andrew Yoo" vs "Andrew Yoo (유영준)"), keeping the
+// RICHEST profile and ordering richest-first as a light "regular collaborator" prior. Sending
+// duplicates made the model pick a different speakerId per meeting and flip isSelf. Shapes the
+// request ONLY — no DB mutation. Keep in sync with workflow-server/src/memory.ts.
+function dedupeRosterByName(roster: RosterEntry[]): RosterEntry[] {
+  const byName = new Map<string, RosterEntry>();
+  for (const entry of roster) {
+    const key = entry.name.replace(/\s*[(（【[].*$/, '').trim().toLowerCase();
+    if (!key) continue;
+    const existing = byName.get(key);
+    if (!existing || (entry.summary?.length ?? 0) > (existing.summary?.length ?? 0)) {
+      byName.set(key, entry);
+    }
+  }
+  return [...byName.values()].sort((a, b) => (b.summary?.length ?? 0) - (a.summary?.length ?? 0));
+}
+
 function buildIdentifyUserPrompt(body: RequestBody): string {
   const transcript = body.transcriptText.slice(0, MAX_TRANSCRIPT_CHARS);
   const labels = body.labels.slice(0, MAX_LABELS);
-  const roster = body.roster.slice(0, MAX_ROSTER_ENTRIES);
+  const roster = dedupeRosterByName(body.roster).slice(0, MAX_ROSTER_ENTRIES);
 
   const rosterText = roster.length
     ? roster
