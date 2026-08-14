@@ -12,7 +12,8 @@
     "eval:gate": "tsx eval/gate.ts",
     "eval:stability": "tsx eval/stability.ts",
     "eval:inspect": "tsx eval/inspect.ts",
-    "typecheck:eval": "tsc -p eval/tsconfig.json"
+    "typecheck:eval": "tsc -p eval/tsconfig.json",
+    "env:check": "node scripts/check-env.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",
