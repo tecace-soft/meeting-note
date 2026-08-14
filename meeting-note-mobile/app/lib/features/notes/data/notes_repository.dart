@@ -305,9 +305,7 @@ class NotesRepository {
           );
           break;
         } on DioException catch (error) {
-          final coldStart =
-              error.type == DioExceptionType.connectionTimeout ||
-                  error.type == DioExceptionType.connectionError;
+          final coldStart = _isTransientConnectFailure(error);
           if (coldStart && attempt < 2) {
             attempt++;
             await Future.delayed(Duration(seconds: 3 * attempt));
@@ -337,8 +335,7 @@ class NotesRepository {
       }
       throw StateError('Workflow server did not return a job id.');
     } on DioException catch (error) {
-      final coldStart = error.type == DioExceptionType.connectionTimeout ||
-          error.type == DioExceptionType.connectionError;
+      final coldStart = _isTransientConnectFailure(error);
       if (coldStart) {
         throw StateError(
           'The server is waking up and did not respond in time. '
@@ -1632,6 +1629,21 @@ String _preview(String value) {
   final compact = value.replaceAll(RegExp(r'\s+'), ' ').trim();
   if (compact.length <= 96) return compact;
   return '${compact.substring(0, 96)}...';
+}
+
+// A cold-start connect failure is not always surfaced by Dio as
+// connectionTimeout/connectionError. When the free-tier backend is spinning up,
+// Dio can also raise `unknown` wrapping a dart:io SocketException, or a
+// receiveTimeout if the socket opened but the waking server never responded in
+// time. Treating all of these as transient makes both the wake-retry loop and
+// the friendly "server is waking up" copy fire in the cases they were meant for,
+// instead of the scary generic "Could not reach ...". Retry stays safe: noteId +
+// fileId are stable idempotency keys, so a resubmit dedupes server-side.
+bool _isTransientConnectFailure(DioException error) {
+  return error.type == DioExceptionType.connectionTimeout ||
+      error.type == DioExceptionType.connectionError ||
+      error.type == DioExceptionType.receiveTimeout ||
+      (error.type == DioExceptionType.unknown && error.error is SocketException);
 }
 
 String _dioMessage(DioException error, String fallback) {
