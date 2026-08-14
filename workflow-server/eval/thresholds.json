@@ -5,5 +5,8 @@
   ],
   "memory:": [
     { "metric": "fact-drift assertions", "max": 0 }
+  ],
+  "speaker-id:": [
+    { "metric": "auto-apply precision", "min": 0.8 }
   ]
 }
