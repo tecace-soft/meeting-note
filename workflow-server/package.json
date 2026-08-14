@@ -9,6 +9,7 @@
     "dev": "tsx src/index.ts",
     "test": "tsx --test src/**/*.test.ts",
     "eval": "tsx eval/run.ts",
+    "eval:gate": "tsx eval/gate.ts",
     "eval:stability": "tsx eval/stability.ts",
     "eval:inspect": "tsx eval/inspect.ts",
     "typecheck:eval": "tsc -p eval/tsconfig.json"

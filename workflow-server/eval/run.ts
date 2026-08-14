@@ -5,7 +5,7 @@
 
 import { config } from 'dotenv';
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printReport, writeSnapshot } from './lib/report.js';
 import type { EvalDeps, InsightGolden, MemoryGolden, SearchGolden, SpeakerIdGolden, SurfaceScore } from './lib/types.js';
@@ -34,19 +34,22 @@ function loadGolden<T>(subdir: string): T[] {
   return out;
 }
 
-async function main(): Promise<void> {
+/** Build eval deps from env, or exit(1) if the required key is missing. Shared by run + gate. */
+export function buildDeps(): EvalDeps {
   const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
   if (!geminiApiKey) {
     process.stderr.write('GEMINI_API_KEY is required to run the eval (insight + memory surfaces call Gemini).\n');
     process.exit(1);
-    return;
   }
-  const deps: EvalDeps = {
+  return {
     geminiApiKey,
     judgeModel: process.env.EVAL_JUDGE_MODEL?.trim() || 'gemini-2.5-flash',
     now: process.env.EVAL_NOW?.trim() || '2026-08-11T00:00:00.000Z', // fixed clock → reproducible fold
   };
+}
 
+/** Load every golden set and score every surface. Shared by `run` (report) and `gate` (CI). */
+export async function collectScores(deps: EvalDeps): Promise<SurfaceScore[]> {
   const insightGolden = loadGolden<InsightGolden>('insight');
   const memoryGolden = loadGolden<MemoryGolden>('memory');
   const searchGolden = loadGolden<SearchGolden>('search');
@@ -58,6 +61,12 @@ async function main(): Promise<void> {
   for (const g of memoryGolden) scores.push(await runMemorySurface(g, deps));
   for (const g of speakerGolden) scores.push(await runSpeakerIdSurface(g, deps));
   for (const g of searchGolden) scores.push(await runSearchSurface(g, deps));
+  return scores;
+}
+
+async function main(): Promise<void> {
+  const deps = buildDeps();
+  const scores = await collectScores(deps);
 
   if (scores.length === 0) {
     process.stderr.write('No golden cases found under eval/golden/. Nothing to score.\n');
@@ -71,7 +80,14 @@ async function main(): Promise<void> {
   process.stdout.write(`snapshot: ${file}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`eval failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
-  process.exit(1);
-});
+// Only run the report when invoked directly (`tsx eval/run.ts`). gate.ts imports
+// buildDeps/collectScores from this module — without this guard that import would
+// re-execute the full eval as a side effect (double run + stray snapshot).
+const invokedDirectly =
+  process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+if (invokedDirectly) {
+  main().catch((error) => {
+    process.stderr.write(`eval failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}

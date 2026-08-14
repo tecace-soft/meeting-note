@@ -1,0 +1,9 @@
+{
+  "_comment": "F8 CI gate thresholds. Each key gates every SurfaceScore whose `surface` STARTS WITH the key (e.g. 'insight:' covers all per-meeting insight scores). `metric` matches a metric whose label STARTS WITH the given string. `min` = floor (value must be >=), `max` = ceiling (value must be <=). A gated metric that is MISSING on a surface that RAN fails the gate — this is intentional: on extraction/fold FAILURE the surface emits only an 'extraction/fold succeeded'=0 metric and drops the quality metrics, so requiring 'macro F1' / 'fact-drift assertions' to be present catches a reliability regression (the 40%->100% extraction fix silently breaking) as well as a quality/fact-drift regression. Surfaces that did not run (ran:false, e.g. search without prod creds) are skipped. Thresholds are deliberately conservative to catch REGRESSIONS, not judge run-to-run noise. Tune here, not in code (raise fact-drift max to 1 if the judge proves flaky).",
+  "insight:": [
+    { "metric": "macro F1", "min": 0.2 }
+  ],
+  "memory:": [
+    { "metric": "fact-drift assertions", "max": 0 }
+  ]
+}
