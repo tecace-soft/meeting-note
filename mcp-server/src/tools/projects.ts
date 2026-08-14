@@ -53,8 +53,22 @@ export function registerProjectTools(server: McpServer): void {
       accessibleNotesQuery = applyNoteAccessScope(accessibleNotesQuery, await noteAccessFilter(userId));
       const { data: noteData, error: noteError } = await accessibleNotesQuery;
       if (noteError) return errorResult(noteError.message);
-      const accessibleProjectIds = uniqueProjectIdsFromNotes((noteData as NoteRow[]) ?? []);
+      const accessibleNotes = (noteData as NoteRow[]) ?? [];
+      const accessibleProjectIds = uniqueProjectIdsFromNotes(accessibleNotes);
       const missingProjectIds = accessibleProjectIds.filter((id) => !projectsById.has(id));
+      // How many notes the CALLER can actually access, per project. For a project the caller
+      // does not own, `project.notes.length` would leak the project's true size (counting notes
+      // the caller can't read) — a note-derived project the owner never shared at the project
+      // level should not reveal its full note count. So non-owned projects report only this
+      // accessible-derived count. Capped at the 500-note accessible sample above (a metadata
+      // count, not a correctness value); owned projects keep their exact full count.
+      const accessibleNoteCountByProject = new Map<string, number>();
+      for (const note of accessibleNotes) {
+        for (const projectId of note.projects ?? []) {
+          const key = String(projectId);
+          accessibleNoteCountByProject.set(key, (accessibleNoteCountByProject.get(key) ?? 0) + 1);
+        }
+      }
       try {
         for (const project of await fetchProjectRowsByIds(missingProjectIds)) {
           projectsById.set(String(project.id), project);
@@ -67,13 +81,21 @@ export function registerProjectTools(server: McpServer): void {
         .sort((a, b) => a.name.localeCompare(b.name))
         .slice(0, resolvedLimit);
       return jsonResult({
-        projects: projects.map((project) => ({
-          id: project.id,
-          name: project.name,
-          noteCount: Array.isArray(project.notes) ? project.notes.length : null,
-          createdAt: project.created_at ?? null,
-          access: project.user_id === userId ? 'owned' : 'from-accessible-shared-notes',
-        })),
+        projects: projects.map((project) => {
+          const owned = project.user_id === userId;
+          // Owned → exact full count (no leak, you own every note). Non-owned → only the notes
+          // the caller can actually access, so the count never exposes unshared notes.
+          const noteCount = owned
+            ? (Array.isArray(project.notes) ? project.notes.length : null)
+            : (accessibleNoteCountByProject.get(String(project.id)) ?? 0);
+          return {
+            id: project.id,
+            name: project.name,
+            noteCount,
+            createdAt: project.created_at ?? null,
+            access: owned ? 'owned' : 'from-accessible-shared-notes',
+          };
+        }),
       });
     },
   );
