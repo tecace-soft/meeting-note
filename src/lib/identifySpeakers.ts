@@ -69,7 +69,10 @@ export async function requestSpeakerSuggestions(
   const roster = savedSpeakers
     .filter((s) => s.name?.trim())
     .map((s) => ({
-      speakerId: s.id,
+      // speaker.id is an integer PK — at runtime it is a NUMBER (PostgREST JSON), despite the
+      // `string` type. Stringify so the edge function's roster parsing keeps it (a number was
+      // being dropped, leaving an empty roster → the model could only answer "unknown").
+      speakerId: String(s.id),
       name: s.name,
       summary: buildSpeakerContextForSummary(s.name, s.profile ?? null),
     }));

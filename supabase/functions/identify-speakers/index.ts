@@ -403,13 +403,19 @@ serve(async (req) => {
   const labels = Array.isArray(body.labels)
     ? body.labels.filter((l): l is string => typeof l === 'string' && l.trim().length > 0).map((l) => l.trim())
     : [];
+  // speakerId arrives as a NUMBER when the DB PK is an integer (PostgREST returns JSON numbers),
+  // so coerce rather than require a string — the old `typeof === 'string'` check silently dropped
+  // EVERY roster entry, leaving the model with no roster (it could only answer "unknown").
   const roster = Array.isArray(body.roster)
     ? body.roster
-        .filter((r): r is RosterEntry =>
-          Boolean(r) && typeof r === 'object' &&
-          typeof (r as RosterEntry).speakerId === 'string' &&
-          typeof (r as RosterEntry).name === 'string')
-        .map((r) => ({ speakerId: r.speakerId, name: r.name, summary: typeof r.summary === 'string' ? r.summary : '' }))
+        .map((r) => {
+          const o = (r ?? {}) as Record<string, unknown>;
+          const id = o.speakerId;
+          const speakerId = typeof id === 'string' ? id.trim() : typeof id === 'number' ? String(id) : '';
+          const name = typeof o.name === 'string' ? o.name.trim() : '';
+          return { speakerId, name, summary: typeof o.summary === 'string' ? o.summary : '' };
+        })
+        .filter((r) => r.speakerId && r.name)
     : [];
 
   if (!transcriptText || labels.length === 0) {

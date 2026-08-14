@@ -2556,9 +2556,11 @@ async function autoIdentifySpeakersAtIngest(input: {
   if (anonLabels.length === 0) return;
 
   const { data: rosterRows } = await supabase.from('speaker').select('id, name, profile').eq('user_id', userId);
-  const roster = ((rosterRows ?? []) as Array<{ id: string; name: string; profile: string | null }>)
+  const roster = ((rosterRows ?? []) as Array<{ id: string | number; name: string; profile: string | null }>)
     .filter((r) => r.name)
-    .map((r) => ({ speakerId: r.id, name: r.name, summary: r.profile ?? '' }));
+    // speaker.id is an integer PK → a NUMBER at runtime; stringify so the returned speakerId
+    // validates against the roster (an unstringified number gets nulled in parseSuggestions).
+    .map((r) => ({ speakerId: String(r.id), name: r.name, summary: r.profile ?? '' }));
 
   const identified = await identifySpeakers({
     apiKey: env.geminiApiKey,
