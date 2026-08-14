@@ -104,7 +104,8 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 - Effort: half a day for the audit + reconciliation. Cost: $0.
 - Guardrail: destructive prod DB writes (DELETE/DROP) are blocked for Management-API curl by the auto-mode classifier; run them via the Supabase SQL Editor after snapshotting.
 
-### P1.3 Decide the honest hosting posture (bring to boss)
+### P1.3 Decide the honest hosting posture (bring to boss) [ON HOLD — 2026-08-14 user call]
+> **ON HOLD (uncommitted):** deferred by the user. Staying on the free tier for now; revisit if/when operational fragility (monthly Render suspension, no company-address alerting) actually becomes a felt problem. P0.1/P0.2 alerting stay parked with it.
 - What: Present the free-but-fragile vs. cheap-but-solid choice. A ~$5–7/mo VPS (Hetzner) or Render paid instance removes fragility and self-management. Oracle Cloud Always Free is powerful but self-managed with idle-reclamation/capacity/account caveats (details in the render-free-tier memory).
 - Why: If the boss wants "calm operations," the cheapest reliable answer is often coffee-money hosting, not more free-tier gymnastics.
 - Effort: one conversation.
