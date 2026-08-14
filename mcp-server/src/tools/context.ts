@@ -381,4 +381,35 @@ export function registerContextTools(_server: McpServer): void {
       return jsonResult({ ok: true, noteId: noteIdTrimmed, projectId: projectIdTrimmed });
     },
   );
+
+  // Symmetric to add_note_to_project: unlink a note from one of the caller's own projects.
+  // Backed by a service_role-only RPC that re-checks ownership (project must be the user's;
+  // the note is unlinked only where the user owns or is shared on it).
+  server.registerTool(
+    'remove_note_from_project',
+    {
+      title: 'Remove Note from Project',
+      description: 'Un-organize a meeting: remove a note from one of YOUR projects. The project must be yours and the note owned by or shared with you. Idempotent (removing a note not in the project is a no-op). After this, project-scoped queries (search_notes / find_action_items / find_events with projectId) no longer include the note.',
+      inputSchema: {
+        noteId: z.string(),
+        projectId: z.string(),
+      },
+    },
+    async ({ noteId, projectId }) => {
+      const { supabase } = getDataContext();
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('This write requires an authenticated user (no scoped user resolved).');
+      const noteIdTrimmed = noteId.trim();
+      const projectIdTrimmed = projectId.trim();
+      if (!noteIdTrimmed || !projectIdTrimmed) return errorResult('Both noteId and projectId are required.');
+      // The RPC raises on: project not found / not owned by the user.
+      const { error } = await supabase.rpc('remove_note_from_project_for_user', {
+        p_note_id: noteIdTrimmed,
+        p_project_id: projectIdTrimmed,
+        p_user_id: userId,
+      });
+      if (error) return errorResult(error.message);
+      return jsonResult({ ok: true, noteId: noteIdTrimmed, projectId: projectIdTrimmed });
+    },
+  );
 }
