@@ -72,7 +72,8 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 
 ## P1 — Remove the things that break (durable root-cause fixes)
 
-### P1.1 Kill the always-on polling backend → event-driven (webhook) on Supabase [BIGGEST LEVER]
+### P1.1 Kill the always-on polling backend → event-driven (webhook) on Supabase [ON HOLD — 2026-08-14 user call]
+> **ON HOLD (uncommitted):** the user is not sure this is worth doing. It's a real re-architecture (days) and its payoffs (free-hour cap, stranded jobs, one fewer service) may be better answered by the P1.3 hosting decision instead. Do NOT start without an explicit go. Analysis kept below for when/if it's revisited.
 - What: Replace the 30-minute AssemblyAI polling loop in workflow-server with AssemblyAI's webhook callback.
   1. Submit the transcript job to AssemblyAI with a `webhook_url` pointing at a Supabase Edge Function.
   2. AssemblyAI calls that function on completion.
