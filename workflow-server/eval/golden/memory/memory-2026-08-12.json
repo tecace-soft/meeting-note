@@ -1,0 +1,119 @@
+{
+  "name": "2026-08-12-eval-speaker-recurring",
+  "noteId": "7f20f70c-9289-4d93-b5f3-5bcff4dc35d8",
+  "selfName": "Andrew Yoo",
+  "priorMemory": {
+    "version": 2,
+    "items": [
+      {
+        "id": "p1",
+        "text": "The team is reworking memory into a two-tier system (a narrative base plus a relational base that records the reasons/context behind decisions), because the boss wants ChatGPT-style long-term memory.",
+        "entities": [
+          "memory",
+          "architecture"
+        ]
+      },
+      {
+        "id": "p2",
+        "text": "An index layer over meeting notes is being built so search is efficient and cuts token cost, retrieving by index instead of feeding whole transcripts.",
+        "entities": [
+          "index layer",
+          "search"
+        ]
+      },
+      {
+        "id": "p3",
+        "text": "An evaluation harness is being built to measure memory and indexing quality; the boss elevated it to a hypothesis-driven gating discipline before shipping.",
+        "entities": [
+          "evaluation",
+          "eval harness"
+        ]
+      },
+      {
+        "id": "p4",
+        "text": "Speaker identification is context-based; the goal is good speaker suggestion so summaries and context come out accurate.",
+        "entities": [
+          "speaker suggestion",
+          "diarization"
+        ]
+      },
+      {
+        "id": "p5",
+        "text": "The 50MB upload limit was a Supabase free-tier cap; it was fixed by upgrading to Supabase Pro and the cap is now 200MB.",
+        "entities": [
+          "upload limit",
+          "Supabase"
+        ]
+      },
+      {
+        "id": "p6",
+        "text": "Recording is capped at 2 hours with an auto-stop-and-save at the limit.",
+        "entities": [
+          "recording cutoff"
+        ]
+      },
+      {
+        "id": "p7",
+        "text": "The mobile app package is being renamed from com.example to com.tecace, with Azure auth redirects registered.",
+        "entities": [
+          "app rename",
+          "Azure"
+        ]
+      },
+      {
+        "id": "p8",
+        "text": "The memory feature is being extended so notes created from mobile recordings also fold into memory.",
+        "entities": [
+          "memory",
+          "mobile"
+        ]
+      },
+      {
+        "id": "p9",
+        "text": "Action items should carry owner attribution (who is responsible), derived from the speaker of each commitment.",
+        "entities": [
+          "owner attribution"
+        ]
+      },
+      {
+        "id": "p10",
+        "text": "An in-app feedback / issue tracker (mini-Jira) is being built so users can report bugs.",
+        "entities": [
+          "feedback tracker"
+        ]
+      },
+      {
+        "id": "p11",
+        "text": "Andrew builds all the software via Claude; Eun Seok Lee is the designer, involved only when a screen needs design.",
+        "entities": [
+          "team",
+          "roles"
+        ]
+      },
+      {
+        "id": "p12",
+        "text": "Version tracking is automated across web, backend, MCP, and mobile.",
+        "entities": [
+          "version tracking"
+        ]
+      }
+    ]
+  },
+  "transcript": "Hansoo Lee: 컴포넌트 녹음 같은 기능이 있으면 좋겠다라고 얘기했었던 게 그런 내용이긴 한데.\nAndrew Yoo (유영준): 인프럼트하게 갑자기 진행되는 대화에서 내용 같은 거, 인포메이션 같은 거 뽑으려면 있으면 편하죠.\nHansoo Lee: 그래서 그 얘기를 먼저 공유를 좀 드렸고요. 김석진 형님도 이해되셨나요? 네네.\nAndrew Yoo (유영준): 저 단계가 아예 없어져 있네요.\nHansoo Lee: 근데 그 얘기를 조금 전에 한건데 사람이 들어와야 될 관계가 있어.\nAndrew Yoo (유영준): 그래서 우선은 완벽하게 나와야 돼. 저렇게 막 죽으니 바꾸니 한 정도로 개발이 되면 안되지. 그래서 어제 이벨루에이션 프로세스 완성됐습니다.\nHansoo Lee: 어때요? 재밌게 했어요? 사실 이벨루에이션 만드는 자체가 되게 머리를 많이 써야 되는...\nAndrew Yoo (유영준): 어지간한 것은 다 이제 클로드가 클로드 통해 가지고 이거 이렇게 할래 저렇게 할래 하고 있어요 그래서 그 클로드 통해 가지고 만들었고 예 그래서 그 지금 이제 그 이벨루에이션 파이플라인이 추가가 되었구요\nHansoo Lee: 그래서 보여줄 수 있는 거에요?\nAndrew Yoo (유영준): 아니요 이거는 거의 에이전트에게 가깝습니다 그래서 클로드 통해서 어 이거 이벨루에이션 돌려줘 라고 하면은 그 뭐냐 거기에서 이제 클래스라든지 그 펑션 같은 거 그냥 가져다가 이제 돌리는 거라 가지고요 그것까지는 좀 힘들고 대신에 이제 그거를 만들어서 돌렸는데 인덱싱 쪽에 문제가 있는 게 발견이 됐어요. 그래서 이 문제가 회의가 인덱싱이 되어야 되는데 그게 한 60% 확률로 페일이 되더라고요.\nHansoo Lee: 그러니까 이런 게 있을 거야.\nAndrew Yoo (유영준): 그래서 최근 회의가 검색에 안 나오던 게 안 나오던 원인이 그거에요.\nHansoo Lee: 그래서 지금\nAndrew Yoo (유영준): 오늘 다시 한번 이 회의 가지고 테스트를 한번 해보고 CLI에 MCP 그걸 연결했기 때문에 오늘 내용을 가지고 다시 한번 테스트를 해볼겁니다. 그래서 어찌됐든 그쪽 버그는 개선이 되었고요. 그 다음에 메모리 쪽도 조금 더 리파인을 해서.\nHansoo Lee: 이벨루이션 하는 부분이 어떤 것들이예요?\nAndrew Yoo (유영준): 이벨루이션 하는 부분은 골든셋 해서 회의 내용이 얼마만큼 정확한지. 그거랑 그게 제대로 인덱싱 되는지.\nHansoo Lee: 제가 얘기한 이밸류이션은 사실은 그 우리 단기기억 장기기억 이런 얘기 했었잖아요. 메모리 얘기 했었잖아요. 메모리를 통해서 사람을 디텍트하고 사람을 서제시션하고 그리고 그래서 메모리를 써서 서머리도 더 정확하게 나오고 원톨로지나 이런 기능을 써서 그런 것들이 시간이 가면서 저희가 만든 프롬프트에 의해서 그런 게 우리가 프롬프트 만드는 거에 의해서 그런 것들이 쌓일 텐데 지식이 쌓일 텐데 메모리가 쌓일 텐데 그게 우리 프롬프트에 의해서 메모리가 정확하게 더 좋아지게 쌓이는지를 이벨루에이션 해달라는 거거든요.\nAndrew Yoo (유영준): 조금 더 이제 시간차 이벨루에이션을.\nHansoo Lee: 그럴 수 있죠.\nAndrew Yoo (유영준): 메모리가 더 쌓이면 쌓일수록 이게 얼마나 더 정확해지는지.\nHansoo Lee: 프롬프트가 있을텐데 그 프롬프트를 리벨로이션 해달라는 거였어요. 그러니까 이게 메모리를 잘 쌓아야 사람도 잘 디텍트 할거고 하잖아요. 그러니까 이게 메모리가 잘 쌓이는지를 리벨로이션 해달라는 건데 그러기 위해서는 프롬프트를 리벨로이션 해야겠죠. trigger는 prompt고 결과는 memory고 another 결과는 그거에 의한 summary나 suggestion이고.\nAndrew Yoo (유영준): 알겠습니다.\nHansoo Lee: 이해가 되셨나? 제가 이게 좀 복잡해서.\nAndrew Yoo (유영준): 그 suggestion이라고 하는 거 지금 말씀하시는 거 화자 suggestion 말씀하시는 거죠.\nHansoo Lee: 그러니까 저희가 최종 목표는 화자 suggestion을 잘해서 편하게 만들고 그리고 그걸 통해서 정확한 summary나 정확한 컨텍스트를 갖고 오는 게 목표잖아요.\nAndrew Yoo (유영준): 그렇죠.\nHansoo Lee: 그걸 하기 위해서 저희는 메모리를 쓰는 거고.\nAndrew Yoo (유영준): 그렇죠?\nHansoo Lee: 그래서 그 메모리가 잘 만들어지는지를 이밸류에트 해보자. 라는 부분이 사실 컸었어요.\nAndrew Yoo (유영준): 근데 그 뭐냐 그 메모리 그 이밸류에이션을 통해 가지고 지금 어제 그 메모리 개선이 한번 이루어지긴 지금은 맞아요.\nHansoo Lee: 그러게 보면 맞는 건데 근데 이제 좀\nAndrew Yoo (유영준): 더 좀 더 그 프롬트 쪽으로 핀포인트를 했으면 좋겠다라는 게 결국은 이제 저희 목적은\nHansoo Lee: 컨텍스트 정확한 컨텍스트를 만들어 넣는게 목적인데 그게 우리의 가설이 시간이 가면서 메모리가 좋아지면 사람도 서제션 잘 할 것이고 컨텍스트도 정확해질 것이다 라는게 어떻게 보면 어중션이잖아요. 그쵸 그쵸 그게 잘 되고 있는지를 이벨루에이트 해보자 라는.\nAndrew Yoo (유영준): 알겠습니다.\nHansoo Lee: 예 알겠습니다. 근데 뭐 아까 하신 것도 또 의미가 있으니까 이벨루에이트는 여러개 그렇죠.\nAndrew Yoo (유영준): 예 맞습니다. 이거를 저도 한번 그 Evaluate랑 메모리랑 인덱싱 쪽을 한번 그 문서화를 해가지고 다시 한번 정리를 한번. 왜냐하면 이게 코딩 에이전트를 통해 가지고 하니까 이게 실제로 개발 속도를 개발 속도가 제가 이거를 이해해 나가는 속도보다 훨씬 빨라요. 그래서 그런 것 때문에 가끔가다 계속 머릿속으로 리프레쉬를 해줘야 되는데 지금 아직까지 그쪽 메모리 쪽은 아직까지 그걸 못했기 때문에 그것도 한번 해야 될 것 같고.\nHansoo Lee: 이게 중요한 게 미팅이 중요한 게 아니고 저희는 컨텍스트 관리와 메모리 관리에요 지금은. 네 맞아요. 근데 그거를 우리가 잘 관리를 하느냐를 좀 리벨로이트 하는 거니까 그런 차원으로 보시는 게 맞나요?\nAndrew Yoo (유영준): 알겠습니다. 그러면 저는 오늘 Evaluate 그쪽 조금 더 진행을 해가지고 프롬트 Evaluation 이라든지 그래서 그런 쪽으로 좀 더 Refine 하는 거 그 작업이랑 그 다음에 방금 전에 말씀하셨던 그 버그 리포트 시스템 버그라든지 그 피드백 리포트 시스템 그거 두 개로 먼저 시작을 할게요. 그거 말고 이제 뒤쪽에 그 백로그 쪽에 몇 개가 더 쌓였긴 한데 그거는 이제 그거 두 개가 끝나면은 몇 개씩 계속 진행을 하는 걸로.\nHansoo Lee: 백로그 뭐가 있죠?\nAndrew Yoo (유영준): 봐야 됩니다. 길어요.\nHansoo Lee: 뺏는거가 이미 있구나. 제가 또 추가 요청이 있는데.\nAndrew Yoo (유영준): 추가 요청 하시면은 그냥 계속 넣어가지고 거기 내서 거기 내서 이제 그 중요도에 따라서 그 클로드가 자동으로 서게션을 해줘요. 저한테. 이거부터 만드는거 추천한다. 저거부터. 얼어붙게 뭐냐. 울트라노인베이스먼트가 큰거부터.\nHansoo Lee: 이거는 제가 프럼프트로 드릴게요. 사장님이 준걸로 저도 시작을 했는데 물론 손을 많이 되긴 했지만 그래도 뭐 기획이 필요 없으니까.\nAndrew Yoo (유영준): 네네네 이거를 그 앱이랑 웹이랑 웹이랑 모바일 우선은 웹만 알겠습니다.\nHansoo Lee: 모바일에 넣어도 좋고 모바일에 넣을 수 있으면 넣는데 모바일은 그렇게 중요하지 않아요.\nAndrew Yoo (유영준): 알겠습니다.\nHansoo Lee: 모바일 같이 들어갈 수 있지 않을까요? 아 그리고 iOS 앱 써보셨어요?\nAndrew Yoo (유영준): 지금 쓰고 있잖아요.\nHansoo Lee: 괜찮아요 아직은?\nAndrew Yoo (유영준): 지금 이제 행동을 해봐야죠.\nHansoo Lee: 아 처음 쓰시는 건가? IOSF 멀티 해도 돼요? 그래서 제가 멀티 하라고 했거든요. 네네네 상관없어요\nAndrew Yoo (유영준): 상관없어요.\nHansoo Lee: IOSF도 됐고. IOSF도 한 단계 된거죠? 테스트 QA. 이거는 이제 다음 백로그인데 혼잣말 녹음했으면 좋겠어요.\nAndrew Yoo (유영준): 혼잣말 녹음. 아, 그거 백목 있어요.\nHansoo Lee: 백목 있어요. 혼잣말 녹음. 혼잣말 녹음해서 나중에 그건 에이전트에서 야, 시리야가 아니라 내 에이전트야. 이거 분석해가지고 나한테 메일로 보내줘. 이런 식의 그런 걸 할 수 있게끔 하셨으면 좋겠어요.\nAndrew Yoo (유영준): 알겠습니다.\nHansoo Lee: 오케이. 그러면 제가 그걸 여기다 넣으면 되겠다. 그렇죠. 이제 여기다 넣으면 되는 거지.\nAndrew Yoo (유영준): 그렇죠, 그렇죠.\nHansoo Lee: 그러면 거기서 보시고 바로 그 얘기한 걸 바로 프럼프트로 만들어져 프럼프트가 쭉 나올 거고 프럼프트를 보시면서 에이 말도 안 돼 아니면 수정을 해가지고 일을 시키면 되는 거니까 그렇게 하면 되겠네 여기서 백로그를 준비하면 되겠네 그쵸 아\nAndrew Yoo (유영준): 그 다음에 또 하나 생각하는 거는 그 MCP 오딧 그것도 한번 생각을 하고 있고요. 현재로서는 그렇습니다. 또 필요하신 거라든지.\nHansoo Lee: 그리고 어떤 이슈가 생긴 거나 이런 거는 언롯을 다 받으시죠? 운영.\nAndrew Yoo (유영준): 운영 쪽이요? 아니요 운영 쪽 아직 사람 안 됐어요. 운영 자리 사람 안 됐어요. 그 이메일 받는 거 말씀하시는 거죠?\nHansoo Lee: 이메일이든 메시지든 뭐든 받아서 이게 돌아가는 거니까 그게 돼야 될 것 같아요.\nAndrew Yoo (유영준): 알겠습니다.\nHansoo Lee: 그리고 그리고 이제부터 좀 써봐야겠네요. 많은 사람들이 쓰게끔 프로모트를 좀 해야 될 것 같습니다.\nAndrew Yoo (유영준): 알겠습니다.\nHansoo Lee: 뭐 자잘한 UI 이슈들이 좀 있긴 있어요. 예를 들면 그런 것들 이제 저기다가 통해서 올려야 될지 모르겠는데 사람 선택하는데 폰에서 선택하는데 좀 어려워. 좀 이따 해보세요 한번 해보시고 뭐 여기서 이슈를 주셔도 되고 알겠습니다.\nAndrew Yoo (유영준): 제가 계속 저는 이거 계속 외부로 여기서는 녹음만 하고 그 회의 자체 회의 세그먼트 자체는 계속 웹에서 핸들링 하다 보니까 제가 그런걸 놓치는 부분인 것 같아요.\nHansoo Lee: 그러니까 그런 것들을 저기다가 올리면은 알겠습니다. 나는 되게 쉬워질 것 같아. 특히 UI 같은 거 버튼 툭툭툭 해가지고 하면은 바로 픽스되고. 네. 되기를 기대해요. 네.\nAndrew Yoo (유영준): 알겠습니다.\nHansoo Lee: 됐을까요?\nAndrew Yoo (유영준): 네.\nHansoo Lee: 그래서 저 이거 빨리 정리하고 다음 프로젝트도 넘어가야 돼. 이제 이거 플랫폼 만들어 놓고 내가 지금 보니까 그 이슈 그거 만들어 놓으면은 알아서 쌓이니까. 알아서 쌓이니까 그거는 거기 가서 툭툭툭툭 할 수 있게끔 하고.\nAndrew Yoo (유영준): 알겠습니다.",
+  "recurringSubjects": [
+    "two-tier memory architecture",
+    "index layer",
+    "evaluation process",
+    "speaker suggestion"
+  ],
+  "forbiddenAssertions": [
+    {
+      "claim": "The personal voice-memo (self-recording) feature has been built or implemented.",
+      "why": "In this meeting it is only raised as a future backlog idea (\"혼잣말 녹음했으면 좋겠어요\"), not implemented."
+    },
+    {
+      "claim": "The MCP audit has been completed.",
+      "why": "The boss only says he is thinking about an MCP audit (\"MCP 오딧 그것도 한번 생각을 하고 있고요\") — it is under consideration, not done."
+    }
+  ]
+}
