@@ -73,9 +73,68 @@ function applyUserScope<T>(query: T, userId: string | undefined): T {
   return (query as { eq: (column: string, value: string) => T }).eq('user_id', userId);
 }
 
-export function applyNoteAccessScope<T>(query: T, userId: string | undefined): T {
-  if (!userId) return query;
-  return (query as { or: (filters: string) => T }).or(`user_id.eq.${userId},shared_users.cs.{${userId}}`);
+// Only oid / numeric-id shaped tokens are ever interpolated into a PostgREST filter
+// string. Anything else is skipped defensively so a stray value can never break (or widen)
+// the filter. userIds are Microsoft oids (uuid), project ids are numeric or uuid.
+const SAFE_FILTER_TOKEN = /^[A-Za-z0-9_-]+$/;
+// Bound the OR-filter size (Power of Ten rule 2). A user shared on more projects than this
+// is not expected; extras are dropped (logged by the caller path if ever hit).
+const MAX_SHARED_PROJECTS_IN_SCOPE = 200;
+
+// Build the PostgREST `or=` expression that mirrors the app's note_owner_select RLS. MCP runs
+// as service_role (RLS bypassed), so the SAME visibility rule must be reproduced here or it
+// drifts from the app (M3). Three branches, matching the migration exactly:
+//   1. own the note                         user_id = me
+//   2. be in the note's shared_users        shared_users @> {me}
+//   3. the note is in a project that ITS OWNER shared with me
+//        project.user_id = note.user_id AND project.shared_users @> {me} AND note.projects ∋ project.id
+// Branch 3 is the one the old two-branch filter missed, so project-shared notes were invisible
+// over MCP. Grouping the shared projects by owner reproduces the "project owned by the note's
+// owner" constraint precisely (a per-owner `and(user_id.eq.OWNER, projects.ov.{their ids})`),
+// and keeps the filter to a handful of terms.
+// Resolve the PostgREST `or=` filter STRING for a user (or null when there is no scoped user,
+// i.e. the trusted static-key path that sees everything). Returns a plain string so callers can
+// `await` it WITHOUT touching the query builder — awaiting the builder itself would execute the
+// query (it is a thenable) and drop the chain.
+export async function noteAccessFilter(userId: string | undefined): Promise<string | null> {
+  if (!userId || !SAFE_FILTER_TOKEN.test(userId)) return null;
+  return noteAccessOrExpression(userId);
+}
+
+async function noteAccessOrExpression(userId: string): Promise<string> {
+  const terms = [`user_id.eq.${userId}`, `shared_users.cs.{${userId}}`];
+  try {
+    const { supabase } = getDataContext();
+    const { data, error } = await supabase
+      .from('project')
+      .select('id, user_id')
+      .contains('shared_users', [userId])
+      .limit(MAX_SHARED_PROJECTS_IN_SCOPE);
+    if (error) throw error;
+    const idsByOwner = new Map<string, string[]>();
+    for (const row of (data as Array<{ id: unknown; user_id: unknown }>) ?? []) {
+      const owner = typeof row.user_id === 'string' ? row.user_id : '';
+      const projectId = row.id == null ? '' : String(row.id);
+      if (!SAFE_FILTER_TOKEN.test(owner) || !SAFE_FILTER_TOKEN.test(projectId)) continue;
+      const list = idsByOwner.get(owner) ?? [];
+      list.push(projectId);
+      idsByOwner.set(owner, list);
+    }
+    for (const [owner, ids] of idsByOwner) {
+      if (ids.length > 0) terms.push(`and(user_id.eq.${owner},projects.ov.{${ids.join(',')}})`);
+    }
+  } catch {
+    // Fail SAFE: on any lookup error keep the two direct-access branches (never widen, never
+    // throw the whole tool call). Worst case degrades to the pre-M3 behavior for this request.
+  }
+  return terms.join(',');
+}
+
+// Apply a pre-resolved note-access filter (from noteAccessFilter). Sync + never awaits the
+// builder, so the query chain stays intact. Null filter (no scoped user) = no scoping.
+export function applyNoteAccessScope<T>(query: T, orFilter: string | null): T {
+  if (!orFilter) return query;
+  return (query as { or: (filters: string) => T }).or(orFilter);
 }
 
 export function toIdValue(id: string): string | number {
@@ -166,7 +225,7 @@ export async function fetchNote(noteId: string, select = NOTE_TRANSCRIPT_SELECT)
   const { supabase } = getDataContext();
   const userId = getScopedUserId();
   let query = supabase.from('note').select(select).eq('id', noteId).limit(1);
-  query = applyNoteAccessScope(query, userId);
+  query = applyNoteAccessScope(query, await noteAccessFilter(userId));
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
   return (data as NoteRow | null) ?? null;

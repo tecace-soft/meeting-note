@@ -9,6 +9,7 @@ import {
   getNoteTranscriptText,
   getScopedUserId,
   applyNoteAccessScope,
+  noteAccessFilter,
   NOTE_SUMMARY_SELECT,
   NOTE_TRANSCRIPT_SELECT,
   summarizeNote,
@@ -103,7 +104,7 @@ export function registerNoteTools(server: McpServer): void {
       const resolvedLimit = clampLimit(limit, 10, 50);
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       let query = supabase.from('note').select(NOTE_SUMMARY_SELECT).order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
@@ -291,7 +292,7 @@ export function registerNoteTools(server: McpServer): void {
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select(NOTE_SUMMARY_SELECT).order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
@@ -319,7 +320,7 @@ export function registerNoteTools(server: McpServer): void {
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select(NOTE_SUMMARY_SELECT).order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
@@ -355,7 +356,7 @@ export function registerNoteTools(server: McpServer): void {
       const dateFilter = resolveDateFilter({ date, startDate, endDate });
       if (!dateFilter.startIso && !dateFilter.endIso) return errorResult('Provide date, startDate, or endDate.');
       let query = supabase.from('note').select(NOTE_TRANSCRIPT_SELECT).order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(resolvedLimit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
@@ -506,7 +507,7 @@ export function registerNoteTools(server: McpServer): void {
           if (!userId) return errorResult('A scoped user id is required to search shared notes.');
           query = query.contains('shared_users', [userId]).neq('user_id', userId);
         } else {
-          query = applyNoteAccessScope(query, userId);
+          query = applyNoteAccessScope(query, await noteAccessFilter(userId));
         }
         if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
         query = applyMeetingDateFilter(query, dateFilter);

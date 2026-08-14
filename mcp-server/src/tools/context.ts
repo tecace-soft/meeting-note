@@ -4,6 +4,7 @@ import { applyMeetingDateFilter, describeDateFilter, resolveDateFilter } from '.
 import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
 import {
   applyNoteAccessScope,
+  noteAccessFilter,
   fetchNote,
   getDataContext,
   getNoteSummary,
@@ -181,7 +182,7 @@ export function registerContextTools(_server: McpServer): void {
         .order('meeting_at', { ascending: true, nullsFirst: true })
         .order('created_at', { ascending: true })
         .limit(resolvedLimit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
@@ -223,7 +224,7 @@ export function registerContextTools(_server: McpServer): void {
         .order('meeting_at', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(resolvedNoteLimit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
@@ -306,7 +307,7 @@ export function registerContextTools(_server: McpServer): void {
         .order('meeting_at', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(resolvedNoteLimit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       if (projectId) query = query.contains('projects', [toIdValue(projectId)]);
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;

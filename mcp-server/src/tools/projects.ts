@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { clampLimit, errorResult, jsonResult } from '../lib/formatters.js';
-import { applyNoteAccessScope, fetchProject, getDataContext, getScopedUserId, NOTE_METADATA_SELECT, NOTE_SUMMARY_SELECT, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
+import { applyNoteAccessScope, noteAccessFilter, fetchProject, getDataContext, getScopedUserId, NOTE_METADATA_SELECT, NOTE_SUMMARY_SELECT, summarizeNote, toIdValue, type NoteRow, type ProjectRow } from '../lib/supabase.js';
 
 function optionalInt(min: number, max: number) {
   return z.preprocess((value) => (value === '' ? undefined : value), z.coerce.number().int().min(min).max(max).optional());
@@ -50,7 +50,7 @@ export function registerProjectTools(server: McpServer): void {
       const projectsById = new Map(ownedProjects.map((project) => [String(project.id), project]));
 
       let accessibleNotesQuery = supabase.from('note').select(NOTE_METADATA_SELECT).order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false }).limit(500);
-      accessibleNotesQuery = applyNoteAccessScope(accessibleNotesQuery, userId);
+      accessibleNotesQuery = applyNoteAccessScope(accessibleNotesQuery, await noteAccessFilter(userId));
       const { data: noteData, error: noteError } = await accessibleNotesQuery;
       if (noteError) return errorResult(noteError.message);
       const accessibleProjectIds = uniqueProjectIdsFromNotes((noteData as NoteRow[]) ?? []);
@@ -98,7 +98,7 @@ export function registerProjectTools(server: McpServer): void {
         .contains('projects', [toIdValue(projectId)])
         .order('created_at', { ascending: false })
         .limit(limit);
-      query = applyNoteAccessScope(query, userId);
+      query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       const notes = ((data as NoteRow[]) ?? []);
