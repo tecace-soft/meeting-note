@@ -89,7 +89,8 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
   - Gemini summarization + attachment handling fits Supabase Edge Function execution-time limits (summary is ~1 call, usually < 1 min → likely fits; attachments/large transcripts need a check).
   - Where the current Android multipart upload path (buffers to temp disk in workflow-server) moves — likely client → Supabase Storage direct, same as web.
 
-### P1.2 Consolidate or idle the MCP server
+### P1.2 Consolidate or idle the MCP server — ❌ DROPPED 2026-08-14 (user call)
+> Not worth doing: the MCP server is the boss's primary way to query meetings (needs to stay responsive), and the free-hour cap is better addressed by the P1.3 hosting decision / P1.1 webhook-ization than by idling the service the boss actively uses. Skipped.
 - What: `meeting-note-mcp` runs always-on and shares the free-hour budget. Decide: is it needed in prod 24/7? If low-traffic, make it on-demand, fold it in, or drop it.
 - Why: A second always-on free service is half the reason the 750h cap blew. Removing/idling it eases the cap even before P1.1 lands.
 - Effort: small–medium.
@@ -155,10 +156,12 @@ Priority: M1 and M2 are size-independent — fix now, ahead of the memory rework
 - FIXED (commit `a111fec`): `summarizeNote` now reports `transcriptChecked: false` with null flags when the transcript/diarization columns were not fetched (unknown, not false); `get_note` fetches the transcript columns so its availability flags are real; `list_recent_notes` description updated to say availability is not checked in list view. Verified via unit check (list-view → null; fetched-with-data → real speakers; fetched-empty → empty).
 - Follow-on (folded into F4): cheap availability indicators for list views (generated `has_transcription`/`has_diarization` columns) so lists can show availability without downloading transcripts.
 
-### M3 Project-shared notes invisible via MCP
-- What: notes shared at the project level show in the app but are missing over MCP; the MCP access-control logic is implemented separately from the app RLS and drifts from it.
-- Fix: unify MCP access control with the app's sharing/RLS rules so owned + project-shared + directly-shared notes all resolve.
-- Effort: medium.
+### M3 Project-shared notes invisible via MCP — ✅ SHIPPED + E2E VERIFIED 2026-08-14
+- What (was): notes shared at the project level showed in the app but were missing over MCP; the MCP note filter (`applyNoteAccessScope`, `mcp-server/src/lib/supabase.ts`) was `user_id.eq OR shared_users.cs` only — the app's `note_owner_select` RLS has a THIRD branch (a note in a project that its owner shared with me) that MCP never reproduced (MCP runs as service_role, RLS bypassed).
+- FIXED (commit `0fee015`, deployed from `mcp-server`): new async `noteAccessFilter(userId)` resolves the PostgREST `or=` STRING (plain string so callers can `await` it without touching the thenable query builder), adding a per-owner `and(user_id.eq.OWNER,projects.ov.{their shared project ids})` term for each project shared with the user. This reproduces the RLS 3rd-branch predicate ("project owned by the note's owner, shared with me, note in it") exactly. `applyNoteAccessScope` is now a sync apply of that string; all 10 call sites updated. Defensive: safe-token regex on interpolated ids, bounded to 200 shared projects, fail-safe to the 2 direct branches on lookup error.
+- **E2E VERIFIED vs prod**: user `d84c9149` (in project 13's `shared_users`, project owned by `d9eb0f3d`) — new filter gained exactly the 2 previously-hidden project-13 notes (owner `d9eb0f3d`, `projects=[13]`), lost 0 (strict superset). Nested `and(...)` + `projects.ov.{...}` parses/executes on prod PostgREST.
+- **RELATED drift NOT changed (needs a product call): `list_projects` is OVER-permissive** — it surfaces projects derived from accessible notes (`access: 'from-accessible-shared-notes'`), while the app's `project_owner_select` RLS is owner OR `project.shared_users` only (no note-derived). Matching the app would HIDE note-derived projects from the boss over MCP (e.g. project 13 would drop for a non-member who can see its notes). Since that reduces what the boss sees, left as-is pending a decision: keep MCP's more-useful note-derived project view, or tighten to app parity.
+- Effort: medium (done).
 
 ### M4 No write/"organize" tools (MCP is 100% read-only) — SHIPPED 2026-08-13
 - What: the boss's actual usage is organizing meetings ("put these meetings into a project"), but MCP exposes no write tool, so Claude cannot do it. Safe RPCs already exist in the DB.
@@ -321,7 +324,7 @@ Condensed from full entries; details live in git history + `MEMORY_FEATURE_DESIG
 ### R6 Two-hour auto-stop recording — SHIPPED 2026-08-06 (web deployed; mobile needs build)
 - Web + mobile: at 2h a recording auto-stops and saves, a non-blocking warning shows in the final 5 min, and the user starts a new recording to continue. Commit `e1f9629`, merged to main (`21a4f05`).
 - Web (`RecorderContext` timer + `FloatingRecorderWidget`/`TranscriptionSummary` UI) is live via the Render redeploy. Mobile (Dart ticker in `recording_service.dart` + `ForegroundRecordingService.kt` `setMaxDuration(7200000)` native backstop for backgrounded Android) is in `main` but NOT on devices until an APK/IPA build ships (pair with the R11 rename build).
-- Remaining: E2E verify (smoke-test by temporarily lowering `MAX_RECORDING_SECONDS`); measure real file-size/storage impact.
+- Remaining: ~~E2E verify~~ **Auto-stop→save path VERIFIED (code review, both surfaces) 2026-08-14.** Web (`RecorderContext.tsx:740-750`): warn when `remaining ≤ WARNING && > 0`; at `recordingTime ≥ MAX` fires once (`autoStopFiredRef`), sets `recordingAutoStopped` + `stopRecording()` → `onstop` finalizes the blob, consumed by `TranscriptionSummary`/`FloatingRecorderWidget` to route into the summarize flow. Mobile (`recording_service.dart:451`): ticker fires once (`_stoppingAtLimit`) → `_handleAutoStopAtLimit` → `stop()` saves the file + exposes `autoStoppedFilePath`; native `setMaxDuration` backstop for backgrounded Android. Mechanism (warn → fire-once → finalize+save → route) correct + complete on both. A live lowered-constant recording (only thing beyond this) needs browser/mic/MSAL automation + creates a throwaway note → skipped as assume-good, consistent with the R9 call; F2 catches a regression. Storage impact measurement still open (low priority).
 
 ### R9 200MB upload limit + clear over-limit error — SHIPPED 2026-08-06 (E2E verify left)
 - Decision (2026-08-06 meeting): cap uploads at 200MB for cost/perf; show a clear error when a file exceeds it. Root cause of the old ~50MB failure was the Supabase free-tier per-file storage cap (not Render, not code); Supabase Pro made it raiseable.
