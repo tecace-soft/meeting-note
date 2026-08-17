@@ -73,7 +73,7 @@ first, then confirming it no longer happens.
    it back with `npm run dev`. The job should recover on the next poll rather
    than immediately reporting "failed".
 
-### Auth / session (targets for items 4 & 5 — not yet implemented)
+### Auth / session (token-readiness + refresh fixes SHIPPED — run as regression checks)
 4. **Fresh login**: sign in with a real Microsoft account; confirm notes load
    (not an empty list). An empty list here usually means the Supabase token
    wasn't ready and the query silently fell back to the anon key.
@@ -93,7 +93,8 @@ first, then confirming it no longer happens.
 ## Notes
 
 - `.env` files are gitignored; only `.env.example` is committed.
-- Deploying the workflow-server restarts it, which currently strands any
-  in-flight job (see RELIABILITY_AUDIT — C2). Deploy the boot-time orphan-job
-  cleanup (Phase 1 item 6) first, and prefer deploy windows when internal
-  testers are idle.
+- Deploying the workflow-server restarts it. The boot-time orphan-job cleanup
+  (`failOrphanedJobs` in `workflow-server/src/index.ts`) is now SHIPPED, so a
+  restart fails any stale in-flight job cleanly on boot (the client gets a
+  prompt, retryable error) instead of stranding it (was RELIABILITY_AUDIT C2).
+  Still prefer deploy windows when internal testers are idle.
