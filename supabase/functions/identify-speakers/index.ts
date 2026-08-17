@@ -155,6 +155,10 @@ async function callGeminiGenerateContent(
         temperature: 0.1,
         maxOutputTokens: 4096,
         responseMimeType: 'application/json',
+        // thinkingBudget:0 keeps this in line with its server twin (memory.ts identifySpeakers
+        // via callJsonModel) + update-user-memory: on 2.5 models, thinking tokens can consume
+        // the output budget and truncate the JSON. Faster + more reliable, no behavior change.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
   });
