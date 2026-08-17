@@ -2,6 +2,7 @@
 
 Last updated: 2026-08-17.
 Goal: make running and maintaining Meeting Note easier and calmer, at (near) zero cost.
+> **Operator guide:** for "how do I deploy / monitor / troubleshoot this," see **`RUNBOOK.md`** (the how). This file is the why / decision history / backlog.
 
 > **2026-08-14 session shipped:** M4 `remove_note_from_project` · **M3** (project-shared notes over MCP + noteCount leak fix) · **F5 speaker-suggestion overhaul** (interaction-role matching + roster dedup + the numeric-`speakerId` empty-roster bug fix; goldens 1→4 + speaker precision CI gate) · **F8 CI gate** (`eval:gate`) + memory goldens 1→2 · R12.4 cold-start (on device) · R11 `com.tecace` APK device-verified (login OK) · P2.3 `env:check` doctor. **ON HOLD (user):** P1.1 webhook-ization, P1.3 hosting decision, P0.1/P0.2 alerting, P1.2 (dropped), F5.2 MS-attendee prior (dropped). **Next-week candidates:** F1'' memory (RE-SCOPED 2026-08-17: full entity layer = non-goal/shelved; only the dedup-consolidation + retrieval-scoring slices remain) · P1.4 migration ledger (ledger backfilled 08-17) · F5.3 speaker frequency.
 > **2026-08-17 session:** **F9 v1 (ops agent: detect → RCA → F2 ticket) SHIPPED + LIVE IN PROD** (`193b9fb`, deployed 2026-08-17T17:21Z; new `workflow-server/src/opsAgent.ts` + wiring; build+25 tests green; prod DB I/O smoke passed). `F9_OPS_AGENT_ENABLED` defaults on. See F9 below. Transition-week goal (~2026-08-21) per the boss's 08-13 direction.
