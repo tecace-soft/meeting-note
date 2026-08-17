@@ -119,7 +119,8 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 
 ## P2 — Distribution & maintenance quality-of-life
 
-### P2.1 Mobile distribution channel (stop manual adb)
+### P2.1 Mobile distribution channel (stop manual adb) — ❌ DROPPED 2026-08-17 (user call)
+> **Not worth it.** adb is fine for the current tiny tester set (user + boss + S23), and P2.1's original driver (get "everyone on the JWT build" / com.tecace) is already done (all devices on the com.tecace build). Firebase App Distribution isn't a 750h "server" but it IS a new account + build-pipeline step + tester onboarding, which the user preferred to avoid during the ~2026-08-21 transition. iOS is now Korea-owned, so the "iOS can ride the same tool later" upside no longer applies to this repo. If distribution ever needs to scale (more testers or store release), the cheapest no-new-infra revisit is a link off **existing** infra (APK → Supabase Storage public URL from `build_apk.sh`, or a GitHub Release asset), NOT Firebase. Original plan kept below for that revisit.
 - What: Firebase App Distribution (free) — upload the APK, testers (boss/S23) get an install+update link. iOS can ride the same tool later (still needs an Apple account + Mac to build).
 - Why: Replaces build → adb install → copy-to-desktop with a link. Makes the "everyone on the JWT build" precondition (blocks the generate-profile gate) trivial to satisfy and verify.
 - Effort: ~half day first setup, trivial after.
