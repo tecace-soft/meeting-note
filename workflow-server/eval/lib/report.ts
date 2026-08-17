@@ -18,7 +18,7 @@ export function printReport(scores: SurfaceScore[], stampedAt: string): void {
     }
     process.stdout.write(`\n[${s.surface}]\n`);
     for (const m of s.metrics) {
-      const isCount = m.label.includes('lower better');
+      const isCount = m.label.includes('lower better') || m.label.includes('(count');
       const value = isCount ? String(m.value) : pct(m.value);
       process.stdout.write(`  ${m.label.padEnd(42)} ${value}${m.detail ? `   (${m.detail})` : ''}\n`);
     }

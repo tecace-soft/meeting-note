@@ -37,6 +37,9 @@ const MAX_INSIGHT_FIELD = 120;
 const DEFAULT_MEMORY_MODEL = 'gemini-2.5-flash-lite';
 // Fallbacks after the primary. Both gemini-2.0-* were retired (404) — kept only live models.
 const DEFAULT_MEMORY_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+// F1'' consolidation pass runs after each fold in prod (one extra flash-lite call,
+// gated to memories with >= CONSOLIDATION_MIN_ITEMS active items). Off-switch for cost.
+const CONSOLIDATION_ENABLED = (process.env.MEMORY_CONSOLIDATION_ENABLED ?? 'true').toLowerCase() !== 'false';
 
 type ItemStatus = 'active' | 'archived';
 
@@ -820,6 +823,126 @@ export async function computeMemoryFold(input: {
   return { priorActiveCount: activeForPrompt.length, ops, items };
 }
 
+// ---------------------------------------------------------------------------
+// F1'' — memory dedup consolidation pass
+//
+// The fold's supersede prompting collapses same-note duplicates, but F8 measured
+// that ~6-8 near-duplicate ACTIVE items still accrete ACROSS meetings (same
+// subject, different phrasing → parallel `add`s the fold didn't merge). Prompt
+// tuning hit its ceiling there. This is a SEPARATE, focused pass: give a model
+// ONLY the active item list (not the transcript) and ask it to group near-dups;
+// the server then merges each group DETERMINISTICALLY (keep the first id, union
+// text/entities/sources, archive the losers). It never invents facts (only
+// combines existing items) and is fully best-effort — any model/parse failure or
+// too-small a list leaves the memory exactly as the fold produced it.
+// ---------------------------------------------------------------------------
+
+const CONSOLIDATION_MIN_ITEMS = 6; // below this, accretion is negligible — skip the extra call
+const MAX_CONSOLIDATION_GROUPS = 40;
+
+export interface ConsolidationGroup {
+  ids: string[];
+  text: string;
+  entities: string[];
+}
+
+const MEMORY_CONSOLIDATION_SYSTEM_PROMPT = `You consolidate a single user's long-term PERSONAL MEMORY item list by merging NEAR-DUPLICATES. The list may contain items that describe the SAME underlying subject / project / person / problem in different words — accreted because earlier folds added instead of merging. Merge ONLY those.
+Rules:
+- Group ONLY items that truly refer to the same subject. If subjects differ, do NOT merge (over-merging is a WORSE defect than a leftover duplicate).
+- For each group, write ONE merged "text" that combines the information of the grouped items in the most current, richest phrasing. Do NOT invent any fact not present in the grouped items.
+- Output ONLY groups of 2+ ids. Do NOT output singletons (unique items are left untouched).
+- Every id belongs to at most one group. If nothing should be merged, return an empty groups array.
+- Write "text" in the SAME language as the items (do not translate).
+Return ONLY JSON: {"groups":[{"ids":["id1","id2"],"text":"merged sentence","entities":["..."]}]}`;
+
+/** Build the consolidation user prompt from the active items (id + text + entities). */
+export function buildConsolidationPrompt(activeItems: Array<{ id: string; text: string; entities: string[] }>): string {
+  return `MEMORY ITEMS (JSON):\n${JSON.stringify(activeItems)}\n\nMerge only near-duplicate items. Answer with the specified JSON only.`;
+}
+
+/** Parse the model's consolidation groups; keep only well-formed groups of >=2 ids. Null iff unparseable JSON. */
+export function parseConsolidationGroups(rawText: string): ConsolidationGroup[] | null {
+  const stripped = rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  const parsed = tryParseJson(stripped);
+  if (parsed === undefined) return null;
+  const rawGroups = (parsed as { groups?: unknown }).groups ?? parsed;
+  if (!Array.isArray(rawGroups)) return null;
+  const groups: ConsolidationGroup[] = [];
+  for (const raw of rawGroups.slice(0, MAX_CONSOLIDATION_GROUPS)) {
+    const o = asObject(raw);
+    const ids: string[] = [];
+    for (const idRaw of asArray(o.ids)) {
+      const id = str(idRaw, 80);
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    if (ids.length < 2) continue;
+    groups.push({ ids, text: str(o.text, MAX_ITEM_TEXT), entities: normalizeEntities(o.entities) });
+  }
+  return groups;
+}
+
+/**
+ * Deterministically merge each group into its first (survivor) id and archive the losers.
+ * Mutates + returns `items`. An id is used by at most one group; ids that are missing,
+ * already archived, or already claimed by an earlier group are ignored. Never drops
+ * information: survivor text/entities/sourceNoteIds absorb the losers'.
+ */
+export function applyConsolidation(items: MemoryItem[], groups: ConsolidationGroup[], now: string): { items: MemoryItem[]; merged: number } {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const claimed = new Set<string>();
+  let merged = 0;
+  for (const g of groups) {
+    const ids = g.ids.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && it.status === 'active' && !claimed.has(id);
+    });
+    if (ids.length < 2) continue;
+    const survivor = byId.get(ids[0])!;
+    const losers = ids.slice(1).map((id) => byId.get(id)!);
+    survivor.text = (g.text.trim() || survivor.text).slice(0, MAX_ITEM_TEXT);
+    for (const src of [...losers.map((l) => l.entities), g.entities]) {
+      for (const e of src) if (e && !survivor.entities.includes(e) && survivor.entities.length < MAX_ENTITIES_PER_ITEM) survivor.entities.push(e);
+    }
+    for (const l of losers) for (const n of l.sourceNoteIds) if (n && !survivor.sourceNoteIds.includes(n)) survivor.sourceNoteIds.push(n);
+    survivor.status = 'active';
+    survivor.updatedAt = now;
+    for (const l of losers) { l.status = 'archived'; l.updatedAt = now; merged += 1; }
+    for (const id of ids) claimed.add(id);
+  }
+  return { items, merged };
+}
+
+/**
+ * Run the consolidation pass on a memory item list. Best-effort: returns items unchanged
+ * (merged 0, ran false) when there are too few active items to bother, or on any
+ * model/parse failure — it must NEVER break the fold. The model only PROPOSES groups; the
+ * merge is deterministic (applyConsolidation). Shared by foldNoteIntoMemory and the F8 eval.
+ */
+export async function consolidateMemory(input: {
+  apiKey: string;
+  model?: string;
+  fallbackModels?: string[];
+  items: MemoryItem[];
+  now?: string;
+}): Promise<{ items: MemoryItem[]; merged: number; ran: boolean }> {
+  const now = input.now ?? new Date().toISOString();
+  const active = input.items.filter((i) => i.status === 'active');
+  if (active.length < CONSOLIDATION_MIN_ITEMS) return { items: input.items, merged: 0, ran: false };
+
+  const activeForPrompt = active.map((i) => ({ id: i.id, text: i.text, entities: i.entities }));
+  const out = await callJsonModel<ConsolidationGroup[]>({
+    apiKey: input.apiKey,
+    models: resolveModels(input.model, input.fallbackModels),
+    systemPrompt: MEMORY_CONSOLIDATION_SYSTEM_PROMPT,
+    userPrompt: buildConsolidationPrompt(activeForPrompt),
+    parse: (text) => parseConsolidationGroups(text),
+    maxOutputTokens: 4096,
+  });
+  if ('error' in out) return { items: input.items, merged: 0, ran: false };
+  const { items, merged } = applyConsolidation(input.items, out.value, now);
+  return { items, merged, ran: true };
+}
+
 export interface FoldNoteResult {
   memoryItemCount: number;
   insightWritten: boolean;
@@ -873,12 +996,20 @@ export async function foldNoteIntoMemory(input: {
   let memoryItemCount = 0;
   let memoryProcessed = false;
   if (!('error' in memoryRes)) {
+    // F1'': collapse near-duplicate active items the fold left accreted. Best-effort —
+    // consolidateMemory returns the fold's items unchanged on skip/failure, so this can
+    // only make memory cleaner, never break the write.
+    let finalItems = memoryRes.items;
+    if (CONSOLIDATION_ENABLED) {
+      const consolidated = await consolidateMemory({ apiKey, model: input.model, fallbackModels: input.fallbackModels, items: finalItems, now });
+      finalItems = consolidated.items;
+    }
     const nextProcessed = [...processedNoteIds, noteId].slice(-PROCESSED_CAP);
     const { error } = await supabase
       .from('user_memory')
-      .upsert({ user_id: userId, memory: { version: 2, items: memoryRes.items }, processed_note_ids: nextProcessed, updated_at: now }, { onConflict: 'user_id' });
+      .upsert({ user_id: userId, memory: { version: 2, items: finalItems }, processed_note_ids: nextProcessed, updated_at: now }, { onConflict: 'user_id' });
     if (!error) {
-      memoryItemCount = memoryRes.items.length;
+      memoryItemCount = finalItems.length;
       memoryProcessed = true;
     }
   }
