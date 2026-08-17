@@ -1,6 +1,6 @@
 import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import { getSegmentText, type TranscriptSegment } from './transcriptSegments';
-import { canonicalOntologyProfileString } from './speakerOntology';
+import { canonicalOntologyProfileString, ontologyRichness, parseOntology } from './speakerOntology';
 import { isAnonymousSpeakerLabel, type IdentifyAuth } from './identifySpeakers';
 
 interface GenerateProfileResponse {
@@ -87,6 +87,19 @@ export async function accumulateSpeakerProfile(params: {
 
   const merged = canonicalOntologyProfileString(result.profile ?? '');
   if (!merged.trim()) return null;
+
+  // O-1/O-3 guard (defense in depth): never overwrite a non-trivial existing profile with
+  // an EMPTY merged one. The edge function now errors instead of returning an empty fallback
+  // on parse failure, but a valid-but-empty merge (the model dropped everything) must also
+  // not wipe accumulated context.
+  if (existingProfile) {
+    const before = parseOntology(existingProfile);
+    const after = parseOntology(merged);
+    if (before && after && ontologyRichness(after) === 0 && ontologyRichness(before) > 0) {
+      console.warn(`Skipping profile overwrite for "${name}": merged ontology is empty but the existing one had content.`);
+      return null;
+    }
+  }
 
   const { error } = await supabase
     .from('speaker')

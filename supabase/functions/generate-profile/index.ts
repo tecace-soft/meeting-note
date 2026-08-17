@@ -102,6 +102,45 @@ const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
 const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 
+// O-2: force structurally-valid ontology JSON at the source (OpenAPI subset, same trick
+// note_insight uses). Without it, a large UPDATE could truncate at maxOutputTokens into
+// invalid JSON, which used to fall back to an EMPTY ontology and wipe the saved profile.
+const CONF = { type: 'NUMBER' } as const;
+const STR = { type: 'STRING' } as const;
+const STR_ARRAY = { type: 'ARRAY', items: { type: 'STRING' } } as const;
+const ONTOLOGY_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    schema_version: STR,
+    speaker_id: STR,
+    display_name: STR,
+    aliases: STR_ARRAY,
+    identity_confidence: CONF,
+    professional_context: {
+      type: 'OBJECT',
+      properties: { company: STR, role: STR, domains: STR_ARRAY, confidence: CONF },
+    },
+    active_projects: {
+      type: 'ARRAY',
+      items: { type: 'OBJECT', properties: { name: STR, role_in_project: STR, status: STR, importance: STR, confidence: CONF } },
+    },
+    relationships: {
+      type: 'ARRAY',
+      items: { type: 'OBJECT', properties: { person_or_group: STR, relationship_type: STR, context: STR, related_projects: STR_ARRAY, confidence: CONF } },
+    },
+    responsibilities: {
+      type: 'ARRAY',
+      items: { type: 'OBJECT', properties: { description: STR, scope: STR, related_projects: STR_ARRAY, status: STR, confidence: CONF } },
+    },
+    open_threads: {
+      type: 'ARRAY',
+      items: { type: 'OBJECT', properties: { topic: STR, status: STR, priority: STR, summary: STR, related_projects: STR_ARRAY, confidence: CONF } },
+    },
+    last_updated_at: STR,
+  },
+  required: ['schema_version', 'speaker_id', 'display_name', 'professional_context', 'active_projects', 'relationships', 'responsibilities', 'open_threads', 'last_updated_at'],
+} as const;
+
 interface GeminiGenerateContentResponse {
   candidates?: {
     content?: { parts?: { text?: string }[] };
@@ -136,8 +175,13 @@ async function callGeminiGenerateContent(
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 8192,
+        // 4096 is ample for a compact ontology; a runaway then fails FAST and the caller
+        // retries. thinkingBudget:0 is the KEY reliability lever — without it flash-lite can
+        // run away to MAX_TOKENS and truncate the JSON (verified). Mirrors workflow-server.
+        maxOutputTokens: 4096,
         responseMimeType: 'application/json',
+        responseSchema: ONTOLOGY_SCHEMA,
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
   });
@@ -197,18 +241,31 @@ async function callGeminiWithRetryAndFallback(
   apiKey: string,
   primaryModel: string,
   systemPrompt: string,
-  userPrompt: string
-): Promise<{ rawText: string; error?: string; status?: number; model?: string }> {
+  userPrompt: string,
+  speakerName: string,
+  speakerId: string
+): Promise<{ ontology?: SpeakerOntology; error?: string; status?: number; model?: string }> {
   const models = parseFallbackModels(primaryModel);
-  let lastResult: { rawText: string; error?: string; status?: number } | null = null;
+  let lastError = 'Gemini profile generation failed after retries and fallback models.';
+  let lastStatus = 502;
 
   for (const model of models) {
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const result = await callGeminiGenerateContent(apiKey, model, systemPrompt, userPrompt);
-      if (!result.error) return { ...result, model };
+      if (!result.error) {
+        // O-1/O-2: an HTTP-200 body that is truncated/garbage (unparseable ontology) is
+        // retryable — NOT a silent empty success that would wipe the saved profile.
+        const parsed = parseOntologyStrict(result.rawText, speakerName, speakerId);
+        if (parsed) return { ontology: parsed, model };
+        lastError = `Ontology output was not valid JSON (model ${model}, len ${result.rawText.length}).`;
+        lastStatus = 502;
+        if (attempt < maxAttempts) { await sleep(700 * attempt + Math.floor(Math.random() * 300)); continue; }
+        break; // exhausted this model → next model
+      }
 
-      lastResult = result;
+      lastError = result.error;
+      lastStatus = result.status ?? 502;
       const retryable = typeof result.status === 'number' && RETRYABLE_GEMINI_STATUSES.has(result.status);
       if (!retryable) break;
       if (attempt < maxAttempts) {
@@ -217,11 +274,7 @@ async function callGeminiWithRetryAndFallback(
     }
   }
 
-  return {
-    rawText: '',
-    error: lastResult?.error ?? 'Gemini profile generation failed after retries and fallback models.',
-    status: lastResult?.status ?? 502,
-  };
+  return { error: lastError, status: lastStatus };
 }
 
 interface SpeakerOntology {
@@ -413,11 +466,31 @@ function parseOntologyResponse(raw: string, speakerName: string, speakerId: stri
   }
 }
 
+// O-1: strict parse — returns null on unparseable output instead of an EMPTY fallback.
+// The retry loop uses this to treat an HTTP-200 truncated/garbage body as retryable, and
+// the handler uses it to fail (502) rather than silently return an empty ontology that
+// would overwrite (wipe) the speaker's accumulated profile.
+function parseOntologyStrict(raw: string, speakerName: string, speakerId: string): SpeakerOntology | null {
+  const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  try {
+    return ontologyFromLooseParsed(JSON.parse(stripped) as Record<string, unknown>, speakerName, speakerId);
+  } catch {
+    return null;
+  }
+}
+
 const CONFIDENCE_RULES = `Confidence scores (0.0–1.0):
 - Every object value must include a numeric field "confidence" in that object (not at the root except identity_confidence).
 - professional_context.confidence reflects confidence in company/role/domains as a whole.
 - Each item in active_projects, relationships, responsibilities, and open_threads must have its own "confidence" for that item's inferred content.
 - 1.0 = stated explicitly in the transcript; ~0.5–0.8 = strongly implied; lower for weak inference; 0.0 when the block is empty or has no transcript support.`;
+
+// Keep output compact. Without this (and thinkingBudget:0) flash-lite can run away to
+// MAX_TOKENS and truncate the JSON, which used to wipe the profile. Verified necessary.
+const TERSENESS_RULES = `Be TERSE and compact:
+- Every string field is at most one short phrase (<= 120 characters). Never write paragraphs.
+- Each array (aliases, domains, active_projects, relationships, responsibilities, open_threads) has at most 6 items.
+- NEVER pad, repeat, or invent items to fill the structure. If a field has no transcript support, leave it empty ("" / []).`;
 
 const NEW_PROFILE_SYSTEM = `You are a speaker ontology extraction engine for a meeting note application.
 
@@ -426,6 +499,8 @@ Your job is to create a practical, lightweight speaker memory ontology from a di
 The goal is not to create a perfect academic ontology. The goal is to create structured speaker context that helps future meeting notes become more accurate, relevant, and consistent.
 
 ${CONFIDENCE_RULES}
+
+${TERSENESS_RULES}
 
 Your JSON output must contain ONLY the keys shown in the required structure. Never output summary_for_meeting_context or any other key not listed there.`;
 
@@ -436,6 +511,8 @@ Your job is to update an existing lightweight speaker memory ontology using a ne
 The goal is to preserve useful speaker context while adding new professional information that improves future meeting summaries.
 
 ${CONFIDENCE_RULES}
+
+${TERSENESS_RULES}
 
 Never output deprecated fields. The field summary_for_meeting_context is not part of the schema and must not appear in your JSON output.`;
 
@@ -621,16 +698,17 @@ serve(async (req) => {
       ? buildUpdateProfilePrompt(speakerName, resolvedSpeakerId, existingOntologyJson, transcriptText, currentDate)
       : buildNewProfilePrompt(speakerName, resolvedSpeakerId, transcriptText, currentDate);
 
-    const geminiResult = await callGeminiWithRetryAndFallback(apiKey, model, systemPrompt, userPrompt);
-    if (geminiResult.error) {
-      return new Response(JSON.stringify({ error: geminiResult.error }), {
+    const geminiResult = await callGeminiWithRetryAndFallback(apiKey, model, systemPrompt, userPrompt, speakerName, resolvedSpeakerId);
+    // O-1: on failure return an ERROR (not an empty ontology). The client then throws and
+    // does NOT overwrite the existing profile, so a bad LLM response can no longer wipe it.
+    if (geminiResult.error || !geminiResult.ontology) {
+      return new Response(JSON.stringify({ error: geminiResult.error ?? 'Ontology generation failed.' }), {
         status: geminiResult.status ?? 502,
         headers: { ...CORS, 'Content-Type': 'application/json' },
       });
     }
-    const ontology = parseOntologyResponse(geminiResult.rawText, speakerName, resolvedSpeakerId);
 
-    return new Response(JSON.stringify({ profile: JSON.stringify(ontology), model: geminiResult.model ?? model }), {
+    return new Response(JSON.stringify({ profile: JSON.stringify(geminiResult.ontology), model: geminiResult.model ?? model }), {
       headers: { ...CORS, 'Content-Type': 'application/json' },
     });
   } catch (err) {

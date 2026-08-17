@@ -140,6 +140,14 @@ export function normalizeOntologyLoose(parsed: unknown): SpeakerOntology | null 
   };
 }
 
+/** Count of populated ontology content (0 = an empty profile). Used to guard against a
+ *  bad merge overwriting an accumulated profile with an emptier one. */
+export function ontologyRichness(o: SpeakerOntology): number {
+  const pc = o.professional_context;
+  return (pc.company ? 1 : 0) + (pc.role ? 1 : 0) + pc.domains.length + o.aliases.length +
+    o.active_projects.length + o.relationships.length + o.responsibilities.length + o.open_threads.length;
+}
+
 export function isOntologyProfile(raw: string | null | undefined): boolean {
   if (!raw) return false;
   const t = raw.trim();
