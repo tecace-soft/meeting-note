@@ -196,16 +196,21 @@ const env = {
   geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
   assemblyAiApiKey: process.env.ASSEMBLYAI_API_KEY ?? '',
   openAiApiKey: process.env.OPENAI_API_KEY ?? '',
-  summaryModel: process.env.GEMINI_SUMMARY_MODEL ?? 'gemini-2.5-flash-lite',
-  regenerateSummaryModel: process.env.GEMINI_REGENERATE_SUMMARY_MODEL ?? 'gemini-3.1-flash-lite',
-  transcriptionTestGeminiModel: process.env.GEMINI_TRANSCRIPTION_TEST_MODEL ?? 'gemini-2.5-flash',
-  transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL ?? 'gpt-4o-transcribe',
-  assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL ?? 'universal-3-pro',
-  assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD ?? '0.21'),
-  frontendOrigin: process.env.APP_FRONTEND_ORIGIN ?? '*',
-  port: Number(process.env.PORT ?? '8787'),
-  fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS ?? '1200000'),
-  fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS ?? '1200000'),
+  // `||` (not `??`) for values with a meaningful default: an env var set to an EMPTY
+  // string must fall back to the default, not keep "". `??` only catches null/undefined,
+  // so an empty GEMINI_SUMMARY_MODEL="" would 404 the model, and empty numeric vars would
+  // become Number("")=0 (port 0, zero timeouts, zero price). API keys/URLs above keep `??`
+  // because "" is their intended "not configured" sentinel.
+  summaryModel: process.env.GEMINI_SUMMARY_MODEL || 'gemini-2.5-flash-lite',
+  regenerateSummaryModel: process.env.GEMINI_REGENERATE_SUMMARY_MODEL || 'gemini-3.1-flash-lite',
+  transcriptionTestGeminiModel: process.env.GEMINI_TRANSCRIPTION_TEST_MODEL || 'gemini-2.5-flash',
+  transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL || 'gpt-4o-transcribe',
+  assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL || 'universal-3-pro',
+  assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD || '0.21'),
+  frontendOrigin: process.env.APP_FRONTEND_ORIGIN || '*',
+  port: Number(process.env.PORT || '8787'),
+  fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS || '1200000'),
+  fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS || '1200000'),
 };
 
 const ASSEMBLYAI_CODE_SWITCHING_MODELS = ['universal-2'] as const;

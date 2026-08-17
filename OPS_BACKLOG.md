@@ -132,10 +132,11 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
 - Effort: small, ongoing.
 - Cost: $0.
 
-### P2.3 Clean up env/secret sprawl
+### P2.3 Clean up env/secret sprawl — env:check doctor SHIPPED; empty-string default hardening SHIPPED 2026-08-17
 - What: One documented source of truth per environment; remove placeholder/template .env confusion (workflow-server/.env was once a template with `your-project-ref`). See env-setup-local memory.
 - Why: Prevents "which key is real" incidents during ops/debugging.
-- Effort: small.
+- **✅ Empty-string env hardening SHIPPED 2026-08-17:** `env.summaryModel` and the other defaulted config in `index.ts` used `?? 'default'`, which does NOT catch an env var explicitly set to `""` (only null/undefined). A blank `GEMINI_SUMMARY_MODEL=""` in the local `.env` 404'd the Gemini call (surfaced during F9 live-fire); blank numeric vars would become `Number("")=0` (port 0 / zero timeouts / zero price). Switched the meaningful-default fields (models, origin, port, timeouts, price) to `|| 'default'`; API keys/URLs keep `??` since `""` is their intended "not configured" sentinel. Build + 25 tests green. (The remaining P2.3 chore = a documented single source of truth per env / cleaning the local placeholder values; low priority.)
+- Effort: small (hardening done; docs/source-of-truth remainder trivial).
 - Cost: $0.
 
 ---
@@ -203,7 +204,7 @@ Feature track from the 2026-08-04 standup, expanded at the 2026-08-06 meeting (H
 
 ### F1 "Memory" feature — SHIPPED (F1a + F1b + F1c) 2026-08-05, verified E2E on prod
 - Per-user accumulated context: F1a auto-accumulate speaker profiles, F1b auto speaker-ID suggestion (suggestion-only), F1c personal `user_memory` rollup (open action items / collaborators / active projects / recurring topics). Live on prod: `user_memory` table, `update-user-memory` edge fn, minimal read-only Memory tab in AccountSettings. Full detail in `MEMORY_FEATURE_DESIGN.md`.
-- Minor polish TODO: collaborators sometimes include the user themselves (prompt says exclude).
+- ~~Minor polish TODO: collaborators sometimes include the user themselves (prompt says exclude).~~ **OBSOLETE 2026-08-17:** F1' narrative memory superseded the flat F1c `collaborators[]` bucket, and BOTH live producers already enforce self-exclusion (`workflow-server/src/memory.ts` MEMORY_SYSTEM_PROMPT + the `update-user-memory` edge fn: "Do NOT record the user themselves as a collaborator or relationship"). The only residual `collaborators`→narrative seeding is the one-time legacy F1c→v2 migration path (`memory.ts:155`), not the live fold — not worth touching. No live self-as-collaborator bug remains.
 - **F1' — dynamic relational memory [SPRINT, due 2026-08-13]. ALPHA SHIPPED 2026-08-07** (ahead of target). Owner: Andrew (all software). Deployed: `update-user-memory` edge fn (LLM emits add/update/supersede/archive ops, server applies deterministically), `userMemory.ts` + `UserMemoryView` (narrative items list). Frontend-first deploy order (edge-fn-first would wipe memory via the old client).
   - **Verified E2E (2026-08-07)** against real prod data. Prompt reworked (`9213e20`) to prioritize **context/relations over facts** (decisions + WHY, how things connect, how they evolved via supersede). Confirmed: memory now reads as reasoning/relationship narrative (e.g. "the 200MB cap was set to avoid cost, then removed after the Supabase Pro upgrade") rather than a to-do list — the boss's "context + relation, not fact-oriented" ask is met. Self-exclusion + clean formatting confirmed.
   - **Open (defer to the relation-graph phase):**
