@@ -2879,7 +2879,12 @@ const F9_ENABLED = (process.env.F9_OPS_AGENT_ENABLED ?? 'true').toLowerCase() !=
 const OPS_AGENT_AUTHOR_EMAIL = 'ops-agent@tecace.com';
 const OPS_AGENT_AUTHOR_NAME = 'Ops Agent (F9)';
 const OPS_INCIDENT_THROTTLE_MS = 24 * 60 * 60 * 1000; // one open ticket per signature per 24h
-const OPS_TICKET_SCAN_LIMIT = 200;
+// Storm cap: max NEW ops tickets (= distinct failure classes) filed per rolling hour.
+// De-dup already collapses identical failures; this bounds an incident STORM of many
+// DIFFERENT classes (e.g. a bad deploy 500-ing every endpoint) so it cannot flood the
+// board, the on-call inbox, OR the Gemini bill (each new ticket = one RCA call). Over
+// the cap, new classes are dropped with a warn (existing tickets still de-dup/bump).
+const OPS_MAX_NEW_TICKETS_PER_HOUR = Number(process.env.F9_MAX_NEW_TICKETS_PER_HOUR || '10');
 
 const OPS_RCA_SYSTEM_PROMPT = `너는 사내 "Meeting Note"(회의 녹음 → AI 전사·요약·메모리·검색 앱) 백엔드를 운영하는 시니어 SRE다.
 스택: Node workflow-server(Render)에서 Gemini 호출, DB Supabase(Postgres + RLS + Storage), 전사 AssemblyAI, 인증 Azure MSAL, 프론트 React/Vite, 모바일 Flutter.
@@ -2893,10 +2898,15 @@ const OPS_RCA_SYSTEM_PROMPT = `너는 사내 "Meeting Note"(회의 녹음 → AI
 - confidence 는 정확히 "low" | "medium" | "high" 중 하나.`;
 
 function opsEnvironment(): string {
-  return process.env.RENDER_SERVICE_NAME ?? process.env.NODE_ENV ?? 'development';
+  return process.env.RENDER_SERVICE_NAME || process.env.NODE_ENV || 'development';
 }
 
-/** Find an open (non-DONE/CLOSED, non-deleted) ops ticket for this fingerprint within the throttle window. */
+/**
+ * Find an open (non-DONE/CLOSED, non-deleted) ops ticket for this fingerprint within the
+ * throttle window. Matches the fingerprint SERVER-SIDE (`ai_suggestion->>fingerprint`) so
+ * de-dup is exact regardless of how many open ops tickets exist — a JS scan of a capped
+ * row window could miss a match beyond the cap during a storm and file a duplicate.
+ */
 async function findOpenOpsTicket(fingerprint: string): Promise<{ id: string; meta: OpsSuggestionMeta } | null> {
   const cutoff = new Date(Date.now() - OPS_INCIDENT_THROTTLE_MS).toISOString();
   const { data, error } = await supabase
@@ -2906,10 +2916,27 @@ async function findOpenOpsTicket(fingerprint: string): Promise<{ id: string; met
     .is('deleted_at', null)
     .not('status', 'in', '(DONE,CLOSED)')
     .gte('created_at', cutoff)
+    .eq('ai_suggestion->>source', 'f9-ops-agent')
+    .eq('ai_suggestion->>fingerprint', fingerprint)
     .order('created_at', { ascending: false })
-    .limit(OPS_TICKET_SCAN_LIMIT);
+    .limit(5);
   if (error) throw error;
+  // matchOpsTicket re-validates source/fingerprint on the (already-filtered) rows — cheap
+  // belt-and-suspenders that also narrows unknown[] to the typed meta.
   return matchOpsTicket((data as Array<{ id: string; ai_suggestion: unknown }>) ?? [], fingerprint);
+}
+
+/** Count NEW ops tickets filed in the last rolling hour (area='ops' rows are F9's alone). */
+async function countRecentOpsTickets(): Promise<number> {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { count, error } = await supabase
+    .from('feedback_issues')
+    .select('id', { count: 'exact', head: true })
+    .eq('area', 'ops')
+    .is('deleted_at', null)
+    .gte('created_at', oneHourAgo);
+  if (error) throw error;
+  return count ?? 0;
 }
 
 async function generateOpsRca(detail: string): Promise<{ resolution: ReturnType<typeof parseIssueResolution>; model: string } | null> {
@@ -2938,14 +2965,25 @@ async function fileOpsIncident(input: WorkflowAlertInput): Promise<void> {
     const nowIso = new Date().toISOString();
 
     // De-dup: a repeat of the same failure only bumps the existing ticket's counter.
+    // Only `ai_suggestion` (display-only agent metadata) is updated — NOT `triage_note`,
+    // which is human-authored and must not be clobbered by an automatic recurrence note.
     const existing = await findOpenOpsTicket(fingerprint);
     if (existing) {
       const meta = bumpOccurrence(existing.meta, nowIso);
       const { error: updateError } = await supabase
         .from('feedback_issues')
-        .update({ ai_suggestion: meta, triage_note: `자동 재발생 ${meta.occurrences}회 (최근 ${nowIso})` })
+        .update({ ai_suggestion: meta })
         .eq('id', existing.id);
       if (updateError) throw updateError;
+      return;
+    }
+
+    // Storm cap: a new failure class, but if too many NEW ops tickets were filed this
+    // hour, drop it (warn only) rather than flooding the board/inbox/Gemini bill. Placed
+    // AFTER de-dup so recurring known failures still bump their ticket during a storm.
+    const recentCount = await countRecentOpsTickets();
+    if (recentCount >= OPS_MAX_NEW_TICKETS_PER_HOUR) {
+      console.warn(`F9: ops ticket rate cap reached (${recentCount}/${OPS_MAX_NEW_TICKETS_PER_HOUR} this hour) — dropping new incident "${input.title}" (fingerprint ${fingerprint}).`);
       return;
     }
 
