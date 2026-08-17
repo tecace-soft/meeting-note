@@ -79,6 +79,7 @@ F9 watches the workflow-server's OWN error events (job failure, HTTP 500, uncaug
 | `ASSEMBLYAI_API_KEY` | transcription |
 | `RESEND_API_KEY`, `WORKFLOW_ALERT_FROM`, `WORKFLOW_ALERT_TO` | alert + issue + F9 email (Resend, `tecace.com` verified sender) |
 | `F9_OPS_AGENT_ENABLED`, `F9_MAX_NEW_TICKETS_PER_HOUR` | F9 on/off + storm cap |
+| `MEMORY_CONSOLIDATION_ENABLED` | F1'' memory dedup consolidation pass (default on; one extra flash-lite call per fold when memory has ≥6 items) |
 
 MCP server (Render → `meeting-note-mcp`): `MCP_API_KEY` (static-key auth; keep secret), `MCP_ALLOW_ANON_CHATGPT_FALLBACK` (default off), plus the same Supabase creds.
 
