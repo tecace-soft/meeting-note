@@ -7,7 +7,7 @@ interface AlertConfig {
   environment: string;
 }
 
-interface WorkflowAlertInput {
+export interface WorkflowAlertInput {
   title: string;
   error: unknown;
   severity?: 'error' | 'warning';
@@ -39,7 +39,7 @@ function parseRecipients(value: string): string[] {
   return [...seen];
 }
 
-function formatError(error: unknown): Record<string, string> {
+export function formatError(error: unknown): Record<string, string> {
   if (error instanceof Error) {
     return {
       name: error.name,
@@ -56,7 +56,7 @@ function formatError(error: unknown): Record<string, string> {
   };
 }
 
-function sanitizeContext(context: Record<string, unknown> = {}): Record<string, unknown> {
+export function sanitizeContext(context: Record<string, unknown> = {}): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(context)) {
     if (/token|authorization|apikey|api_key|secret|password/i.test(key)) {

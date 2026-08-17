@@ -3,7 +3,7 @@ import { createWriteStream } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
@@ -14,7 +14,8 @@ import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata 
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
 import { extractAndStoreInsight, foldNoteIntoMemory, identifySpeakers } from './memory.js';
-import { sendWorkflowAlert, sendEmail, alertRecipients } from './alerts.js';
+import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
+import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -2171,7 +2172,7 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Workflow job ${jobId} failed:`, error);
-    void sendWorkflowAlert({
+    void raiseIncident({
       title: 'Summarize audio job failed',
       error,
       context: {
@@ -2854,6 +2855,169 @@ async function issueNotify(req: IncomingMessage, res: ServerResponse): Promise<v
   sendJson(res, 200, { ok: true, sent });
 }
 
+// ---------------------------------------------------------------------------
+// F9 — Autonomous ops agent (v1: detect → RCA draft → F2 ticket, human-gated)
+//
+// Every workflow alert (job failure, 500, uncaught/unhandled) is also handed to
+// this agent, which drafts a root-cause analysis with the SAME structured LLM
+// path the human issue-resolution endpoint uses (ISSUE_RESOLUTION_SCHEMA), then
+// files an ops-tagged ticket on the existing F2 `feedback_issues` board and
+// emails the on-call. It NEVER touches prod code — remediation stays human
+// (auto-fix is deferred to F9.2). Repeats of the same failure are de-duped by
+// fingerprint so a flapping error updates one ticket instead of flooding the
+// board. This function is fully self-contained and MUST NOT reject: it runs off
+// the alert path (incl. process.uncaughtException), so a throw here would loop
+// back through the same alert handler. All failures are swallowed with a warn.
+// ---------------------------------------------------------------------------
+
+const F9_ENABLED = (process.env.F9_OPS_AGENT_ENABLED ?? 'true').toLowerCase() !== 'false';
+const OPS_AGENT_AUTHOR_EMAIL = 'ops-agent@tecace.com';
+const OPS_AGENT_AUTHOR_NAME = 'Ops Agent (F9)';
+const OPS_INCIDENT_THROTTLE_MS = 24 * 60 * 60 * 1000; // one open ticket per signature per 24h
+const OPS_TICKET_SCAN_LIMIT = 200;
+
+const OPS_RCA_SYSTEM_PROMPT = `너는 사내 "Meeting Note"(회의 녹음 → AI 전사·요약·메모리·검색 앱) 백엔드를 운영하는 시니어 SRE다.
+스택: Node workflow-server(Render)에서 Gemini 호출, DB Supabase(Postgres + RLS + Storage), 전사 AssemblyAI, 인증 Azure MSAL, 프론트 React/Vite, 모바일 Flutter.
+운영 중 발생한 장애 알림(에러 + 컨텍스트)을 읽고 담당 엔지니어가 바로 착수할 수 있는 근본원인 분석(RCA)을 작성한다. 규칙:
+- 한국어로, 각 배열 원소는 한 문장씩. 실행 가능한 내용만 쓴다.
+- rootCauses 는 스택/메시지/컨텍스트를 근거로, 확인되지 않은 가설임을 전제로 가능성이 높은 순서로 쓴다.
+- checks 는 담당자가 로그/DB/대시보드에서 실제로 조회하거나 재현해 볼 절차로 쓴다.
+- fixPlan 은 손대야 할 위치와 방향을 순서대로 쓴다. 확실하지 않은 파일명을 지어내지 않는다.
+- verification 은 수정 후 무엇이 어떻게 보이면 해결로 볼 수 있는지 쓴다.
+- 정보가 부족하면 추측을 늘리지 말고 confidence 를 "low"로 두고 checks 에 무엇을 더 확인해야 하는지 적는다.
+- confidence 는 정확히 "low" | "medium" | "high" 중 하나.`;
+
+function opsEnvironment(): string {
+  return process.env.RENDER_SERVICE_NAME ?? process.env.NODE_ENV ?? 'development';
+}
+
+/** Find an open (non-DONE/CLOSED, non-deleted) ops ticket for this fingerprint within the throttle window. */
+async function findOpenOpsTicket(fingerprint: string): Promise<{ id: string; meta: OpsSuggestionMeta } | null> {
+  const cutoff = new Date(Date.now() - OPS_INCIDENT_THROTTLE_MS).toISOString();
+  const { data, error } = await supabase
+    .from('feedback_issues')
+    .select('id, ai_suggestion, status, created_at')
+    .eq('area', 'ops')
+    .is('deleted_at', null)
+    .not('status', 'in', '(DONE,CLOSED)')
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: false })
+    .limit(OPS_TICKET_SCAN_LIMIT);
+  if (error) throw error;
+  return matchOpsTicket((data as Array<{ id: string; ai_suggestion: unknown }>) ?? [], fingerprint);
+}
+
+async function generateOpsRca(detail: string): Promise<{ resolution: ReturnType<typeof parseIssueResolution>; model: string } | null> {
+  if (!env.geminiApiKey) return null;
+  const result = await callGeminiWithFallback({
+    stage: 'Ops RCA',
+    model: env.summaryModel,
+    fallbackModels: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'],
+    responseMimeType: 'application/json',
+    responseSchema: ISSUE_RESOLUTION_SCHEMA,
+    maxOutputTokens: 4096,
+    parts: [{ text: `${OPS_RCA_SYSTEM_PROMPT}\n\n장애 알림:\n${detail}\n\n위 장애에 대한 RCA를 지정된 JSON 스키마로만 작성하라.` }],
+  });
+  return { resolution: parseIssueResolution(result.text), model: result.model };
+}
+
+async function fileOpsIncident(input: WorkflowAlertInput): Promise<void> {
+  if (!F9_ENABLED) return;
+  if (!env.supabaseUrl || !env.serviceRoleKey) return; // no DB → nothing to file
+  try {
+    const severity: 'error' | 'warning' = input.severity === 'warning' ? 'warning' : 'error';
+    const rawErr = formatAlertError(input.error);
+    const err = { name: rawErr.name, message: rawErr.message, stack: rawErr.stack };
+    const context = sanitizeAlertContext(input.context);
+    const fingerprint = incidentFingerprint(input.title, err.name, err.message);
+    const nowIso = new Date().toISOString();
+
+    // De-dup: a repeat of the same failure only bumps the existing ticket's counter.
+    const existing = await findOpenOpsTicket(fingerprint);
+    if (existing) {
+      const meta = bumpOccurrence(existing.meta, nowIso);
+      const { error: updateError } = await supabase
+        .from('feedback_issues')
+        .update({ ai_suggestion: meta, triage_note: `자동 재발생 ${meta.occurrences}회 (최근 ${nowIso})` })
+        .eq('id', existing.id);
+      if (updateError) throw updateError;
+      return;
+    }
+
+    // New failure class → draft an RCA and open a ticket.
+    const contextText = Object.keys(context).length ? JSON.stringify(context, null, 2) : '(없음)';
+    const detail = buildOpsIncidentDetail({ title: input.title, severity, environment: opsEnvironment(), err, contextText });
+
+    let resolution: ReturnType<typeof parseIssueResolution> = null;
+    let resolutionModel: string | null = null;
+    try {
+      const rca = await generateOpsRca(detail);
+      resolution = rca?.resolution ?? null;
+      resolutionModel = rca?.model ?? null;
+    } catch (rcaError) {
+      console.warn('F9 ops RCA generation failed (filing ticket without RCA):', rcaError);
+    }
+
+    const issueKey = makeOpsIssueKey(new Date(), randomBytes(4).toString('hex'));
+    const { priority, severity: ticketSeverity } = opsSeverityToPriority(severity);
+    const meta: OpsSuggestionMeta = {
+      source: 'f9-ops-agent',
+      fingerprint,
+      occurrences: 1,
+      firstSeen: nowIso,
+      lastSeen: nowIso,
+      environment: opsEnvironment(),
+      severity,
+    };
+    const description = buildOpsTicketDescription({ title: input.title, err, contextText });
+
+    const { error: insertError } = await supabase.from('feedback_issues').insert({
+      issue_key: issueKey,
+      title: `[운영] ${input.title}`.slice(0, 200),
+      description,
+      purpose: 'bug',
+      area: 'ops',
+      status: 'OPEN',
+      priority,
+      severity: ticketSeverity,
+      ai_suggestion: meta,
+      resolution: resolution ?? null,
+      resolution_generated_at: resolution ? nowIso : null,
+      resolution_model: resolutionModel,
+      author_email: OPS_AGENT_AUTHOR_EMAIL,
+      author_name: OPS_AGENT_AUTHOR_NAME,
+    });
+    if (insertError) throw insertError;
+
+    // Notify the on-call. Reuses the F2 email renderer so ops tickets read like any issue.
+    const origin = env.frontendOrigin && env.frontendOrigin !== '*' ? env.frontendOrigin.replace(/\/+$/, '') : '';
+    const deepLink = `${origin}/issues?issue=${encodeURIComponent(issueKey)}`;
+    const html = issueEmailHtml({
+      kind: 'created',
+      issueKey,
+      title: `[운영] ${input.title}`,
+      description,
+      purpose: 'bug',
+      area: 'ops',
+      priority,
+      resolution,
+      imageUrls: [],
+      deepLink,
+    });
+    await sendEmail({ to: alertRecipients(), subject: `[운영 장애] ${issueKey} ${input.title}`, html });
+  } catch (fileError) {
+    // Never rethrow — this runs off the alert path (incl. uncaughtException), so a
+    // throw would re-enter the alert handler and loop.
+    console.warn('F9 fileOpsIncident failed:', fileError);
+  }
+}
+
+/** Emit an ops alert: the existing email PLUS an F9 RCA ticket. Fire-and-forget, never throws. */
+function raiseIncident(input: WorkflowAlertInput): void {
+  void sendWorkflowAlert(input);
+  void fileOpsIncident(input);
+}
+
 // F4 backfill: populate note_insight for existing notes (insight only, no memory
 // fold). Admin-gated and batched — call repeatedly until `processed` is 0. Each
 // call pulls a batch of notes still lacking a note_insight row (server-side filter
@@ -3024,7 +3188,7 @@ const server = createServer((req, res) => {
     const status = getHttpStatus(error);
     console.error('Workflow request failed:', error);
     if (status >= 500) {
-      void sendWorkflowAlert({
+      void raiseIncident({
         title: 'Workflow request failed',
         error,
         context: {
@@ -3040,7 +3204,7 @@ const server = createServer((req, res) => {
 
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled workflow rejection:', error);
-  void sendWorkflowAlert({
+  void raiseIncident({
     title: 'Unhandled workflow rejection',
     error,
     context: { source: 'process.unhandledRejection' },
@@ -3049,7 +3213,7 @@ process.on('unhandledRejection', (error) => {
 
 process.on('uncaughtException', (error) => {
   console.error('Uncaught workflow exception:', error);
-  void sendWorkflowAlert({
+  void raiseIncident({
     title: 'Uncaught workflow exception',
     error,
     context: { source: 'process.uncaughtException' },
