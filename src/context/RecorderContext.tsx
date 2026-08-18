@@ -86,6 +86,58 @@ const CHUNK_STORE = 'chunks';
 const ACTIVE_SESSION_ID = 'active';
 const RECORDING_TIMESLICE_MS = 2000;
 
+// Cross-tab/window recording guard (Web Locks API). The recorder persists to a single
+// shared IndexedDB session key, so two tabs recording at once would clobber each other,
+// and a second tab used to misread the first tab's LIVE session as an "interrupted
+// recording" to recover/discard (discarding it would wipe the other tab's in-progress
+// recording). The recording tab HOLDS this lock for the whole recording; the browser
+// auto-releases it if that tab crashes or closes, so a held lock reliably means "a
+// recording is live in another tab" while a free lock + a leftover session means
+// "genuinely interrupted". No timestamp heuristics needed.
+const RECORDING_LOCK_NAME = 'meeting-note-active-recording';
+
+function supportsWebLocks(): boolean {
+  return typeof navigator !== 'undefined' && 'locks' in navigator && Boolean(navigator.locks);
+}
+
+// Acquire the recording lock. Returns a release() fn when acquired (or a no-op when Web
+// Locks are unsupported — the tab then simply loses the cross-tab guard, nothing breaks),
+// or null when ANOTHER tab already holds it (a recording is in progress elsewhere).
+async function acquireRecordingLock(): Promise<(() => void) | null> {
+  if (!supportsWebLocks()) return () => {};
+  return new Promise<(() => void) | null>((resolveRelease) => {
+    let release = () => {};
+    const held = new Promise<void>((resolveHeld) => {
+      release = resolveHeld;
+    });
+    void navigator.locks
+      .request(RECORDING_LOCK_NAME, { ifAvailable: true }, (lock) => {
+        if (lock === null) {
+          resolveRelease(null); // held elsewhere → caller must not start
+          return undefined; // never held it; nothing to keep
+        }
+        resolveRelease(release);
+        return held; // keep the lock until release() is called
+      })
+      .catch(() => resolveRelease(() => {})); // degrade to no guard on any lock error
+  });
+}
+
+// True when ANOTHER tab currently holds the recording lock (used at mount so a live
+// recording elsewhere is never surfaced as a recoverable/interrupted session here).
+async function isRecordingLockHeldElsewhere(): Promise<boolean> {
+  if (!supportsWebLocks()) return false;
+  try {
+    return await navigator.locks.request(
+      RECORDING_LOCK_NAME,
+      { ifAvailable: true },
+      async (lock) => lock === null,
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Hard cap on a single recording: 2 hours. At the cap the recording auto-stops
 // and is saved, and the user must start a new recording to continue. A
 // non-blocking warning is surfaced RECORDING_LIMIT_WARNING_SECONDS before it.
@@ -413,6 +465,8 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const autoStopFiredRef = useRef(false);
   const stopResolveRef = useRef<(() => void) | null>(null);
   const cloudDraftFailuresRef = useRef(0);
+  // Holds the release() for the cross-tab recording lock while this tab is recording.
+  const recordingLockReleaseRef = useRef<(() => void) | null>(null);
   // Tracks the latest recordedAudioUrl so the unmount-only teardown can revoke
   // it without listing recordedAudioUrl as an effect dependency (see below).
   const recordedAudioUrlRef = useRef<string | null>(null);
@@ -546,6 +600,9 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    // Recording ended in this tab — release the cross-tab lock so other tabs can record.
+    recordingLockReleaseRef.current?.();
+    recordingLockReleaseRef.current = null;
     await releaseScreenWakeLock();
     stopResolveRef.current?.();
     stopResolveRef.current = null;
@@ -558,6 +615,15 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setRecorderError('Recover or discard the interrupted recording before starting a new one.');
         return;
       }
+      // Cross-tab guard: acquire the recording lock BEFORE clearPersistedRecording wipes
+      // IndexedDB. If another tab holds it, a recording is already live there (single
+      // shared session) — refuse rather than clobber it or misreport it as "interrupted".
+      const lockRelease = await acquireRecordingLock();
+      if (lockRelease === null) {
+        setRecorderError('A recording is already in progress in another tab or window. Stop that recording before starting a new one.');
+        return;
+      }
+      recordingLockReleaseRef.current = lockRelease;
       clearPlayback();
       startScreenWakeLockKeepAlive();
       await clearPersistedRecording();
@@ -709,6 +775,9 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setRecordingTime((prev) => prev + 1);
       }, 1000);
     } catch (error) {
+      // Starting failed after we took the lock — release it so other tabs aren't blocked.
+      recordingLockReleaseRef.current?.();
+      recordingLockReleaseRef.current = null;
       await releaseScreenWakeLock();
       console.error('Error starting recording:', error);
       setRecorderError('Could not access microphone. Please ensure you have granted microphone permissions.');
@@ -788,6 +857,9 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     audioChunksRef.current = [];
     chunkIndexRef.current = 0;
     clearDraftBackups(sessionToDelete);
+    // If this tab was the one recording, drop the cross-tab lock too.
+    recordingLockReleaseRef.current?.();
+    recordingLockReleaseRef.current = null;
     void releaseScreenWakeLock();
     setRecoverableSession(null);
     clearRecording();
@@ -853,6 +925,11 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // If another tab holds the recording lock, a recording is LIVE there — its persisted
+      // session is not "interrupted", so never surface it as recoverable here (and never
+      // let this tab discard it, which would wipe the other tab's in-progress recording).
+      if (await isRecordingLockHeldElsewhere()) return;
+      if (cancelled) return;
       const localSession = await getSession().catch(() => undefined);
       if (cancelled) return;
       if (localSession?.chunkCount) {
@@ -925,6 +1002,10 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       }
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      // Release the cross-tab recording lock if this tab held it (also auto-released by
+      // the browser on tab close, but drop it explicitly on provider unmount too).
+      recordingLockReleaseRef.current?.();
+      recordingLockReleaseRef.current = null;
       if (recordedAudioUrlRef.current) URL.revokeObjectURL(recordedAudioUrlRef.current);
     };
   }, []);
