@@ -701,6 +701,10 @@ async function callGeminiWithFallback(input: {
   responseMimeType?: 'application/json' | 'text/plain';
   responseSchema?: unknown;
   maxOutputTokens?: number;
+  // When set (e.g. 0), disables model "thinking" so latency isn't spent on
+  // reasoning tokens. The summary/translation calls emit plain JSON and gain
+  // nothing from thinking, so we pass 0 to cut a fixed per-call latency floor.
+  thinkingBudget?: number;
 }): Promise<GeminiWorkflowCallResult> {
   const models = [input.model, ...input.fallbackModels].filter((model, index, all) => model && all.indexOf(model) === index);
   let lastError: unknown = null;
@@ -716,6 +720,7 @@ async function callGeminiWithFallback(input: {
           responseMimeType: input.responseMimeType,
           responseSchema: input.responseSchema,
           maxOutputTokens: input.maxOutputTokens,
+          thinkingBudget: input.thinkingBudget,
         });
         return {
           text: result.text,
@@ -1249,8 +1254,14 @@ async function transcribeWithAssembly(input: {
   // an explicit 'error' status from AssemblyAI) still aborts immediately.
   const maxConsecutivePollFailures = 5;
   let consecutivePollFailures = 0;
+  // Short first poll, then back off to the steady 3s cadence. A brief clip is often
+  // transcribed within ~1-2s, so waiting a full 3s before the FIRST status check added
+  // a fixed ~3s to every short recording for no benefit; one extra early poll is
+  // negligible load and doesn't slow long transcriptions.
+  let pollIntervalMs = 1000;
   while (performance.now() - startedAt < timeoutMs) {
-    await delay(3000);
+    await delay(pollIntervalMs);
+    pollIntervalMs = 3000;
     let pollResponse: Response;
     let pollRaw: string;
     try {
@@ -1567,6 +1578,7 @@ async function translateTranscriptSegments(input: {
     fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'application/json',
     maxOutputTokens: 32768,
+    thinkingBudget: 0,
     parts: [{
       text: buildTranscriptTranslationPrompt({
         targetLanguage: input.targetLanguage,
@@ -1781,26 +1793,28 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   const translationLanguage = getOppositeTranscriptLanguage(detectedLanguage);
   const diarizationTranslations: Partial<Record<'en' | 'ko', TranscriptSegment[]>> = {};
   const transcriptionTranslations: Partial<Record<'en' | 'ko', string>> = {};
-  if (translationLanguage) {
-    await updateWorkflowJob(jobId, {
-      stage: `translating transcript to ${translationLanguage === 'ko' ? 'Korean' : 'English'}`,
-      progress: 58,
-    });
-    try {
-      const translatedSegments = await translateTranscriptSegments({
+  // Translate the transcript to the opposite language (the bilingual-transcript feature)
+  // IN PARALLEL with summary generation. The translation output feeds only insertNote
+  // (storage) and is never read by the summary, so running it sequentially ahead of the
+  // summary only added a fixed multi-second stall to every note. Best-effort: a
+  // translation failure is logged and never fails the note. Awaited before insertNote.
+  const translationPromise: Promise<void> = translationLanguage
+    ? translateTranscriptSegments({
         segments,
         targetLanguage: translationLanguage,
         noteId: input.noteId,
         userId: input.userId,
-      });
-      if (translatedSegments.length > 0) {
-        diarizationTranslations[translationLanguage] = translatedSegments;
-        transcriptionTranslations[translationLanguage] = formatTranscriptText(translatedSegments, 'original');
-      }
-    } catch (translationError) {
-      console.warn(`Transcript translation to ${translationLanguage} failed:`, translationError);
-    }
-  }
+      })
+        .then((translatedSegments) => {
+          if (translatedSegments.length > 0) {
+            diarizationTranslations[translationLanguage] = translatedSegments;
+            transcriptionTranslations[translationLanguage] = formatTranscriptText(translatedSegments, 'original');
+          }
+        })
+        .catch((translationError) => {
+          console.warn(`Transcript translation to ${translationLanguage} failed:`, translationError);
+        })
+    : Promise.resolve();
   const meetingStartAt = inferMeetingStartAt(input.meetingAt, audioDurationSeconds);
   const meetingDateForPrompt = meetingStartAt
     ? formatMeetingDateForPrompt(new Date(meetingStartAt), input.userTimeZone)
@@ -1815,6 +1829,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     fallbackModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     responseMimeType: 'application/json',
     maxOutputTokens: 16384,
+    thinkingBudget: 0,
     parts: [
       {
         text: buildSummaryPrompt({
@@ -1916,6 +1931,9 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     summaryTranslations[alternateLanguage] = parsedAlternateSummary.summary;
   }
 
+  // The transcript translation ran in parallel with the summary; make sure it has
+  // landed (or failed best-effort) before we persist, since insertNote stores it.
+  await translationPromise;
   await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
   const noteName = buildNoteName({
     title: parsedSummary.title,
@@ -1943,43 +1961,11 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     audioDurationSeconds,
   });
 
-  // Fold this note into the owner's personal memory (F1') and write its
-  // note_insight index (F4). Done server-side so it runs for EVERY note regardless
-  // of client — the web client used to do this, which left mobile-created notes and
-  // their owners' memory empty. Best-effort: never fail the summary job over a
-  // memory/insight hiccup. Idempotent: foldNoteIntoMemory skips already-folded notes.
-  await updateWorkflowJob(jobId, { stage: 'updating memory', progress: 96 });
-  try {
-    const fold = await foldNoteIntoMemory({
-      supabase,
-      apiKey: env.geminiApiKey,
-      userId: input.userId,
-      noteId: input.noteId,
-      transcript: transcriptText,
-      selfName: input.userName ?? null,
-      // Same speaker-name hint the summary uses, so action owners resolve to real
-      // names instead of "" (transcript labels are generic "Speaker A/B" at this stage).
-      speakerContext: input.speakerContext || null,
-    });
-    console.log(`Memory fold note=${input.noteId} items=${fold.memoryItemCount} insight=${fold.insightWritten} skipped=${fold.skipped}`);
-  } catch (memoryError) {
-    console.warn(`Memory fold failed for note ${input.noteId}:`, memoryError);
-  }
-
-  // F5.1: auto-identify speakers from context and (high-confidence only) name the
-  // diarization + refresh note_insight. Best-effort; never fails the job. Runs AFTER the
-  // memory fold so an auto-ID cannot flow into personal memory (conservative scope).
-  try {
-    await autoIdentifySpeakersAtIngest({
-      noteId: input.noteId,
-      userId: input.userId,
-      selfName: input.userName ?? null,
-      segments,
-    });
-  } catch (identifyError) {
-    console.warn(`Auto speaker identify failed for note ${input.noteId}:`, identifyError);
-  }
-
+  // Memory fold (F1') + auto speaker-ID (F5.1) used to run here, blocking job
+  // completion behind 2-3 more Gemini calls the user never waits to see. They no
+  // longer affect the returned summary, so the caller now runs finalizeNoteMemory()
+  // AFTER marking the job completed / sending the response (see processSummarizeJob
+  // and summarizeAudio). The note itself is already persisted above.
   return {
     transcript: segments,
     summary: parsedSummary.summary,
@@ -1994,6 +1980,52 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   };
 }
 
+// Post-summary enrichment that does NOT change the returned summary: fold the note
+// into the owner's personal memory (F1' + note_insight/F4 index) and auto-identify
+// speakers (F5.1). Run by the callers AFTER the job is marked completed / the response
+// is sent, so the user sees the summary without waiting on these extra Gemini calls.
+// Guaranteed non-throwing: each step is best-effort and the whole body is guarded, so a
+// caller can await or fire-and-forget it without risk of an unhandled rejection.
+async function finalizeNoteMemory(input: SummarizeAudioInput, segments: TranscriptSegment[]): Promise<void> {
+  try {
+    const transcriptText = formatTranscriptText(segments, 'original');
+    // Fold into personal memory + write the note_insight index. Idempotent:
+    // foldNoteIntoMemory skips already-folded notes, so a retry never double-counts.
+    try {
+      const fold = await foldNoteIntoMemory({
+        supabase,
+        apiKey: env.geminiApiKey,
+        userId: input.userId,
+        noteId: input.noteId,
+        transcript: transcriptText,
+        selfName: input.userName ?? null,
+        // Same speaker-name hint the summary uses, so action owners resolve to real
+        // names instead of "" (transcript labels are generic "Speaker A/B" at this stage).
+        speakerContext: input.speakerContext || null,
+      });
+      console.log(`Memory fold note=${input.noteId} items=${fold.memoryItemCount} insight=${fold.insightWritten} skipped=${fold.skipped}`);
+    } catch (memoryError) {
+      console.warn(`Memory fold failed for note ${input.noteId}:`, memoryError);
+    }
+
+    // F5.1: auto-identify speakers and (high-confidence only) name the diarization +
+    // refresh note_insight. Runs AFTER the memory fold so an auto-ID cannot flow into
+    // personal memory (conservative scope).
+    try {
+      await autoIdentifySpeakersAtIngest({
+        noteId: input.noteId,
+        userId: input.userId,
+        selfName: input.userName ?? null,
+        segments,
+      });
+    } catch (identifyError) {
+      console.warn(`Auto speaker identify failed for note ${input.noteId}:`, identifyError);
+    }
+  } catch (finalizeError) {
+    console.warn(`finalizeNoteMemory failed for note ${input.noteId}:`, finalizeError);
+  }
+}
+
 async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const input = parseSummarizeInput((await readBody(req, 110_000_000)) as SummarizeAudioRequest);
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
@@ -2001,6 +2033,8 @@ async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promis
 
   const result = await runSummarizeAudio(input);
   sendJson(res, 200, result);
+  // Enrich after responding so the web client isn't held behind memory/speaker-ID calls.
+  await finalizeNoteMemory(input, result.transcript);
 }
 
 async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -2174,6 +2208,10 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
       error: null,
     }, { retries: 4 });
     completedJobResults.set(jobId, result);
+    // Post-completion enrichment (memory fold + speaker-ID). Runs after the job is
+    // marked completed so the client sees the summary immediately; awaited here so the
+    // work still finishes in-process (heartbeat keeps the row fresh). Never throws.
+    await finalizeNoteMemory(input, result.transcript);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Workflow job ${jobId} failed:`, error);
