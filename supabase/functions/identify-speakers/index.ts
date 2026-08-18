@@ -116,7 +116,10 @@ const MAX_SUMMARY_CHARS = 700;
 
 /** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
-const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+// gemini-2.0-* were RETIRED (verified 404 2026-08-18) — a failover chain ending on a dead
+// model surfaced a confusing "no longer available" 404. LITE-ONLY for cost (no
+// gemini-2.5-flash — too expensive); both models here are live lite-tier.
+const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-3.1-flash-lite'];
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 interface GeminiGenerateContentResponse {

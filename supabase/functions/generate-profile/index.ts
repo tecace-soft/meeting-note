@@ -99,7 +99,12 @@ interface RequestBody {
 
 /** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
-const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+// gemini-2.0-* were RETIRED (verified 404 2026-08-18: "no longer available") — their
+// presence here meant any failover chain ended on a dead model, surfacing a confusing
+// "gemini-2.0-flash is no longer available" 404 to the user on Sync Profile. LITE-ONLY
+// for cost (no gemini-2.5-flash — too expensive): primary stays gemini-2.5-flash-lite,
+// fallback is the other live lite model.
+const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-3.1-flash-lite'];
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 // O-2: force structurally-valid ontology JSON at the source (OpenAPI subset, same trick
