@@ -345,68 +345,81 @@ function clampConfidence01(n: unknown): number {
   return Math.min(1, Math.max(0, n));
 }
 
+// Gemini enforces responseSchema `maxItems` but NOT `maxLength` (verified 2026-08-18: it
+// returned an 813-char string for a maxLength:120 field). So bound string length and array
+// size in APPLICATION code, applied on BOTH the parsed OUTPUT and the existing ontology fed
+// back into the update prompt. Trimming the existing profile keeps every Sync Profile input
+// compact, which is what stops a heavy speaker's ontology from growing until the update
+// output overflows maxOutputTokens and truncates mid-JSON.
+function clampStr(v: unknown): string {
+  return (typeof v === 'string' ? v : '').slice(0, MAX_STR_LEN);
+}
+function clampStrArray(v: unknown): string[] {
+  return (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+    .map((s) => s.slice(0, MAX_STR_LEN))
+    .slice(0, MAX_ARRAY_ITEMS);
+}
+
 function mapProfessionalContext(pc: Record<string, unknown>): SpeakerOntology['professional_context'] {
   return {
-    company: typeof pc.company === 'string' ? pc.company : '',
-    role: typeof pc.role === 'string' ? pc.role : '',
-    domains: Array.isArray(pc.domains) ? pc.domains.filter((x): x is string => typeof x === 'string') : [],
+    company: clampStr(pc.company),
+    role: clampStr(pc.role),
+    domains: clampStrArray(pc.domains),
     confidence: clampConfidence01(pc.confidence),
   };
 }
 
 function mapActiveProject(o: Record<string, unknown>): SpeakerOntology['active_projects'][number] {
   return {
-    name: typeof o.name === 'string' ? o.name : '',
-    role_in_project: typeof o.role_in_project === 'string' ? o.role_in_project : '',
-    status: typeof o.status === 'string' ? o.status : '',
-    importance: typeof o.importance === 'string' ? o.importance : '',
+    name: clampStr(o.name),
+    role_in_project: clampStr(o.role_in_project),
+    status: clampStr(o.status),
+    importance: clampStr(o.importance),
     confidence: clampConfidence01(o.confidence),
   };
 }
 
 function mapRelationship(o: Record<string, unknown>): SpeakerOntology['relationships'][number] {
   return {
-    person_or_group: typeof o.person_or_group === 'string' ? o.person_or_group : '',
-    relationship_type: typeof o.relationship_type === 'string' ? o.relationship_type : '',
-    context: typeof o.context === 'string' ? o.context : '',
-    related_projects: Array.isArray(o.related_projects)
-      ? o.related_projects.filter((x): x is string => typeof x === 'string')
-      : [],
+    person_or_group: clampStr(o.person_or_group),
+    relationship_type: clampStr(o.relationship_type),
+    context: clampStr(o.context),
+    related_projects: clampStrArray(o.related_projects),
     confidence: clampConfidence01(o.confidence),
   };
 }
 
 function mapResponsibility(o: Record<string, unknown>): SpeakerOntology['responsibilities'][number] {
   return {
-    description: typeof o.description === 'string' ? o.description : '',
-    scope: typeof o.scope === 'string' ? o.scope : '',
-    related_projects: Array.isArray(o.related_projects)
-      ? o.related_projects.filter((x): x is string => typeof x === 'string')
-      : [],
-    status: typeof o.status === 'string' ? o.status : '',
+    description: clampStr(o.description),
+    scope: clampStr(o.scope),
+    related_projects: clampStrArray(o.related_projects),
+    status: clampStr(o.status),
     confidence: clampConfidence01(o.confidence),
   };
 }
 
 function mapOpenThread(o: Record<string, unknown>): SpeakerOntology['open_threads'][number] {
   return {
-    topic: typeof o.topic === 'string' ? o.topic : '',
-    status: typeof o.status === 'string' ? o.status : '',
-    priority: typeof o.priority === 'string' ? o.priority : '',
-    summary: typeof o.summary === 'string' ? o.summary : '',
-    related_projects: Array.isArray(o.related_projects)
-      ? o.related_projects.filter((x): x is string => typeof x === 'string')
-      : [],
+    topic: clampStr(o.topic),
+    status: clampStr(o.status),
+    priority: clampStr(o.priority),
+    summary: clampStr(o.summary),
+    related_projects: clampStrArray(o.related_projects),
     confidence: clampConfidence01(o.confidence),
   };
 }
 
+// Clamp to MAX_ARRAY_ITEMS: the top-level ontology arrays must be bounded even though
+// Gemini's maxItems is only advisory on some inputs, and so the existing profile fed into
+// the next update stays small.
 function mapObjectArray<T>(arr: unknown, fn: (o: Record<string, unknown>) => T): T[] {
   if (!Array.isArray(arr)) return [];
   const out: T[] = [];
   for (const item of arr) {
     if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
       out.push(fn(item as Record<string, unknown>));
+      if (out.length >= MAX_ARRAY_ITEMS) break;
     }
   }
   return out;
@@ -462,8 +475,8 @@ function ontologyFromLooseParsed(parsed: Record<string, unknown>, speakerName: s
   return {
     schema_version: typeof parsed.schema_version === 'string' ? parsed.schema_version : '1.0',
     speaker_id: typeof parsed.speaker_id === 'string' ? parsed.speaker_id : speakerId,
-    display_name: typeof parsed.display_name === 'string' ? parsed.display_name : speakerName,
-    aliases: Array.isArray(parsed.aliases) ? parsed.aliases.filter((x): x is string => typeof x === 'string') : [],
+    display_name: clampStr(parsed.display_name) || speakerName,
+    aliases: clampStrArray(parsed.aliases),
     identity_confidence: typeof parsed.identity_confidence === 'number' ? parsed.identity_confidence : 0,
     professional_context,
     active_projects: mapObjectArray(parsed.active_projects, mapActiveProject),
