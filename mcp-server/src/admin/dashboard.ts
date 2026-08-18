@@ -43,9 +43,16 @@ function getBearerToken(req: IncomingMessage): string | undefined {
 }
 
 async function getMicrosoftUser(accessToken: string): Promise<AdminUser | null> {
-  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', {
-    headers: { authorization: `Bearer ${accessToken}` },
-  });
+  let response: Response;
+  try {
+    response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', {
+      headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(8000), // never hang admin auth on a stalled Graph call
+    });
+  } catch (error) {
+    console.warn(`[admin] Graph /me lookup failed or timed out: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
   if (!response.ok) return null;
   const data = (await response.json()) as JsonRecord;
   const id = typeof data.id === 'string' ? data.id.trim() : '';
@@ -68,7 +75,15 @@ async function requireAdmin(req: IncomingMessage): Promise<AdminUser | null> {
   const env = getEnv();
   const allowedIds = env.mcpAdminMicrosoftIds;
   const allowedEmails = env.mcpAdminEmails;
-  if (allowedIds.size === 0 && allowedEmails.size === 0) return user;
+  // Fail CLOSED when no admin allowlist is configured. Previously this returned the
+  // user as an admin, so with both MCP_ADMIN_EMAILS and MCP_ADMIN_MICROSOFT_IDS unset
+  // (and mcpAdminTenantId defaulting to 'common'), any Microsoft account in any tenant
+  // could sign in and read every user's meeting content via /admin. An unconfigured
+  // allowlist must deny, not grant.
+  if (allowedIds.size === 0 && allowedEmails.size === 0) {
+    console.warn('[admin] denied: no MCP_ADMIN_EMAILS / MCP_ADMIN_MICROSOFT_IDS configured (admin is fail-closed).');
+    return null;
+  }
   if (allowedIds.has(user.id.toLowerCase())) return user;
   if (user.email && allowedEmails.has(user.email.toLowerCase())) return user;
   return null;
@@ -76,7 +91,7 @@ async function requireAdmin(req: IncomingMessage): Promise<AdminUser | null> {
 
 async function fetchLocalHealth(req: IncomingMessage): Promise<JsonRecord> {
   const host = req.headers.host ?? 'localhost:3000';
-  const response = await fetch(`http://${host}/health?deep=1`);
+  const response = await fetch(`http://${host}/health?deep=1`, { signal: AbortSignal.timeout(8000) });
   return (await response.json()) as JsonRecord;
 }
 

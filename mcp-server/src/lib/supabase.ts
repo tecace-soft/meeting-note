@@ -44,6 +44,10 @@ export interface DataContext {
 export const NOTE_METADATA_SELECT = 'id, user_id, name, user_name, tags, projects, chat_id, created_at, meeting_at';
 export const NOTE_SUMMARY_SELECT = `${NOTE_METADATA_SELECT}, summary, summary_edit`;
 export const NOTE_TRANSCRIPT_SELECT = `${NOTE_SUMMARY_SELECT}, transcription, diarization`;
+// For the speaker-segment scan: metadata + diarization ONLY (no full `transcription`
+// plain text, no summary). Scanning many notes for one speaker only needs diarization,
+// so this roughly halves the bytes pulled per note vs NOTE_TRANSCRIPT_SELECT.
+export const NOTE_SPEAKER_SCAN_SELECT = 'id, user_id, name, user_name, created_at, meeting_at, diarization';
 
 let context: DataContext | null = null;
 const requestUserIdStorage = new AsyncLocalStorage<string | undefined>();
@@ -123,9 +127,12 @@ async function noteAccessOrExpression(userId: string): Promise<string> {
     for (const [owner, ids] of idsByOwner) {
       if (ids.length > 0) terms.push(`and(user_id.eq.${owner},projects.ov.{${ids.join(',')}})`);
     }
-  } catch {
+  } catch (error) {
     // Fail SAFE: on any lookup error keep the two direct-access branches (never widen, never
     // throw the whole tool call). Worst case degrades to the pre-M3 behavior for this request.
+    // Log it so a PERSISTENT failure (which silently narrows every user's shared-project
+    // visibility) is observable instead of invisible.
+    console.warn(`[noteAccessOrExpression] shared-project lookup failed, degrading to direct-access only: ${error instanceof Error ? error.message : String(error)}`);
   }
   return terms.join(',');
 }

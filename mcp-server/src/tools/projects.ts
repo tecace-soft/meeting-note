@@ -78,7 +78,7 @@ export function registerProjectTools(server: McpServer): void {
       }
 
       const projects = [...projectsById.values()]
-        .sort((a, b) => a.name.localeCompare(b.name))
+        .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
         .slice(0, resolvedLimit);
       return jsonResult({
         projects: projects.map((project) => {
@@ -90,7 +90,7 @@ export function registerProjectTools(server: McpServer): void {
             : (accessibleNoteCountByProject.get(String(project.id)) ?? 0);
           return {
             id: project.id,
-            name: project.name,
+            name: project.name ?? `Project ${project.id}`,
             noteCount,
             createdAt: project.created_at ?? null,
             access: owned ? 'owned' : 'from-accessible-shared-notes',
@@ -124,10 +124,13 @@ export function registerProjectTools(server: McpServer): void {
       const { data, error } = await query;
       if (error) return errorResult(error.message);
       const notes = ((data as NoteRow[]) ?? []);
-      const project = await fetchProject(projectId)
-        .catch(() => null)
-        ?? (await fetchProjectRowsByIds([String(projectId)]).catch(() => []))[0]
-        ?? null;
+      // Only surface a project row the caller OWNS (fetchProject is owner-scoped). The
+      // previous unscoped `fetchProjectRowsByIds` fallback returned ANY project by id,
+      // leaking another user's project name, created_at, and full note-id list for an
+      // enumerable numeric id (IDOR). For a project the caller merely has accessible
+      // notes in, `project` stays null and name/noteIds are derived from the
+      // access-scoped `notes` below — never from the unowned project row.
+      const project = await fetchProject(projectId).catch(() => null);
       if (!project && notes.length === 0) return errorResult(`Project not found or no accessible notes found for project: ${projectId}`);
       return jsonResult({
         project: {

@@ -21,7 +21,23 @@ export interface MeetingNoteEnv {
   mcpHealthCheckIntervalMs: number;
   mcpHeartbeatLogIntervalMs: number;
   mcpDisconnectAlertThreshold: number;
+  // IANA zone used to interpret bare YYYY-MM-DD date filters (e.g. get_notes_by_date).
+  // The user base is in Korea, so a plain "2026-08-18" means that day in KST, not UTC.
+  mcpDefaultTimeZone: string;
   port: number;
+}
+
+// Validate a configured IANA time zone, falling back to Asia/Seoul (the user base) when
+// unset or unrecognized, so a typo can never make Intl throw deep inside a date query.
+function resolveDefaultTimeZone(raw: string | undefined): string {
+  const value = raw?.trim() || 'Asia/Seoul';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return value;
+  } catch {
+    console.warn(`[env] MCP_DEFAULT_TIME_ZONE="${value}" is not a valid IANA zone; falling back to Asia/Seoul.`);
+    return 'Asia/Seoul';
+  }
 }
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -108,6 +124,7 @@ export function getEnv(): MeetingNoteEnv {
     mcpHealthCheckIntervalMs,
     mcpHeartbeatLogIntervalMs,
     mcpDisconnectAlertThreshold,
+    mcpDefaultTimeZone: resolveDefaultTimeZone(process.env.MCP_DEFAULT_TIME_ZONE),
     port,
   };
 }

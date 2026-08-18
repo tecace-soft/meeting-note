@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { applyMeetingDateFilter, describeDateFilter, resolveDateFilter } from '../lib/dateFilters.js';
-import { clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
+import { applyLimitWindow, clampLimit, errorResult, jsonResult, truncateText } from '../lib/formatters.js';
 import {
   applyNoteAccessScope,
   noteAccessFilter,
@@ -181,15 +181,17 @@ export function registerContextTools(_server: McpServer): void {
         .contains('projects', [toIdValue(projectId)])
         .order('meeting_at', { ascending: true, nullsFirst: true })
         .order('created_at', { ascending: true })
-        .limit(resolvedLimit);
+        .limit(resolvedLimit + 1);
       query = applyNoteAccessScope(query, await noteAccessFilter(userId));
       query = applyMeetingDateFilter(query, dateFilter);
       const { data, error } = await query;
       if (error) return errorResult(error.message);
+      const { shown, hasMore } = applyLimitWindow(((data as NoteRow[]) ?? []), resolvedLimit);
       return jsonResult({
         projectId,
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
-        meetings: ((data as NoteRow[]) ?? []).map((note) => ({
+        hasMore,
+        meetings: shown.map((note) => ({
           ...summarizeNote(note),
           summary: truncateText(getNoteSummary(note) || 'No summary for this note.', maxCharactersPerSummary),
         })),
@@ -237,7 +239,10 @@ export function registerContextTools(_server: McpServer): void {
       const noteIds = notes.map((note) => note.id).filter(Boolean);
       const actionsByNote = new Map<string, Array<{ text?: unknown; owner?: unknown; due?: unknown; status?: unknown }>>();
       if (noteIds.length > 0) {
-        const { data: insightRows } = await supabase.from('note_insight').select('note_id, actions').in('note_id', noteIds);
+        const { data: insightRows, error: insightError } = await supabase.from('note_insight').select('note_id, actions').in('note_id', noteIds);
+        // The structured index is this tool's primary source; a silent failure here would
+        // downgrade every note to the summary heuristic while looking like success. Log it.
+        if (insightError) console.warn(`[find_action_items] note_insight query failed, falling back to heuristic: ${insightError.message}`);
         for (const row of (insightRows as Array<{ note_id: string; actions: unknown }> | null) ?? []) {
           if (Array.isArray(row.actions) && row.actions.length > 0) {
             actionsByNote.set(row.note_id, row.actions as Array<{ text?: unknown }>);
@@ -251,6 +256,7 @@ export function registerContextTools(_server: McpServer): void {
         const structured = actionsByNote.get(note.id);
         if (structured) {
           for (const action of structured.slice(0, resolvedMaxItemsPerNote)) {
+            if (!action || typeof action !== 'object') continue; // a [null] / non-object element must not crash the tool
             const text = typeof action.text === 'string' ? action.text.trim() : '';
             if (!text) continue;
             items.push({
@@ -276,6 +282,10 @@ export function registerContextTools(_server: McpServer): void {
         projectId: projectId ?? null,
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
         searchedNotes: notes.length,
+        // The note window is capped at resolvedNoteLimit newest notes; if it was hit, action
+        // items in older notes were not scanned. Narrow by date/project for full coverage.
+        reachedNoteCap: notes.length >= resolvedNoteLimit,
+        noteCap: resolvedNoteLimit,
         actionItems: items,
       });
     },
@@ -320,7 +330,10 @@ export function registerContextTools(_server: McpServer): void {
       const noteIds = notes.map((note) => note.id).filter(Boolean);
       const eventsByNote = new Map<string, Array<{ cause?: unknown; effect?: unknown }>>();
       if (noteIds.length > 0) {
-        const { data: insightRows } = await supabase.from('note_insight').select('note_id, events').in('note_id', noteIds);
+        const { data: insightRows, error: insightError } = await supabase.from('note_insight').select('note_id, events').in('note_id', noteIds);
+        // Events live only in this index (no heuristic fallback); a silent failure would
+        // return zero events as if there genuinely were none. Log it.
+        if (insightError) console.warn(`[find_events] note_insight query failed: ${insightError.message}`);
         for (const row of (insightRows as Array<{ note_id: string; events: unknown }> | null) ?? []) {
           if (Array.isArray(row.events) && row.events.length > 0) {
             eventsByNote.set(row.note_id, row.events as Array<{ cause?: unknown; effect?: unknown }>);
@@ -334,6 +347,7 @@ export function registerContextTools(_server: McpServer): void {
         if (!structured) continue;
         const sourceNote = summarizeNote(note);
         for (const ev of structured.slice(0, resolvedMaxItemsPerNote)) {
+          if (!ev || typeof ev !== 'object') continue; // guard [null] / non-object elements
           const cause = typeof ev.cause === 'string' ? ev.cause.trim() : '';
           const effect = typeof ev.effect === 'string' ? ev.effect.trim() : '';
           if (!cause || !effect) continue;
@@ -347,6 +361,9 @@ export function registerContextTools(_server: McpServer): void {
         projectId: projectId ?? null,
         dateFilter: describeDateFilter({ date, startDate, endDate }, dateFilter),
         searchedNotes: notes.length,
+        // Capped at resolvedNoteLimit newest notes; if hit, older notes' events were not read.
+        reachedNoteCap: notes.length >= resolvedNoteLimit,
+        noteCap: resolvedNoteLimit,
         events: items,
       });
     },

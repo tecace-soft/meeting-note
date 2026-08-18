@@ -92,6 +92,7 @@ export async function sendMcpAlert(input: McpAlertInput): Promise<void> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000), // don't let a stalled Resend call hang the alert path
     });
 
     if (!response.ok) {

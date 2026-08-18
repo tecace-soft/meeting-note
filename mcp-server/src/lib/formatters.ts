@@ -24,6 +24,14 @@ export function jsonResource(uri: string, value: unknown): ReadResourceResult {
   };
 }
 
+// Honest pagination signal. Callers fetch `limit + 1` rows; this returns the first
+// `limit` to show plus `hasMore` telling the model whether more rows exist beyond the
+// window. Without it, a bare capped array reads as "these are all" when it is only the
+// top N, producing confidently-incomplete answers at scale.
+export function applyLimitWindow<T>(rows: T[], limit: number): { shown: T[]; hasMore: boolean } {
+  return { shown: rows.slice(0, limit), hasMore: rows.length > limit };
+}
+
 export function clampLimit(limit: number | undefined, fallback: number, max: number): number {
   if (!limit || !Number.isFinite(limit)) return fallback;
   return Math.max(1, Math.min(Math.floor(limit), max));
