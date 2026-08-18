@@ -110,9 +110,15 @@ const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 // O-2: force structurally-valid ontology JSON at the source (OpenAPI subset, same trick
 // note_insight uses). Without it, a large UPDATE could truncate at maxOutputTokens into
 // invalid JSON, which used to fall back to an EMPTY ontology and wipe the saved profile.
+// Bound the output at the SCHEMA level (Gemini hard-enforces maxItems/maxLength, verified
+// 2026-08-18). Without array caps, a heavy speaker (many meetings) made the model emit an
+// ontology larger than maxOutputTokens, which truncated mid-JSON → parse failure → Sync
+// Profile error. maxItems:6 mirrors the terseness rule but is now enforced, not requested.
+const MAX_ARRAY_ITEMS = 6;
+const MAX_STR_LEN = 120;
 const CONF = { type: 'NUMBER' } as const;
-const STR = { type: 'STRING' } as const;
-const STR_ARRAY = { type: 'ARRAY', items: { type: 'STRING' } } as const;
+const STR = { type: 'STRING', maxLength: MAX_STR_LEN } as const;
+const STR_ARRAY = { type: 'ARRAY', maxItems: MAX_ARRAY_ITEMS, items: { type: 'STRING', maxLength: MAX_STR_LEN } } as const;
 const ONTOLOGY_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -127,18 +133,22 @@ const ONTOLOGY_SCHEMA = {
     },
     active_projects: {
       type: 'ARRAY',
+      maxItems: MAX_ARRAY_ITEMS,
       items: { type: 'OBJECT', properties: { name: STR, role_in_project: STR, status: STR, importance: STR, confidence: CONF } },
     },
     relationships: {
       type: 'ARRAY',
+      maxItems: MAX_ARRAY_ITEMS,
       items: { type: 'OBJECT', properties: { person_or_group: STR, relationship_type: STR, context: STR, related_projects: STR_ARRAY, confidence: CONF } },
     },
     responsibilities: {
       type: 'ARRAY',
+      maxItems: MAX_ARRAY_ITEMS,
       items: { type: 'OBJECT', properties: { description: STR, scope: STR, related_projects: STR_ARRAY, status: STR, confidence: CONF } },
     },
     open_threads: {
       type: 'ARRAY',
+      maxItems: MAX_ARRAY_ITEMS,
       items: { type: 'OBJECT', properties: { topic: STR, status: STR, priority: STR, summary: STR, related_projects: STR_ARRAY, confidence: CONF } },
     },
     last_updated_at: STR,
@@ -166,7 +176,7 @@ async function callGeminiGenerateContent(
   model: string,
   systemPrompt: string,
   userPrompt: string
-): Promise<{ rawText: string; error?: string; status?: number }> {
+): Promise<{ rawText: string; error?: string; status?: number; finishReason?: string }> {
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const res = await fetch(url, {
@@ -180,10 +190,12 @@ async function callGeminiGenerateContent(
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       generationConfig: {
         temperature: 0.2,
-        // 4096 is ample for a compact ontology; a runaway then fails FAST and the caller
-        // retries. thinkingBudget:0 is the KEY reliability lever — without it flash-lite can
-        // run away to MAX_TOKENS and truncate the JSON (verified). Mirrors workflow-server.
-        maxOutputTokens: 4096,
+        // Headroom above the schema's hard-capped worst case (maxItems:6 + maxLength:120
+        // ≈ up to ~6k tokens if every field is maxed) so a valid ontology always COMPLETES
+        // rather than truncating mid-JSON. thinkingBudget:0 still prevents reasoning-token
+        // runaway; the schema caps prevent array runaway. Billed on actual output, so the
+        // higher ceiling costs nothing for the typical small ontology.
+        maxOutputTokens: 8192,
         responseMimeType: 'application/json',
         responseSchema: ONTOLOGY_SCHEMA,
         thinkingConfig: { thinkingBudget: 0 },
@@ -216,17 +228,17 @@ async function callGeminiGenerateContent(
       status: 400,
     };
   }
+  const finishReason = data.candidates?.[0]?.finishReason;
   const rawText = extractGeminiOutputText(data).trim();
   if (!rawText) {
-    const fr = data.candidates?.[0]?.finishReason;
-    const reason = fr ? ` (finishReason: ${fr})` : '';
+    const reason = finishReason ? ` (finishReason: ${finishReason})` : '';
     return {
       rawText: '',
       error: `Gemini returned empty output.${reason} Check model name (GEMINI_MODEL) and API key.`,
       status: 502,
     };
   }
-  return { rawText };
+  return { rawText, finishReason };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -263,7 +275,9 @@ async function callGeminiWithRetryAndFallback(
         // retryable — NOT a silent empty success that would wipe the saved profile.
         const parsed = parseOntologyStrict(result.rawText, speakerName, speakerId);
         if (parsed) return { ontology: parsed, model };
-        lastError = `Ontology output was not valid JSON (model ${model}, len ${result.rawText.length}).`;
+        // finishReason distinguishes a MAX_TOKENS truncation (needs more headroom / tighter
+        // caps) from genuinely malformed content. Schema maxItems now hard-caps array growth.
+        lastError = `Ontology output was not valid JSON (model ${model}, len ${result.rawText.length}, finishReason ${result.finishReason ?? 'n/a'}).`;
         lastStatus = 502;
         if (attempt < maxAttempts) { await sleep(700 * attempt + Math.floor(Math.random() * 300)); continue; }
         break; // exhausted this model → next model
