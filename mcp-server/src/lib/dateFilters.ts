@@ -5,7 +5,7 @@ export interface DateFilterInput {
   startDate?: string;
   endDate?: string;
   // IANA zone for interpreting bare YYYY-MM-DD bounds. Defaults to MCP_DEFAULT_TIME_ZONE
-  // (Asia/Seoul) so "2026-08-18" means that calendar day in the user's zone, not UTC.
+  // (America/Los_Angeles) so "2026-08-18" means that calendar day in the user's zone, not UTC.
   timeZone?: string;
 }
 

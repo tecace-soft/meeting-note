@@ -22,21 +22,25 @@ export interface MeetingNoteEnv {
   mcpHeartbeatLogIntervalMs: number;
   mcpDisconnectAlertThreshold: number;
   // IANA zone used to interpret bare YYYY-MM-DD date filters (e.g. get_notes_by_date).
-  // The user base is in Korea, so a plain "2026-08-18" means that day in KST, not UTC.
+  // The primary MCP users are in the US Pacific zone (Seattle), so a plain "2026-08-18"
+  // means that calendar day in America/Los_Angeles, not UTC. Override per deploy with
+  // MCP_DEFAULT_TIME_ZONE if the querying user is elsewhere.
   mcpDefaultTimeZone: string;
   port: number;
 }
 
-// Validate a configured IANA time zone, falling back to Asia/Seoul (the user base) when
-// unset or unrecognized, so a typo can never make Intl throw deep inside a date query.
+const FALLBACK_TIME_ZONE = 'America/Los_Angeles';
+
+// Validate a configured IANA time zone, falling back to the primary users' zone when unset
+// or unrecognized, so a typo can never make Intl throw deep inside a date query.
 function resolveDefaultTimeZone(raw: string | undefined): string {
-  const value = raw?.trim() || 'Asia/Seoul';
+  const value = raw?.trim() || FALLBACK_TIME_ZONE;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: value });
     return value;
   } catch {
-    console.warn(`[env] MCP_DEFAULT_TIME_ZONE="${value}" is not a valid IANA zone; falling back to Asia/Seoul.`);
-    return 'Asia/Seoul';
+    console.warn(`[env] MCP_DEFAULT_TIME_ZONE="${value}" is not a valid IANA zone; falling back to ${FALLBACK_TIME_ZONE}.`);
+    return FALLBACK_TIME_ZONE;
   }
 }
 
