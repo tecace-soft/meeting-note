@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../../notes/ui/new_note_screen.dart';
 import '../data/recent_recordings_repository.dart';
@@ -26,6 +27,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   Widget build(BuildContext context) {
     final rec = ref.watch(recordingProvider);
     final notifier = ref.read(recordingProvider.notifier);
+    final t = ref.watch(appTextProvider);
 
     // When a recording auto-stops at the 2-hour cap, move the user into the
     // new-note flow with the saved audio and tell them what happened.
@@ -36,11 +38,8 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
       notifier.clearCaptureFailedFlag();
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Recording stopped: no audio was being captured. Close any app '
-            'using the microphone and try again.',
-          ),
+        SnackBar(
+          content: Text(t('record.captureFailed')),
         ),
       );
     });
@@ -51,10 +50,8 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
       notifier.clearAutoStoppedFlag();
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Reached the 2-hour limit. Recording stopped and saved. Start a new recording to continue.',
-          ),
+        SnackBar(
+          content: Text(t('record.autoStopped')),
         ),
       );
       context.push(
@@ -112,7 +109,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
               ),
               const SizedBox(height: 22),
               Text(
-                'Keeps recording in the background - Auto-recovery',
+                t('record.backgroundHint'),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 11,
@@ -130,10 +127,8 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
                     if (!context.mounted) return;
                     if (path == null) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'This interrupted recording could not be finalized. Please record again.',
-                          ),
+                        SnackBar(
+                          content: Text(t('record.recoverFailed')),
                         ),
                       );
                       return;
@@ -144,7 +139,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
                     await notifier.discardRecoverableRecording();
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Recovered recording discarded.')),
+                      SnackBar(content: Text(t('record.recoveredDiscarded'))),
                     );
                   },
                 ),
@@ -164,13 +159,13 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
       _capturedAttachmentPaths.clear();
       final result = await notifier.start();
       if (result != RecordStartResult.started && context.mounted) {
+        final t = ref.read(appTextProvider);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               result == RecordStartResult.permissionDenied
-                  ? 'Microphone permission is required. Enable it in Settings.'
-                  : 'Could not start recording. Close any app using the '
-                      'microphone (call, voice memo) and try again.',
+                  ? t('record.micPermission')
+                  : t('record.startFailed'),
             ),
           ),
         );
@@ -193,17 +188,18 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
       if (!mounted) return;
       setState(() => _capturedAttachmentPaths.add(image.path));
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Photo attached to this recording.')),
+        SnackBar(content: Text(ref.read(appTextProvider)('record.photoAttached'))),
       );
     } catch (error) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open camera: $error')),
+        SnackBar(content: Text('${ref.read(appTextProvider)('record.cameraError')}: $error')),
       );
     }
   }
 
   Future<void> _showUploadOptions(BuildContext context) async {
+    final t = ref.read(appTextProvider);
     final selected = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -215,14 +211,14 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.upload_file_rounded),
-                title: const Text('Choose audio file'),
-                subtitle: const Text('Pick an audio file from this device'),
+                title: Text(t('record.chooseAudioFile')),
+                subtitle: Text(t('record.chooseAudioFileSub')),
                 onTap: () => Navigator.pop(context, 'pick'),
               ),
               ListTile(
                 leading: const Icon(Icons.edit_rounded),
-                title: const Text('Enter local file path'),
-                subtitle: const Text('Useful for emulator testing'),
+                title: Text(t('record.enterFilePath')),
+                subtitle: Text(t('record.enterFilePathSub')),
                 onTap: () => Navigator.pop(context, 'manual'),
               ),
             ],
@@ -257,18 +253,19 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     } catch (error) {
       if (!context.mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not choose audio: $error')),
+        SnackBar(content: Text('${ref.read(appTextProvider)('record.chooseAudioError')}: $error')),
       );
       return null;
     }
   }
 
   Future<String?> _showManualPathDialog(BuildContext context) {
+    final t = ref.read(appTextProvider);
     final controller = TextEditingController();
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Audio file path'),
+        title: Text(t('record.audioFilePathTitle')),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -277,14 +274,14 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(t('common.cancel')),
           ),
           FilledButton(
             onPressed: () {
               final path = controller.text.trim();
               Navigator.pop(context, path.isEmpty ? null : path);
             },
-            child: const Text('Continue'),
+            child: Text(t('record.continue')),
           ),
         ],
       ),
@@ -309,7 +306,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     } catch (error) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load recent recording: $error')),
+        SnackBar(content: Text('${ref.read(appTextProvider)('record.loadRecentError')}: $error')),
       );
     }
   }
@@ -350,7 +347,7 @@ class _HomeTopBar extends ConsumerWidget {
   }
 }
 
-class _ActiveRecordingScreen extends StatelessWidget {
+class _ActiveRecordingScreen extends ConsumerWidget {
   const _ActiveRecordingScreen({
     required this.state,
     required this.elapsed,
@@ -372,9 +369,10 @@ class _ActiveRecordingScreen extends StatelessWidget {
   final int attachmentCount;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final t = ref.watch(appTextProvider);
     return Scaffold(
       backgroundColor: palette.pageBackground,
       body: SafeArea(
@@ -410,7 +408,7 @@ class _ActiveRecordingScreen extends StatelessWidget {
               child: Column(
                 children: [
                   Text(
-                    'Recording',
+                    t('record.recording'),
                     style: TextStyle(
                       fontSize: 16,
                       height: 1,
@@ -429,11 +427,11 @@ class _ActiveRecordingScreen extends StatelessWidget {
                         color: dark ? const Color(0xFF17345D) : const Color(0xFFE8F2FF),
                         borderRadius: BorderRadius.circular(99),
                       ),
-                      child: const Center(
+                      child: Center(
                         widthFactor: 1,
                         child: Text(
-                          'Background active',
-                          style: TextStyle(
+                          t('record.backgroundActive'),
+                          style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w400,
                             color: Color(0xFF2F80FF),
@@ -462,10 +460,10 @@ class _ActiveRecordingScreen extends StatelessWidget {
                         color: const Color(0x1AE5484D),
                         borderRadius: BorderRadius.circular(99),
                       ),
-                      child: const Text(
-                        'Approaching the 2-hour limit. Recording will stop soon.',
+                      child: Text(
+                        t('record.limitWarning'),
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
                           color: Color(0xFFE5484D),
@@ -483,7 +481,9 @@ class _ActiveRecordingScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       _SecondaryActionButton(
-                        label: state == RecordState.paused ? 'Resume' : 'Pause',
+                        label: state == RecordState.paused
+                            ? t('record.resume')
+                            : t('record.pause'),
                         onTap: onPauseResume,
                       ),
                       const SizedBox(width: 16),
@@ -494,15 +494,15 @@ class _ActiveRecordingScreen extends StatelessWidget {
                       ),
                       const SizedBox(width: 16),
                       _GradientActionButton(
-                        label: 'Done',
+                        label: t('record.done'),
                         onTap: onDone,
                       ),
                     ],
                   ),
                   const SizedBox(height: 38),
-                  const Text(
-                    'Saved locally even if interrupted',
-                    style: TextStyle(
+                  Text(
+                    t('record.savedLocally'),
+                    style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w300,
                       color: Color(0xFFB7C0CD),
@@ -519,7 +519,7 @@ class _ActiveRecordingScreen extends StatelessWidget {
   }
 }
 
-class _RecordContainer extends StatelessWidget {
+class _RecordContainer extends ConsumerWidget {
   const _RecordContainer({
     required this.onRecordTap,
     required this.onUpload,
@@ -531,9 +531,10 @@ class _RecordContainer extends StatelessWidget {
   final VoidCallback onRecent;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final t = ref.watch(appTextProvider);
     return SizedBox(
       height: 480,
       width: double.infinity,
@@ -590,7 +591,7 @@ class _RecordContainer extends StatelessWidget {
                     Column(
                       children: [
                         Text(
-                          'Record your meeting',
+                          t('record.title'),
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 21,
@@ -602,7 +603,7 @@ class _RecordContainer extends StatelessWidget {
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          'AI transcribes and summarizes for you',
+                          t('record.subtitle'),
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 13,
@@ -623,17 +624,17 @@ class _RecordContainer extends StatelessWidget {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      child: const Text('Tap to record'),
+                      child: Text(t('record.tapToRecord')),
                     ),
                     const SizedBox(height: 13),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _PillButton(label: 'Record', selected: true, onTap: onRecordTap),
+                        _PillButton(label: t('record.tabRecord'), selected: true, onTap: onRecordTap),
                         const SizedBox(width: 10),
-                        _PillButton(label: 'Upload', onTap: onUpload),
+                        _PillButton(label: t('record.tabUpload'), onTap: onUpload),
                         const SizedBox(width: 10),
-                        _PillButton(label: 'Recent', onTap: onRecent),
+                        _PillButton(label: t('record.tabRecent'), onTap: onRecent),
                       ],
                     ),
                   ],
@@ -855,7 +856,7 @@ class _SecondaryActionButton extends StatelessWidget {
   }
 }
 
-class _RecoverableRecordingCard extends StatelessWidget {
+class _RecoverableRecordingCard extends ConsumerWidget {
   const _RecoverableRecordingCard({
     required this.session,
     required this.onRecover,
@@ -867,10 +868,11 @@ class _RecoverableRecordingCard extends StatelessWidget {
   final VoidCallback onDiscard;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final started = _formatStarted(session.startedAt);
     final duration = _formatDuration(session.elapsed);
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
 
     return Material(
       color: palette.card,
@@ -898,7 +900,7 @@ class _RecoverableRecordingCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Recover interrupted recording',
+                    t('record.recoverTitle'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -909,7 +911,7 @@ class _RecoverableRecordingCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '$started - $duration saved',
+                    '$started - $duration ${t('record.savedSuffix')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -931,7 +933,7 @@ class _RecoverableRecordingCard extends StatelessWidget {
                   fontWeight: FontWeight.w400,
                 ),
               ),
-              child: const Text('Discard'),
+              child: Text(t('record.discard')),
             ),
             TextButton(
               onPressed: onRecover,
@@ -942,7 +944,7 @@ class _RecoverableRecordingCard extends StatelessWidget {
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              child: const Text('Use'),
+              child: Text(t('record.use')),
             ),
           ],
         ),
@@ -1092,16 +1094,17 @@ class _WaveformBars extends StatelessWidget {
   }
 }
 
-class _RecentRecordingsSheet extends StatefulWidget {
+class _RecentRecordingsSheet extends ConsumerStatefulWidget {
   const _RecentRecordingsSheet({required this.repository});
 
   final RecentRecordingsRepository repository;
 
   @override
-  State<_RecentRecordingsSheet> createState() => _RecentRecordingsSheetState();
+  ConsumerState<_RecentRecordingsSheet> createState() =>
+      _RecentRecordingsSheetState();
 }
 
-class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
+class _RecentRecordingsSheetState extends ConsumerState<_RecentRecordingsSheet> {
   late Future<List<RecentRecording>> _future;
 
   @override
@@ -1139,6 +1142,7 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
 
     return SafeArea(
       child: DraggableScrollableSheet(
@@ -1155,7 +1159,7 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Recent recordings',
+                      t('record.recentTitle'),
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w500,
@@ -1164,7 +1168,7 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Refresh',
+                    tooltip: t('record.refresh'),
                     onPressed: _refresh,
                     icon: const Icon(Icons.refresh_rounded),
                   ),
@@ -1181,7 +1185,7 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
                     if (snapshot.hasError) {
                       return Center(
                         child: Text(
-                          'Failed to load recent recordings: ${snapshot.error}',
+                          '${t('record.loadRecentListError')}: ${snapshot.error}',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: scheme.error),
                         ),
@@ -1191,7 +1195,7 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
                     if (recordings.isEmpty) {
                       return Center(
                         child: Text(
-                          'No recent recordings yet.',
+                          t('record.noRecent'),
                           style: TextStyle(color: scheme.onSurfaceVariant),
                         ),
                       );
@@ -1214,7 +1218,7 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
-                                    'Failed to delete recent recording: $error',
+                                    '${t('record.deleteRecentError')}: $error',
                                   ),
                                 ),
                               );
@@ -1234,7 +1238,7 @@ class _RecentRecordingsSheetState extends State<_RecentRecordingsSheet> {
   }
 }
 
-class _RecentRecordingTile extends StatelessWidget {
+class _RecentRecordingTile extends ConsumerWidget {
   const _RecentRecordingTile({
     required this.recording,
     required this.onTap,
@@ -1246,9 +1250,10 @@ class _RecentRecordingTile extends StatelessWidget {
   final Future<void> Function() onDelete;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1303,7 +1308,7 @@ class _RecentRecordingTile extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'Remove',
+                tooltip: t('record.remove'),
                 onPressed: onDelete,
                 icon: Icon(Icons.close_rounded, color: palette.textMuted),
               ),

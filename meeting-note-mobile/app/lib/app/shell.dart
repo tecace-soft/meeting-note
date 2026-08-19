@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/i18n/app_strings.dart';
 import '../shared/widgets/widgets.dart';
 
-class AppShell extends StatelessWidget {
+class AppShell extends ConsumerWidget {
   const AppShell({
     super.key,
     required this.shell,
@@ -14,13 +16,14 @@ class AppShell extends StatelessWidget {
   final bool showBottomNav;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     final tabs = [
-      const _TabSpec(label: 'Home'),
-      const _TabSpec(label: 'History'),
-      const _TabSpec(label: 'Projects'),
-      const _TabSpec(label: 'Settings'),
+      _TabSpec(label: t('shell.home')),
+      _TabSpec(label: t('shell.history')),
+      _TabSpec(label: t('shell.projects')),
+      _TabSpec(label: t('shell.settings')),
     ];
 
     return Scaffold(

@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../shared/util/uuid.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../../auth/providers/auth_provider.dart';
@@ -72,7 +73,8 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
-    final audioName = _fileName(_audioPath) ?? 'No audio selected';
+    final t = ref.watch(appTextProvider);
+    final audioName = _fileName(_audioPath) ?? t('newNote.noAudioSelected');
     final attachmentNames = _attachmentPaths.map(_fileName).whereType<String>().toList();
 
     return Scaffold(
@@ -90,7 +92,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(
-                        'Back',
+                        t('newNote.back'),
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w400,
@@ -101,7 +103,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                   ),
                   const Spacer(),
                   Text(
-                    'New Meeting Note',
+                    t('newNote.title'),
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w600,
@@ -120,49 +122,51 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                     _AudioSourceCard(
                       name: audioName,
                       meta: _audioMetaLine(_audioPath),
+                      removeLabel: t('newNote.remove'),
                       onRemove: () => setState(() => _audioPath = null),
                     ),
                     const SizedBox(height: 24),
-                    const _FieldLabel('Title'),
+                    _FieldLabel(t('newNote.titleLabel')),
                     const SizedBox(height: 8),
                     _FigmaTextField(
                       controller: _title,
                       minHeight: 51,
                     ),
                     const SizedBox(height: 23),
-                    const _FieldLabel('Instructions (optional)'),
+                    _FieldLabel(t('newNote.instructionsLabel')),
                     const SizedBox(height: 8),
                     _FigmaTextField(
                       controller: _instructions,
                       minHeight: 84,
                       maxLines: 3,
-                      hintText: 'e.g. Focus on action items, summarize in Korean',
+                      hintText: t('newNote.instructionsHint'),
                     ),
                     const SizedBox(height: 23),
-                    const _FieldLabel('Summary prompt'),
+                    _FieldLabel(t('newNote.summaryPromptLabel')),
                     const SizedBox(height: 8),
                     _SummaryPromptButton(
                       label: _prompt?.name ??
                           (_loadingPrompts
-                              ? 'Loading prompts...'
-                              : 'Choose summary prompt'),
+                              ? t('newNote.loadingPrompts')
+                              : t('newNote.chooseSummaryPrompt')),
+                      changeLabel: t('newNote.change'),
                       onTap: _pickPrompt,
                     ),
                     const SizedBox(height: 26),
-                    const _FieldLabel('Attachments'),
+                    _FieldLabel(t('newNote.attachments')),
                     const SizedBox(height: 10),
                     Row(
                       children: [
                         Expanded(
                           child: _AttachmentButton(
-                            label: '+ File',
+                            label: t('newNote.attachFile'),
                             onTap: _pickAttachment,
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: _AttachmentButton(
-                            label: 'Camera',
+                            label: t('newNote.camera'),
                             icon: Icons.camera_alt_outlined,
                             onTap: _pickCameraImage,
                           ),
@@ -186,13 +190,13 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                     ],
                     const SizedBox(height: 55),
                     PrimaryButton(
-                      label: 'Generate Summary',
+                      label: t('newNote.generateSummary'),
                       loading: false,
                       onPressed: _audioPath == null ? null : _submit,
                     ),
                     const SizedBox(height: 19),
                     Text(
-                      "We'll notify you when it's ready",
+                      t('newNote.notifyReady'),
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 12,
@@ -212,21 +216,22 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   }
 
   Future<void> _pickPrompt() async {
+    final t = ref.read(appTextProvider);
     late final List<SummaryPrompt> prompts;
     try {
       prompts = await _loadPromptsFresh();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not load prompts: $error')),
+        SnackBar(content: Text('${t('newNote.couldNotLoadPrompts')}: $error')),
       );
       return;
     }
     if (!mounted) return;
     if (prompts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No summary prompts found for this account.'),
+        SnackBar(
+          content: Text(t('newNote.noSummaryPrompts')),
         ),
       );
       return;
@@ -263,7 +268,11 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not load prompts: $error')),
+        SnackBar(
+          content: Text(
+            '${ref.read(appTextProvider)('newNote.couldNotLoadPrompts')}: $error',
+          ),
+        ),
       );
     } finally {
       if (mounted) setState(() => _loadingPrompts = false);
@@ -314,6 +323,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   }
 
   Future<void> _showAudioOptions() async {
+    final t = ref.read(appTextProvider);
     final selected = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -325,14 +335,14 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.upload_file_rounded),
-                title: const Text('Choose audio file'),
-                subtitle: const Text('Pick an audio file from this device'),
+                title: Text(t('newNote.chooseAudioFile')),
+                subtitle: Text(t('newNote.chooseAudioFileSub')),
                 onTap: () => Navigator.pop(context, 'pick'),
               ),
               ListTile(
                 leading: const Icon(Icons.edit_rounded),
-                title: const Text('Enter local file path'),
-                subtitle: const Text('Useful for emulator testing'),
+                title: Text(t('newNote.enterLocalPath')),
+                subtitle: Text(t('newNote.enterLocalPathSub')),
                 onTap: () => Navigator.pop(context, 'manual'),
               ),
             ],
@@ -374,18 +384,23 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     } catch (error) {
       if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not choose audio: $error')),
+        SnackBar(
+          content: Text(
+            '${ref.read(appTextProvider)('newNote.couldNotChooseAudio')}: $error',
+          ),
+        ),
       );
       return null;
     }
   }
 
   Future<String?> _showManualPathDialog() {
+    final t = ref.read(appTextProvider);
     final controller = TextEditingController();
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Audio file path'),
+        title: Text(t('newNote.audioFilePath')),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -396,14 +411,14 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(t('common.cancel')),
           ),
           FilledButton(
             onPressed: () {
               final path = controller.text.trim();
               Navigator.pop(context, path.isEmpty ? null : path);
             },
-            child: const Text('Continue'),
+            child: Text(t('newNote.continue')),
           ),
         ],
       ),
@@ -418,7 +433,11 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not attach file: $error')),
+        SnackBar(
+          content: Text(
+            '${ref.read(appTextProvider)('newNote.couldNotAttachFile')}: $error',
+          ),
+        ),
       );
     }
   }
@@ -430,7 +449,11 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open camera: $error')),
+        SnackBar(
+          content: Text(
+            '${ref.read(appTextProvider)('newNote.couldNotOpenCamera')}: $error',
+          ),
+        ),
       );
     }
   }
@@ -439,12 +462,11 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     final audioPath = _audioPath;
     if (audioPath == null) return;
 
+    final t = ref.read(appTextProvider);
     try {
       final selectedPrompt = await _selectedPromptForSubmit();
       if (selectedPrompt == null) {
-        throw StateError(
-          'Could not load summary prompts for this account. Open Settings > Summary Prompts and confirm at least one prompt exists.',
-        );
+        throw StateError(t('newNote.noPromptsError'));
       }
       final user = ref.read(authControllerProvider).user;
       if (!mounted) return;
@@ -467,8 +489,9 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed to submit: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${t('newNote.failedToSubmit')}: $e')),
+        );
       }
     }
   }
@@ -487,9 +510,11 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   }
 
   String _audioMetaLine(String? path) {
-    if (path == null || path.isEmpty) return 'Select an audio file';
+    final t = ref.read(appTextProvider);
+    if (path == null || path.isEmpty) return t('newNote.selectAudioFile');
     final size = _fileSizeLabel(path);
-    return size == null ? 'Audio source' : 'Audio source - $size';
+    final audioSource = t('newNote.audioSource');
+    return size == null ? audioSource : '$audioSource - $size';
   }
 
   String? _fileSizeLabel(String path) {
@@ -515,11 +540,13 @@ class _AudioSourceCard extends StatelessWidget {
   const _AudioSourceCard({
     required this.name,
     required this.meta,
+    required this.removeLabel,
     required this.onRemove,
   });
 
   final String name;
   final String meta;
+  final String removeLabel;
   final VoidCallback onRemove;
 
   @override
@@ -590,7 +617,7 @@ class _AudioSourceCard extends StatelessWidget {
           GestureDetector(
             onTap: onRemove,
             child: Text(
-              'Remove',
+              removeLabel,
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w300,
@@ -671,10 +698,12 @@ class _FigmaTextField extends StatelessWidget {
 class _SummaryPromptButton extends StatelessWidget {
   const _SummaryPromptButton({
     required this.label,
+    required this.changeLabel,
     required this.onTap,
   });
 
   final String label;
+  final String changeLabel;
   final VoidCallback onTap;
 
   @override
@@ -705,9 +734,9 @@ class _SummaryPromptButton extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            const Text(
-              'Change',
-              style: TextStyle(
+            Text(
+              changeLabel,
+              style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
                 color: FigmaDesign.activeBlue,

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../../auth/data/mobile_supabase_session.dart';
 import '../../projects/data/projects_repository.dart';
@@ -110,6 +111,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     return Scaffold(
       backgroundColor: palette.pageBackground,
       body: SafeArea(
@@ -122,7 +124,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                 children: [
                   Expanded(
                     child: Text(
-                      'History',
+                      t('history.title'),
                       style: TextStyle(
                         fontSize: 25,
                         height: 1,
@@ -133,12 +135,15 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                   ),
                   _HistoryModeToggle(
                     calendarMode: _calendarMode,
+                    listLabel: t('history.list'),
+                    calendarLabel: t('history.calendar'),
                     onChanged: (value) => setState(() => _calendarMode = value),
                   ),
                 ],
               ),
               const SizedBox(height: 28),
               _HistorySearchField(
+                hintText: t('history.searchHint'),
                 onChanged: (value) {
                   _query = value;
                   _refresh(preferCache: true);
@@ -146,6 +151,9 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
               ),
               const SizedBox(height: 18),
               _HistoryOwnershipFilters(
+                allLabel: t('history.filterAll'),
+                mineLabel: t('history.filterMine'),
+                sharedLabel: t('history.filterShared'),
                 selected: _ownership,
                 onChanged: (value) {
                   setState(() => _ownership = value);
@@ -165,21 +173,28 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                         _retryQuietly();
                         return const Center(child: CircularProgressIndicator());
                       }
-                      return _ErrorState(error: snapshot.error, onRetry: _refresh);
+                      return _ErrorState(
+                        error: snapshot.error,
+                        title: t('history.loadFailedTitle'),
+                        retryLabel: t('history.tryAgain'),
+                        onRetry: _refresh,
+                      );
                     }
                     _loadRetries = 0;
                     final notes = snapshot.data ?? const [];
                     if (notes.isEmpty) {
                       return EmptyState(
                         icon: Icons.mic_none_rounded,
-                        title: _query.isEmpty ? 'No notes yet' : 'No results',
+                        title: _query.isEmpty
+                            ? t('history.emptyTitle')
+                            : t('history.emptyResults'),
                         subtitle: _query.isEmpty
-                            ? 'Record or upload your first meeting to get started.'
+                            ? t('history.emptySubtitle')
                             : null,
                         action: _query.isEmpty
                             ? FilledButton(
                                 onPressed: () => context.go('/record'),
-                                child: const Text('Record a meeting'),
+                                child: Text(t('history.recordMeeting')),
                               )
                             : null,
                       );
@@ -215,6 +230,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   }
 
   Future<void> _showNoteActions(MeetingNote note) async {
+    final t = ref.read(appTextProvider);
     final action = await showModalBottomSheet<_NoteAction>(
       context: context,
       showDragHandle: true,
@@ -226,22 +242,22 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.ios_share_rounded),
-                title: const Text('Share'),
+                title: Text(t('history.share')),
                 onTap: () => Navigator.pop(context, _NoteAction.share),
               ),
               ListTile(
                 leading: const Icon(Icons.create_new_folder_rounded),
-                title: const Text('Add to project'),
+                title: Text(t('history.addToProject')),
                 onTap: () => Navigator.pop(context, _NoteAction.project),
               ),
               ListTile(
                 leading: const Icon(Icons.badge_rounded),
-                title: const Text('Sync profile'),
+                title: Text(t('history.syncProfile')),
                 onTap: () => Navigator.pop(context, _NoteAction.profile),
               ),
               ListTile(
                 leading: const Icon(Icons.auto_awesome_rounded),
-                title: const Text('Regenerate summary'),
+                title: Text(t('history.regenerateSummaryAction')),
                 enabled: note.transcript.isNotEmpty,
                 onTap: note.transcript.isEmpty
                     ? null
@@ -249,7 +265,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
               ),
               ListTile(
                 leading: const Icon(Icons.edit_rounded),
-                title: const Text('Rename note'),
+                title: Text(t('history.renameNote')),
                 onTap: () => Navigator.pop(context, _NoteAction.rename),
               ),
               ListTile(
@@ -258,7 +274,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                   color: Theme.of(context).colorScheme.error,
                 ),
                 title: Text(
-                  'Delete note',
+                  t('history.deleteNote'),
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
                 onTap: () => Navigator.pop(context, _NoteAction.delete),
@@ -294,7 +310,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Action failed: $error')),
+        SnackBar(content: Text('${t('history.actionFailed')}: $error')),
       );
     }
   }
@@ -314,7 +330,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     _refresh();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sharing updated.')),
+      SnackBar(content: Text(ref.read(appTextProvider)('history.sharingUpdated'))),
     );
   }
 
@@ -336,7 +352,11 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     _refresh();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Added to ${project.name}.')),
+      SnackBar(
+        content: Text(
+          '${ref.read(appTextProvider)('history.addedToProject')}: ${project.name}',
+        ),
+      ),
     );
   }
 
@@ -353,19 +373,20 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   }
 
   Future<void> _regenerateSummary(MeetingNote note) async {
+    final t = ref.read(appTextProvider);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Regenerate summary?'),
-        content: const Text('This will replace the edited summary for this note.'),
+        title: Text(t('history.regenerateConfirmTitle')),
+        content: Text(t('history.regenerateConfirmBody')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(t('common.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Regenerate'),
+            child: Text(t('history.regenerate')),
           ),
         ],
       ),
@@ -374,24 +395,25 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(
-      const SnackBar(content: Text('Regenerating summary...')),
+      SnackBar(content: Text(t('history.regenerating'))),
     );
     try {
       await ref.read(notesRepositoryProvider).regenerateSummary(note);
       _refresh();
       if (!mounted) return;
       messenger.showSnackBar(
-        const SnackBar(content: Text('Summary regenerated.')),
+        SnackBar(content: Text(t('history.summaryRegenerated'))),
       );
     } catch (error) {
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(content: Text('Regenerate failed: $error')),
+        SnackBar(content: Text('${t('history.regenerateFailed')}: $error')),
       );
     }
   }
 
   Future<void> _renameNote(MeetingNote note) async {
+    final t = ref.read(appTextProvider);
     final controller = TextEditingController(text: note.title);
     final name = await showDialog<String>(
       context: context,
@@ -421,7 +443,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                   children: [
                     Expanded(
                       child: Text(
-                        'Rename note',
+                        t('history.renameNote'),
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,
@@ -430,7 +452,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Close',
+                      tooltip: t('history.close'),
                       onPressed: () => Navigator.pop(context),
                       icon: Icon(Icons.close_rounded, color: palette.textMuted),
                     ),
@@ -442,7 +464,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                   autofocus: true,
                   style: TextStyle(color: palette.text),
                   decoration: InputDecoration(
-                    hintText: 'Note title',
+                    hintText: t('history.noteTitleHint'),
                     hintStyle: TextStyle(color: palette.textMuted),
                     filled: true,
                     fillColor: palette.field,
@@ -490,10 +512,10 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                         ),
                       ],
                     ),
-                    child: const Center(
+                    child: Center(
                       child: Text(
-                        'Save',
-                        style: TextStyle(
+                        t('history.save'),
+                        style: const TextStyle(
                           color: Colors.white,
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
@@ -515,6 +537,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   }
 
   Future<void> _deleteNote(MeetingNote note) async {
+    final t = ref.read(appTextProvider);
     final currentUserId = await ref.read(notesRepositoryProvider).currentUserId();
     final sharedWithMe = currentUserId != null &&
         note.ownerId != currentUserId &&
@@ -522,20 +545,24 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(sharedWithMe ? 'Remove shared note?' : 'Delete note?'),
+        title: Text(
+          sharedWithMe
+              ? t('history.removeSharedTitle')
+              : t('history.deleteConfirmTitle'),
+        ),
         content: Text(
           sharedWithMe
-              ? '"${note.title}" will be removed from your shared notes. The owner will keep access.'
-              : '"${note.title}" will be permanently deleted.',
+              ? '"${note.title}" ${t('history.removeSharedBody')}'
+              : '"${note.title}" ${t('history.deleteBody')}',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(t('common.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(sharedWithMe ? 'Remove' : 'Delete'),
+            child: Text(sharedWithMe ? t('history.remove') : t('history.delete')),
           ),
         ],
       ),
@@ -553,10 +580,14 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
 class _HistoryModeToggle extends StatelessWidget {
   const _HistoryModeToggle({
     required this.calendarMode,
+    required this.listLabel,
+    required this.calendarLabel,
     required this.onChanged,
   });
 
   final bool calendarMode;
+  final String listLabel;
+  final String calendarLabel;
   final ValueChanged<bool> onChanged;
 
   @override
@@ -566,10 +597,10 @@ class _HistoryModeToggle extends StatelessWidget {
       width: 104,
       child: FigmaSlidingSegmentedToggle(
         height: 40,
-        options: const [
-          FigmaSegmentOption(label: 'List', icon: Icons.view_list_rounded),
+        options: [
+          FigmaSegmentOption(label: listLabel, icon: Icons.view_list_rounded),
           FigmaSegmentOption(
-            label: 'Calendar',
+            label: calendarLabel,
             icon: Icons.calendar_month_rounded,
           ),
         ],
@@ -581,8 +612,9 @@ class _HistoryModeToggle extends StatelessWidget {
 }
 
 class _HistorySearchField extends StatelessWidget {
-  const _HistorySearchField({required this.onChanged});
+  const _HistorySearchField({required this.hintText, required this.onChanged});
 
+  final String hintText;
   final ValueChanged<String> onChanged;
 
   @override
@@ -609,7 +641,7 @@ class _HistorySearchField extends StatelessWidget {
           color: palette.text,
         ),
         decoration: InputDecoration(
-          hintText: 'Search title, summary, speaker, tag',
+          hintText: hintText,
           hintStyle: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w300,
@@ -626,10 +658,16 @@ class _HistorySearchField extends StatelessWidget {
 
 class _HistoryOwnershipFilters extends StatelessWidget {
   const _HistoryOwnershipFilters({
+    required this.allLabel,
+    required this.mineLabel,
+    required this.sharedLabel,
     required this.selected,
     required this.onChanged,
   });
 
+  final String allLabel;
+  final String mineLabel;
+  final String sharedLabel;
   final NoteOwnershipFilter selected;
   final ValueChanged<NoteOwnershipFilter> onChanged;
 
@@ -639,20 +677,20 @@ class _HistoryOwnershipFilters extends StatelessWidget {
       spacing: 10,
       children: [
         _HistoryFilterChip(
-          label: 'All',
+          label: allLabel,
           selected: selected == NoteOwnershipFilter.all,
           activeColor: _allNotesColor,
           onTap: () => onChanged(NoteOwnershipFilter.all),
         ),
         _HistoryFilterChip(
-          label: 'Mine',
+          label: mineLabel,
           selected: selected == NoteOwnershipFilter.mine,
           activeColor: _mineNoteColor,
           dotColor: _mineNoteColor,
           onTap: () => onChanged(NoteOwnershipFilter.mine),
         ),
         _HistoryFilterChip(
-          label: 'Shared',
+          label: sharedLabel,
           selected: selected == NoteOwnershipFilter.shared,
           activeColor: _sharedNoteColor,
           dotColor: _sharedNoteColor,
@@ -849,7 +887,7 @@ class _CalendarHistoryState extends State<_CalendarHistory> {
   }
 }
 
-class _CalendarToolbar extends StatelessWidget {
+class _CalendarToolbar extends ConsumerWidget {
   const _CalendarToolbar({
     required this.focusedDay,
     required this.scope,
@@ -865,8 +903,9 @@ class _CalendarToolbar extends StatelessWidget {
   final VoidCallback onNext;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -896,10 +935,10 @@ class _CalendarToolbar extends StatelessWidget {
         const SizedBox(height: 10),
         FigmaSlidingSegmentedToggle(
           height: 38,
-          options: const [
-            FigmaSegmentOption(label: 'Month'),
-            FigmaSegmentOption(label: 'Week'),
-            FigmaSegmentOption(label: 'Day'),
+          options: [
+            FigmaSegmentOption(label: t('history.month')),
+            FigmaSegmentOption(label: t('history.week')),
+            FigmaSegmentOption(label: t('history.day')),
           ],
           selectedIndex: scope.index,
           onChanged: (index) => onScopeChanged(_CalendarScope.values[index]),
@@ -1114,7 +1153,7 @@ class _WeekCalendarView extends StatelessWidget {
   }
 }
 
-class _DayCalendarView extends StatelessWidget {
+class _DayCalendarView extends ConsumerWidget {
   const _DayCalendarView({
     super.key,
     required this.day,
@@ -1131,7 +1170,7 @@ class _DayCalendarView extends StatelessWidget {
   final ValueChanged<MeetingNote> onActions;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
     final dayNotes = _notesForDay(notes, day);
     final hours = _visibleHours(dayNotes, day, day);
@@ -1170,7 +1209,7 @@ class _DayCalendarView extends StatelessWidget {
               ],
             ),
           if (dayNotes.isEmpty)
-            _CalendarEmptyMessage('No meetings scheduled for this day.'),
+            _CalendarEmptyMessage(ref.read(appTextProvider)('history.noMeetingsDay')),
         ],
       ),
     );
@@ -1203,7 +1242,7 @@ class _CalendarGridFrame extends StatelessWidget {
   }
 }
 
-class _CalendarHourCell extends StatelessWidget {
+class _CalendarHourCell extends ConsumerWidget {
   const _CalendarHourCell({
     required this.day,
     required this.notes,
@@ -1217,7 +1256,7 @@ class _CalendarHourCell extends StatelessWidget {
   final ValueChanged<DateTime> onDaySelected;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
     final color = notes.isEmpty
         ? _mineNoteColor
@@ -1242,7 +1281,7 @@ class _CalendarHourCell extends StatelessWidget {
                     child: Text(
                       notes.length == 1
                           ? notes.first.title
-                          : '${notes.length} meetings',
+                          : '${notes.length} ${ref.read(appTextProvider)('history.meetings')}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
@@ -1299,7 +1338,7 @@ class _CalendarEmptyMessage extends StatelessWidget {
   }
 }
 
-class _HistoryNoteCard extends StatelessWidget {
+class _HistoryNoteCard extends ConsumerWidget {
   const _HistoryNoteCard({
     required this.note,
     required this.shared,
@@ -1313,8 +1352,9 @@ class _HistoryNoteCard extends StatelessWidget {
   final VoidCallback onActions;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     final accent = shared ? _sharedNoteColor : _mineNoteColor;
     return Material(
       color: Colors.transparent,
@@ -1364,7 +1404,7 @@ class _HistoryNoteCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 7),
                     Text(
-                      '${_historyDateLabel(note.displayDate)} - ${note.durationLabel}',
+                      '${_historyDateLabel(note.displayDate, t)} - ${note.durationLabel}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1376,7 +1416,7 @@ class _HistoryNoteCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 7),
                     Text(
-                      _historyMetaLabel(note),
+                      _historyMetaLabel(note, t),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1427,7 +1467,7 @@ class _HistoryMenuButton extends StatelessWidget {
   }
 }
 
-class _ShareNoteSheet extends StatefulWidget {
+class _ShareNoteSheet extends ConsumerStatefulWidget {
   const _ShareNoteSheet({
     required this.note,
     required this.repository,
@@ -1437,10 +1477,10 @@ class _ShareNoteSheet extends StatefulWidget {
   final NotesRepository repository;
 
   @override
-  State<_ShareNoteSheet> createState() => _ShareNoteSheetState();
+  ConsumerState<_ShareNoteSheet> createState() => _ShareNoteSheetState();
 }
 
-class _ShareNoteSheetState extends State<_ShareNoteSheet> {
+class _ShareNoteSheetState extends ConsumerState<_ShareNoteSheet> {
   late Future<List<TecAceContact>> _future;
   late final Set<String> _selectedIds;
   String _query = '';
@@ -1455,6 +1495,7 @@ class _ShareNoteSheetState extends State<_ShareNoteSheet> {
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -1468,10 +1509,10 @@ class _ShareNoteSheetState extends State<_ShareNoteSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _SheetHeader(title: 'Share note', subtitle: widget.note.title),
+              _SheetHeader(title: t('history.shareNoteTitle'), subtitle: widget.note.title),
               const SizedBox(height: 12),
               _SheetSearchField(
-                hintText: 'Search TecAce members',
+                hintText: t('history.searchTecAce'),
                 onChanged: (value) => setState(() => _query = value),
               ),
               const SizedBox(height: 12),
@@ -1483,12 +1524,12 @@ class _ShareNoteSheetState extends State<_ShareNoteSheet> {
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (snapshot.hasError) {
-                      return _SheetMessage('Could not load TecAce members: ${snapshot.error}');
+                      return _SheetMessage('${t('history.loadTecAceError')}: ${snapshot.error}');
                     }
                     final contacts = (snapshot.data ?? const <TecAceContact>[])
                         .where((contact) => _contactMatches(contact, _query))
                         .toList();
-                    if (contacts.isEmpty) return const _SheetMessage('No TecAce members found.');
+                    if (contacts.isEmpty) return _SheetMessage(t('history.noTecAceMembers'));
                     return ListView.separated(
                       shrinkWrap: true,
                       itemCount: contacts.length,
@@ -1520,12 +1561,12 @@ class _ShareNoteSheetState extends State<_ShareNoteSheet> {
                 width: double.infinity,
                 child: FilledButton(
                   onPressed: () => Navigator.pop(context, _selectedIds.toList()),
-                  child: Text('Share with ${_selectedIds.length}'),
+                  child: Text('${t('history.shareWith')} ${_selectedIds.length}'),
                 ),
               ),
               const SizedBox(height: 6),
               Text(
-                'Existing shared users are preselected.',
+                t('history.sharePreselectNote'),
                 style: TextStyle(fontSize: 11, color: palette.textMuted),
               ),
             ],
@@ -1544,7 +1585,7 @@ class _ShareNoteSheetState extends State<_ShareNoteSheet> {
   }
 }
 
-class _AddToProjectSheet extends StatelessWidget {
+class _AddToProjectSheet extends ConsumerWidget {
   const _AddToProjectSheet({
     required this.note,
     required this.projectsRepository,
@@ -1554,7 +1595,8 @@ class _AddToProjectSheet extends StatelessWidget {
   final ProjectsRepository projectsRepository;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = ref.watch(appTextProvider);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -1564,7 +1606,7 @@ class _AddToProjectSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _SheetHeader(title: 'Add to Project', subtitle: note.title),
+              _SheetHeader(title: t('history.addToProjectTitle'), subtitle: note.title),
               const SizedBox(height: 12),
               Flexible(
                 child: FutureBuilder<List<MeetingProject>>(
@@ -1574,10 +1616,10 @@ class _AddToProjectSheet extends StatelessWidget {
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (snapshot.hasError) {
-                      return _SheetMessage('Could not load projects: ${snapshot.error}');
+                      return _SheetMessage('${t('history.loadProjectsError')}: ${snapshot.error}');
                     }
                     final projects = snapshot.data ?? const <MeetingProject>[];
-                    if (projects.isEmpty) return const _SheetMessage('No projects found.');
+                    if (projects.isEmpty) return _SheetMessage(t('history.noProjects'));
                     return ListView.separated(
                       shrinkWrap: true,
                       itemCount: projects.length,
@@ -1589,7 +1631,9 @@ class _AddToProjectSheet extends StatelessWidget {
                         );
                         return _SelectableSheetRow(
                           title: project.name,
-                          subtitle: alreadyAdded ? 'Already in project' : 'Add to project',
+                          subtitle: alreadyAdded
+                              ? t('history.alreadyInProject')
+                              : t('history.addToProject'),
                           selected: alreadyAdded,
                           enabled: !alreadyAdded,
                           onTap: alreadyAdded ? null : () => Navigator.pop(context, project),
@@ -1607,7 +1651,7 @@ class _AddToProjectSheet extends StatelessWidget {
   }
 }
 
-class _SyncProfilesSheet extends StatefulWidget {
+class _SyncProfilesSheet extends ConsumerStatefulWidget {
   const _SyncProfilesSheet({
     required this.note,
     required this.repository,
@@ -1617,10 +1661,10 @@ class _SyncProfilesSheet extends StatefulWidget {
   final NotesRepository repository;
 
   @override
-  State<_SyncProfilesSheet> createState() => _SyncProfilesSheetState();
+  ConsumerState<_SyncProfilesSheet> createState() => _SyncProfilesSheetState();
 }
 
-class _SyncProfilesSheetState extends State<_SyncProfilesSheet> {
+class _SyncProfilesSheetState extends ConsumerState<_SyncProfilesSheet> {
   late Future<List<GeneratedSpeakerProfile>> _future;
   final _savedSpeakerNames = <String>{};
   String? _error;
@@ -1635,6 +1679,7 @@ class _SyncProfilesSheetState extends State<_SyncProfilesSheet> {
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -1653,14 +1698,14 @@ class _SyncProfilesSheetState extends State<_SyncProfilesSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _SheetHeader(
-                    title: 'Sync Profile',
-                    subtitle: 'AI-generated speaker profiles from this transcript',
+                    title: t('history.syncProfileTitle'),
+                    subtitle: t('history.syncProfileSubtitle'),
                   ),
                   const SizedBox(height: 12),
                   if (snapshot.connectionState == ConnectionState.waiting)
                     const Flexible(child: Center(child: CircularProgressIndicator()))
                   else if (snapshot.hasError)
-                    Flexible(child: _SheetMessage('Profile sync failed: ${snapshot.error}'))
+                    Flexible(child: _SheetMessage('${t('history.syncProfileFailed')}: ${snapshot.error}'))
                   else
                     Flexible(
                       child: ListView.separated(
@@ -1688,12 +1733,14 @@ class _SyncProfilesSheetState extends State<_SyncProfilesSheet> {
                       width: double.infinity,
                       child: FilledButton(
                         onPressed: _savingAll ? null : () => _saveAll(profiles),
-                        child: Text(_savingAll ? 'Saving...' : 'Save all profiles'),
+                        child: Text(_savingAll
+                            ? t('history.savingAll')
+                            : t('history.saveAllProfiles')),
                       ),
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Profiles are saved to your speaker profiles.',
+                      t('history.profilesSavedNote'),
                       style: TextStyle(fontSize: 11, color: palette.textMuted),
                     ),
                   ],
@@ -1732,7 +1779,7 @@ class _SyncProfilesSheetState extends State<_SyncProfilesSheet> {
       if (!mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Speaker profiles saved.')),
+        SnackBar(content: Text(ref.read(appTextProvider)('history.speakerProfilesSaved'))),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1744,7 +1791,7 @@ class _SyncProfilesSheetState extends State<_SyncProfilesSheet> {
   }
 }
 
-class _GeneratedProfileCard extends StatelessWidget {
+class _GeneratedProfileCard extends ConsumerWidget {
   const _GeneratedProfileCard({
     required this.profile,
     required this.saved,
@@ -1756,8 +1803,9 @@ class _GeneratedProfileCard extends StatelessWidget {
   final VoidCallback? onSave;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1790,7 +1838,7 @@ class _GeneratedProfileCard extends StatelessWidget {
               ),
               TextButton(
                 onPressed: onSave,
-                child: Text(saved ? 'Saved' : 'Save'),
+                child: Text(saved ? t('history.saved') : t('history.save')),
               ),
             ],
           ),
@@ -1974,14 +2022,16 @@ class _SheetMessage extends StatelessWidget {
   }
 }
 
-String _historyDateLabel(DateTime value) {
+String _historyDateLabel(DateTime value, AppText t) {
   value = value.toLocal();
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
   final date = DateTime(value.year, value.month, value.day);
   final time = DateFormat('HH:mm').format(value);
-  if (date == today) return 'Today $time';
-  if (date == today.subtract(const Duration(days: 1))) return 'Yesterday $time';
+  if (date == today) return '${t('history.today')} $time';
+  if (date == today.subtract(const Duration(days: 1))) {
+    return '${t('history.yesterday')} $time';
+  }
   return '${DateFormat('EEE M/d').format(value)} - $time';
 }
 
@@ -2045,13 +2095,15 @@ String _calendarTitle(DateTime day, _CalendarScope scope) {
   };
 }
 
-String _historyMetaLabel(MeetingNote note) {
+String _historyMetaLabel(MeetingNote note, AppText t) {
   final speakers = note.transcript
       .map((segment) => segment.speaker?.trim() ?? '')
       .where((speaker) => speaker.isNotEmpty)
       .toSet()
       .length;
-  final speakerText = speakers == 1 ? '1 speaker' : '$speakers speakers';
+  final speakerText = speakers == 1
+      ? '1 ${t('history.speakerSingular')}'
+      : '$speakers ${t('history.speakerPlural')}';
   final tags = note.tags.take(2).map((tag) => '#$tag').join(' ');
   return tags.isEmpty ? speakerText : '$speakerText - $tags';
 }
@@ -2070,20 +2122,27 @@ Color _noteAccentColor(MeetingNote note, String? currentUserId) {
 }
 
 class _ErrorState extends StatelessWidget {
-  const _ErrorState({required this.error, required this.onRetry});
+  const _ErrorState({
+    required this.error,
+    required this.title,
+    required this.retryLabel,
+    required this.onRetry,
+  });
 
   final Object? error;
+  final String title;
+  final String retryLabel;
   final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
     return EmptyState(
       icon: Icons.error_outline_rounded,
-      title: 'Failed to load history',
+      title: title,
       subtitle: error.toString(),
       action: FilledButton(
         onPressed: onRetry,
-        child: const Text('Try again'),
+        child: Text(retryLabel),
       ),
     );
   }

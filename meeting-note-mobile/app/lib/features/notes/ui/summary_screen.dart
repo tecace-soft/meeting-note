@@ -4,6 +4,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../data/notes_repository.dart';
 import '../models/meeting_note.dart';
@@ -15,6 +16,7 @@ class SummaryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = ref.watch(appTextProvider);
     final noteAsync = ref.watch(noteProvider(noteId));
 
     return noteAsync.when(
@@ -29,7 +31,7 @@ class SummaryScreen extends ConsumerWidget {
             padding: const EdgeInsets.all(24),
             child: EmptyState(
               icon: Icons.error_outline_rounded,
-              title: 'Failed to load note',
+              title: t('note.loadFailed'),
               subtitle: '$e',
             ),
           ),
@@ -40,16 +42,16 @@ class SummaryScreen extends ConsumerWidget {
   }
 }
 
-class _DetailScaffold extends StatefulWidget {
+class _DetailScaffold extends ConsumerStatefulWidget {
   const _DetailScaffold({required this.note});
 
   final MeetingNote note;
 
   @override
-  State<_DetailScaffold> createState() => _DetailScaffoldState();
+  ConsumerState<_DetailScaffold> createState() => _DetailScaffoldState();
 }
 
-class _DetailScaffoldState extends State<_DetailScaffold> {
+class _DetailScaffoldState extends ConsumerState<_DetailScaffold> {
   int _tab = 0;
   String? _selectedSpeaker;
   late MeetingNote _note;
@@ -72,6 +74,7 @@ class _DetailScaffoldState extends State<_DetailScaffold> {
   @override
   Widget build(BuildContext context) {
     final note = _note;
+    final t = ref.watch(appTextProvider);
     return Scaffold(
       backgroundColor: FigmaDesign.of(context).pageBackground,
       body: SafeArea(
@@ -79,18 +82,28 @@ class _DetailScaffoldState extends State<_DetailScaffold> {
           padding: const EdgeInsets.fromLTRB(24, 33, 24, 0),
           child: Column(
             children: [
-              _DetailHeader(note: note),
+              _DetailHeader(
+                note: note,
+                backLabel: t('note.back'),
+                moreLabel: t('note.more'),
+              ),
               const SizedBox(height: 19),
               _SegmentedTabs(
                 selected: _tab,
                 onChanged: (value) => setState(() => _tab = value),
+                summaryLabel: t('note.summaryTab'),
+                transcriptLabel: t('note.transcriptTab'),
               ),
               const SizedBox(height: 19),
               Expanded(
                 child: IndexedStack(
                   index: _tab,
                   children: [
-                    _SummaryTab(note: note),
+                    _SummaryTab(
+                      note: note,
+                      emptyTitle: t('note.noSummaryTitle'),
+                      emptySubtitle: t('note.noSummarySub'),
+                    ),
                     _TranscriptTab(
                       note: note,
                       selectedSpeaker: _selectedSpeaker,
@@ -125,9 +138,15 @@ class _DetailScaffoldState extends State<_DetailScaffold> {
 }
 
 class _DetailHeader extends StatelessWidget {
-  const _DetailHeader({required this.note});
+  const _DetailHeader({
+    required this.note,
+    required this.backLabel,
+    required this.moreLabel,
+  });
 
   final MeetingNote note;
+  final String backLabel;
+  final String moreLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -141,7 +160,7 @@ class _DetailHeader extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(
-              'Back',
+              backLabel,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w400,
@@ -186,7 +205,7 @@ class _DetailHeader extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Text(
-            'More',
+            moreLabel,
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w400,
@@ -203,17 +222,21 @@ class _SegmentedTabs extends StatelessWidget {
   const _SegmentedTabs({
     required this.selected,
     required this.onChanged,
+    required this.summaryLabel,
+    required this.transcriptLabel,
   });
 
   final int selected;
   final ValueChanged<int> onChanged;
+  final String summaryLabel;
+  final String transcriptLabel;
 
   @override
   Widget build(BuildContext context) {
     return FigmaSlidingSegmentedToggle(
-      options: const [
-        FigmaSegmentOption(label: 'Summary'),
-        FigmaSegmentOption(label: 'Transcript'),
+      options: [
+        FigmaSegmentOption(label: summaryLabel),
+        FigmaSegmentOption(label: transcriptLabel),
       ],
       selectedIndex: selected,
       onChanged: onChanged,
@@ -223,18 +246,24 @@ class _SegmentedTabs extends StatelessWidget {
 }
 
 class _SummaryTab extends StatelessWidget {
-  const _SummaryTab({required this.note});
+  const _SummaryTab({
+    required this.note,
+    required this.emptyTitle,
+    required this.emptySubtitle,
+  });
 
   final MeetingNote note;
+  final String emptyTitle;
+  final String emptySubtitle;
 
   @override
   Widget build(BuildContext context) {
     final summary = note.displaySummary;
     if (summary.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.hourglass_empty_rounded,
-        title: 'No summary yet',
-        subtitle: 'This note has no summary. Try retrying the job.',
+        title: emptyTitle,
+        subtitle: emptySubtitle,
       );
     }
 
@@ -314,11 +343,12 @@ class _TranscriptTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = ref.watch(appTextProvider);
     final segments = note.transcript;
     if (segments.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.subject_rounded,
-        title: 'No transcript',
+        title: t('note.noTranscript'),
       );
     }
 
@@ -337,7 +367,7 @@ class _TranscriptTab extends ConsumerWidget {
           runSpacing: 8,
           children: [
             _SpeakerChip(
-              label: 'All',
+              label: t('note.allSpeakers'),
               selected: selectedSpeaker == null,
               onTap: () => onSelectedSpeakerChanged(null),
             ),
@@ -528,14 +558,19 @@ class _ActionBar extends ConsumerStatefulWidget {
 class _ActionBarState extends ConsumerState<_ActionBar> {
   String? _activeAction;
 
-  Future<void> _runAction(String label, Future<void> Function() action) async {
-    setState(() => _activeAction = label);
+  Future<void> _runAction(
+    String id,
+    String label,
+    Future<void> Function() action,
+  ) async {
+    setState(() => _activeAction = id);
     try {
       await action();
     } catch (error) {
       if (!mounted) return;
+      final t = ref.read(appTextProvider);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$label failed: $error')),
+        SnackBar(content: Text('$label ${t('note.failed')}: $error')),
       );
     }
   }
@@ -543,6 +578,7 @@ class _ActionBarState extends ConsumerState<_ActionBar> {
   @override
   Widget build(BuildContext context) {
     final note = widget.note;
+    final t = ref.watch(appTextProvider);
     return SafeArea(
       top: false,
       child: Container(
@@ -553,9 +589,9 @@ class _ActionBarState extends ConsumerState<_ActionBar> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             _ActionText(
-              label: 'Copy',
+              label: t('note.copy'),
               active: _activeAction == 'Copy',
-              onTap: () => _runAction('Copy', () async {
+              onTap: () => _runAction('Copy', t('note.copy'), () async {
                 final text = widget.tab == 0
                     ? note.displaySummary
                     : _transcriptCopyText(note);
@@ -563,16 +599,16 @@ class _ActionBarState extends ConsumerState<_ActionBar> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(widget.tab == 0
-                        ? 'Summary copied'
-                        : 'Transcript copied'),
+                        ? t('note.summaryCopied')
+                        : t('note.transcriptCopied')),
                   ),
                 );
               }),
             ),
             _ActionText(
-              label: 'Share',
+              label: t('note.share'),
               active: _activeAction == 'Share',
-              onTap: () => _runAction('Share', () async {
+              onTap: () => _runAction('Share', t('note.share'), () async {
                 final selected = await showModalBottomSheet<List<String>>(
                   context: context,
                   showDragHandle: true,
@@ -590,14 +626,15 @@ class _ActionBarState extends ConsumerState<_ActionBar> {
                 widget.onNoteChanged(note.copyWith(sharedUserIds: selected));
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Sharing updated.')),
+                  SnackBar(content: Text(t('note.sharingUpdated'))),
                 );
               }),
             ),
             _ActionText(
-              label: 'Sync Profile',
+              label: t('note.syncProfile'),
               active: _activeAction == 'Sync Profile',
-              onTap: () => _runAction('Sync Profile', () async {
+              onTap: () =>
+                  _runAction('Sync Profile', t('note.syncProfile'), () async {
                 await showModalBottomSheet<void>(
                   context: context,
                   showDragHandle: true,
@@ -610,33 +647,34 @@ class _ActionBarState extends ConsumerState<_ActionBar> {
               }),
             ),
             _ActionText(
-              label: 'Regenerate',
+              label: t('note.regenerate'),
               active: _activeAction == 'Regenerate',
               onTap: note.transcript.isEmpty
                   ? null
-                  : () => _runAction('Regenerate', () async {
+                  : () =>
+                      _runAction('Regenerate', t('note.regenerate'), () async {
                       final confirmed = await showDialog<bool>(
                         context: context,
                         builder: (context) => AlertDialog(
-                          title: const Text('Regenerate summary?'),
-                          content: const Text(
-                            'This will replace the edited summary for this note.',
+                          title: Text(t('note.regenConfirmTitle')),
+                          content: Text(
+                            t('note.regenConfirmBody'),
                           ),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.pop(context, false),
-                              child: const Text('Cancel'),
+                              child: Text(t('common.cancel')),
                             ),
                             FilledButton(
                               onPressed: () => Navigator.pop(context, true),
-                              child: const Text('Regenerate'),
+                              child: Text(t('note.regenerate')),
                             ),
                           ],
                         ),
                       );
                       if (confirmed != true) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Regenerating summary...')),
+                        SnackBar(content: Text(t('note.regenerating'))),
                       );
                       final summary = await ref
                           .read(notesRepositoryProvider)
@@ -644,7 +682,7 @@ class _ActionBarState extends ConsumerState<_ActionBar> {
                       widget.onNoteChanged(note.copyWith(summaryEdit: summary));
                       if (!mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Summary regenerated.')),
+                        SnackBar(content: Text(t('note.summaryRegenerated'))),
                       );
                     }),
             ),
@@ -690,7 +728,7 @@ class _ActionText extends StatelessWidget {
   }
 }
 
-class _DetailShareNoteSheet extends StatefulWidget {
+class _DetailShareNoteSheet extends ConsumerStatefulWidget {
   const _DetailShareNoteSheet({
     required this.note,
     required this.repository,
@@ -700,10 +738,11 @@ class _DetailShareNoteSheet extends StatefulWidget {
   final NotesRepository repository;
 
   @override
-  State<_DetailShareNoteSheet> createState() => _DetailShareNoteSheetState();
+  ConsumerState<_DetailShareNoteSheet> createState() =>
+      _DetailShareNoteSheetState();
 }
 
-class _DetailShareNoteSheetState extends State<_DetailShareNoteSheet> {
+class _DetailShareNoteSheetState extends ConsumerState<_DetailShareNoteSheet> {
   late final Future<List<TecAceContact>> _future;
   late final Set<String> _selectedIds;
   String _query = '';
@@ -717,6 +756,7 @@ class _DetailShareNoteSheetState extends State<_DetailShareNoteSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -732,10 +772,11 @@ class _DetailShareNoteSheetState extends State<_DetailShareNoteSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _DetailSheetHeader(title: 'Share note', subtitle: widget.note.title),
+              _DetailSheetHeader(
+                  title: t('note.shareNote'), subtitle: widget.note.title),
               const SizedBox(height: 12),
               _DetailSheetSearchField(
-                hintText: 'Search TecAce members',
+                hintText: t('note.searchTecAce'),
                 onChanged: (value) => setState(() => _query = value),
               ),
               const SizedBox(height: 12),
@@ -748,14 +789,14 @@ class _DetailShareNoteSheetState extends State<_DetailShareNoteSheet> {
                     }
                     if (snapshot.hasError) {
                       return _DetailSheetMessage(
-                        'Could not load TecAce members: ${snapshot.error}',
+                        '${t('note.tecAceLoadError')}: ${snapshot.error}',
                       );
                     }
                     final contacts = (snapshot.data ?? const <TecAceContact>[])
                         .where((contact) => _contactMatches(contact, _query))
                         .toList();
                     if (contacts.isEmpty) {
-                      return const _DetailSheetMessage('No TecAce members found.');
+                      return _DetailSheetMessage(t('note.noTecAceFound'));
                     }
                     return ListView.separated(
                       shrinkWrap: true,
@@ -788,7 +829,7 @@ class _DetailShareNoteSheetState extends State<_DetailShareNoteSheet> {
                 width: double.infinity,
                 child: FilledButton(
                   onPressed: () => Navigator.pop(context, _selectedIds.toList()),
-                  child: Text('Share with ${_selectedIds.length}'),
+                  child: Text('${t('note.shareWith')} ${_selectedIds.length}'),
                 ),
               ),
             ],
@@ -807,7 +848,7 @@ class _DetailShareNoteSheetState extends State<_DetailShareNoteSheet> {
   }
 }
 
-class _DetailSyncProfilesSheet extends StatefulWidget {
+class _DetailSyncProfilesSheet extends ConsumerStatefulWidget {
   const _DetailSyncProfilesSheet({
     required this.note,
     required this.repository,
@@ -817,10 +858,12 @@ class _DetailSyncProfilesSheet extends StatefulWidget {
   final NotesRepository repository;
 
   @override
-  State<_DetailSyncProfilesSheet> createState() => _DetailSyncProfilesSheetState();
+  ConsumerState<_DetailSyncProfilesSheet> createState() =>
+      _DetailSyncProfilesSheetState();
 }
 
-class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
+class _DetailSyncProfilesSheetState
+    extends ConsumerState<_DetailSyncProfilesSheet> {
   late final Future<List<GeneratedSpeakerProfile>> _future;
   final _savedSpeakerNames = <String>{};
   String? _error;
@@ -834,6 +877,7 @@ class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -853,9 +897,9 @@ class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const _DetailSheetHeader(
-                    title: 'Sync Profile',
-                    subtitle: 'AI-generated speaker profiles from this transcript',
+                  _DetailSheetHeader(
+                    title: t('note.syncProfile'),
+                    subtitle: t('note.syncProfileSub'),
                   ),
                   const SizedBox(height: 12),
                   if (snapshot.connectionState == ConnectionState.waiting)
@@ -863,7 +907,7 @@ class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
                   else if (snapshot.hasError)
                     Flexible(
                       child: _DetailSheetMessage(
-                        'Profile sync failed: ${snapshot.error}',
+                        '${t('note.profileSyncFailed')}: ${snapshot.error}',
                       ),
                     )
                   else
@@ -879,6 +923,8 @@ class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
                           return _GeneratedProfileTile(
                             profile: profile,
                             saved: saved,
+                            saveLabel: t('note.save'),
+                            savedLabel: t('note.saved'),
                             onSave: saved ? null : () => _saveProfile(profile),
                           );
                         },
@@ -900,7 +946,9 @@ class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
                       width: double.infinity,
                       child: FilledButton(
                         onPressed: _savingAll ? null : () => _saveAll(profiles),
-                        child: Text(_savingAll ? 'Saving...' : 'Save all profiles'),
+                        child: Text(_savingAll
+                            ? t('note.saving')
+                            : t('note.saveAllProfiles')),
                       ),
                     ),
                   ],
@@ -939,7 +987,7 @@ class _DetailSyncProfilesSheetState extends State<_DetailSyncProfilesSheet> {
       if (!mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Speaker profiles saved.')),
+        SnackBar(content: Text(ref.read(appTextProvider)('note.profilesSaved'))),
       );
     } catch (error) {
       if (!mounted) return;
@@ -955,11 +1003,15 @@ class _GeneratedProfileTile extends StatelessWidget {
   const _GeneratedProfileTile({
     required this.profile,
     required this.saved,
+    required this.saveLabel,
+    required this.savedLabel,
     required this.onSave,
   });
 
   final GeneratedSpeakerProfile profile;
   final bool saved;
+  final String saveLabel;
+  final String savedLabel;
   final VoidCallback? onSave;
 
   @override
@@ -997,7 +1049,7 @@ class _GeneratedProfileTile extends StatelessWidget {
               ),
               TextButton(
                 onPressed: onSave,
-                child: Text(saved ? 'Saved' : 'Save'),
+                child: Text(saved ? savedLabel : saveLabel),
               ),
             ],
           ),
@@ -1345,7 +1397,7 @@ bool _shouldReplaceSpeaker({
   };
 }
 
-class _SpeakerPickerSheet extends StatefulWidget {
+class _SpeakerPickerSheet extends ConsumerStatefulWidget {
   const _SpeakerPickerSheet({
     required this.noteId,
     required this.segments,
@@ -1367,10 +1419,11 @@ class _SpeakerPickerSheet extends StatefulWidget {
   final NotesRepository repository;
 
   @override
-  State<_SpeakerPickerSheet> createState() => _SpeakerPickerSheetState();
+  ConsumerState<_SpeakerPickerSheet> createState() =>
+      _SpeakerPickerSheetState();
 }
 
-class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
+class _SpeakerPickerSheetState extends ConsumerState<_SpeakerPickerSheet> {
   late final TextEditingController _controller;
   _ReplacementScope _scope = _ReplacementScope.single;
   List<SavedSpeaker> _savedSpeakers = const [];
@@ -1407,8 +1460,7 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
       try {
         contacts = await widget.repository.tecAceContacts();
       } catch (error) {
-        contactError =
-            'TecAce directory unavailable. Sign out and back in if Microsoft asks for new permissions.';
+        contactError = ref.read(appTextProvider)('note.tecAceDirUnavailable');
       }
       if (!mounted) return;
       setState(() {
@@ -1429,7 +1481,7 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
   Future<void> _applyCustomSpeaker() async {
     final name = _controller.text.trim();
     if (name.isEmpty) {
-      setState(() => _error = 'Enter a speaker name.');
+      setState(() => _error = ref.read(appTextProvider)('note.enterSpeakerName'));
       return;
     }
     if (_pickedSpeakerId != null) {
@@ -1550,6 +1602,7 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
     final filteredContacts = _contacts
         .where((contact) => _matchesTecAceContact(contact, query))
         .toList();
+    final t = ref.watch(appTextProvider);
 
     return SafeArea(
       child: Padding(
@@ -1570,7 +1623,7 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Change speaker',
+                      t('note.changeSpeaker'),
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
@@ -1581,7 +1634,7 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
                   if (_canResetSpeakers(widget.segments, widget.transcription))
                     TextButton(
                       onPressed: _saving ? null : _resetSpeakersAction,
-                      child: const Text('Reset A/B'),
+                      child: Text(t('note.resetAB')),
                     ),
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(),
@@ -1594,7 +1647,7 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
                 controller: _controller,
                 style: TextStyle(color: FigmaDesign.of(context).text),
                 decoration: InputDecoration(
-                  hintText: 'Search or type speaker',
+                  hintText: t('note.searchOrTypeSpeaker'),
                   hintStyle: TextStyle(color: FigmaDesign.of(context).textMuted),
                   filled: true,
                   fillColor: FigmaDesign.of(context).field,
@@ -1614,12 +1667,12 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
                         shrinkWrap: true,
                         children: [
                           if (filteredSavedSpeakers.isNotEmpty)
-                            _SpeakerSectionTitle('Saved speakers'),
+                            _SpeakerSectionTitle(t('note.savedSpeakers')),
                           if (_savedSpeakers.isEmpty)
-                            const _SpeakerEmptyRow('No saved speakers yet.')
+                            _SpeakerEmptyRow(t('note.noSavedSpeakers'))
                           else if (filteredSavedSpeakers.isEmpty)
-                            const _SpeakerEmptyRow(
-                              'No saved speaker matches. Type a new name to add one.',
+                            _SpeakerEmptyRow(
+                              t('note.noSavedSpeakerMatch'),
                             )
                           else
                             for (final speaker in filteredSavedSpeakers)
@@ -1635,20 +1688,20 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
                               ),
                           const SizedBox(height: 16),
                           if (_contactError == null && filteredContacts.isNotEmpty)
-                            _SpeakerSectionTitle('TecAce Members'),
+                            _SpeakerSectionTitle(t('note.tecAceMembers')),
                           if (_contactError != null)
                             _SpeakerEmptyRow(_contactError!)
                           else if (_contacts.isEmpty)
-                            const _SpeakerEmptyRow('No TecAce contacts found.')
+                            _SpeakerEmptyRow(t('note.noTecAceContacts'))
                           else if (filteredContacts.isEmpty)
-                            const _SpeakerEmptyRow('No TecAce members match.')
+                            _SpeakerEmptyRow(t('note.noTecAceMatch'))
                           else
                             for (final contact in filteredContacts)
                               _SpeakerChoiceRow(
                                 title: contact.displayName,
                                 subtitle: _savedSpeakerForContact(contact) == null
                                     ? contact.email
-                                    : 'Saved speaker',
+                                    : t('note.savedSpeaker'),
                                 onTap:
                                     _saving ? null : () => _applyContact(contact),
                               ),
@@ -1659,6 +1712,9 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
               _ScopeChoice(
                 value: _scope,
                 onChanged: (value) => setState(() => _scope = value),
+                singleLabel: t('note.scopeSingle'),
+                fromHereLabel: t('note.scopeFromHere'),
+                allLabel: t('note.scopeAll'),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
@@ -1684,7 +1740,7 @@ class _SpeakerPickerSheetState extends State<_SpeakerPickerSheet> {
                       borderRadius: BorderRadius.circular(18),
                     ),
                   ),
-                  child: Text(_saving ? 'Saving...' : 'Change'),
+                  child: Text(_saving ? t('note.saving') : t('note.change')),
                 ),
               ),
             ],
@@ -1725,27 +1781,33 @@ class _ScopeChoice extends StatelessWidget {
   const _ScopeChoice({
     required this.value,
     required this.onChanged,
+    required this.singleLabel,
+    required this.fromHereLabel,
+    required this.allLabel,
   });
 
   final _ReplacementScope value;
   final ValueChanged<_ReplacementScope> onChanged;
+  final String singleLabel;
+  final String fromHereLabel;
+  final String allLabel;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         _ScopeRow(
-          label: 'Only this instance',
+          label: singleLabel,
           selected: value == _ReplacementScope.single,
           onTap: () => onChanged(_ReplacementScope.single),
         ),
         _ScopeRow(
-          label: 'This and all following instances',
+          label: fromHereLabel,
           selected: value == _ReplacementScope.fromHere,
           onTap: () => onChanged(_ReplacementScope.fromHere),
         ),
         _ScopeRow(
-          label: 'All instances',
+          label: allLabel,
           selected: value == _ReplacementScope.all,
           onTap: () => onChanged(_ReplacementScope.all),
         ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../providers/auth_provider.dart';
@@ -11,6 +12,7 @@ class SignInScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
+    final t = ref.watch(appTextProvider);
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -51,7 +53,7 @@ class SignInScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Sign in with your Microsoft account to capture, summarize, and export your meeting notes.',
+                t('auth.tagline'),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 15,
@@ -65,7 +67,7 @@ class SignInScreen extends ConsumerWidget {
               ],
               const Spacer(),
               PrimaryButton(
-                label: 'Sign in with Microsoft',
+                label: t('auth.signInMicrosoft'),
                 icon: Icons.login_rounded,
                 loading: auth.loading,
                 onPressed: () =>
@@ -73,7 +75,7 @@ class SignInScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                'Meeting Note uses Microsoft authentication to access your workspace and OneDrive permissions.',
+                t('auth.microsoftDisclaimer'),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 12,

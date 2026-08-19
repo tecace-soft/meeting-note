@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../notes/data/notes_repository.dart';
@@ -16,6 +17,7 @@ class SettingsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final t = ref.watch(appTextProvider);
     final auth = ref.watch(authControllerProvider);
     final user = auth.user;
     final language = ref.watch(appLanguageProvider);
@@ -30,7 +32,7 @@ class SettingsScreen extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(22, 28, 22, 34),
           children: [
             Text(
-              'Settings',
+              t('settings.title'),
               style: TextStyle(
                 color: palette.text,
                 fontSize: 26,
@@ -39,30 +41,30 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 26),
             _UserCard(
-              name: user?.displayName ?? 'Meeting Note User',
-              email: user?.email ?? 'Signed in with Microsoft',
+              name: user?.displayName ?? t('settings.defaultUserName'),
+              email: user?.email ?? t('settings.signedInWith'),
             ),
             const SizedBox(height: 24),
-            const _SectionLabel('GENERAL'),
+            _SectionLabel(t('settings.general')),
             const SizedBox(height: 8),
             _SettingsGroup(
               children: [
                 _SettingsRow(
-                  title: 'App language',
+                  title: t('settings.appLanguage'),
                   value: language.label,
                   onTap: () => _showLanguageSheet(context, ref, language),
                 ),
                 _SettingsRow(
-                  title: 'Theme',
-                  value: _themeLabel(themeMode),
+                  title: t('settings.theme'),
+                  value: _themeLabel(themeMode, t),
                   onTap: () => _showThemeSheet(context, ref, themeMode),
                 ),
               ],
             ),
             const SizedBox(height: 22),
             _SettingsNavCard(
-              title: 'Summary Prompts',
-              subtitle: 'View and edit summary templates',
+              title: t('settings.summaryPrompts'),
+              subtitle: t('settings.summaryPromptsSub'),
               trailing: counts.maybeWhen(
                 data: (data) => '${data.summaryPrompts}',
                 orElse: () => '',
@@ -71,8 +73,8 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
             _SettingsNavCard(
-              title: 'Speaker Profiles',
-              subtitle: 'Manage saved speaker context',
+              title: t('settings.speakerProfiles'),
+              subtitle: t('settings.speakerProfilesSub'),
               trailing: counts.maybeWhen(
                 data: (data) => '${data.speakerProfiles}',
                 orElse: () => '',
@@ -81,8 +83,8 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
             _SettingsNavCard(
-              title: 'My Memory',
-              subtitle: 'Personal context that builds after each summary',
+              title: t('settings.myMemory'),
+              subtitle: t('settings.myMemorySub'),
               trailing: counts.maybeWhen(
                 data: (data) => '${data.personalMemoryItems}',
                 orElse: () => '',
@@ -91,10 +93,12 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
             _SettingsNavCard(
-              title: 'MCP Setup',
-              subtitle: 'ChatGPT and Claude connection',
+              title: t('settings.mcpSetup'),
+              subtitle: t('settings.mcpSetupSub'),
               trailing: counts.maybeWhen(
-                data: (data) => data.activeMcpKeys > 0 ? 'Connected' : 'Setup',
+                data: (data) => data.activeMcpKeys > 0
+                    ? t('settings.mcpConnected')
+                    : t('settings.mcpSetupBadge'),
                 orElse: () => '',
               ),
               onTap: () => context.push('/settings/mcp-setup'),
@@ -105,9 +109,9 @@ class SettingsScreen extends ConsumerWidget {
                 onPressed: auth.loading
                     ? null
                     : () => ref.read(authControllerProvider.notifier).signOut(),
-                child: const Text(
-                  'Sign out',
-                  style: TextStyle(
+                child: Text(
+                  t('settings.signOut'),
+                  style: const TextStyle(
                     color: Color(0xFFFF3B3B),
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
@@ -126,11 +130,12 @@ class SettingsScreen extends ConsumerWidget {
     WidgetRef ref,
     AppLanguage selected,
   ) {
+    final t = ref.read(appTextProvider);
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (context) => _ChoiceSheet<AppLanguage>(
-        title: 'App language',
+        title: t('settings.appLanguage'),
         selected: selected,
         options: AppLanguage.values,
         labelFor: (value) => value.label,
@@ -147,14 +152,15 @@ class SettingsScreen extends ConsumerWidget {
     WidgetRef ref,
     ThemeMode selected,
   ) {
+    final t = ref.read(appTextProvider);
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (context) => _ChoiceSheet<ThemeMode>(
-        title: 'Theme',
+        title: t('settings.theme'),
         selected: selected,
         options: const [ThemeMode.light, ThemeMode.dark],
-        labelFor: _themeLabel,
+        labelFor: (value) => _themeLabel(value, t),
         onSelected: (value) {
           ref.read(themeModeProvider.notifier).set(value);
           Navigator.of(context).pop();
@@ -215,8 +221,10 @@ class _SummaryPromptsScreenState extends ConsumerState<SummaryPromptsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     return _SettingsSubScaffold(
-      title: 'Summary Prompts',
+      title: t('settings.summaryPrompts'),
+      backLabel: t('common.back'),
       action: FigmaPillButton(
         label: '+',
         compact: true,
@@ -230,14 +238,15 @@ class _SummaryPromptsScreenState extends ConsumerState<SummaryPromptsScreen> {
           }
           if (snapshot.hasError) {
             return _ErrorState(
-              title: 'Could not load prompts',
+              title: t('prompts.loadError'),
               error: snapshot.error,
               onRetry: _refresh,
+              retryLabel: t('common.tryAgain'),
             );
           }
           final prompts = snapshot.data ?? const [];
           if (prompts.isEmpty) {
-            return const _EmptyState('No summary prompts yet.');
+            return _EmptyState(t('prompts.empty'));
           }
           return ListView.separated(
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 34),
@@ -250,6 +259,7 @@ class _SummaryPromptsScreenState extends ConsumerState<SummaryPromptsScreen> {
                 subtitle: _preview(prompt.prompt),
                 onTap: () => _editPrompt(prompt),
                 onDelete: () => _deletePrompt(prompt),
+                deleteTooltip: t('prompts.delete'),
               );
             },
           );
@@ -269,19 +279,22 @@ class _SummaryPromptsScreenState extends ConsumerState<SummaryPromptsScreen> {
   }
 
   Future<void> _deletePrompt(SettingsSummaryPrompt prompt) async {
+    final t = ref.read(appTextProvider);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete prompt?'),
-        content: Text('Delete "${prompt.name}" from your summary prompts?'),
+        title: Text(t('prompts.deleteTitle')),
+        content: Text(
+          t('prompts.deleteConfirm').replaceAll('{name}', prompt.name),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(t('common.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+            child: Text(t('prompts.delete')),
           ),
         ],
       ),
@@ -293,7 +306,7 @@ class _SummaryPromptsScreenState extends ConsumerState<SummaryPromptsScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not delete prompt: $error')),
+        SnackBar(content: Text('${t('prompts.deleteError')}: $error')),
       );
     }
   }
@@ -348,9 +361,11 @@ class _SpeakerProfilesScreenState extends ConsumerState<SpeakerProfilesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     final user = ref.watch(authControllerProvider).user;
     return _SettingsSubScaffold(
-      title: 'Speaker Profiles',
+      title: t('settings.speakerProfiles'),
+      backLabel: t('common.back'),
       child: FutureBuilder<List<SettingsSpeakerProfile>>(
         future: _future,
         builder: (context, snapshot) {
@@ -359,9 +374,10 @@ class _SpeakerProfilesScreenState extends ConsumerState<SpeakerProfilesScreen> {
           }
           if (snapshot.hasError) {
             return _ErrorState(
-              title: 'Could not load speakers',
+              title: t('speakers.loadError'),
               error: snapshot.error,
               onRetry: _refresh,
+              retryLabel: t('common.tryAgain'),
             );
           }
           final speakers = snapshot.data ?? const [];
@@ -374,33 +390,35 @@ class _SpeakerProfilesScreenState extends ConsumerState<SpeakerProfilesScreen> {
           return ListView(
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 34),
             children: [
-              const _SectionLabel('YOUR PROFILE'),
+              _SectionLabel(t('speakers.yourProfile')),
               const SizedBox(height: 8),
               if (self == null)
-                const _InfoCard(
-                  title: 'No matching speaker profile',
-                  subtitle:
-                      'Label yourself in a transcript to create your profile.',
+                _InfoCard(
+                  title: t('speakers.noSelfTitle'),
+                  subtitle: t('speakers.noSelfSub'),
                 )
               else
                 _SpeakerCard(
                   speaker: self,
                   onTap: () => _editSpeaker(self),
+                  profileSavedLabel: t('speakers.profileSaved'),
+                  noProfileLabel: t('speakers.noProfile'),
                 ),
               const SizedBox(height: 24),
-              const _SectionLabel('OTHER SPEAKERS'),
+              _SectionLabel(t('speakers.otherSpeakers')),
               const SizedBox(height: 8),
               if (others.isEmpty)
-                const _InfoCard(
-                  title: 'No other saved speakers',
-                  subtitle:
-                      'Speakers appear here after you label names in transcripts.',
+                _InfoCard(
+                  title: t('speakers.noOthersTitle'),
+                  subtitle: t('speakers.noOthersSub'),
                 )
               else
                 for (final speaker in others) ...[
                   _SpeakerCard(
                     speaker: speaker,
                     onTap: () => _editSpeaker(speaker),
+                    profileSavedLabel: t('speakers.profileSaved'),
+                    noProfileLabel: t('speakers.noProfile'),
                   ),
                   const SizedBox(height: 12),
                 ],
@@ -463,16 +481,18 @@ class _MyMemoryScreenState extends ConsumerState<MyMemoryScreen> {
       if (!mounted) return;
       setState(() => _deleting = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not delete your memory.')),
+        SnackBar(content: Text(ref.read(appTextProvider)('memory.deleteError'))),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     final palette = FigmaDesign.of(context);
     return _SettingsSubScaffold(
-      title: 'My Memory',
+      title: t('settings.myMemory'),
+      backLabel: t('common.back'),
       child: FutureBuilder<List<SettingsMemoryItem>>(
         future: _future,
         builder: (context, snapshot) {
@@ -481,9 +501,10 @@ class _MyMemoryScreenState extends ConsumerState<MyMemoryScreen> {
           }
           if (snapshot.hasError) {
             return _ErrorState(
-              title: 'Could not load your memory',
+              title: t('memory.loadError'),
               error: snapshot.error,
               onRetry: _refresh,
+              retryLabel: t('common.tryAgain'),
             );
           }
           final items = snapshot.data ?? const [];
@@ -491,15 +512,14 @@ class _MyMemoryScreenState extends ConsumerState<MyMemoryScreen> {
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 34),
             children: [
               Text(
-                'Personal context that builds automatically after each meeting summary. '
-                'Read-only, and you can delete it anytime.',
+                t('memory.desc'),
                 style: TextStyle(color: palette.textMuted, fontSize: 13, height: 1.45),
               ),
               const SizedBox(height: 20),
               if (items.isEmpty)
-                const _InfoCard(
-                  title: 'No memory yet',
-                  subtitle: 'It fills in automatically once you summarize a meeting.',
+                _InfoCard(
+                  title: t('memory.emptyTitle'),
+                  subtitle: t('memory.emptySub'),
                 )
               else ...[
                 for (final item in items) ...[
@@ -513,6 +533,11 @@ class _MyMemoryScreenState extends ConsumerState<MyMemoryScreen> {
                   onStart: () => setState(() => _confirmingDelete = true),
                   onCancel: () => setState(() => _confirmingDelete = false),
                   onConfirm: _delete,
+                  deleteLabel: t('memory.delete'),
+                  confirmText: t('memory.deleteConfirm'),
+                  deletingLabel: t('memory.deleting'),
+                  deleteYesLabel: t('memory.deleteYes'),
+                  cancelLabel: t('common.cancel'),
                 ),
               ],
             ],
@@ -563,6 +588,11 @@ class _DeleteMemoryControl extends StatelessWidget {
     required this.onStart,
     required this.onCancel,
     required this.onConfirm,
+    required this.deleteLabel,
+    required this.confirmText,
+    required this.deletingLabel,
+    required this.deleteYesLabel,
+    required this.cancelLabel,
   });
 
   final bool confirming;
@@ -570,6 +600,11 @@ class _DeleteMemoryControl extends StatelessWidget {
   final VoidCallback onStart;
   final VoidCallback onCancel;
   final Future<void> Function() onConfirm;
+  final String deleteLabel;
+  final String confirmText;
+  final String deletingLabel;
+  final String deleteYesLabel;
+  final String cancelLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -581,9 +616,9 @@ class _DeleteMemoryControl extends StatelessWidget {
           onPressed: onStart,
           icon: const Icon(Icons.delete_outline_rounded,
               size: 18, color: Color(0xFFFF3B3B)),
-          label: const Text(
-            'Delete my memory',
-            style: TextStyle(
+          label: Text(
+            deleteLabel,
+            style: const TextStyle(
               color: Color(0xFFFF3B3B),
               fontSize: 14,
               fontWeight: FontWeight.w500,
@@ -596,7 +631,7 @@ class _DeleteMemoryControl extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Delete all your memory? This cannot be undone.',
+          confirmText,
           style: TextStyle(color: palette.textSecondary, fontSize: 13),
         ),
         const SizedBox(height: 12),
@@ -607,12 +642,12 @@ class _DeleteMemoryControl extends StatelessWidget {
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFFF3B3B),
               ),
-              child: Text(deleting ? 'Deleting…' : 'Delete'),
+              child: Text(deleting ? deletingLabel : deleteYesLabel),
             ),
             const SizedBox(width: 10),
             TextButton(
               onPressed: deleting ? null : onCancel,
-              child: Text('Cancel',
+              child: Text(cancelLabel,
                   style: TextStyle(color: palette.textSecondary)),
             ),
           ],
@@ -652,8 +687,10 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     return _SettingsSubScaffold(
-      title: 'MCP Setup',
+      title: t('settings.mcpSetup'),
+      backLabel: t('common.back'),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(22, 18, 22, 34),
         children: [
@@ -671,26 +708,27 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
   }
 
   Widget _chatGptSetup() {
+    final t = ref.watch(appTextProvider);
     const url = 'https://meeting-note-mcp.onrender.com/mcp-chatgpt';
     return Column(
       children: [
         _InfoCard(
-          title: 'ChatGPT MCP URL',
+          title: t('mcp.chatgptUrlTitle'),
           subtitle: url,
           action: _SmallAction(
-            label: 'Copy',
+            label: t('mcp.copy'),
             onTap: () => _copy(url),
           ),
         ),
         const SizedBox(height: 12),
-        const _InstructionCard(
-          title: 'Setup steps',
+        _InstructionCard(
+          title: t('mcp.chatgptStepsTitle'),
           steps: [
-            'Open ChatGPT settings.',
-            'Go to Connectors and add a remote MCP server.',
-            'Paste the MCP URL above.',
-            'Complete Microsoft sign-in and consent.',
-            'Choose Meeting Note from the connector/tools menu in a chat.',
+            t('mcp.chatgptStep1'),
+            t('mcp.chatgptStep2'),
+            t('mcp.chatgptStep3'),
+            t('mcp.chatgptStep4'),
+            t('mcp.chatgptStep5'),
           ],
         ),
       ],
@@ -698,14 +736,15 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
   }
 
   Widget _claudeSetup() {
+    final t = ref.watch(appTextProvider);
     final config = _claudeConfig(_newToken);
     return Column(
       children: [
         _InfoCard(
-          title: 'Personal MCP key',
-          subtitle: 'Generate a key for Claude Desktop. The full key is shown once.',
+          title: t('mcp.keyTitle'),
+          subtitle: t('mcp.keySub'),
           action: _SmallAction(
-            label: _busy ? 'Working' : 'Generate',
+            label: _busy ? t('mcp.working') : t('mcp.generate'),
             onTap: _busy ? null : _generateToken,
           ),
         ),
@@ -719,32 +758,34 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
         if (_newToken != null) ...[
           const SizedBox(height: 12),
           _CodeCard(
-            title: 'New MCP key - copy now',
+            title: t('mcp.newKeyTitle'),
             code: _newToken!,
             onCopy: () => _copy(_newToken!),
+            copyLabel: t('mcp.copy'),
           ),
         ],
         const SizedBox(height: 12),
         _CodeCard(
-          title: 'Claude Desktop config',
+          title: t('mcp.configTitle'),
           code: config,
           onCopy: () => _copy(config),
+          copyLabel: t('mcp.copy'),
         ),
         const SizedBox(height: 12),
         FutureBuilder<List<McpTokenRow>>(
           future: _future,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return const _InfoCard(
-                title: 'Existing keys',
-                subtitle: 'Loading keys...',
+              return _InfoCard(
+                title: t('mcp.existingKeysTitle'),
+                subtitle: t('mcp.loadingKeys'),
               );
             }
             final tokens = snapshot.data ?? const [];
             if (tokens.isEmpty) {
-              return const _InfoCard(
-                title: 'Existing keys',
-                subtitle: 'No MCP keys have been generated yet.',
+              return _InfoCard(
+                title: t('mcp.existingKeysTitle'),
+                subtitle: t('mcp.noKeys'),
               );
             }
             return _SettingsGroup(
@@ -752,7 +793,7 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
                 for (final token in tokens)
                   _SettingsRow(
                     title: token.name,
-                    value: token.isActive ? 'Revoke' : 'Inactive',
+                    value: token.isActive ? t('mcp.revoke') : t('mcp.inactive'),
                     subtitle: '${token.tokenPrefix} - ${_dateLabel(token.createdAt)}',
                     onTap: token.isActive ? () => _revokeToken(token.id) : null,
                   ),
@@ -761,14 +802,14 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
           },
         ),
         const SizedBox(height: 12),
-        const _InstructionCard(
-          title: 'Claude steps',
+        _InstructionCard(
+          title: t('mcp.claudeStepsTitle'),
           steps: [
-            'Open Claude Desktop settings and find the MCP config file.',
-            'Generate a personal MCP key above.',
-            'Copy the config after generating a key.',
-            'Add the mcpServers block to the existing JSON.',
-            'Restart Claude Desktop and look for Meeting Note MCP tools.',
+            t('mcp.claudeStep1'),
+            t('mcp.claudeStep2'),
+            t('mcp.claudeStep3'),
+            t('mcp.claudeStep4'),
+            t('mcp.claudeStep5'),
           ],
         ),
       ],
@@ -811,7 +852,7 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Copied')),
+      SnackBar(content: Text(ref.read(appTextProvider)('mcp.copied'))),
     );
   }
 }
@@ -847,17 +888,18 @@ class _PromptEditorSheetState extends ConsumerState<_PromptEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     final existing = widget.prompt;
     return _EditorSheet(
-      title: existing == null ? 'New summary prompt' : existing.name,
+      title: existing == null ? t('prompts.newTitle') : existing.name,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _TextInput(controller: _name, label: 'Name'),
+          _TextInput(controller: _name, label: t('prompts.name')),
           const SizedBox(height: 12),
           _TextInput(
             controller: _prompt,
-            label: 'Prompt',
+            label: t('prompts.prompt'),
             minLines: 12,
             maxLines: 18,
             monospace: true,
@@ -872,7 +914,7 @@ class _PromptEditorSheetState extends ConsumerState<_PromptEditorSheet> {
               if (existing != null)
                 Expanded(
                   child: _SecondaryButton(
-                    label: 'Delete',
+                    label: t('prompts.delete'),
                     onTap: _saving ? null : _delete,
                     danger: true,
                   ),
@@ -881,7 +923,7 @@ class _PromptEditorSheetState extends ConsumerState<_PromptEditorSheet> {
                 const SizedBox(width: 10),
               Expanded(
                 child: _PrimaryButton(
-                  label: _saving ? 'Saving...' : 'Save',
+                  label: _saving ? t('prompts.saving') : t('prompts.save'),
                   onTap: _saving ? null : _save,
                 ),
               ),
@@ -896,7 +938,7 @@ class _PromptEditorSheetState extends ConsumerState<_PromptEditorSheet> {
     final name = _name.text.trim();
     final prompt = _prompt.text.trim();
     if (name.isEmpty || prompt.isEmpty) {
-      setState(() => _error = 'Name and prompt are required.');
+      setState(() => _error = ref.read(appTextProvider)('prompts.required'));
       return;
     }
     setState(() {
@@ -967,6 +1009,7 @@ class _SpeakerEditorSheetState extends ConsumerState<_SpeakerEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     final palette = FigmaDesign.of(context);
     return _EditorSheet(
       title: widget.speaker.name,
@@ -983,7 +1026,7 @@ class _SpeakerEditorSheetState extends ConsumerState<_SpeakerEditorSheet> {
             ),
           _TextInput(
             controller: _profile,
-            label: 'Speaker profile',
+            label: t('speakers.profileLabel'),
             minLines: 14,
             maxLines: 20,
             monospace: true,
@@ -994,7 +1037,7 @@ class _SpeakerEditorSheetState extends ConsumerState<_SpeakerEditorSheet> {
           ],
           const SizedBox(height: 16),
           _PrimaryButton(
-            label: _saving ? 'Saving...' : 'Save profile',
+            label: _saving ? t('speakers.saving') : t('speakers.saveProfile'),
             onTap: _saving ? null : _save,
           ),
         ],
@@ -1025,11 +1068,13 @@ class _SettingsSubScaffold extends StatelessWidget {
   const _SettingsSubScaffold({
     required this.title,
     required this.child,
+    required this.backLabel,
     this.action,
   });
 
   final String title;
   final Widget child;
+  final String backLabel;
   final Widget? action;
 
   @override
@@ -1047,7 +1092,7 @@ class _SettingsSubScaffold extends StatelessWidget {
                   GestureDetector(
                     onTap: () => context.pop(),
                     child: Text(
-                      'Back',
+                      backLabel,
                       style: TextStyle(
                         color: palette.textSecondary,
                         fontSize: 14,
@@ -1227,6 +1272,7 @@ class _SettingsNavCard extends StatelessWidget {
     required this.onTap,
     this.trailing = '',
     this.onDelete,
+    this.deleteTooltip,
   });
 
   final String title;
@@ -1234,6 +1280,7 @@ class _SettingsNavCard extends StatelessWidget {
   final String trailing;
   final VoidCallback onTap;
   final VoidCallback? onDelete;
+  final String? deleteTooltip;
 
   @override
   Widget build(BuildContext context) {
@@ -1285,7 +1332,7 @@ class _SettingsNavCard extends StatelessWidget {
           if (onDelete != null) ...[
             const SizedBox(width: 10),
             IconButton(
-              tooltip: 'Delete',
+              tooltip: deleteTooltip,
               onPressed: onDelete,
               icon: const Icon(
                 Icons.delete_outline_rounded,
@@ -1308,10 +1355,17 @@ class _SettingsNavCard extends StatelessWidget {
 }
 
 class _SpeakerCard extends StatelessWidget {
-  const _SpeakerCard({required this.speaker, required this.onTap});
+  const _SpeakerCard({
+    required this.speaker,
+    required this.onTap,
+    required this.profileSavedLabel,
+    required this.noProfileLabel,
+  });
 
   final SettingsSpeakerProfile speaker;
   final VoidCallback onTap;
+  final String profileSavedLabel;
+  final String noProfileLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1355,7 +1409,7 @@ class _SpeakerCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  speaker.email ?? (hasProfile ? 'Profile saved' : 'No profile yet'),
+                  speaker.email ?? (hasProfile ? profileSavedLabel : noProfileLabel),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -1462,11 +1516,13 @@ class _CodeCard extends StatelessWidget {
     required this.title,
     required this.code,
     required this.onCopy,
+    required this.copyLabel,
   });
 
   final String title;
   final String code;
   final VoidCallback onCopy;
+  final String copyLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1487,7 +1543,7 @@ class _CodeCard extends StatelessWidget {
                   ),
                 ),
               ),
-              _SmallAction(label: 'Copy', onTap: onCopy),
+              _SmallAction(label: copyLabel, onTap: onCopy),
             ],
           ),
           const SizedBox(height: 10),
@@ -1830,11 +1886,13 @@ class _ErrorState extends StatelessWidget {
     required this.title,
     required this.error,
     required this.onRetry,
+    required this.retryLabel,
   });
 
   final String title;
   final Object? error;
   final VoidCallback onRetry;
+  final String retryLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1866,7 +1924,7 @@ class _ErrorState extends StatelessWidget {
               style: TextStyle(color: palette.textSecondary, fontSize: 13),
             ),
             const SizedBox(height: 18),
-            FigmaPillButton(label: 'Try again', onTap: onRetry, compact: true),
+            FigmaPillButton(label: retryLabel, onTap: onRetry, compact: true),
           ],
         ),
       ),
@@ -1891,10 +1949,10 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-String _themeLabel(ThemeMode mode) => switch (mode) {
-      ThemeMode.light => 'Light',
-      ThemeMode.dark => 'Dark',
-      ThemeMode.system => 'Light',
+String _themeLabel(ThemeMode mode, AppText t) => switch (mode) {
+      ThemeMode.light => t('theme.light'),
+      ThemeMode.dark => t('theme.dark'),
+      ThemeMode.system => t('theme.light'),
     };
 
 String _preview(String value) {

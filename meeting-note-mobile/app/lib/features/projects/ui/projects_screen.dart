@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../notes/data/notes_repository.dart';
@@ -83,6 +84,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     final auth = ref.watch(authControllerProvider);
     final userId = auth.user?.id;
     if (!auth.loading && userId != _loadedForUserId) {
@@ -107,7 +109,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Projects',
+                          t('projects.title'),
                           style: TextStyle(
                             fontSize: 25,
                             height: 1,
@@ -117,6 +119,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                         ),
                       ),
                       _NewProjectButton(
+                        label: t('projects.newButton'),
                         onTap: snapshot.connectionState ==
                                 ConnectionState.waiting
                             ? null
@@ -138,6 +141,13 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                         }
                         return _ProjectBody(
                           snapshot: snapshot,
+                          errorTitle: t('projects.loadListErrorTitle'),
+                          tryAgainLabel: t('projects.tryAgain'),
+                          emptyTitle: t('projects.emptyTitle'),
+                          emptySubtitle: t('projects.emptySubtitle'),
+                          openProjectLabel: t('projects.openProject'),
+                          noteWord: t('projects.note'),
+                          notesWord: t('projects.notes'),
                           onRetry: _refresh,
                           onOpenProject: (project) => context.push(
                             '/projects/${project.id}',
@@ -316,7 +326,8 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
     final data = _data;
     if (text.isEmpty || _sending || data == null) return;
     if (userId == null || userId.isEmpty) {
-      setState(() => _chatError = 'Missing authenticated user.');
+      setState(() =>
+          _chatError = ref.read(appTextProvider)('projects.missingUser'));
       return;
     }
 
@@ -429,6 +440,7 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = ref.watch(appTextProvider);
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: FigmaDesign.of(context).pageBackground,
@@ -448,17 +460,18 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _ProjectBackHeader(
-                      title: widget.projectName ?? 'Project',
-                      subtitle: 'Could not load project',
+                      backLabel: t('projects.back'),
+                      title: widget.projectName ?? t('projects.fallbackTitle'),
+                      subtitle: t('projects.couldNotLoad'),
                     ),
                     const SizedBox(height: 32),
                     EmptyState(
                       icon: Icons.error_outline_rounded,
-                      title: 'Failed to load project',
+                      title: t('projects.loadDetailErrorTitle'),
                       subtitle: '${snapshot.error}',
                       action: FilledButton(
                         onPressed: _refresh,
-                        child: const Text('Try again'),
+                        child: Text(t('projects.tryAgain')),
                       ),
                     ),
                   ],
@@ -470,11 +483,15 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
               final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
               final keyboardActive = keyboardInset > 0;
               final subtitle =
-                  '${data.notes.length} ${data.notes.length == 1 ? 'note' : 'notes'} - ${_lastActivity(data)}';
+                  '${data.notes.length} ${data.notes.length == 1 ? t('projects.note') : t('projects.notes')} - ${_lastActivity(data, t)}';
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _ProjectBackHeader(title: title, subtitle: subtitle),
+                  _ProjectBackHeader(
+                    backLabel: t('projects.back'),
+                    title: title,
+                    subtitle: subtitle,
+                  ),
                   const SizedBox(height: 26),
                   _ProjectChatCard(
                     expanded: !_isLowerSectionExpanded,
@@ -486,11 +503,16 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
                     messages: _messages,
                     sending: _sending,
                     error: _chatError,
+                    emptyLabel: t('projects.askAboutProject'),
+                    hintText: t('projects.askHint'),
+                    typingLabel: t('projects.thinking'),
                     onSend: _sendChat,
                   ),
                   const SizedBox(height: 16),
                   _ProjectDetailToggle(
                     showChats: _showChats,
+                    chatsLabel: t('projects.chatsTab'),
+                    notesLabel: t('projects.notesTab'),
                     onChanged: (value) => setState(() {
                       _showChats = value;
                       _isLowerSectionExpanded = true;
@@ -508,11 +530,15 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
                                     sessions: data.sessions,
                                     chatsBySession: data.chatsBySession,
                                     selectedSessionId: _activeSessionId,
+                                    emptyLabel: t('projects.noChatSessions'),
+                                    noResponseLabel:
+                                        t('projects.noResponseYet'),
                                     onSelect: _selectSession,
                                   )
                                 : _ProjectNotesList(
                                     key: const ValueKey('project-notes'),
                                     notes: data.notes,
+                                    emptyLabel: t('projects.noProjectNotes'),
                                     onOpen: (note) =>
                                         context.push('/note/${note.id}'),
                                   ))
@@ -534,10 +560,12 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
 
 class _ProjectBackHeader extends StatelessWidget {
   const _ProjectBackHeader({
+    required this.backLabel,
     required this.title,
     required this.subtitle,
   });
 
+  final String backLabel;
   final String title;
   final String subtitle;
 
@@ -552,7 +580,7 @@ class _ProjectBackHeader extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(
-              'Back',
+              backLabel,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w400,
@@ -610,6 +638,9 @@ class _ProjectChatCard extends StatelessWidget {
     required this.messages,
     required this.sending,
     required this.error,
+    required this.emptyLabel,
+    required this.hintText,
+    required this.typingLabel,
     required this.onSend,
   });
 
@@ -622,6 +653,9 @@ class _ProjectChatCard extends StatelessWidget {
   final List<_ProjectChatMessage> messages;
   final bool sending;
   final String? error;
+  final String emptyLabel;
+  final String hintText;
+  final String typingLabel;
   final VoidCallback onSend;
 
   @override
@@ -683,14 +717,14 @@ class _ProjectChatCard extends StatelessWidget {
                       if (sending &&
                           message.role == _ProjectChatRole.assistant &&
                           message.content.isEmpty) {
-                        return const _ProjectAssistantTyping();
+                        return _ProjectAssistantTyping(label: typingLabel);
                       }
                       return _ProjectMessageBubble(message: message);
                     },
                   )
                 : Center(
                     child: Text(
-                      'Ask about this project',
+                      emptyLabel,
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w300,
@@ -730,7 +764,7 @@ class _ProjectChatCard extends StatelessWidget {
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => onSend(),
                     decoration: InputDecoration(
-                      hintText: 'Ask about this project...',
+                      hintText: hintText,
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
@@ -845,7 +879,9 @@ class _ProjectMessageBubble extends StatelessWidget {
 }
 
 class _ProjectAssistantTyping extends StatelessWidget {
-  const _ProjectAssistantTyping();
+  const _ProjectAssistantTyping({required this.label});
+
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -853,7 +889,7 @@ class _ProjectAssistantTyping extends StatelessWidget {
     return Align(
       alignment: Alignment.centerRight,
       child: Text(
-        'Thinking...',
+        label,
         style: TextStyle(
           color: palette.textMuted,
           fontSize: 12,
@@ -867,10 +903,14 @@ class _ProjectAssistantTyping extends StatelessWidget {
 class _ProjectDetailToggle extends StatelessWidget {
   const _ProjectDetailToggle({
     required this.showChats,
+    required this.chatsLabel,
+    required this.notesLabel,
     required this.onChanged,
   });
 
   final bool showChats;
+  final String chatsLabel;
+  final String notesLabel;
   final ValueChanged<bool> onChanged;
 
   @override
@@ -881,9 +921,9 @@ class _ProjectDetailToggle extends StatelessWidget {
       child: FigmaSlidingSegmentedToggle(
         height: 36,
         thumbRadius: 999,
-        options: const [
-          FigmaSegmentOption(label: 'Chats'),
-          FigmaSegmentOption(label: 'Notes'),
+        options: [
+          FigmaSegmentOption(label: chatsLabel),
+          FigmaSegmentOption(label: notesLabel),
         ],
         selectedIndex: showChats ? 0 : 1,
         onChanged: (index) => onChanged(index == 0),
@@ -899,18 +939,22 @@ class _ProjectChatSessionList extends StatelessWidget {
     required this.sessions,
     required this.chatsBySession,
     required this.selectedSessionId,
+    required this.emptyLabel,
+    required this.noResponseLabel,
     required this.onSelect,
   });
 
   final List<ProjectChatSession> sessions;
   final Map<String, List<ProjectChatRow>> chatsBySession;
   final String? selectedSessionId;
+  final String emptyLabel;
+  final String noResponseLabel;
   final ValueChanged<String> onSelect;
 
   @override
   Widget build(BuildContext context) {
     if (sessions.isEmpty) {
-      return const _ProjectEmptyLowerState('No chat sessions yet.');
+      return _ProjectEmptyLowerState(emptyLabel);
     }
     return ListView.separated(
       padding: const EdgeInsets.only(bottom: 24),
@@ -922,7 +966,7 @@ class _ProjectChatSessionList extends StatelessWidget {
         final firstResponse = _firstNonEmpty(
               rows.map((row) => row.response?.trim() ?? ''),
             ) ??
-            'No response yet';
+            noResponseLabel;
         final firstMessage = _firstNonEmpty(
               rows.map((row) => row.message?.trim() ?? ''),
             ) ??
@@ -945,16 +989,18 @@ class _ProjectNotesList extends StatelessWidget {
   const _ProjectNotesList({
     super.key,
     required this.notes,
+    required this.emptyLabel,
     required this.onOpen,
   });
 
   final List<ProjectNoteSummary> notes;
+  final String emptyLabel;
   final ValueChanged<ProjectNoteSummary> onOpen;
 
   @override
   Widget build(BuildContext context) {
     if (notes.isEmpty) {
-      return const _ProjectEmptyLowerState('No project notes yet.');
+      return _ProjectEmptyLowerState(emptyLabel);
     }
     return ListView.separated(
       padding: const EdgeInsets.only(bottom: 24),
@@ -1166,28 +1212,42 @@ String? _firstNonEmpty(Iterable<String> values) {
   return null;
 }
 
-String _lastActivity(_ProjectDetailData data) {
+String _lastActivity(_ProjectDetailData data, AppText t) {
   final dates = [
     ...data.notes.map((note) => note.createdAt),
     ...data.sessions.map((session) => session.createdAt),
   ]..sort((a, b) => b.compareTo(a));
-  if (dates.isEmpty) return 'Last activity: none';
+  if (dates.isEmpty) return t('projects.lastActivityNone');
   final latest = dates.first;
   final now = DateTime.now();
   final sameDay =
       latest.year == now.year && latest.month == now.month && latest.day == now.day;
-  if (sameDay) return 'Last activity: today';
-  return 'Last activity: ${DateFormat('MMM d').format(latest)}';
+  if (sameDay) return t('projects.lastActivityToday');
+  return '${t('projects.lastActivityPrefix')}${DateFormat('MMM d').format(latest)}';
 }
 
 class _ProjectBody extends StatelessWidget {
   const _ProjectBody({
     required this.snapshot,
+    required this.errorTitle,
+    required this.tryAgainLabel,
+    required this.emptyTitle,
+    required this.emptySubtitle,
+    required this.openProjectLabel,
+    required this.noteWord,
+    required this.notesWord,
     required this.onRetry,
     required this.onOpenProject,
   });
 
   final AsyncSnapshot<_ProjectsScreenData> snapshot;
+  final String errorTitle;
+  final String tryAgainLabel;
+  final String emptyTitle;
+  final String emptySubtitle;
+  final String openProjectLabel;
+  final String noteWord;
+  final String notesWord;
   final VoidCallback onRetry;
   final ValueChanged<MeetingProject> onOpenProject;
 
@@ -1199,21 +1259,21 @@ class _ProjectBody extends StatelessWidget {
     if (snapshot.hasError) {
       return EmptyState(
         icon: Icons.error_outline_rounded,
-        title: 'Failed to load projects',
+        title: errorTitle,
         subtitle: '${snapshot.error}',
         action: FilledButton(
           onPressed: onRetry,
-          child: const Text('Try again'),
+          child: Text(tryAgainLabel),
         ),
       );
     }
     final data = snapshot.data;
     final projects = data?.projects ?? const <MeetingProject>[];
     if (projects.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.folder_open_rounded,
-        title: 'No projects yet',
-        subtitle: 'Create a project to organize related meeting notes.',
+        title: emptyTitle,
+        subtitle: emptySubtitle,
       );
     }
 
@@ -1228,6 +1288,9 @@ class _ProjectBody extends StatelessWidget {
           return _ProjectCard(
             project: project,
             noteCount: null,
+            openLabel: openProjectLabel,
+            noteWord: noteWord,
+            notesWord: notesWord,
             onTap: () => onOpenProject(project),
           );
         },
@@ -1237,8 +1300,9 @@ class _ProjectBody extends StatelessWidget {
 }
 
 class _NewProjectButton extends StatelessWidget {
-  const _NewProjectButton({required this.onTap});
+  const _NewProjectButton({required this.label, required this.onTap});
 
+  final String label;
   final VoidCallback? onTap;
 
   @override
@@ -1264,10 +1328,10 @@ class _NewProjectButton extends StatelessWidget {
               ),
             ],
           ),
-          child: const Center(
+          child: Center(
             child: Text(
-              '+ New',
-              style: TextStyle(
+              label,
+              style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
                 color: Colors.white,
@@ -1284,11 +1348,17 @@ class _ProjectCard extends StatelessWidget {
   const _ProjectCard({
     required this.project,
     required this.noteCount,
+    required this.openLabel,
+    required this.noteWord,
+    required this.notesWord,
     required this.onTap,
   });
 
   final MeetingProject project;
   final int? noteCount;
+  final String openLabel;
+  final String noteWord;
+  final String notesWord;
   final VoidCallback onTap;
 
   @override
@@ -1357,10 +1427,10 @@ class _ProjectCard extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       noteCount == null
-                          ? 'Open project'
+                          ? openLabel
                           : noteCount == 1
-                              ? '1 note'
-                              : '$noteCount notes',
+                              ? '1 $noteWord'
+                              : '$noteCount $notesWord',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w300,
@@ -1407,7 +1477,8 @@ class _NewProjectSheetState extends ConsumerState<_NewProjectSheet> {
   Future<void> _create() async {
     final name = _controller.text.trim();
     if (name.isEmpty) {
-      setState(() => _error = 'Project name is required.');
+      setState(() =>
+          _error = ref.read(appTextProvider)('projects.nameRequired'));
       return;
     }
 
@@ -1434,6 +1505,7 @@ class _NewProjectSheetState extends ConsumerState<_NewProjectSheet> {
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -1453,7 +1525,7 @@ class _NewProjectSheetState extends ConsumerState<_NewProjectSheet> {
                 children: [
                   Expanded(
                     child: Text(
-                      'New Project',
+                      t('projects.newProjectTitle'),
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
@@ -1472,7 +1544,7 @@ class _NewProjectSheetState extends ConsumerState<_NewProjectSheet> {
                 controller: _controller,
                 autofocus: true,
                 decoration: InputDecoration(
-                  hintText: 'Project name',
+                  hintText: t('projects.namePlaceholder'),
                   filled: true,
                   fillColor: palette.field,
                   hintStyle: TextStyle(color: palette.textMuted),
@@ -1487,7 +1559,7 @@ class _NewProjectSheetState extends ConsumerState<_NewProjectSheet> {
               ),
               const SizedBox(height: 18),
               Text(
-                'Select notes',
+                t('projects.selectNotes'),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -1497,7 +1569,9 @@ class _NewProjectSheetState extends ConsumerState<_NewProjectSheet> {
               const SizedBox(height: 8),
               Flexible(
                 child: widget.notes.isEmpty
-                    ? const _ProjectSheetEmptyNoteList()
+                    ? _ProjectSheetEmptyNoteList(
+                        message: t('projects.noNotesAvailable'),
+                      )
                     : ListView.separated(
                         shrinkWrap: true,
                         itemCount: widget.notes.length,
@@ -1545,7 +1619,9 @@ class _NewProjectSheetState extends ConsumerState<_NewProjectSheet> {
                       borderRadius: BorderRadius.circular(18),
                     ),
                   ),
-                  child: Text(_saving ? 'Creating...' : 'Create Project'),
+                  child: Text(_saving
+                      ? t('projects.creating')
+                      : t('projects.createProject')),
                 ),
               ),
             ],
@@ -1678,7 +1754,9 @@ class _ProjectNoteRow extends StatelessWidget {
 }
 
 class _ProjectSheetEmptyNoteList extends StatelessWidget {
-  const _ProjectSheetEmptyNoteList();
+  const _ProjectSheetEmptyNoteList({required this.message});
+
+  final String message;
 
   @override
   Widget build(BuildContext context) {
@@ -1690,7 +1768,7 @@ class _ProjectSheetEmptyNoteList extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
       ),
       child: Text(
-        'No notes available yet.',
+        message,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w300,
