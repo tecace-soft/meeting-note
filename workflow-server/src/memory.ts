@@ -25,6 +25,11 @@ const MAX_ENTITY = 80;
 const MAX_ENTITIES_PER_ITEM = 12;
 const MAX_OPS = 80;
 const ACTIVE_CAP = 50;
+// A single meeting almost always CONTINUES existing threads (update/supersede) and
+// introduces very few genuinely-new durable subjects. Capping ADD ops per fold is the
+// reliable backstop against near-duplicate accretion when the model fails to match a new
+// observation to the existing item it belongs to (update/supersede/archive are unbounded).
+const MAX_ADDS_PER_FOLD = 3;
 const TOTAL_CAP = 80;
 const MAX_STR = 400;
 const PROCESSED_CAP = 500;
@@ -214,12 +219,14 @@ function parseOps(rawText: string): Op[] | null {
   if (!Array.isArray(rawOps)) return null;
 
   const ops: Op[] = [];
+  let addCount = 0;
   for (const raw of rawOps.slice(0, MAX_OPS)) {
     const o = asObject(raw);
     const kind = str(o.op, 20).toLowerCase();
     if (kind === 'add') {
+      if (addCount >= MAX_ADDS_PER_FOLD) continue; // backstop: drop excess adds, keep all folds
       const text = str(o.text, MAX_ITEM_TEXT);
-      if (text) ops.push({ op: 'add', text, entities: normalizeEntities(o.entities) });
+      if (text) { ops.push({ op: 'add', text, entities: normalizeEntities(o.entities) }); addCount += 1; }
     } else if (kind === 'update' || kind === 'supersede') {
       const id = str(o.id, 80);
       const text = str(o.text, MAX_ITEM_TEXT);
@@ -357,7 +364,9 @@ DEDUP (critical — the memory must not accumulate duplicates):
 - Supersede when the new meeting resolves or contradicts an existing memory (e.g. "the 50MB upload limit is under investigation" becomes "the 50MB limit was a Supabase free-tier cap, fixed by upgrading to Supabase Pro; the cap is now 200MB").
 
 BOUNDS:
-- Emit AT MOST 20 operations total. Prefer a few high-value update/supersede ops over many adds. NEVER pad the array, repeat an op, or emit empty/placeholder ops.
+- Emit AT MOST 20 operations total, and AT MOST 3 "add" ops. A meeting almost always CONTINUES existing threads, so the great majority of your ops must be update/supersede. Producing 4+ adds is a red flag that you FAILED to match new information to the existing item it belongs to — go back, find that item, and update it instead.
+- Before EVERY add, scan ALL existing items once more: if ANY of them is about the same subject / project / person / problem / feature area (even phrased differently, even if the meeting only adds a new facet of it), you MUST update that item, not add. Two items about "memory", or two about "indexing/search", or two about "the eval process", is exactly the duplicate defect — there must be only ONE item per subject.
+- NEVER pad the array, repeat an op, or emit empty/placeholder ops.
 
 GROUNDING:
 - Only durable, meeting-crossing understanding. Skip one-off small talk and pure logistics.
