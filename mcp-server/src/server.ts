@@ -3,6 +3,7 @@ import { registerNoteResources } from './resources/noteResources.js';
 import { registerSpeakerResources } from './resources/speakerResources.js';
 import { registerContextTools } from './tools/context.js';
 import { registerEvaluationTools } from './tools/evaluation.js';
+import { registerMemoryTools } from './tools/memory.js';
 import { registerNoteTools } from './tools/notes.js';
 import { registerProjectTools } from './tools/projects.js';
 import { registerSpeakerTools } from './tools/speakers.js';
@@ -20,6 +21,7 @@ export function createMeetingNoteMcpServer(): McpServer {
   registerSpeakerTools(server);
   registerProjectTools(server);
   registerContextTools(server);
+  registerMemoryTools(server);
   registerEvaluationTools(server);
   registerNoteResources(server);
   registerSpeakerResources(server);
