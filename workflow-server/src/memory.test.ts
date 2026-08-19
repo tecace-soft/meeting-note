@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyConsolidation, parseConsolidationGroups, type ConsolidationGroup, type MemoryItem } from './memory.js';
+import { applyConsolidation, parseConsolidationOps, type ConsolidationOp, type MemoryItem } from './memory.js';
 
 function item(id: string, text: string, opts: Partial<MemoryItem> = {}): MemoryItem {
   return {
@@ -9,79 +9,92 @@ function item(id: string, text: string, opts: Partial<MemoryItem> = {}): MemoryI
   };
 }
 
-// ---- parseConsolidationGroups ----
+// ---- parseConsolidationOps ----
 
-test('parseConsolidationGroups parses groups and drops singletons', () => {
-  const g = parseConsolidationGroups('{"groups":[{"ids":["a","b"],"text":"merged","entities":["X"]},{"ids":["c"],"text":"solo"}]}');
-  assert.equal(g?.length, 1);
-  assert.deepEqual(g?.[0].ids, ['a', 'b']);
-  assert.equal(g?.[0].text, 'merged');
+test('parseConsolidationOps parses a merge op and drops keepId from dropIds', () => {
+  const ops = parseConsolidationOps('{"ops":[{"kind":"merge","keepId":"a","dropIds":["a","b"],"text":"merged","entities":["X"]}]}');
+  assert.equal(ops?.length, 1);
+  assert.deepEqual(ops?.[0], { kind: 'merge', keepId: 'a', dropIds: ['b'], text: 'merged', entities: ['X'] });
 });
 
-test('parseConsolidationGroups strips code fences and accepts a bare array', () => {
-  const g = parseConsolidationGroups('```json\n[{"ids":["a","b"],"text":"m"}]\n```');
-  assert.equal(g?.length, 1);
-  assert.deepEqual(g?.[0].ids, ['a', 'b']);
+test('parseConsolidationOps parses a split op (needs 2+ parts)', () => {
+  const ops = parseConsolidationOps('{"ops":[{"kind":"split","id":"c","parts":[{"text":"one","entities":[]},{"text":"two","entities":["Y"]}]}]}');
+  assert.equal(ops?.length, 1);
+  assert.equal(ops?.[0].kind, 'split');
+  assert.equal((ops?.[0] as { parts: unknown[] }).parts.length, 2);
 });
 
-test('parseConsolidationGroups returns [] for empty groups, null for garbage', () => {
-  assert.deepEqual(parseConsolidationGroups('{"groups":[]}'), []);
-  assert.equal(parseConsolidationGroups('not json at all'), null);
+test('parseConsolidationOps drops a merge with no dropIds and a split with <2 parts', () => {
+  const ops = parseConsolidationOps('{"ops":[{"kind":"merge","keepId":"a","dropIds":[],"text":"x"},{"kind":"split","id":"c","parts":[{"text":"only"}]}]}');
+  assert.deepEqual(ops, []);
 });
 
-test('parseConsolidationGroups dedups ids within a group and drops <2 after dedup', () => {
-  const g = parseConsolidationGroups('{"groups":[{"ids":["a","a"],"text":"x"},{"ids":["b","c","c"],"text":"y"}]}');
-  assert.equal(g?.length, 1); // ["a","a"] collapses to 1 id -> dropped; ["b","c"] kept
-  assert.deepEqual(g?.[0].ids, ['b', 'c']);
+test('parseConsolidationOps strips code fences, accepts a bare array, null for garbage', () => {
+  const ops = parseConsolidationOps('```json\n[{"kind":"merge","keepId":"a","dropIds":["b"],"text":"m"}]\n```');
+  assert.equal(ops?.length, 1);
+  assert.deepEqual(parseConsolidationOps('{"ops":[]}'), []);
+  assert.equal(parseConsolidationOps('not json at all'), null);
 });
 
-// ---- applyConsolidation ----
+// ---- applyConsolidation: merge ----
 
-test('applyConsolidation merges a group: survivor keeps first id, losers archived', () => {
+test('applyConsolidation merge: survivor keeps keepId with atomic text, losers archived', () => {
   const items = [
     item('a', 'old A', { entities: ['P'], sourceNoteIds: ['n1'] }),
     item('b', 'dup of A', { entities: ['Q'], sourceNoteIds: ['n2'] }),
     item('c', 'unrelated'),
   ];
-  const groups: ConsolidationGroup[] = [{ ids: ['a', 'b'], text: 'merged A', entities: ['R'] }];
-  const { items: out, merged } = applyConsolidation(items, groups, 't5');
+  const ops: ConsolidationOp[] = [{ kind: 'merge', keepId: 'a', dropIds: ['b'], text: 'merged A', entities: ['R'] }];
+  const { items: out, merged } = applyConsolidation(items, ops, 't5');
   assert.equal(merged, 1);
   const a = out.find((i) => i.id === 'a')!;
-  const b = out.find((i) => i.id === 'b')!;
-  const c = out.find((i) => i.id === 'c')!;
   assert.equal(a.status, 'active');
-  assert.equal(a.text, 'merged A');
+  assert.equal(a.text, 'merged A'); // atomic replacement, NOT a concatenation
   assert.deepEqual(a.entities, ['P', 'Q', 'R']); // union
   assert.deepEqual(a.sourceNoteIds, ['n1', 'n2']); // union
   assert.equal(a.updatedAt, 't5');
-  assert.equal(b.status, 'archived'); // loser
-  assert.equal(c.status, 'active'); // untouched
+  assert.equal(out.find((i) => i.id === 'b')!.status, 'archived'); // loser
+  assert.equal(out.find((i) => i.id === 'c')!.status, 'active'); // untouched
 });
 
-test('applyConsolidation: empty merged text falls back to survivor text', () => {
+test('applyConsolidation merge: empty text falls back to survivor text', () => {
   const items = [item('a', 'keep me'), item('b', 'dup')];
-  const { items: out } = applyConsolidation(items, [{ ids: ['a', 'b'], text: '   ', entities: [] }], 't1');
+  const { items: out } = applyConsolidation(items, [{ kind: 'merge', keepId: 'a', dropIds: ['b'], text: '   ', entities: [] }], 't1');
   assert.equal(out.find((i) => i.id === 'a')!.text, 'keep me');
 });
 
-test('applyConsolidation ignores missing / archived / already-claimed ids', () => {
-  const items = [
-    item('a', 'A'), item('b', 'B'),
-    item('x', 'X', { status: 'archived' }),
+test('applyConsolidation merge: ignores missing / archived / already-claimed ids', () => {
+  const items = [item('a', 'A'), item('b', 'B'), item('x', 'X', { status: 'archived' })];
+  const ops: ConsolidationOp[] = [
+    { kind: 'merge', keepId: 'a', dropIds: ['missing'], text: 'm1', entities: [] }, // no valid drop -> skipped
+    { kind: 'merge', keepId: 'a', dropIds: ['b'], text: 'm2', entities: [] },       // valid -> merges
+    { kind: 'merge', keepId: 'b', dropIds: ['x'], text: 'm3', entities: [] },       // b claimed + x archived -> skipped
   ];
-  const groups: ConsolidationGroup[] = [
-    { ids: ['a', 'missing'], text: 'm1', entities: [] }, // only 1 valid -> skipped
-    { ids: ['a', 'b'], text: 'm2', entities: [] },       // valid -> merges
-    { ids: ['b', 'x'], text: 'm3', entities: [] },       // b claimed + x archived -> skipped
-  ];
-  const { items: out, merged } = applyConsolidation(items, groups, 't2');
+  const { items: out, merged } = applyConsolidation(items, ops, 't2');
   assert.equal(merged, 1);
   assert.equal(out.find((i) => i.id === 'a')!.text, 'm2');
   assert.equal(out.find((i) => i.id === 'b')!.status, 'archived');
-  assert.equal(out.find((i) => i.id === 'x')!.status, 'archived'); // stays archived, untouched
+  assert.equal(out.find((i) => i.id === 'x')!.status, 'archived');
 });
 
-test('applyConsolidation with no groups is a no-op', () => {
+// ---- applyConsolidation: split ----
+
+test('applyConsolidation split: archives the run-on item and adds one atomic item per part', () => {
+  const items = [item('a', 'subject one; subject two', { entities: ['P'], sourceNoteIds: ['n1', 'n2'] })];
+  const ops: ConsolidationOp[] = [{ kind: 'split', id: 'a', parts: [
+    { text: 'Subject one.', entities: ['P'] },
+    { text: 'Subject two.', entities: ['Q'] },
+  ] }];
+  const { items: out, merged } = applyConsolidation(items, ops, 't9');
+  assert.equal(merged, 0); // split is not a merge
+  assert.equal(out.find((i) => i.id === 'a')!.status, 'archived');
+  const active = out.filter((i) => i.status === 'active');
+  assert.equal(active.length, 2);
+  assert.deepEqual(active.map((i) => i.text).sort(), ['Subject one.', 'Subject two.']);
+  for (const it of active) assert.deepEqual(it.sourceNoteIds, ['n1', 'n2']); // parts inherit provenance
+});
+
+test('applyConsolidation with no ops is a no-op', () => {
   const items = [item('a', 'A'), item('b', 'B')];
   const { merged } = applyConsolidation(items, [], 't1');
   assert.equal(merged, 0);

@@ -871,78 +871,126 @@ export async function computeMemoryFold(input: {
 // ---------------------------------------------------------------------------
 
 const CONSOLIDATION_MIN_ITEMS = 6; // below this, accretion is negligible — skip the extra call
-const MAX_CONSOLIDATION_GROUPS = 40;
+const MAX_CONSOLIDATION_OPS = 40;
+const MAX_SPLIT_PARTS = 5;
 
-export interface ConsolidationGroup {
-  ids: string[];
-  text: string;
-  entities: string[];
-}
+// A consolidation operation. MERGE collapses genuine duplicates of ONE subject into a
+// single atomic item (never concatenates, never over-merges); SPLIT breaks a run-on item
+// that crammed several subjects back into one atomic item per subject.
+export type ConsolidationOp =
+  | { kind: 'merge'; keepId: string; dropIds: string[]; text: string; entities: string[] }
+  | { kind: 'split'; id: string; parts: Array<{ text: string; entities: string[] }> };
 
-const MEMORY_CONSOLIDATION_SYSTEM_PROMPT = `You consolidate a single user's long-term PERSONAL MEMORY item list by merging NEAR-DUPLICATES. The list may contain items that describe the SAME underlying subject / project / person / problem in different words — accreted because earlier folds added instead of merging. Merge ONLY those.
-Rules:
-- Group ONLY items that truly refer to the same subject. If subjects differ, do NOT merge (over-merging is a WORSE defect than a leftover duplicate).
-- For each group, write ONE merged "text" that combines the information of the grouped items in the most current, richest phrasing. Do NOT invent any fact not present in the grouped items.
-- Output ONLY groups of 2+ ids. Do NOT output singletons (unique items are left untouched).
-- Every id belongs to at most one group. If nothing should be merged, return an empty groups array.
-- Write "text" in the SAME language as the items (do not translate).
-Return ONLY JSON: {"groups":[{"ids":["id1","id2"],"text":"merged sentence","entities":["..."]}]}`;
+const MEMORY_CONSOLIDATION_SYSTEM_PROMPT = `You clean a single user's long-term PERSONAL MEMORY so every item is ATOMIC (about exactly ONE subject) and there are NO duplicates. You are given the current memory items, each with an id. Emit operations that fix only the two defects below; change nothing else.
+
+DEFECT 1 — DUPLICATES: two or more items describe the SAME subject / project / person / problem in different words (accreted because earlier folds added instead of merging).
+  Fix with a MERGE: pick ONE id to keep (keepId), list the OTHER duplicate ids to drop (dropIds), and write ONE atomic sentence stating that single shared subject in its richest, most-current phrasing.
+  - Do NOT concatenate the items' sentences, and do NOT pull in any detail that belongs to a DIFFERENT subject. The merged text stays about the ONE shared subject only.
+  - Merge ONLY items that truly share the same subject. Merging two DIFFERENT subjects is the WORST possible error — never do it. When unsure, do not merge.
+
+DEFECT 2 — NON-ATOMIC ITEM: a single item crams TWO OR MORE unrelated subjects into one run-on sentence (e.g. a memory-system description AND a version-management description in the same item).
+  Fix with a SPLIT: give the item's id and 2+ parts — one atomic sentence per distinct subject it contains. Use ONLY information already in that item; never add a fact that is not there. Together the parts must preserve everything the original said — drop nothing.
+
+RULES:
+- Every id you name (keepId, dropIds, split id) MUST be an id from the given list. Use each id in AT MOST ONE operation.
+- Keep every text in the SAME language as the items (do not translate). Each text is ONE self-contained sentence about ONE subject.
+- Leave items that are already atomic and unique untouched. If the whole memory is already clean, return an empty ops array.
+- Emit at most ${MAX_CONSOLIDATION_OPS} operations.
+Return ONLY JSON: {"ops":[{"kind":"merge","keepId":"id1","dropIds":["id2"],"text":"...","entities":["..."]},{"kind":"split","id":"id3","parts":[{"text":"...","entities":["..."]},{"text":"...","entities":["..."]}]}]}`;
 
 /** Build the consolidation user prompt from the active items (id + text + entities). */
 export function buildConsolidationPrompt(activeItems: Array<{ id: string; text: string; entities: string[] }>): string {
-  return `MEMORY ITEMS (JSON):\n${JSON.stringify(activeItems)}\n\nMerge only near-duplicate items. Answer with the specified JSON only.`;
+  return `MEMORY ITEMS (JSON):\n${JSON.stringify(activeItems)}\n\nEmit merge/split operations per the rules above. Answer with the specified JSON only.`;
 }
 
-/** Parse the model's consolidation groups; keep only well-formed groups of >=2 ids. Null iff unparseable JSON. */
-export function parseConsolidationGroups(rawText: string): ConsolidationGroup[] | null {
+/** Parse the model's consolidation ops; keep only well-formed merge/split ops. Null iff unparseable JSON. */
+export function parseConsolidationOps(rawText: string): ConsolidationOp[] | null {
   const stripped = rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   const parsed = tryParseJson(stripped);
   if (parsed === undefined) return null;
-  const rawGroups = (parsed as { groups?: unknown }).groups ?? parsed;
-  if (!Array.isArray(rawGroups)) return null;
-  const groups: ConsolidationGroup[] = [];
-  for (const raw of rawGroups.slice(0, MAX_CONSOLIDATION_GROUPS)) {
+  const rawOps = (parsed as { ops?: unknown }).ops ?? parsed;
+  if (!Array.isArray(rawOps)) return null;
+  const ops: ConsolidationOp[] = [];
+  for (const raw of rawOps.slice(0, MAX_CONSOLIDATION_OPS)) {
     const o = asObject(raw);
-    const ids: string[] = [];
-    for (const idRaw of asArray(o.ids)) {
-      const id = str(idRaw, 80);
-      if (id && !ids.includes(id)) ids.push(id);
+    const kind = str(o.kind, 12);
+    if (kind === 'merge') {
+      const keepId = str(o.keepId, 80);
+      const dropIds: string[] = [];
+      for (const idRaw of asArray(o.dropIds)) {
+        const id = str(idRaw, 80);
+        if (id && id !== keepId && !dropIds.includes(id)) dropIds.push(id);
+      }
+      const text = str(o.text, MAX_ITEM_TEXT);
+      if (!keepId || dropIds.length === 0 || !text) continue;
+      ops.push({ kind: 'merge', keepId, dropIds, text, entities: normalizeEntities(o.entities) });
+    } else if (kind === 'split') {
+      const id = str(o.id, 80);
+      const parts: Array<{ text: string; entities: string[] }> = [];
+      for (const p of asArray(o.parts).slice(0, MAX_SPLIT_PARTS)) {
+        const po = asObject(p);
+        const text = str(po.text, MAX_ITEM_TEXT);
+        if (text) parts.push({ text, entities: normalizeEntities(po.entities) });
+      }
+      if (!id || parts.length < 2) continue; // a split needs 2+ atomic parts
+      ops.push({ kind: 'split', id, parts });
     }
-    if (ids.length < 2) continue;
-    groups.push({ ids, text: str(o.text, MAX_ITEM_TEXT), entities: normalizeEntities(o.entities) });
   }
-  return groups;
+  return ops;
 }
 
 /**
- * Deterministically merge each group into its first (survivor) id and archive the losers.
- * Mutates + returns `items`. An id is used by at most one group; ids that are missing,
- * already archived, or already claimed by an earlier group are ignored. Never drops
- * information: survivor text/entities/sourceNoteIds absorb the losers'.
+ * Deterministically apply consolidation ops. Mutates + returns `items` (plus any items
+ * added by splits). Every id is used at most once; ids that are missing, archived, or
+ * already claimed are ignored. MERGE keeps one survivor (atomic text, absorbing the
+ * dropped items' entities/sourceNoteIds) and archives the duplicates — it NEVER
+ * concatenates. SPLIT archives the run-on item and adds one atomic item per part, each
+ * inheriting the source's sourceNoteIds. `merged` counts duplicates removed by merges.
  */
-export function applyConsolidation(items: MemoryItem[], groups: ConsolidationGroup[], now: string): { items: MemoryItem[]; merged: number } {
+export function applyConsolidation(items: MemoryItem[], ops: ConsolidationOp[], now: string): { items: MemoryItem[]; merged: number } {
   const byId = new Map(items.map((i) => [i.id, i]));
   const claimed = new Set<string>();
+  const added: MemoryItem[] = [];
   let merged = 0;
-  for (const g of groups) {
-    const ids = g.ids.filter((id) => {
-      const it = byId.get(id);
-      return it !== undefined && it.status === 'active' && !claimed.has(id);
-    });
-    if (ids.length < 2) continue;
-    const survivor = byId.get(ids[0])!;
-    const losers = ids.slice(1).map((id) => byId.get(id)!);
-    survivor.text = (g.text.trim() || survivor.text).slice(0, MAX_ITEM_TEXT);
-    for (const src of [...losers.map((l) => l.entities), g.entities]) {
-      for (const e of src) if (e && !survivor.entities.includes(e) && survivor.entities.length < MAX_ENTITIES_PER_ITEM) survivor.entities.push(e);
+  const usable = (id: string): boolean => {
+    const it = byId.get(id);
+    return it !== undefined && it.status === 'active' && !claimed.has(id);
+  };
+  for (const op of ops) {
+    if (op.kind === 'merge') {
+      if (!usable(op.keepId)) continue;
+      const drops = op.dropIds.filter(usable);
+      if (drops.length === 0) continue;
+      const survivor = byId.get(op.keepId)!;
+      survivor.text = (op.text.trim() || survivor.text).slice(0, MAX_ITEM_TEXT);
+      for (const src of [...drops.map((id) => byId.get(id)!.entities), op.entities]) {
+        for (const e of src) if (e && !survivor.entities.includes(e) && survivor.entities.length < MAX_ENTITIES_PER_ITEM) survivor.entities.push(e);
+      }
+      for (const id of drops) for (const n of byId.get(id)!.sourceNoteIds) if (n && !survivor.sourceNoteIds.includes(n)) survivor.sourceNoteIds.push(n);
+      survivor.status = 'active';
+      survivor.updatedAt = now;
+      claimed.add(op.keepId);
+      for (const id of drops) { const l = byId.get(id)!; l.status = 'archived'; l.updatedAt = now; claimed.add(id); merged += 1; }
+    } else {
+      if (!usable(op.id)) continue;
+      const source = byId.get(op.id)!;
+      for (const part of op.parts) {
+        added.push({
+          id: newId(),
+          text: part.text.slice(0, MAX_ITEM_TEXT),
+          entities: part.entities.slice(0, MAX_ENTITIES_PER_ITEM),
+          status: 'active',
+          createdAt: source.createdAt, // keep original creation time; the subject is not new
+          updatedAt: now,
+          sourceNoteIds: [...source.sourceNoteIds],
+        });
+      }
+      source.status = 'archived';
+      source.updatedAt = now;
+      claimed.add(op.id);
     }
-    for (const l of losers) for (const n of l.sourceNoteIds) if (n && !survivor.sourceNoteIds.includes(n)) survivor.sourceNoteIds.push(n);
-    survivor.status = 'active';
-    survivor.updatedAt = now;
-    for (const l of losers) { l.status = 'archived'; l.updatedAt = now; merged += 1; }
-    for (const id of ids) claimed.add(id);
   }
-  return { items, merged };
+  return { items: [...items, ...added], merged };
 }
 
 /**
@@ -963,17 +1011,18 @@ export async function consolidateMemory(input: {
   if (active.length < CONSOLIDATION_MIN_ITEMS) return { items: input.items, merged: 0, ran: false };
 
   const activeForPrompt = active.map((i) => ({ id: i.id, text: i.text, entities: i.entities }));
-  const out = await callJsonModel<ConsolidationGroup[]>({
+  const out = await callJsonModel<ConsolidationOp[]>({
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
     systemPrompt: MEMORY_CONSOLIDATION_SYSTEM_PROMPT,
     userPrompt: buildConsolidationPrompt(activeForPrompt),
-    parse: (text) => parseConsolidationGroups(text),
+    parse: (text) => parseConsolidationOps(text),
     maxOutputTokens: 4096,
   });
   if ('error' in out) return { items: input.items, merged: 0, ran: false };
+  // enforceCaps bounds total items after splits may have added a few.
   const { items, merged } = applyConsolidation(input.items, out.value, now);
-  return { items, merged, ran: true };
+  return { items: enforceCaps(items), merged, ran: true };
 }
 
 export interface FoldNoteResult {
