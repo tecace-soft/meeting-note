@@ -1120,6 +1120,53 @@ class NotesRepository {
     throw StateError('Could not create or find speaker "$name".');
   }
 
+  /// Ask the identify-speakers edge function to suggest who each ANONYMOUS diarization
+  /// label ("Speaker A/B") most likely is, from transcript signals + the user's saved
+  /// speakers. Suggestion-only (no write). Returns [] when nothing is anonymous.
+  Future<List<SpeakerSuggestion>> requestSpeakerSuggestions({
+    required List<TranscriptSegment> segments,
+    required String? selfName,
+  }) async {
+    final labels = anonymousLabelsInTranscript(segments);
+    if (labels.isEmpty) return const [];
+    final auth = await MobileSupabaseSession().auth();
+    final saved = await savedSpeakers();
+    final roster = saved
+        .where((speaker) => speaker.name.trim().isNotEmpty)
+        .map((speaker) => {
+              // speaker.id must be a STRING for the edge function's roster parsing.
+              'speakerId': speaker.id,
+              'name': speaker.name,
+              'summary': speaker.profile ?? '',
+            })
+        .toList();
+    // Send the ORIGINAL-language transcript: name mentions / honorifics are the strongest
+    // identity signals and are weakened by translation.
+    final transcriptText = segments
+        .map((segment) => '${segment.speaker ?? ''}: ${segment.text}')
+        .join('\n\n');
+
+    final response = await _supabaseRoot.post<Map<String, dynamic>>(
+      '/functions/v1/identify-speakers',
+      data: {
+        'transcriptText': transcriptText,
+        'labels': labels,
+        'roster': roster,
+        'selfName': selfName,
+      },
+      options: Options(headers: _supabaseJsonHeaders(auth.token)),
+    );
+    final error = _stringValue(response.data?['error']);
+    if (error != null) throw StateError(error);
+    final rawList = response.data?['suggestions'];
+    if (rawList is! List) return const [];
+    return rawList
+        .whereType<Map>()
+        .map((row) => SpeakerSuggestion.fromJson(row.cast<String, dynamic>()))
+        .whereType<SpeakerSuggestion>()
+        .toList();
+  }
+
   Future<void> saveDiarization(
     String noteId,
     List<TranscriptSegment> segments,
@@ -1665,6 +1712,63 @@ int? _intValue(Object? value) {
   if (value is num) return value.toInt();
   if (value is String) return int.tryParse(value);
   return null;
+}
+
+/// One model suggestion for an anonymous diarization label (from identify-speakers).
+class SpeakerSuggestion {
+  const SpeakerSuggestion({
+    required this.label,
+    required this.name,
+    required this.speakerId,
+    required this.confidence,
+    required this.isSelf,
+    required this.rationale,
+  });
+
+  final String label;
+  final String? name;
+  final String? speakerId;
+  final double confidence;
+  final bool isSelf;
+  final String rationale;
+
+  static SpeakerSuggestion? fromJson(Map<String, dynamic> json) {
+    final label = _stringValue(json['label']);
+    if (label == null) return null;
+    final conf = json['confidence'];
+    return SpeakerSuggestion(
+      label: label,
+      name: _stringValue(json['name']),
+      speakerId: _stringValue(json['speakerId']),
+      confidence: conf is num ? conf.toDouble().clamp(0.0, 1.0) : 0.0,
+      isSelf: json['isSelf'] == true,
+      rationale: _stringValue(json['rationale']) ?? '',
+    );
+  }
+}
+
+/// A diarization label is "anonymous" when it is a generic placeholder ("Speaker A",
+/// "Speaker 1", "Transcript", "Unknown") rather than a real name the user already set.
+bool isAnonymousSpeakerLabel(String label) {
+  final trimmed = label.trim();
+  if (trimmed.isEmpty) return false;
+  return RegExp(r'^(speaker|transcript|unknown)\b', caseSensitive: false).hasMatch(trimmed) ||
+      RegExp(r'^speaker\s*#?\s*\d+$', caseSensitive: false).hasMatch(trimmed);
+}
+
+/// Distinct anonymous labels in the transcript, in first-seen order.
+List<String> anonymousLabelsInTranscript(List<TranscriptSegment> segments) {
+  final seen = <String>{};
+  final out = <String>[];
+  for (final segment in segments) {
+    final label = segment.speaker?.trim();
+    if (label == null || label.isEmpty || !isAnonymousSpeakerLabel(label) || seen.contains(label)) {
+      continue;
+    }
+    seen.add(label);
+    out.add(label);
+  }
+  return out;
 }
 
 String? _stringValue(Object? value) {

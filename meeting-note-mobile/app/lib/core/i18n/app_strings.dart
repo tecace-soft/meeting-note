@@ -325,6 +325,17 @@ const Map<String, Map<String, String>> _appStrings = {
   'note.scopeSingle': {'en': 'Only this instance', 'ko': '이 항목만'},
   'note.scopeFromHere': {'en': 'This and all following instances', 'ko': '이 항목과 이후 모두'},
   'note.scopeAll': {'en': 'All instances', 'ko': '모든 항목'},
+  'note.suggestSpeakers': {'en': 'Suggest speakers', 'ko': '화자 추천'},
+  'note.suggestTitle': {'en': 'Suggested speakers', 'ko': '추천된 화자'},
+  'note.suggestSubtitle': {
+    'en': 'AI guesses who each speaker is from the transcript. Review and apply.',
+    'ko': '대화록을 바탕으로 AI가 각 화자를 추정합니다. 검토 후 적용하세요.',
+  },
+  'note.suggesting': {'en': 'Finding speakers…', 'ko': '화자 찾는 중…'},
+  'note.suggestFailed': {'en': 'Could not suggest speakers', 'ko': '화자를 추천하지 못했습니다'},
+  'note.noSuggestions': {'en': 'No speaker suggestions', 'ko': '화자 추천이 없습니다'},
+  'note.applySuggestions': {'en': 'Apply', 'ko': '적용'},
+  'note.applying': {'en': 'Applying…', 'ko': '적용 중…'},
 
   // ---- History screen ----
   'history.title': {'en': 'History', 'ko': '기록'},

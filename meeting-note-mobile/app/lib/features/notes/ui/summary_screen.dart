@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
+import '../../auth/providers/auth_provider.dart';
 import '../data/notes_repository.dart';
 import '../models/meeting_note.dart';
 
@@ -353,6 +354,7 @@ class _TranscriptTab extends ConsumerWidget {
     }
 
     final speakers = _orderedSpeakers(segments);
+    final anonLabels = anonymousLabelsInTranscript(segments);
     final visibleSegments = selectedSpeaker == null
         ? segments
         : segments
@@ -381,6 +383,32 @@ class _TranscriptTab extends ConsumerWidget {
               ),
           ],
         ),
+        // AI speaker suggestion (identify-speakers). Only offered when the transcript still
+        // has anonymous "Speaker A/B" labels to resolve.
+        if (anonLabels.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FigmaPillButton(
+              label: t('note.suggestSpeakers'),
+              compact: true,
+              onTap: () async {
+                final next = await showModalBottomSheet<List<TranscriptSegment>>(
+                  context: context,
+                  isScrollControlled: true,
+                  showDragHandle: true,
+                  builder: (_) => _SuggestSpeakersSheet(
+                    repository: ref.read(notesRepositoryProvider),
+                    noteId: note.id,
+                    segments: segments,
+                    selfName: ref.read(authControllerProvider).user?.displayName,
+                  ),
+                );
+                if (next != null) onTranscriptChanged(next);
+              },
+            ),
+          ),
+        ],
         const SizedBox(height: 20),
         for (final entry in visibleSegments.indexed)
           _TranscriptRow(
@@ -1395,6 +1423,250 @@ bool _shouldReplaceSpeaker({
     _ReplacementScope.fromHere => index >= segmentIndex && sameSpeaker,
     _ReplacementScope.all => sameSpeaker,
   };
+}
+
+/// AI speaker suggestion sheet: asks identify-speakers to guess who each anonymous label
+/// is, lets the user review + toggle, and applies the selected renames to the diarization.
+class _SuggestSpeakersSheet extends ConsumerStatefulWidget {
+  const _SuggestSpeakersSheet({
+    required this.repository,
+    required this.noteId,
+    required this.segments,
+    required this.selfName,
+  });
+
+  final NotesRepository repository;
+  final String noteId;
+  final List<TranscriptSegment> segments;
+  final String? selfName;
+
+  @override
+  ConsumerState<_SuggestSpeakersSheet> createState() => _SuggestSpeakersSheetState();
+}
+
+class _SuggestSpeakersSheetState extends ConsumerState<_SuggestSpeakersSheet> {
+  late Future<List<SpeakerSuggestion>> _future;
+  final Set<String> _selected = {};
+  bool _applying = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<List<SpeakerSuggestion>> _load() async {
+    final list = await widget.repository.requestSpeakerSuggestions(
+      segments: widget.segments,
+      selfName: widget.selfName,
+    );
+    // Pre-select confident, resolvable suggestions (mirrors the ingest auto-apply bar of 0.8).
+    _selected
+      ..clear()
+      ..addAll(list.where(_isApplicable).where((s) => s.confidence >= 0.8).map((s) => s.label));
+    return list;
+  }
+
+  bool _isApplicable(SpeakerSuggestion s) =>
+      (s.isSelf && (widget.selfName?.trim().isNotEmpty ?? false)) ||
+      (s.name != null && s.name!.trim().isNotEmpty);
+
+  String _appliedName(SpeakerSuggestion s) {
+    if (s.isSelf && (widget.selfName?.trim().isNotEmpty ?? false)) return widget.selfName!.trim();
+    return s.name?.trim() ?? '';
+  }
+
+  Future<void> _apply(List<SpeakerSuggestion> suggestions) async {
+    final nameByLabel = <String, String>{};
+    for (final s in suggestions) {
+      if (!_selected.contains(s.label)) continue;
+      final name = _appliedName(s);
+      if (name.isNotEmpty) nameByLabel[s.label] = name;
+    }
+    if (nameByLabel.isEmpty) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _applying = true;
+      _error = null;
+    });
+    try {
+      final next = widget.segments
+          .map((seg) => nameByLabel.containsKey(seg.speaker)
+              ? seg.copyWith(speaker: nameByLabel[seg.speaker])
+              : seg)
+          .toList();
+      await widget.repository.saveDiarization(widget.noteId, next);
+      if (!mounted) return;
+      Navigator.of(context).pop(next);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _applying = false;
+        _error = '$error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
+        ),
+        child: FutureBuilder<List<SpeakerSuggestion>>(
+          future: _future,
+          builder: (context, snapshot) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  t('note.suggestTitle'),
+                  style: TextStyle(color: palette.text, fontSize: 17, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  t('note.suggestSubtitle'),
+                  style: TextStyle(color: palette.textMuted, fontSize: 12, height: 1.4),
+                ),
+                const SizedBox(height: 16),
+                _buildBody(context, t, snapshot),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, AppText t, AsyncSnapshot<List<SpeakerSuggestion>> snapshot) {
+    final palette = FigmaDesign.of(context);
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 32),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+            const SizedBox(width: 12),
+            Text(t('note.suggesting'), style: TextStyle(color: palette.textSecondary)),
+          ],
+        ),
+      );
+    }
+    if (snapshot.hasError) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Text('${t('note.suggestFailed')}: ${snapshot.error}',
+            style: const TextStyle(color: Color(0xFFFF3B3B), fontSize: 13)),
+      );
+    }
+    final suggestions = snapshot.data ?? const <SpeakerSuggestion>[];
+    final applicable = suggestions.where(_isApplicable).toList();
+    if (applicable.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Text(t('note.noSuggestions'), style: TextStyle(color: palette.textSecondary, fontSize: 13)),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final s in applicable)
+          _SuggestionRow(
+            label: s.label,
+            name: _appliedName(s),
+            confidence: s.confidence,
+            selected: _selected.contains(s.label),
+            onChanged: (v) => setState(() {
+              if (v) {
+                _selected.add(s.label);
+              } else {
+                _selected.remove(s.label);
+              }
+            }),
+          ),
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(_error!, style: const TextStyle(color: Color(0xFFFF3B3B), fontSize: 12)),
+        ],
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: _applying ? null : () => _apply(suggestions),
+            child: Text(_applying ? t('note.applying') : t('note.applySuggestions')),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SuggestionRow extends StatelessWidget {
+  const _SuggestionRow({
+    required this.label,
+    required this.name,
+    required this.confidence,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String name;
+  final double confidence;
+  final bool selected;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return InkWell(
+      onTap: () => onChanged(!selected),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Checkbox(
+              value: selected,
+              onChanged: (v) => onChanged(v ?? false),
+              visualDensity: VisualDensity.compact,
+            ),
+            Expanded(
+              child: Row(
+                children: [
+                  Text(label, style: TextStyle(color: palette.textMuted, fontSize: 13)),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 6),
+                    child: Icon(Icons.arrow_forward_rounded, size: 14, color: Color(0xFF9AA4B5)),
+                  ),
+                  Flexible(
+                    child: Text(
+                      name,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: palette.text, fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('${(confidence * 100).round()}%',
+                style: TextStyle(color: palette.textMuted, fontSize: 12)),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _SpeakerPickerSheet extends ConsumerStatefulWidget {
