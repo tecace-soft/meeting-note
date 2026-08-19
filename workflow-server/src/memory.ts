@@ -1014,6 +1014,10 @@ export async function consolidateMemory(input: {
   fallbackModels?: string[];
   items: MemoryItem[];
   now?: string;
+  // Splitting run-on items is powerful but the model does it aggressively and variably
+  // (it can over-fragment a rich single-subject item). DEFAULT OFF so the pass is a safe,
+  // monotonic dedup (active count only goes DOWN). Enable only for a reviewed atomization.
+  allowSplit?: boolean;
 }): Promise<{ items: MemoryItem[]; merged: number; ran: boolean }> {
   const now = input.now ?? new Date().toISOString();
   const active = input.items.filter((i) => i.status === 'active');
@@ -1029,8 +1033,9 @@ export async function consolidateMemory(input: {
     maxOutputTokens: 4096,
   });
   if ('error' in out) return { items: input.items, merged: 0, ran: false };
-  // enforceCaps bounds total items after splits may have added a few.
-  const { items, merged } = applyConsolidation(input.items, out.value, now);
+  const ops = input.allowSplit ? out.value : out.value.filter((op) => op.kind === 'merge');
+  // enforceCaps bounds total items in case splitting was enabled and added a few.
+  const { items, merged } = applyConsolidation(input.items, ops, now);
   return { items: enforceCaps(items), merged, ran: true };
 }
 

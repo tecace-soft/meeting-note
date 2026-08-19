@@ -1,12 +1,13 @@
-// One-time GC for personal memory: clean the run-on / duplicate pollution that the OLD
-// concatenating consolidation left in user_memory rows. Runs the (fixed) consolidation
-// pass TWICE per user — pass 1 atomizes run-on items (split), pass 2 dedups the resulting
-// atoms (merge) — then writes the cleaned active set back.
+// One-time GC for personal memory: collapse the DUPLICATE items the OLD concatenating
+// consolidation left in user_memory rows. Runs the fixed consolidation MERGE-ONLY (split
+// is off by default because it over-fragments variably) so the pass is monotonic — active
+// item count only goes DOWN — then writes the deduped active set back. Two passes catch
+// duplicates a single pass leaves.
 //
 // SAFE BY DEFAULT: dry-run (prints before/after, writes nothing). Pass --write to persist.
-// Best-effort and idempotent: re-running a clean memory is a near no-op. Never drops
-// information (split preserves content, merge unions sources); the model only proposes,
-// the merge/split apply is deterministic.
+// Best-effort and idempotent: re-running clean memory is a near no-op. Never drops
+// information (merge unions text/entities/sources); the model only proposes the groups,
+// the merge is deterministic.
 //
 //   npm run memory:gc                       # dry-run, ALL users
 //   npm run memory:gc -- --user <uuid>      # dry-run, one user
@@ -19,7 +20,7 @@ import { consolidateMemory, type MemoryItem } from '../src/memory.js';
 
 config();
 
-const PASSES = 2; // pass 1: atomize (split); pass 2: dedup the split atoms (merge).
+const PASSES = 2; // merge-only dedup; a 2nd pass catches duplicates the first leaves.
 
 function activeCount(items: MemoryItem[]): number {
   return items.filter((i) => i.status === 'active').length;
