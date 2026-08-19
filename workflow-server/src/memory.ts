@@ -611,6 +611,9 @@ export async function extractAndStoreInsight(input: {
 const MAX_IDENTIFY_LABELS = 20;
 const MAX_ROSTER_ENTRIES = 40;
 const MAX_ROSTER_SUMMARY = 800;
+// Optional personal-memory context block (F8 A/B experiment only). Prod NEVER passes
+// personalMemory, so the prompt is byte-identical to today unless the eval sets it.
+const MAX_IDENTIFY_MEMORY_CHARS = 4000;
 
 export interface SpeakerRosterEntry {
   speakerId: string;
@@ -690,6 +693,7 @@ function buildIdentifyUserPrompt(
   labels: string[],
   roster: SpeakerRosterEntry[],
   selfName: string | null,
+  personalMemory?: string | null,
 ): string {
   const rosterText = roster.length
     ? roster
@@ -702,13 +706,20 @@ function buildIdentifyUserPrompt(
   const selfLine = selfName?.trim()
     ? `Logged-in user (self), usually present: "${selfName.trim()}"`
     : 'Logged-in user (self): unknown';
+  // Prod passes no personalMemory → this block is absent and the prompt is unchanged.
+  // The F8 A/B eval sets it to test whether cross-meeting memory improves identification.
+  const memoryText = (personalMemory || '').slice(0, MAX_IDENTIFY_MEMORY_CHARS).trim();
+  const memoryBlock = memoryText
+    ? `\n\nUSER'S PERSONAL MEMORY (durable cross-meeting context about the self and the people they work with; use it as a prior for who is likely present and which role each person plays):
+${memoryText}`
+    : '';
   return `${selfLine}
 
 Anonymous labels to identify (return one suggestion per label, in this order):
 ${labels.map((l) => `- ${l}`).join('\n')}
 
 Known speaker roster:
-${rosterText}
+${rosterText}${memoryBlock}
 
 Transcript (speakers are anonymous):
 ${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
@@ -756,6 +767,9 @@ export async function identifySpeakers(input: {
   labels: string[];
   roster: SpeakerRosterEntry[];
   selfName?: string | null;
+  // F8 A/B experiment only. Prod leaves this undefined → prompt unchanged. When set, the
+  // user's durable personal memory is injected as an extra identification prior.
+  personalMemory?: string | null;
 }): Promise<{ suggestions: SpeakerSuggestion[] } | { error: string }> {
   const labels = Array.from(new Set(input.labels.map((l) => l.trim()).filter(Boolean))).slice(0, MAX_IDENTIFY_LABELS);
   if (labels.length === 0) return { suggestions: [] };
@@ -765,7 +779,7 @@ export async function identifySpeakers(input: {
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
     systemPrompt: IDENTIFY_SYSTEM_PROMPT,
-    userPrompt: buildIdentifyUserPrompt(input.transcript.trim(), labels, roster, input.selfName ?? null),
+    userPrompt: buildIdentifyUserPrompt(input.transcript.trim(), labels, roster, input.selfName ?? null, input.personalMemory ?? null),
     parse: (text) => parseSuggestions(text, validIds, labels),
   });
   if ('error' in out) return { error: out.error };

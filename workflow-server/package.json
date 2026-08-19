@@ -12,6 +12,7 @@
     "eval:gate": "tsx eval/gate.ts",
     "eval:stability": "tsx eval/stability.ts",
     "eval:inspect": "tsx eval/inspect.ts",
+    "eval:speaker-ab": "tsx eval/speaker-memory-ab.ts",
     "typecheck:eval": "tsc -p eval/tsconfig.json",
     "env:check": "node scripts/check-env.mjs"
   },
