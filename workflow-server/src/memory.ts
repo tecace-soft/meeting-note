@@ -475,7 +475,7 @@ const MAX_ATTEMPTS_PER_MODEL = 3;
  * unparseable/invalid output — a legitimately empty result (e.g. zero memory ops) is a
  * non-null value and is NOT retried.
  */
-async function callJsonModel<T>(input: {
+export async function callJsonModel<T>(input: {
   apiKey: string;
   models: string[];
   systemPrompt: string;
@@ -784,6 +784,25 @@ export async function identifySpeakers(input: {
   });
   if ('error' in out) return { error: out.error };
   return { suggestions: out.value };
+}
+
+/**
+ * Render a stored user_memory value into a compact, bounded text block for injecting as
+ * BACKGROUND context into the summary prompt. Active v2 items only; returns '' for empty,
+ * absent, or legacy-v1 memory (nothing worth injecting). Pure (no DB).
+ */
+export function renderMemoryForContext(memory: unknown, maxChars = 4000): string {
+  const obj = memory && typeof memory === 'object' && !Array.isArray(memory) ? (memory as Record<string, unknown>) : {};
+  if (obj.version !== 2 || !Array.isArray(obj.items)) return '';
+  const lines: string[] = [];
+  for (const raw of obj.items) {
+    const it = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    if (it.status === 'archived') continue;
+    const text = typeof it.text === 'string' ? it.text.trim() : '';
+    if (text) lines.push(`- ${text}`);
+  }
+  const out = lines.join('\n');
+  return out.length > maxChars ? out.slice(0, maxChars) : out;
 }
 
 export interface MemoryFoldComputation {

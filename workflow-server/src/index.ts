@@ -13,7 +13,7 @@ import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
-import { extractAndStoreInsight, foldNoteIntoMemory, identifySpeakers } from './memory.js';
+import { extractAndStoreInsight, foldNoteIntoMemory, identifySpeakers, renderMemoryForContext } from './memory.js';
 import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 
@@ -1822,6 +1822,10 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   const attachmentParts = await buildGeminiAttachmentParts(input.attachments);
   const hasGeminiAttachments = attachmentParts.some((part) => Boolean(part.fileData));
 
+  // F1' -> summary: inject the user's personal memory as BACKGROUND context so the summary
+  // connects this meeting to their ongoing work. Best-effort (never blocks the summary);
+  // buildSummaryPrompt's GROUNDING RULES forbid it from adding facts absent from the transcript.
+  const personalMemoryContext = await getPersonalMemoryContext(input.userId);
   await updateWorkflowJob(jobId, { stage: 'generating summary', progress: 75 });
   const summaryRaw = await callGeminiWithFallback({
     stage: 'Summarization',
@@ -1841,6 +1845,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
           transcript: transcriptText,
           speakerContext: input.speakerContext,
           globalSummaryContext: transcriptionSettings.summaryContext,
+          personalMemoryContext,
           outputLanguage: input.language,
           hasAttachments: hasGeminiAttachments,
         }),
@@ -1911,6 +1916,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
             transcript: alternateTranscriptText,
             speakerContext: input.speakerContext,
             globalSummaryContext: transcriptionSettings.summaryContext,
+            personalMemoryContext,
             outputLanguage: alternateLanguage,
             hasAttachments: hasGeminiAttachments,
           }),
@@ -1978,6 +1984,23 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     audioDurationSeconds,
     meetingStartAt,
   };
+}
+
+/**
+ * The logged-in user's personal memory as a bounded BACKGROUND context block for the
+ * summary prompt. Best-effort and guaranteed non-throwing: a memory read must never block
+ * or fail a summary. Returns '' when there is no memory, no DB configured, or on any error.
+ */
+async function getPersonalMemoryContext(userId: string | undefined): Promise<string> {
+  if (!userId || !env.supabaseUrl || !env.serviceRoleKey) return '';
+  try {
+    const { data, error } = await supabase.from('user_memory').select('memory').eq('user_id', userId).maybeSingle();
+    if (error || !data) return '';
+    return renderMemoryForContext((data as { memory?: unknown }).memory ?? null);
+  } catch (memoryError) {
+    console.warn(`Personal memory context read failed for user ${userId}:`, memoryError);
+    return '';
+  }
 }
 
 // Post-summary enrichment that does NOT change the returned summary: fold the note

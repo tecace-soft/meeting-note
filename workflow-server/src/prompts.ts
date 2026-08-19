@@ -104,6 +104,7 @@ export function buildSummaryPrompt(input: {
   transcript: string;
   speakerContext?: string;
   globalSummaryContext?: string;
+  personalMemoryContext?: string;
   outputLanguage?: 'en' | 'ko';
   hasAttachments?: boolean;
 }): string {
@@ -112,6 +113,17 @@ export function buildSummaryPrompt(input: {
     : '';
   const globalSummaryContext = input.globalSummaryContext?.trim()
     ? `\nGLOBAL SUMMARY CONTEXT\n'''\n${input.globalSummaryContext.trim()}\n'''\n`
+    : '';
+  // F1' personal memory as BACKGROUND context: the logged-in user's durable, cross-meeting
+  // notes. Used only to connect this meeting to ongoing work; the GROUNDING RULES below
+  // forbid it from adding any fact not in the transcript (fact-drift guard).
+  const personalMemoryContext = input.personalMemoryContext?.trim()
+    ? `\nPERSONAL MEMORY CONTEXT\n'''\n${input.personalMemoryContext.trim()}\n'''\n`
+    : '';
+  // The drift guard is added ONLY when memory is actually injected, so a note with no
+  // personal memory (or a failed read) gets a prompt byte-identical to the pre-F1' one.
+  const personalMemoryRule = input.personalMemoryContext?.trim()
+    ? `\n- Personal memory context is the logged-in user's accumulated memory from PAST meetings. Use it ONLY to connect this meeting to ongoing work: recognize recurring projects, people, and threads, and note genuine continuity or contradiction with what the File Transcript actually says. It must NOT introduce people, decisions, action items, numbers, or any fact that is not present in the File Transcript. If it is irrelevant to this meeting, ignore it completely. Never restate a memory item as a fact of this meeting unless the File Transcript supports it.`
     : '';
 
   const meetingDateLine = input.meetingDate
@@ -171,11 +183,11 @@ SUMMARIZATION RULES
 ${input.summaryRules}
 ${attachmentInstructions}
 ${globalSummaryContext}
-${speakerContext}
+${speakerContext}${personalMemoryContext}
 GROUNDING RULES
 - Base the summary on the File Transcript and, when attached files are provided, the readable/visible content of those attached files.
 - The File Transcript remains the primary source of truth. Attached files are supporting context, but they must be inspected and accounted for when provided.
-- Global summary context may guide terminology, preferred style, company background, and recurring project/product names, but it must not add facts that are absent from the File Transcript.
+- Global summary context may guide terminology, preferred style, company background, and recurring project/product names, but it must not add facts that are absent from the File Transcript.${personalMemoryRule}
 - If the summary needs to mention or reason about the meeting date, use the Meeting date above, not Today's date.
 - Today's date is only the date this summary is being generated.
 - Do not introduce participant names, organizations, decisions, or topics that are not explicitly present in the File Transcript.
