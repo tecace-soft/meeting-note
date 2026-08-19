@@ -96,6 +96,10 @@ final routerProvider = Provider<GoRouter>((ref) {
                   builder: (context, state) => const SpeakerProfilesScreen(),
                 ),
                 GoRoute(
+                  path: 'my-memory',
+                  builder: (context, state) => const MyMemoryScreen(),
+                ),
+                GoRoute(
                   path: 'mcp-setup',
                   builder: (context, state) => const McpSetupScreen(),
                 ),

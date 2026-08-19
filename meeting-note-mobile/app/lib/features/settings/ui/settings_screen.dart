@@ -81,6 +81,16 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
             _SettingsNavCard(
+              title: 'My Memory',
+              subtitle: 'Personal context that builds after each summary',
+              trailing: counts.maybeWhen(
+                data: (data) => '${data.personalMemoryItems}',
+                orElse: () => '',
+              ),
+              onTap: () => context.push('/settings/my-memory'),
+            ),
+            const SizedBox(height: 12),
+            _SettingsNavCard(
               title: 'MCP Setup',
               subtitle: 'ChatGPT and Claude connection',
               trailing: counts.maybeWhen(
@@ -409,6 +419,206 @@ class _SpeakerProfilesScreenState extends ConsumerState<SpeakerProfilesScreen> {
       builder: (context) => _SpeakerEditorSheet(speaker: speaker),
     );
     if (changed == true) _refresh();
+  }
+}
+
+class MyMemoryScreen extends ConsumerStatefulWidget {
+  const MyMemoryScreen({super.key});
+
+  @override
+  ConsumerState<MyMemoryScreen> createState() => _MyMemoryScreenState();
+}
+
+class _MyMemoryScreenState extends ConsumerState<MyMemoryScreen> {
+  late Future<List<SettingsMemoryItem>> _future;
+  bool _confirmingDelete = false;
+  bool _deleting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = ref.read(settingsRepositoryProvider).userMemory();
+  }
+
+  void _refresh() {
+    setState(() {
+      _confirmingDelete = false;
+      _future = ref.read(settingsRepositoryProvider).userMemory();
+    });
+    ref.invalidate(settingsCountsProvider);
+  }
+
+  Future<void> _delete() async {
+    setState(() => _deleting = true);
+    try {
+      await ref.read(settingsRepositoryProvider).clearUserMemory();
+      if (!mounted) return;
+      setState(() {
+        _deleting = false;
+        _confirmingDelete = false;
+        _future = Future.value(const <SettingsMemoryItem>[]);
+      });
+      ref.invalidate(settingsCountsProvider);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not delete your memory.')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return _SettingsSubScaffold(
+      title: 'My Memory',
+      child: FutureBuilder<List<SettingsMemoryItem>>(
+        future: _future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return _ErrorState(
+              title: 'Could not load your memory',
+              error: snapshot.error,
+              onRetry: _refresh,
+            );
+          }
+          final items = snapshot.data ?? const [];
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(22, 18, 22, 34),
+            children: [
+              Text(
+                'Personal context that builds automatically after each meeting summary. '
+                'Read-only, and you can delete it anytime.',
+                style: TextStyle(color: palette.textMuted, fontSize: 13, height: 1.45),
+              ),
+              const SizedBox(height: 20),
+              if (items.isEmpty)
+                const _InfoCard(
+                  title: 'No memory yet',
+                  subtitle: 'It fills in automatically once you summarize a meeting.',
+                )
+              else ...[
+                for (final item in items) ...[
+                  _MemoryItemCard(text: item.text),
+                  const SizedBox(height: 10),
+                ],
+                const SizedBox(height: 14),
+                _DeleteMemoryControl(
+                  confirming: _confirmingDelete,
+                  deleting: _deleting,
+                  onStart: () => setState(() => _confirmingDelete = true),
+                  onCancel: () => setState(() => _confirmingDelete = false),
+                  onConfirm: _delete,
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MemoryItemCard extends StatelessWidget {
+  const _MemoryItemCard({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    return FigmaGlassCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 6, right: 12),
+            width: 6,
+            height: 6,
+            decoration: const BoxDecoration(
+              color: Color(0xFF2F80FF),
+              shape: BoxShape.circle,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(color: palette.text, fontSize: 14, height: 1.45),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeleteMemoryControl extends StatelessWidget {
+  const _DeleteMemoryControl({
+    required this.confirming,
+    required this.deleting,
+    required this.onStart,
+    required this.onCancel,
+    required this.onConfirm,
+  });
+
+  final bool confirming;
+  final bool deleting;
+  final VoidCallback onStart;
+  final VoidCallback onCancel;
+  final Future<void> Function() onConfirm;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    if (!confirming) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: onStart,
+          icon: const Icon(Icons.delete_outline_rounded,
+              size: 18, color: Color(0xFFFF3B3B)),
+          label: const Text(
+            'Delete my memory',
+            style: TextStyle(
+              color: Color(0xFFFF3B3B),
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Delete all your memory? This cannot be undone.',
+          style: TextStyle(color: palette.textSecondary, fontSize: 13),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            FilledButton(
+              onPressed: deleting ? null : () => onConfirm(),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFFF3B3B),
+              ),
+              child: Text(deleting ? 'Deleting…' : 'Delete'),
+            ),
+            const SizedBox(width: 10),
+            TextButton(
+              onPressed: deleting ? null : onCancel,
+              child: Text('Cancel',
+                  style: TextStyle(color: palette.textSecondary)),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }
 

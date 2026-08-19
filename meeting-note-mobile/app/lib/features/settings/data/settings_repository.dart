@@ -85,10 +85,12 @@ Rules:
     final prompts = await summaryPrompts();
     final speakers = await speakerProfiles();
     final tokens = await mcpTokensOrEmpty();
+    final memory = await userMemoryOrEmpty();
     return SettingsCounts(
       summaryPrompts: prompts.length,
       speakerProfiles: speakers.length,
       activeMcpKeys: tokens.where((token) => token.isActive).length,
+      personalMemoryItems: memory.length,
     );
   }
 
@@ -334,6 +336,41 @@ Rules:
     return null;
   }
 
+  // Personal memory (F1'): the per-user memory that folds in after each summary. Read-only
+  // list + delete, mirroring the web UserMemoryView. Scoped to the caller's user_id.
+  Future<List<SettingsMemoryItem>> userMemory() async {
+    final auth = await _supabaseAuth();
+    final response = await _supabase.get<List<dynamic>>(
+      '/user_memory',
+      queryParameters: {
+        'select': 'memory',
+        'user_id': 'eq.${auth.userId}',
+      },
+      options: Options(headers: _supabaseHeaders(auth.token)),
+    );
+    final rows = response.data ?? const [];
+    if (rows.isEmpty) return const [];
+    final first = rows.first;
+    return _memoryItems(first is Map ? first['memory'] : null);
+  }
+
+  Future<List<SettingsMemoryItem>> userMemoryOrEmpty() async {
+    try {
+      return await userMemory();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> clearUserMemory() async {
+    final auth = await _supabaseAuth();
+    await _supabase.delete<void>(
+      '/user_memory',
+      queryParameters: {'user_id': 'eq.${auth.userId}'},
+      options: Options(headers: _supabaseHeaders(auth.token)),
+    );
+  }
+
   Future<List<McpTokenRow>> mcpTokensOrEmpty() async {
     try {
       return await mcpTokens();
@@ -426,11 +463,21 @@ class SettingsCounts {
     required this.summaryPrompts,
     required this.speakerProfiles,
     required this.activeMcpKeys,
+    required this.personalMemoryItems,
   });
 
   final int summaryPrompts;
   final int speakerProfiles;
   final int activeMcpKeys;
+  final int personalMemoryItems;
+}
+
+/// One active personal-memory item (F1'), for the read-only "My Memory" screen.
+class SettingsMemoryItem {
+  const SettingsMemoryItem({required this.id, required this.text});
+
+  final String id;
+  final String text;
 }
 
 class SettingsSummaryPrompt {
@@ -582,6 +629,27 @@ String _speakerProfilesCacheKey(String userId) => 'speaker_profiles_$userId';
 String? _stringValue(Object? value) {
   final text = value?.toString().trim();
   return text == null || text.isEmpty ? null : text;
+}
+
+/// Parse a stored user_memory `memory` value into active items, most-recently-updated
+/// first. Handles only the v2 shape ({version:2, items:[{id,text,status,updatedAt}]});
+/// returns empty for legacy/empty/absent memory (nothing to show).
+List<SettingsMemoryItem> _memoryItems(Object? memory) {
+  if (memory is! Map || memory['version'] != 2) return const [];
+  final items = memory['items'];
+  if (items is! List) return const [];
+  final entries = <MapEntry<String, SettingsMemoryItem>>[];
+  for (final raw in items) {
+    if (raw is! Map) continue;
+    if (raw['status'] == 'archived') continue;
+    final text = _stringValue(raw['text']);
+    if (text == null) continue;
+    final id = _stringValue(raw['id']) ?? 'local-${text.hashCode}';
+    final updatedAt = _stringValue(raw['updatedAt']) ?? '';
+    entries.add(MapEntry(updatedAt, SettingsMemoryItem(id: id, text: text)));
+  }
+  entries.sort((a, b) => b.key.compareTo(a.key));
+  return entries.map((entry) => entry.value).toList();
 }
 
 bool _isDefaultPromptName(String value) =>
