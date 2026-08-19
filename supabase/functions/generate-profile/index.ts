@@ -110,12 +110,24 @@ const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 // O-2: force structurally-valid ontology JSON at the source (OpenAPI subset, same trick
 // note_insight uses). Without it, a large UPDATE could truncate at maxOutputTokens into
 // invalid JSON, which used to fall back to an EMPTY ontology and wipe the saved profile.
-// Bound the output at the SCHEMA level (Gemini hard-enforces maxItems/maxLength, verified
-// 2026-08-18). Without array caps, a heavy speaker (many meetings) made the model emit an
-// ontology larger than maxOutputTokens, which truncated mid-JSON → parse failure → Sync
-// Profile error. maxItems:6 mirrors the terseness rule but is now enforced, not requested.
+// Bound the output at the SCHEMA level. IMPORTANT: Gemini hard-enforces `maxItems` on
+// arrays but IGNORES `maxLength` on strings (verified 2026-08-18/-19 — a maxLength:120
+// field still returns 800+ char strings). So maxItems:6 caps array COUNT, but a heavy
+// speaker's long string fields still bloat the output: 4 arrays × 6 items × several long
+// fields ≈ 50k chars, which overran maxOutputTokens and truncated mid-JSON (finishReason
+// MAX_TOKENS) → parse failure → Sync Profile error. Mitigation is two-sided: enough output
+// headroom to CLOSE the JSON (see maxOutputTokens below) + post-parse clampStr to trim.
 const MAX_ARRAY_ITEMS = 6;
 const MAX_STR_LEN = 120;
+// On a MAX_TOKENS truncation the retry raises the output ceiling AND forces much shorter
+// output (maxLength is unenforced, so the prompt is the only way to shrink string fields).
+const MAX_TOKENS_RETRY_BUDGET = 32768;
+const BREVITY_ESCALATION =
+  'IMPORTANT: your previous response was too long and was cut off before the JSON closed. ' +
+  'Produce a MUCH SHORTER ontology this time: at most 3 items in each array, and every string ' +
+  'field at most 60 characters (a short phrase, never a sentence or paragraph). Keep only the ' +
+  'highest-confidence, most important facts and drop the rest. Returning COMPLETE, valid JSON is ' +
+  'more important than being comprehensive.';
 const CONF = { type: 'NUMBER' } as const;
 const STR = { type: 'STRING', maxLength: MAX_STR_LEN } as const;
 const STR_ARRAY = { type: 'ARRAY', maxItems: MAX_ARRAY_ITEMS, items: { type: 'STRING', maxLength: MAX_STR_LEN } } as const;
@@ -175,7 +187,8 @@ async function callGeminiGenerateContent(
   apiKey: string,
   model: string,
   systemPrompt: string,
-  userPrompt: string
+  userPrompt: string,
+  maxOutputTokens?: number
 ): Promise<{ rawText: string; error?: string; status?: number; finishReason?: string }> {
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
@@ -190,12 +203,13 @@ async function callGeminiGenerateContent(
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       generationConfig: {
         temperature: 0.2,
-        // Headroom above the schema's hard-capped worst case (maxItems:6 + maxLength:120
-        // ≈ up to ~6k tokens if every field is maxed) so a valid ontology always COMPLETES
-        // rather than truncating mid-JSON. thinkingBudget:0 still prevents reasoning-token
-        // runaway; the schema caps prevent array runaway. Billed on actual output, so the
-        // higher ceiling costs nothing for the typical small ontology.
-        maxOutputTokens: 8192,
+        // maxLength is NOT enforced (see ONTOLOGY_SCHEMA note), so a heavy speaker's verbose
+        // string fields can push the JSON well past 8192 tokens and truncate mid-object
+        // (observed: len 50421, finishReason MAX_TOKENS). maxItems:6 still bounds the STRUCTURE,
+        // so the output is large-but-finite; this ceiling gives enough room to always CLOSE the
+        // JSON so it parses (then clampStr trims the long strings). thinkingBudget:0 prevents
+        // reasoning-token runaway. Billed on ACTUAL output, so a small ontology costs the same.
+        maxOutputTokens: maxOutputTokens ?? 24576,
         responseMimeType: 'application/json',
         responseSchema: ONTOLOGY_SCHEMA,
         thinkingConfig: { thinkingBudget: 0 },
@@ -268,17 +282,26 @@ async function callGeminiWithRetryAndFallback(
 
   for (const model of models) {
     const maxAttempts = 3;
+    // Escalation state (reset per model): a MAX_TOKENS truncation means the output overran
+    // the budget, so the NEXT attempt both raises the ceiling and reinforces brevity in the
+    // prompt (maxLength is unenforced, so the prompt is the only lever to shrink strings).
+    let attemptUserPrompt = userPrompt;
+    let attemptBudget: number | undefined = undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const result = await callGeminiGenerateContent(apiKey, model, systemPrompt, userPrompt);
+      const result = await callGeminiGenerateContent(apiKey, model, systemPrompt, attemptUserPrompt, attemptBudget);
       if (!result.error) {
         // O-1/O-2: an HTTP-200 body that is truncated/garbage (unparseable ontology) is
         // retryable — NOT a silent empty success that would wipe the saved profile.
         const parsed = parseOntologyStrict(result.rawText, speakerName, speakerId);
         if (parsed) return { ontology: parsed, model };
-        // finishReason distinguishes a MAX_TOKENS truncation (needs more headroom / tighter
-        // caps) from genuinely malformed content. Schema maxItems now hard-caps array growth.
         lastError = `Ontology output was not valid JSON (model ${model}, len ${result.rawText.length}, finishReason ${result.finishReason ?? 'n/a'}).`;
         lastStatus = 502;
+        // A MAX_TOKENS truncation repeats identically unless we change the request: give the
+        // retry more room AND push the model to write shorter fields / fewer items.
+        if (result.finishReason === 'MAX_TOKENS') {
+          attemptBudget = MAX_TOKENS_RETRY_BUDGET;
+          attemptUserPrompt = `${userPrompt}\n\n${BREVITY_ESCALATION}`;
+        }
         if (attempt < maxAttempts) { await sleep(700 * attempt + Math.floor(Math.random() * 300)); continue; }
         break; // exhausted this model → next model
       }
