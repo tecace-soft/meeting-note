@@ -126,11 +126,12 @@ const TOTAL_TIME_BUDGET_MS = 120_000;
 // input, add enough output headroom to CLOSE the JSON, and post-parse clampStr to trim.
 const MAX_ARRAY_ITEMS = 4;
 const MAX_STR_LEN = 120;
-// The transcript is embedded whole in the prompt. A long meeting (e.g. 2h) makes generation
-// slow and pushes the model toward verbose output — the main driver of the 150s timeout. Cap
-// it so a single Sync Profile call stays comfortably under the platform limit. Keep it roomy
-// enough that a normal meeting is untouched (~10k tokens).
-const MAX_TRANSCRIPT_CHARS = 40000;
+// Generous DEFENSIVE backstop, not a real trim: the timeout is driven by OUTPUT generation
+// (bounded now by the item cap + base-prompt brevity + per-call/total timeouts), NOT by input
+// size — prefill of even a 2h meeting is a few seconds. So keep the whole transcript for real
+// meetings (a 38-min meeting is ~35-45k chars; ~90 min fits here) and only clip a pathological
+// input. Raising this does NOT reintroduce the 150s timeout. ~37k tokens is trivial for lite.
+const MAX_TRANSCRIPT_CHARS = 150000;
 // On a MAX_TOKENS truncation the retry raises the output ceiling AND forces much shorter
 // output (maxLength is unenforced, so the prompt is the only way to shrink string fields).
 const MAX_TOKENS_RETRY_BUDGET = 32768;
