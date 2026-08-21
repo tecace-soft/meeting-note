@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
@@ -325,8 +326,156 @@ class _SummaryTab extends StatelessWidget {
             ),
           ),
         ),
+        _NoteAttachments(noteId: note.id),
         const SizedBox(height: 28),
       ],
+    );
+  }
+}
+
+/// Note attachment gallery (web parity): mobile could attach files at creation but not VIEW
+/// them on a saved note. Loads the note's attachments (signed URLs) and shows images as
+/// tappable thumbnails (full-screen viewer) and other files as chips (open externally).
+class _NoteAttachments extends ConsumerStatefulWidget {
+  const _NoteAttachments({required this.noteId});
+
+  final String noteId;
+
+  @override
+  ConsumerState<_NoteAttachments> createState() => _NoteAttachmentsState();
+}
+
+class _NoteAttachmentsState extends ConsumerState<_NoteAttachments> {
+  late final Future<List<NoteAttachment>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = ref
+        .read(notesRepositoryProvider)
+        .listNoteAttachments(widget.noteId)
+        .catchError((_) => <NoteAttachment>[]); // best-effort: no attachments UI on failure
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
+    return FutureBuilder<List<NoteAttachment>>(
+      future: _future,
+      builder: (context, snapshot) {
+        final items = snapshot.data ?? const <NoteAttachment>[];
+        if (items.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(top: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${t('note.attachments')} (${items.length})',
+                style: TextStyle(color: palette.text, fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [for (final a in items) _AttachmentTile(attachment: a)],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AttachmentTile extends StatelessWidget {
+  const _AttachmentTile({required this.attachment});
+
+  final NoteAttachment attachment;
+
+  void _openImage(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: const EdgeInsets.all(12),
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 4,
+              child: Center(
+                child: Image.network(attachment.url, fit: BoxFit.contain),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.white),
+                onPressed: () => Navigator.of(dialogContext).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openExternal() async {
+    final uri = Uri.tryParse(attachment.url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    if (attachment.isImage) {
+      return GestureDetector(
+        onTap: () => _openImage(context),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.network(
+            attachment.url,
+            width: 84,
+            height: 84,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _fileChip(palette),
+          ),
+        ),
+      );
+    }
+    return GestureDetector(
+      onTap: _openExternal,
+      child: _fileChip(palette),
+    );
+  }
+
+  Widget _fileChip(FigmaPalette palette) {
+    return Container(
+      width: 84,
+      height: 84,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: palette.card,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.insert_drive_file_outlined, color: palette.textMuted, size: 26),
+          const SizedBox(height: 6),
+          Text(
+            attachment.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 10, height: 1.2, color: palette.textSecondary),
+          ),
+        ],
+      ),
     );
   }
 }

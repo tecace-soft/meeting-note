@@ -306,6 +306,7 @@ const Map<String, Map<String, String>> _appStrings = {
   'note.profilesSaved': {'en': 'Speaker profiles saved.', 'ko': '화자 프로필을 저장했습니다.'},
   'note.save': {'en': 'Save', 'ko': '저장'},
   'note.saved': {'en': 'Saved', 'ko': '저장됨'},
+  'note.attachments': {'en': 'Attachments', 'ko': '첨부'},
   'note.editSegment': {'en': 'Edit transcript', 'ko': '발화 편집'},
   'note.editSegmentHint': {'en': 'Edit the spoken text', 'ko': '발화 내용을 편집하세요'},
   'note.editSegmentEmpty': {'en': 'Text cannot be empty.', 'ko': '내용을 비울 수 없습니다.'},

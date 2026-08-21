@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -1190,6 +1191,30 @@ class NotesRepository {
       );
     }
     await _cache.delete(_notesCacheKey(auth.userId));
+    // F5.0 parity: re-extract note_insight from the now-named transcript so action owners /
+    // participants resolve to real names. Fire-and-forget so it never blocks the save.
+    unawaited(_refreshNoteInsight(noteId));
+  }
+
+  /// Best-effort: ask the workflow server to refresh this note's note_insight after a
+  /// diarization change (rename / suggest / text edit). Mirrors the web `refreshNoteInsight`.
+  /// Never throws — the index also refreshes on the next summary regenerate.
+  Future<void> _refreshNoteInsight(String noteId) async {
+    try {
+      if (workflowApiUrl.trim().isEmpty) return;
+      final microsoftToken = await _storage.read(key: AuthTokenStore.accessTokenKey);
+      if (microsoftToken == null || microsoftToken.isEmpty) return;
+      await _workflow.post<void>(
+        '/refresh-note-insight',
+        data: {'noteId': noteId},
+        options: Options(headers: {
+          'content-type': 'application/json',
+          'authorization': 'Bearer $microsoftToken',
+        }),
+      );
+    } catch (_) {
+      // best-effort: never disrupt the editor over an index refresh.
+    }
   }
 
   /// Speaker-suggestion feedback loop (Stage 0): record ONE human speaker decision
@@ -1234,6 +1259,51 @@ class NotesRepository {
     } catch (_) {
       // best-effort telemetry; never surface to the user
     }
+  }
+
+  /// Lists a note's attachments (web parity: mobile could attach at creation but not VIEW
+  /// them on a saved note). Reads the same `note_image` table the web + creation flow write,
+  /// and returns a short-lived signed URL per attachment for display/opening.
+  Future<List<NoteAttachment>> listNoteAttachments(String noteId) async {
+    final auth = await MobileSupabaseSession().auth();
+    final response = await _supabase.get<List<dynamic>>(
+      '/note_image',
+      queryParameters: {
+        'note_id': 'eq.$noteId',
+        'select': 'id,name,mime_type,size_bytes,bucket,storage_path,created_at',
+        'order': 'created_at.asc',
+      },
+      options: Options(headers: _supabaseHeaders(auth.token)),
+    );
+    final out = <NoteAttachment>[];
+    for (final row in response.data ?? const []) {
+      if (row is! Map) continue;
+      final id = _stringValue(row['id']);
+      final path = _stringValue(row['storage_path']);
+      if (id == null || path == null) continue;
+      final bucket = _stringValue(row['bucket']) ?? _noteImageBucket;
+      String? url;
+      try {
+        final signed = await _supabaseRoot.post<Map<String, dynamic>>(
+          '/storage/v1/object/sign/$bucket/${_encodeStoragePath(path)}',
+          data: {'expiresIn': _signedUrlSeconds},
+          options: Options(headers: _supabaseJsonHeaders(auth.token)),
+        );
+        final s = signed.data?['signedURL'] ?? signed.data?['signedUrl'];
+        if (s is String && s.isNotEmpty) url = _absoluteSupabaseStorageUrl(s);
+      } catch (_) {
+        // skip an attachment whose signed URL fails rather than failing the whole list
+      }
+      if (url == null) continue;
+      out.add(NoteAttachment(
+        id: id,
+        name: _stringValue(row['name']) ?? 'attachment',
+        mimeType: _stringValue(row['mime_type']) ?? 'application/octet-stream',
+        sizeBytes: _intValue(row['size_bytes']) ?? 0,
+        url: url,
+      ));
+    }
+    return out;
   }
 
   Future<void> shareNoteWithMicrosoftUser(
@@ -1789,6 +1859,26 @@ class SpeakerSuggestion {
       rationale: _stringValue(json['rationale']) ?? '',
     );
   }
+}
+
+/// One attachment on a saved note (from the `note_image` table), with a short-lived signed
+/// URL for display/opening.
+class NoteAttachment {
+  const NoteAttachment({
+    required this.id,
+    required this.name,
+    required this.mimeType,
+    required this.sizeBytes,
+    required this.url,
+  });
+
+  final String id;
+  final String name;
+  final String mimeType;
+  final int sizeBytes;
+  final String url;
+
+  bool get isImage => mimeType.startsWith('image/');
 }
 
 /// A diarization label is "anonymous" when it is a generic placeholder ("Speaker A",
