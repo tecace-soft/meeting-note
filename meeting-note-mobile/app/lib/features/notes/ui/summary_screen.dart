@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -1499,6 +1501,20 @@ class _SuggestSpeakersSheetState extends ConsumerState<_SuggestSpeakersSheet> {
               : seg)
           .toList();
       await widget.repository.saveDiarization(widget.noteId, next);
+      // Ground-truth log: the human kept these suggestions (feedback loop, Stage 0).
+      for (final s in suggestions) {
+        if (!_selected.contains(s.label)) continue;
+        final name = _appliedName(s);
+        if (name.isEmpty) continue;
+        unawaited(widget.repository.logSpeakerFeedback(
+          noteId: widget.noteId,
+          label: s.label,
+          chosenName: name,
+          chosenSpeakerId: s.speakerId,
+          source: 'suggest_sheet',
+          suggestion: s,
+        ));
+      }
       if (!mounted) return;
       Navigator.of(context).pop(next);
     } catch (error) {
@@ -1824,6 +1840,13 @@ class _SpeakerPickerSheetState extends ConsumerState<_SpeakerPickerSheet> {
         scope: _scope,
       );
       await widget.repository.saveDiarization(widget.noteId, next);
+      // Ground-truth log: human set this anonymous label manually (feedback loop, Stage 0).
+      unawaited(widget.repository.logSpeakerFeedback(
+        noteId: widget.noteId,
+        label: widget.originalSpeaker,
+        chosenName: name,
+        source: 'manual_rename',
+      ));
       if (microsoftId != null && microsoftId.isNotEmpty) {
         await widget.repository.shareNoteWithMicrosoftUser(
           widget.noteId,

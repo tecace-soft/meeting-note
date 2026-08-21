@@ -1192,6 +1192,50 @@ class NotesRepository {
     await _cache.delete(_notesCacheKey(auth.userId));
   }
 
+  /// Speaker-suggestion feedback loop (Stage 0): record ONE human speaker decision
+  /// (what the model SUGGESTED vs what the human CHOSE) as ground truth. Fire-and-forget:
+  /// never throws, so a logging failure can't break the rename the user just made. Only
+  /// logs decisions on ANONYMOUS labels (the actual identification task).
+  Future<void> logSpeakerFeedback({
+    required String? noteId,
+    required String label,
+    required String chosenName,
+    String? chosenSpeakerId,
+    required String source, // 'suggest_sheet' | 'manual_rename'
+    SpeakerSuggestion? suggestion,
+  }) async {
+    try {
+      final chosen = chosenName.trim();
+      if (chosen.isEmpty || !isAnonymousSpeakerLabel(label)) return;
+      final auth = await MobileSupabaseSession().auth();
+      final suggestedName = suggestion?.name;
+      final s = (suggestedName ?? '').trim().toLowerCase();
+      final outcome = s.isEmpty
+          ? 'manual'
+          : (s == chosen.toLowerCase() ? 'accepted' : 'overridden');
+      await _supabase.post<void>(
+        '/speaker_suggestion_feedback',
+        data: {
+          'user_id': auth.userId,
+          'note_id': noteId,
+          'label': label,
+          'suggested_name': suggestedName,
+          'suggested_speaker_id': suggestion?.speakerId,
+          'suggested_confidence': suggestion?.confidence,
+          'suggested_is_self': suggestion?.isSelf,
+          'chosen_name': chosen,
+          'chosen_speaker_id': chosenSpeakerId,
+          'outcome': outcome,
+          'source': source,
+          'client': 'mobile',
+        },
+        options: Options(headers: _supabaseInsertHeaders(auth.token)),
+      );
+    } catch (_) {
+      // best-effort telemetry; never surface to the user
+    }
+  }
+
   Future<void> shareNoteWithMicrosoftUser(
     String noteId,
     String microsoftId,

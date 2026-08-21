@@ -12,6 +12,7 @@ import {
   requestSpeakerSuggestions,
   type SpeakerSuggestion,
 } from '../lib/identifySpeakers';
+import { logSpeakerFeedback } from '../lib/speakerFeedback';
 import { accumulateSpeakerProfile } from '../lib/accumulateSpeakerProfile';
 import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
 import {
@@ -489,6 +490,12 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         else await persistNoteDiarization(noteId, next);
       }
       startTransition(() => { onSegmentsChange(next); });
+      // Ground-truth log: the human kept this suggestion (feedback loop, Stage 0).
+      void logSpeakerFeedback({
+        userId: user?.id, noteId: noteId ?? null, label: suggestion.label,
+        chosenName: suggestion.name, chosenSpeakerId: suggestion.speakerId,
+        source: 'suggest_sheet', suggestion, client: 'web',
+      });
       setSuggestions((prev) => prev?.filter((s) => s.label !== suggestion.label) ?? null);
       void accumulateProfileInBackground(suggestion.name, suggestion.speakerId, next);
       scheduleNoteInsightRefresh(noteId, getAccessToken);
@@ -740,6 +747,14 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       startTransition(() => {
         onSegmentsChange(nextTranscript);
       });
+      // Ground-truth log: human set this label manually (accepted/overridden/manual vs any suggestion).
+      void logSpeakerFeedback({
+        userId: user?.id, noteId: noteId ?? null, label: speakerMenu.originalSpeaker,
+        chosenName, chosenSpeakerId: selectedSpeaker?.id ?? pickedSpeakerId ?? null,
+        source: 'manual_rename',
+        suggestion: suggestions?.find((s) => s.label === speakerMenu.originalSpeaker) ?? null,
+        client: 'web',
+      });
       void accumulateProfileInBackground(chosenName, selectedSpeaker?.id ?? pickedSpeakerId ?? null, nextTranscript);
       scheduleNoteInsightRefresh(noteId, getAccessToken);
       closeSpeakerMenu();
@@ -828,6 +843,14 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
 
       startTransition(() => {
         onSegmentsChange(nextTranscript);
+      });
+      // Ground-truth log: human assigned a Microsoft contact to this label.
+      void logSpeakerFeedback({
+        userId: user?.id, noteId: noteId ?? null, label: speakerMenu.originalSpeaker,
+        chosenName: speakerRow.name, chosenSpeakerId: speakerRow.id,
+        source: 'manual_rename',
+        suggestion: suggestions?.find((s) => s.label === speakerMenu.originalSpeaker) ?? null,
+        client: 'web',
       });
       void accumulateProfileInBackground(speakerRow.name, speakerRow.id, nextTranscript);
       scheduleNoteInsightRefresh(noteId, getAccessToken);

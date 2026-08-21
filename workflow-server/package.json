@@ -15,6 +15,7 @@
     "eval:speaker-ab": "tsx eval/speaker-memory-ab.ts",
     "eval:summary-mem": "tsx eval/summary-memory-check.ts",
     "memory:gc": "tsx scripts/consolidate-memory-gc.ts",
+    "speaker:feedback": "tsx scripts/speaker-feedback-report.ts",
     "typecheck:eval": "tsc -p eval/tsconfig.json",
     "env:check": "node scripts/check-env.mjs"
   },
