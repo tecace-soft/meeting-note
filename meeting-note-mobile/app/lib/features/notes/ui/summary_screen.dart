@@ -433,6 +433,21 @@ class _TranscriptTab extends ConsumerWidget {
               );
               if (next != null) onTranscriptChanged(next);
             },
+            onTextTap: () async {
+              final originalIndex = segments.indexOf(entry.$2);
+              final next = await showModalBottomSheet<List<TranscriptSegment>>(
+                context: context,
+                isScrollControlled: true,
+                showDragHandle: true,
+                builder: (context) => _EditSegmentTextSheet(
+                  noteId: note.id,
+                  segments: segments,
+                  segmentIndex: originalIndex,
+                  repository: ref.read(notesRepositoryProvider),
+                ),
+              );
+              if (next != null) onTranscriptChanged(next);
+            },
           ),
         const SizedBox(height: 28),
       ],
@@ -487,10 +502,12 @@ class _TranscriptRow extends StatelessWidget {
   const _TranscriptRow({
     required this.segment,
     required this.onSpeakerTap,
+    required this.onTextTap,
   });
 
   final TranscriptSegment segment;
   final VoidCallback onSpeakerTap;
+  final VoidCallback onTextTap;
 
   @override
   Widget build(BuildContext context) {
@@ -552,19 +569,158 @@ class _TranscriptRow extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  segment.text,
-                  style: TextStyle(
-                    fontSize: 13,
-                    height: 1.35,
-                    fontWeight: FontWeight.w300,
-                    color: palette.textSecondary,
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onTextTap,
+                  child: Text(
+                    segment.text,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w300,
+                      color: palette.textSecondary,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Edits the TEXT of one transcript segment (web parity: the segment text is read-only on
+/// mobile today — only the speaker label is editable). Saves via the same `saveDiarization`
+/// path as speaker relabeling. No new permissions.
+class _EditSegmentTextSheet extends ConsumerStatefulWidget {
+  const _EditSegmentTextSheet({
+    required this.noteId,
+    required this.segments,
+    required this.segmentIndex,
+    required this.repository,
+  });
+
+  final String noteId;
+  final List<TranscriptSegment> segments;
+  final int segmentIndex;
+  final NotesRepository repository;
+
+  @override
+  ConsumerState<_EditSegmentTextSheet> createState() => _EditSegmentTextSheetState();
+}
+
+class _EditSegmentTextSheetState extends ConsumerState<_EditSegmentTextSheet> {
+  late final TextEditingController _controller;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.segments[widget.segmentIndex].text);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final next = _controller.text.trim();
+    final current = widget.segments[widget.segmentIndex].text.trim();
+    if (next.isEmpty) {
+      setState(() => _error = ref.read(appTextProvider)('note.editSegmentEmpty'));
+      return;
+    }
+    if (next == current) {
+      Navigator.of(context).pop(); // no change
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final updated = List<TranscriptSegment>.from(widget.segments);
+      updated[widget.segmentIndex] =
+          widget.segments[widget.segmentIndex].copyWith(text: next);
+      await widget.repository.saveDiarization(widget.noteId, updated);
+      if (!mounted) return;
+      Navigator.of(context).pop(updated);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = '${ref.read(appTextProvider)('note.failedSaveSegmentEdit')}: $error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = FigmaDesign.of(context);
+    final t = ref.watch(appTextProvider);
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              t('note.editSegment'),
+              style: TextStyle(color: palette.text, fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              minLines: 3,
+              maxLines: 8,
+              textCapitalization: TextCapitalization.sentences,
+              enabled: !_saving,
+              style: TextStyle(color: palette.text, fontSize: 14, height: 1.4),
+              decoration: InputDecoration(
+                hintText: t('note.editSegmentHint'),
+                filled: true,
+                fillColor: palette.card,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: const TextStyle(color: Color(0xFFFF3B3B), fontSize: 12)),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                    child: Text(t('common.cancel')),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: _saving ? null : _save,
+                    child: Text(_saving ? t('note.saving') : t('note.save')),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

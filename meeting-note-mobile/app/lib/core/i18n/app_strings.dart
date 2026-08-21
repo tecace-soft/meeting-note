@@ -306,6 +306,10 @@ const Map<String, Map<String, String>> _appStrings = {
   'note.profilesSaved': {'en': 'Speaker profiles saved.', 'ko': '화자 프로필을 저장했습니다.'},
   'note.save': {'en': 'Save', 'ko': '저장'},
   'note.saved': {'en': 'Saved', 'ko': '저장됨'},
+  'note.editSegment': {'en': 'Edit transcript', 'ko': '발화 편집'},
+  'note.editSegmentHint': {'en': 'Edit the spoken text', 'ko': '발화 내용을 편집하세요'},
+  'note.editSegmentEmpty': {'en': 'Text cannot be empty.', 'ko': '내용을 비울 수 없습니다.'},
+  'note.failedSaveSegmentEdit': {'en': 'Could not save the edit', 'ko': '편집을 저장하지 못했습니다'},
   'note.tecAceDirUnavailable': {
     'en': 'TecAce directory unavailable. Sign out and back in if Microsoft asks for new permissions.',
     'ko': 'TecAce 디렉터리를 사용할 수 없습니다. Microsoft가 새 권한을 요청하면 로그아웃 후 다시 로그인하세요.',
