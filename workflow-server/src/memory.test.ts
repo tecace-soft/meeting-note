@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyConsolidation, parseConsolidationOps, type ConsolidationOp, type MemoryItem } from './memory.js';
+import { applyConsolidation, parseConsolidationOps, parseSuggestions, isNonPersonName, type ConsolidationOp, type MemoryItem } from './memory.js';
 
 function item(id: string, text: string, opts: Partial<MemoryItem> = {}): MemoryItem {
   return {
@@ -99,4 +99,44 @@ test('applyConsolidation with no ops is a no-op', () => {
   const { merged } = applyConsolidation(items, [], 't1');
   assert.equal(merged, 0);
   assert.equal(items.every((i) => i.status === 'active'), true);
+});
+
+// ---- speaker-suggestion garbage guard (issue FB-20260821-70986757) ----
+
+test('isNonPersonName flags echoed labels, placeholders, and the product name', () => {
+  const labels = ['Speaker C', 'Speaker D', 'Speaker E', 'Speaker F'];
+  assert.equal(isNonPersonName('Speaker C', labels), true);   // echoed anonymous label
+  assert.equal(isNonPersonName('Speaker 2', labels), true);   // numeric anonymous label
+  assert.equal(isNonPersonName('Unknown', labels), true);
+  assert.equal(isNonPersonName('Transcript', labels), true);
+  assert.equal(isNonPersonName('meeting note', labels), true); // product name as a person
+  assert.equal(isNonPersonName('Meeting Note', labels), true);
+  assert.equal(isNonPersonName('', labels), true);
+  assert.equal(isNonPersonName('Andrew Yoo', labels), false);
+  assert.equal(isNonPersonName('Hansoo Lee', labels), false);
+});
+
+test('parseSuggestions coerces the reported garbage names (Speaker C->Speaker C, Speaker F->meeting note) to unknown', () => {
+  const labels = ['Speaker C', 'Speaker D', 'Speaker E', 'Speaker F'];
+  const raw = JSON.stringify({ suggestions: [
+    { label: 'Speaker C', speakerId: null, name: 'Speaker C', confidence: 0.8, isSelf: false, rationale: 'x' },
+    { label: 'Speaker D', speakerId: null, name: 'Speaker D', confidence: 0.9, isSelf: false, rationale: 'x' },
+    { label: 'Speaker F', speakerId: null, name: 'meeting note', confidence: 0.7, isSelf: false, rationale: 'x' },
+  ] });
+  const out = parseSuggestions(raw, new Set<string>(), labels);
+  assert.equal(out?.length, 3);
+  assert.equal(out?.every((s) => s.name === null), true); // all coerced to unknown -> UI shows "Unknown", no Apply
+});
+
+test('parseSuggestions keeps a real roster mapping and a genuine new-name suggestion', () => {
+  const labels = ['Speaker A', 'Speaker B'];
+  const raw = JSON.stringify({ suggestions: [
+    { label: 'Speaker A', speakerId: '12', name: 'Andrew Yoo', confidence: 0.85, isSelf: true, rationale: 'x' },
+    { label: 'Speaker B', speakerId: null, name: 'Jin Park', confidence: 0.6, isSelf: false, rationale: 'x' },
+  ] });
+  const out = parseSuggestions(raw, new Set(['12']), labels);
+  assert.deepEqual(out?.map((s) => [s.label, s.speakerId, s.name]), [
+    ['Speaker A', '12', 'Andrew Yoo'],
+    ['Speaker B', null, 'Jin Park'],
+  ]);
 });

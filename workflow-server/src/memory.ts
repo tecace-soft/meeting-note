@@ -661,6 +661,8 @@ Rules:
   - >=0.8 only when a SPECIFIC label has a clear distinguishing signal (direct address, an unambiguous interaction-role match, a name mention).
   - <=0.5 when you can identify the participant SET but the role/text signals do not clearly say WHICH label is which (e.g. two same-domain speakers, weak or conflicting stance signals). Give your best-guess mapping at low confidence so it is offered as a suggestion, NOT auto-applied. A confident WRONG mapping is worse than a tentative one.
 - Never invent a speakerId that is not in the roster.
+- NEVER output an anonymous label itself as the name. If you cannot identify a label's speaker, return speakerId=null AND name=null (unknown) — do NOT echo "Speaker A"/"Speaker B"/"Speaker C" back as the name.
+- Names are real PEOPLE only. NEVER use the meeting/app/product/company/tool name, a project name, or any non-person noun (e.g. "meeting note", "the app") as a person's name; if that is all you have, return unknown.
 - rationale: one short sentence citing the evidence (a quote, the matched interaction role, or the self/roster prior).
 
 Return ONLY JSON of the exact shape:
@@ -674,6 +676,24 @@ Include exactly one object per distinct label given, in the same order.`;
 function clamp01(n: unknown): number {
   if (typeof n !== 'number' || Number.isNaN(n)) return 0;
   return Math.min(1, Math.max(0, n));
+}
+
+// Product/app names that recur in these transcripts and must never be treated as a person.
+// Compared after stripping non-alphanumerics + lowercasing ("Meeting Note" -> "meetingnote").
+// Keep in sync with supabase/functions/identify-speakers/index.ts.
+const NON_PERSON_NAME_TOKENS = new Set(['meetingnote', 'meetingnotes']);
+
+/** A model-returned NAME that is not a real person: an echoed anonymous label ("Speaker C"),
+ *  a generic placeholder ("Unknown"/"Transcript"), one of the labels we asked about, or the
+ *  product/app name. Coerce these to unknown so no bogus identity is suggested/auto-applied. */
+export function isNonPersonName(name: string, requestedLabels: string[]): boolean {
+  const t = name.trim();
+  if (!t) return true;
+  if (/^(speaker|transcript|unknown)\b/i.test(t) || /^speaker\s*#?\s*\d+$/i.test(t)) return true;
+  const lc = t.toLowerCase();
+  if (requestedLabels.some((l) => l.trim().toLowerCase() === lc)) return true;
+  if (NON_PERSON_NAME_TOKENS.has(lc.replace(/[^a-z0-9]/g, ''))) return true;
+  return false;
 }
 
 // A person can accumulate more than one roster entry (e.g. "Andrew Yoo" and "Andrew Yoo (유영준)"
@@ -736,7 +756,7 @@ ${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
 
 // Returns null ONLY for unparseable output (so callJsonModel retries); a parsed-but-empty
 // result is a valid []. Drops any speakerId not in the roster (never trust an invented id).
-function parseSuggestions(rawText: string, validSpeakerIds: Set<string>, requestedLabels: string[]): SpeakerSuggestion[] | null {
+export function parseSuggestions(rawText: string, validSpeakerIds: Set<string>, requestedLabels: string[]): SpeakerSuggestion[] | null {
   const parsed = tryParseJson(rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim());
   if (parsed === undefined) return null;
   const arr = asArray(asObject(parsed).suggestions);
@@ -750,7 +770,10 @@ function parseSuggestions(rawText: string, validSpeakerIds: Set<string>, request
     seen.add(label);
     let speakerId = typeof o.speakerId === 'string' && o.speakerId.trim() ? o.speakerId.trim() : null;
     if (speakerId && !validSpeakerIds.has(speakerId)) speakerId = null;
-    const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
+    let name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
+    // Reject a new-name suggestion (no roster match) whose name is not a real person — an echoed
+    // label or the product name. This is unknown, not an identity: null it so nothing bogus folds.
+    if (name && speakerId === null && isNonPersonName(name, requestedLabels)) name = null;
     out.push({
       label,
       speakerId,
