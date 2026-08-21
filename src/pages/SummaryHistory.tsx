@@ -8,12 +8,10 @@ import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE
 import {
   ArrowsReload01,
   Calendar,
-  Chat,
   Check,
   ChevronLeft,
   ChevronRight,
   CloseMd,
-  Cloud,
   Copy,
   EditPencilLine01,
   Expand,
@@ -31,7 +29,6 @@ import {
 } from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { marked } from 'marked';
 import { Client } from '@microsoft/microsoft-graph-client';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
@@ -56,7 +53,7 @@ import {
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { getNoteImageCounts } from '../lib/noteImages';
-import { getOutlookCalendarEvents, getTeamsChats, sendChatMessage, type OutlookCalendarEvent, type TeamsChat } from '../services/graphService';
+import { getOutlookCalendarEvents, type OutlookCalendarEvent } from '../services/graphService';
 import ShareNoteModal from '../components/ShareNoteModal';
 import NoteImageAttachments from '../components/NoteImageAttachments';
 
@@ -528,15 +525,6 @@ const SummaryHistory: React.FC = () => {
   const [noteSpeakerFilters, setNoteSpeakerFilters] = useState<Record<string, string[]>>({});
   const [noteTranscriptLanguage, setNoteTranscriptLanguage] = useState<Record<string, TranscriptLanguage>>({});
 
-  // Forward to Teams state
-  const [forwardModalNoteId, setForwardModalNoteId] = useState<string | null>(null);
-  const [teamsChats, setTeamsChats] = useState<TeamsChat[]>([]);
-  const [teamsChatsLoading, setTeamsChatsLoading] = useState(false);
-  const [teamsChatsError, setTeamsChatsError] = useState<string | null>(null);
-  const [selectedForwardChatId, setSelectedForwardChatId] = useState<string | null>(null);
-  const [isForwarding, setIsForwarding] = useState(false);
-  const [forwardError, setForwardError] = useState<string | null>(null);
-  const [forwardSuccess, setForwardSuccess] = useState(false);
   const [shareModalNoteId, setShareModalNoteId] = useState<string | null>(null);
 
   // Regenerate summary state
@@ -1897,55 +1885,6 @@ const SummaryHistory: React.FC = () => {
     }
   };
 
-  const handleOpenForwardModal = async (note: Note) => {
-    setOpenNoteMenuId(null);
-    setForwardModalNoteId(note.id);
-    setSelectedForwardChatId(null);
-    setForwardError(null);
-    setForwardSuccess(false);
-    setTeamsChatsLoading(true);
-    setTeamsChatsError(null);
-    try {
-      const token = await getAccessToken();
-      if (!token) throw new Error('No access token');
-      const chats = await getTeamsChats(token);
-      setTeamsChats(chats);
-    } catch (err: unknown) {
-      setTeamsChatsError(err instanceof Error ? err.message : 'Failed to load Teams chats');
-    } finally {
-      setTeamsChatsLoading(false);
-    }
-  };
-
-  const handleForwardSummary = async (note: Note) => {
-    if (!selectedForwardChatId) return;
-    const summaryText = getLocalizedSummary(note, appLanguage);
-    if (!summaryText) return;
-    setIsForwarding(true);
-    setForwardError(null);
-    try {
-      const token = await getAccessToken();
-      if (!token) throw new Error('No access token');
-      const summaryHtml = await marked(summaryText);
-      await sendChatMessage(token, selectedForwardChatId, `<strong>Meeting Note:</strong><br><br>${summaryHtml}`, 'html');
-      const { error: chatIdError } = await supabase
-        .from('note')
-        .update({ chat_id: selectedForwardChatId })
-        .eq('id', note.id);
-      // The Teams message already sent; a failed chat_id write is bookkeeping
-      // only, so log it rather than failing the whole forward.
-      if (chatIdError) console.error('Failed to persist forwarded chat_id:', chatIdError);
-      setForwardSuccess(true);
-      setTimeout(() => {
-        setForwardSuccess(false);
-        setForwardModalNoteId(null);
-      }, 2000);
-    } catch (err: unknown) {
-      setForwardError(err instanceof Error ? err.message : 'Failed to forward summary');
-    } finally {
-      setIsForwarding(false);
-    }
-  };
 
   const handleOpenShareModal = (note: Note) => {
     setOpenNoteMenuId(null);
@@ -2740,15 +2679,7 @@ const SummaryHistory: React.FC = () => {
                               </div>
                             ) : null}
                           </div>
-                          <div className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5" style={{ borderColor: 'var(--border)' }}>
-                            <button type="button" onClick={() => navigate(`/save-summary?note_id=${note.id}`)} className={RESULT_ACTION_BTN_CLASS} title={t('saveToOneDrive')} aria-label={t('saveToOneDrive')}>
-                              <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
-                            </button>
-                            <button type="button" onClick={() => void handleOpenForwardModal(note)} className={RESULT_ACTION_BTN_CLASS} title={t('forwardToTeams')} aria-label={t('forwardToTeams')}>
-                              <Users className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
-                            </button>
+                          <div className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-3 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5" style={{ borderColor: 'var(--border)' }}>
                             <button type="button" onClick={() => handleOpenShareModal(note)} className={RESULT_ACTION_BTN_CLASS} title={t('share')} aria-label={t('share')}>
                               <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
                               <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('share')}</span>
@@ -3252,31 +3183,9 @@ const SummaryHistory: React.FC = () => {
                                           ) : null}
                                         </div>
                                         <div
-                                          className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
+                                          className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-3 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
                                           style={{ borderColor: 'var(--border)' }}
                                         >
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              navigate(`/save-summary?note_id=${note.id}`);
-                                            }}
-                                            className={RESULT_ACTION_BTN_CLASS}
-                                            title={t('saveToOneDrive')}
-                                            aria-label={t('saveToOneDrive')}
-                                          >
-                                            <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => void handleOpenForwardModal(note)}
-                                            className={RESULT_ACTION_BTN_CLASS}
-                                            title={t('forwardToTeams')}
-                                            aria-label={t('forwardToTeams')}
-                                          >
-                                            <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                            <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
-                                          </button>
                                           <button
                                             type="button"
                                             onClick={() => handleOpenShareModal(note)}
@@ -3551,31 +3460,9 @@ const SummaryHistory: React.FC = () => {
                             ) : null}
                           </div>
                           <div
-                            className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-5 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5"
+                            className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-3 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5"
                             style={{ borderColor: 'var(--border)' }}
                           >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                navigate(`/save-summary?note_id=${note.id}`);
-                              }}
-                              className={RESULT_ACTION_BTN_CLASS}
-                              title={t('saveToOneDrive')}
-                              aria-label={t('saveToOneDrive')}
-                            >
-                              <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Save</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleOpenForwardModal(note)}
-                              className={RESULT_ACTION_BTN_CLASS}
-                              title={t('forwardToTeams')}
-                              aria-label={t('forwardToTeams')}
-                            >
-                              <Users className="h-4 w-4 shrink-0" aria-hidden />
-                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>Forward</span>
-                            </button>
                             <button
                               type="button"
                               onClick={() => handleOpenShareModal(note)}
@@ -3743,93 +3630,6 @@ const SummaryHistory: React.FC = () => {
           </div>
         </div>
       )}
-      {/* Forward to Teams modal */}
-      {forwardModalNoteId && (() => {
-        const note = notes.find((n) => n.id === forwardModalNoteId);
-        if (!note) return null;
-        return (
-          <div
-            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-            style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
-            role="presentation"
-            onClick={() => { if (!isForwarding) { setForwardModalNoteId(null); setSelectedForwardChatId(null); } }}
-          >
-            <div
-              role="dialog"
-              aria-modal="true"
-              className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div
-                className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-5"
-                style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
-              >
-                <div>
-                  <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('forwardToTeams')}</h2>
-                  <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    {t('chooseChatForward')}
-                  </p>
-                </div>
-                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label={t('close')}><CloseMd className="h-5 w-5" aria-hidden /></button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-4 py-3 sm:px-5">
-                {teamsChatsLoading ? (
-                  <div className="flex items-center justify-center py-10">
-                    <div className="h-8 w-8 animate-spin rounded-full border-b-2" style={{ borderColor: 'var(--accent)' }} />
-                  </div>
-                ) : teamsChatsError ? (
-                  <p className="text-sm" style={{ color: 'var(--error)' }}>{teamsChatsError}</p>
-                ) : teamsChats.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-10">
-                    <Chat className="mb-3 h-10 w-10" style={{ color: 'var(--text-muted)' }} aria-hidden />
-                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{t('noTeamsChatsFound')}</p>
-                  </div>
-                ) : (
-                  <div className="max-h-[min(50vh,22rem)] overflow-y-auto custom-scrollbar rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                    <div className="space-y-2 p-2">
-                      {teamsChats.filter((c) => c.members && c.members.length > 1).map((chat) => (
-                        <div
-                          key={chat.id}
-                          onClick={() => setSelectedForwardChatId(chat.id === selectedForwardChatId ? null : chat.id)}
-                          className="chat-item flex cursor-pointer items-center gap-4 rounded-lg p-4 transition-all"
-                          style={{ borderColor: chat.id === selectedForwardChatId ? 'var(--accent)' : undefined, backgroundColor: chat.id === selectedForwardChatId ? 'var(--accent-light)' : undefined }}
-                        >
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: chat.id === selectedForwardChatId ? 'var(--accent)' : 'var(--accent-light)' }}>
-                            <Users className="h-5 w-5" style={{ color: chat.id === selectedForwardChatId ? '#fff' : 'var(--accent)' }} aria-hidden />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium" style={{ color: 'var(--text)' }}>
-                              {chat.topic || (chat.members?.filter((m) => m.email?.toLowerCase() !== user?.email?.toLowerCase()).map((m) => m.displayName).join(', ')) || 'Chat'}
-                            </p>
-                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {chat.chatType === 'oneOnOne' ? 'Direct message' : 'Group chat'}
-                              {chat.members && ` • ${chat.members.length} members`}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {forwardError ? <p className="mt-3 text-xs" style={{ color: 'var(--error)' }}>{forwardError}</p> : null}
-              </div>
-              <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3 sm:px-5" style={{ borderColor: 'var(--border)' }}>
-                <button type="button" disabled={isForwarding} onClick={() => setForwardModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t('cancel')}</button>
-                <button
-                  type="button"
-                  disabled={!selectedForwardChatId || isForwarding || forwardSuccess}
-                  onClick={() => void handleForwardSummary(note)}
-                  className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{ backgroundColor: forwardSuccess ? 'var(--success)' : 'var(--accent)', color: '#fff' }}
-                >
-                  {isForwarding ? <><Loading className="h-4 w-4 animate-spin" aria-hidden />{t('sending')}</> : forwardSuccess ? <><Check className="h-4 w-4" aria-hidden />{t('sent')}</> : t('forwardSummary')}
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
       {shareModalNoteId && (() => {
         const note = notes.find((n) => n.id === shareModalNoteId);
         return (
@@ -4167,22 +3967,6 @@ const SummaryHistory: React.FC = () => {
             }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <button
-              type="button"
-              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); navigate(`/save-summary?note_id=${menuNote.id}`); }}
-              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-            >
-              <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-              {t('saveToOneDrive')}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); void handleOpenForwardModal(menuNote); }}
-              className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
-            >
-              <Users className="h-4 w-4 shrink-0" aria-hidden />
-              {t('forwardToTeams')}
-            </button>
             <button
               type="button"
               onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); handleOpenShareModal(menuNote); }}

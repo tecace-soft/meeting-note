@@ -9,7 +9,6 @@ import { msalConfig } from './config/msalConfig';
 import Login from './pages/Login';
 import TranscriptionSummary from './pages/TranscriptionSummary';
 import SummaryHistory from './pages/SummaryHistory';
-import SaveSummary from './pages/SaveSummary';
 import Project from './pages/Project';
 import AccountSettings from './pages/AccountSettings';
 import Issues from './pages/Issues';
@@ -107,7 +106,6 @@ const App: React.FC = () => {
                     <Route path="/transcription-summary" element={<TranscriptionSummary />} />
                     <Route path="/history" element={<SummaryHistory />} />
                     <Route path="/summary-history" element={<Navigate to="/history" replace />} />
-                    <Route path="/save-summary" element={<SaveSummary />} />
                     <Route path="/project" element={<Project />} />
                     <Route path="/account-settings" element={<AccountSettings />} />
                     <Route path="/issues" element={<Issues />} />

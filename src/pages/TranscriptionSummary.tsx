@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback, startTransition } from
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../components/ConfirmDialog';
-import { getTeamsChats, TeamsChat, sendChatMessage } from '../services/graphService';
 import {
   supabase,
   AUDIO_BUCKET,
@@ -18,16 +17,12 @@ import {
 import { ensureStorageObjectReady } from '../lib/storagePublicReady';
 import {
   ArrowsReload01,
-  Chat,
   Check,
   CloseMd,
-  Cloud,
   CloudUpload,
   Copy,
   EditPencilLine01,
-  ListOrdered,
   Loading,
-  MoreVertical,
   Pause,
   Play,
   Save,
@@ -35,13 +30,11 @@ import {
   Stop,
   UserCircle,
   UserVoice,
-  Users,
   VolumeMax,
   Download,
 } from 'react-coolicons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { marked } from 'marked';
 import NoteImageAttachments from '../components/NoteImageAttachments';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
@@ -322,9 +315,6 @@ const TranscriptionSummary: React.FC = () => {
   const uploadProgressGateRef = useRef<Map<string, { pct: number; at: number }>>(new Map());
   const activeUploadsRef = useRef(0);
 
-  const [chats, setChats] = useState<TeamsChat[]>([]);
-  const [chatsLoading, setChatsLoading] = useState(true);
-  const [chatsError, setChatsError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [pendingNoteImages, setPendingNoteImages] = useState<PendingNoteImage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -349,9 +339,6 @@ const TranscriptionSummary: React.FC = () => {
   const resultPlaybackStopAtRef = useRef<number | null>(null);
   const [resultSegmentPlayback, setResultSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
   const [resultPlaybackLoadingSegmentIndex, setResultPlaybackLoadingSegmentIndex] = useState<number | null>(null);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
-  const [isForwarding, setIsForwarding] = useState(false);
-  const [forwardSuccess, setForwardSuccess] = useState(false);
   const [isEditingSummary, setIsEditingSummary] = useState(false);
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
@@ -359,9 +346,7 @@ const TranscriptionSummary: React.FC = () => {
   const generatedTitleInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingGeneratedTitle, setIsEditingGeneratedTitle] = useState(false);
   const [generatedTitleDraft, setGeneratedTitleDraft] = useState('');
-  const [openMenuChatId, setOpenMenuChatId] = useState<string | null>(null);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
-  const [isForwardTeamsModalOpen, setIsForwardTeamsModalOpen] = useState(false);
   const [isShareNoteModalOpen, setIsShareNoteModalOpen] = useState(false);
   const [generatedSharedUserIds, setGeneratedSharedUserIds] = useState<string[]>([]);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -384,20 +369,10 @@ const TranscriptionSummary: React.FC = () => {
   const [recentAudioLoading, setRecentAudioLoading] = useState(false);
   const [recentAudioError, setRecentAudioError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [forwardError, setForwardError] = useState<string | null>(null);
   /** Tailwind `md` is 768px — used to mirror “mobile” layout behavior. */
   const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
   );
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = () => setOpenMenuChatId(null);
-    if (openMenuChatId) {
-      document.addEventListener('click', handleClickOutside);
-      return () => document.removeEventListener('click', handleClickOutside);
-    }
-  }, [openMenuChatId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -555,29 +530,6 @@ const TranscriptionSummary: React.FC = () => {
     },
     [user?.id]
   );
-
-  useEffect(() => {
-    const fetchChats = async () => {
-      if (!isAuthenticated) return;
-
-      try {
-        setChatsLoading(true);
-        setChatsError(null);
-        const token = await getAccessToken();
-        if (token) {
-          const teamsChats = await getTeamsChats(token);
-          setChats(teamsChats);
-        }
-      } catch (error: any) {
-        console.error('Error fetching chats:', error);
-        setChatsError(error.message || 'Failed to load Teams chats');
-      } finally {
-        setChatsLoading(false);
-      }
-    };
-
-    fetchChats();
-  }, [isAuthenticated, getAccessToken]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -1417,23 +1369,6 @@ const TranscriptionSummary: React.FC = () => {
     });
   };
 
-  const getChatDisplayName = (chat: TeamsChat): string => {
-    if (chat.topic) return chat.topic;
-    if (chat.members && chat.members.length > 0) {
-      const userEmail = user?.email?.toLowerCase() || '';
-      const otherMembers = chat.members.filter(m => {
-        const memberEmail = m.email?.toLowerCase() || '';
-        if (!memberEmail) return true;
-        return memberEmail !== userEmail;
-      });
-      
-      if (otherMembers.length > 0) {
-        return otherMembers.map(m => m.displayName).join(', ');
-      }
-    }
-    return chat.chatType === 'oneOnOne' ? 'Direct Message' : 'Group Chat';
-  };
-
   const persistSummaryEdit = async (summaryText: string): Promise<boolean> => {
     if (!currentNoteId) return false;
 
@@ -1508,44 +1443,6 @@ const TranscriptionSummary: React.FC = () => {
       if (!saved) return;
     }
     setIsEditingSummary(false);
-  };
-
-  const handleForwardSummary = async () => {
-    if (!selectedChatId || !editedSummary || !currentNoteId) return;
-    
-    setIsForwarding(true);
-    setForwardSuccess(false);
-    setForwardError(null);
-
-    try {
-      const token = await getAccessToken();
-      if (!token) throw new Error('No access token');
-
-      // Convert markdown to HTML for Teams
-      const summaryHtml = await marked(editedSummary);
-      const message = `<strong>Meeting Note:</strong><br><br>${summaryHtml}`;
-      await sendChatMessage(token, selectedChatId, message, 'html');
-      
-      // Update the note in Supabase with the chat_id
-      const { error: updateError } = await supabase
-        .from('note')
-        .update({ chat_id: selectedChatId })
-        .eq('id', currentNoteId);
-      
-      if (updateError) {
-        console.error('Error updating note with chat_id:', updateError);
-      }
-      
-      setForwardSuccess(true);
-      setIsForwardTeamsModalOpen(false);
-      setOpenMenuChatId(null);
-      setTimeout(() => setForwardSuccess(false), 3000);
-    } catch (error: any) {
-      console.error('Error forwarding summary:', error);
-      setForwardError('Failed to forward summary: ' + (error.message || 'Unknown error'));
-    } finally {
-      setIsForwarding(false);
-    }
   };
 
   const formatTranscriptText = (segments: TranscriptSegment[], language: TranscriptLanguage = transcriptLanguage): string =>
@@ -2806,64 +2703,9 @@ const TranscriptionSummary: React.FC = () => {
                     ) : null}
 
                     <div
-                      className="summary-result-action-row grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-5 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
+                      className="summary-result-action-row grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-3 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
                       style={{ borderColor: 'var(--border)' }}
                     >
-                      <button
-                        type="button"
-                        title={t('saveToOneDrive')}
-                        aria-label={t('saveToOneDrive')}
-                        onClick={() => void (async () => {
-                          const completedFile = uploadedFiles.find((f) => f.status === 'completed' && (f.storagePath || f.publicUrl));
-                          const signedUrl = completedFile?.storagePath
-                            ? await createAudioSignedUrl(completedFile.storagePath, completedFile.bucket || AUDIO_BUCKET)
-                            : completedFile?.publicUrl;
-                          const audioUrl = signedUrl ? encodeURIComponent(signedUrl) : '';
-                          const audioName = completedFile?.name ? encodeURIComponent(completedFile.name) : '';
-                          navigate(`/save-summary?note_id=${currentNoteId}&audio_url=${audioUrl}&audio_name=${audioName}`);
-                        })()}
-                        className={resultActionBtnClass}
-                      >
-                        <Cloud className="h-4 w-4 shrink-0" aria-hidden />
-                        <span className={resultActionBtnLabelClass}>Save</span>
-                      </button>
-                      <button
-                        type="button"
-                        title={
-                          isForwarding
-                            ? t('sending')
-                            : forwardSuccess
-                              ? t('sent')
-                              : t('forwardToTeams')
-                        }
-                        aria-label={
-                          isForwarding
-                            ? t('sending')
-                            : forwardSuccess
-                              ? t('sent')
-                              : t('forwardToTeams')
-                        }
-                        onClick={() => setIsForwardTeamsModalOpen(true)}
-                        disabled={isForwarding}
-                        className={resultActionBtnClass}
-                      >
-                        {isForwarding ? (
-                          <>
-                            <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>{t('sending')}</span>
-                          </>
-                        ) : forwardSuccess ? (
-                          <>
-                            <Check className="h-4 w-4 shrink-0" style={{ color: 'var(--success)' }} aria-hidden />
-                            <span className={resultActionBtnLabelClass}>{t('sent')}</span>
-                          </>
-                        ) : (
-                          <>
-                            <Users className="h-4 w-4 shrink-0" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Forward</span>
-                          </>
-                        )}
-                      </button>
                       <button
                         type="button"
                         title={t('share')}
@@ -2950,210 +2792,6 @@ const TranscriptionSummary: React.FC = () => {
           setResultSegmentPlayback(null);
         }}
       />
-
-      {isForwardTeamsModalOpen && summaryResult && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
-          role="presentation"
-          onClick={() => {
-            if (!isForwarding) setIsForwardTeamsModalOpen(false);
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="forward-teams-title"
-            className="flex max-h-[min(90vh,720px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-5"
-              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
-            >
-              <h2 id="forward-teams-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                {t('forwardToTeams')}
-              </h2>
-              <button
-                type="button"
-                disabled={isForwarding}
-                onClick={() => setIsForwardTeamsModalOpen(false)}
-                className="rounded-md p-2 transition-opacity disabled:opacity-50"
-                style={{ color: 'var(--text-muted)' }}
-                aria-label={t('close')}
-              >
-                <CloseMd className="h-5 w-5" aria-hidden />
-              </button>
-            </div>
-            <p className="shrink-0 px-4 pt-3 text-sm sm:px-5" style={{ color: 'var(--text-secondary)' }}>
-              {t('chooseChatForward')}
-            </p>
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-3 sm:px-5">
-              {chatsLoading ? (
-                <div className="rounded-lg border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
-                  <div
-                    className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-b-2"
-                    style={{ borderColor: 'var(--accent)' }}
-                  />
-                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    {t('loadingTeamsChats')}
-                  </p>
-                </div>
-              ) : chatsError ? (
-                <div className="rounded-lg border p-6" style={{ borderColor: 'var(--border)' }}>
-                  <p className="text-sm font-medium" style={{ color: 'var(--error)' }}>
-                    {chatsError}
-                  </p>
-                  <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {t('teamsPermissionHint')}
-                  </p>
-                </div>
-              ) : chats.length === 0 ? (
-                <div className="rounded-lg border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
-                  <Chat className="mx-auto mb-4 h-12 w-12" style={{ color: 'var(--text-muted)' }} aria-hidden />
-                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    {t('noTeamsChatsFound')}
-                  </p>
-                </div>
-              ) : (
-                <div className="max-h-[min(50vh,22rem)] overflow-y-auto custom-scrollbar rounded-lg border" style={{ borderColor: 'var(--border)' }}>
-                  <div className="space-y-2 p-2">
-                    {chats
-                      .filter((chat) => chat.members && chat.members.length > 1)
-                      .map((chat) => (
-                        <div
-                          key={chat.id}
-                          onClick={() => setSelectedChatId(chat.id === selectedChatId ? null : chat.id)}
-                          className="chat-item flex cursor-pointer items-center gap-4 rounded-lg p-4 transition-all"
-                          style={{
-                            borderColor: chat.id === selectedChatId ? 'var(--accent)' : undefined,
-                            backgroundColor: chat.id === selectedChatId ? 'var(--accent-light)' : undefined,
-                          }}
-                        >
-                          <div
-                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
-                            style={{
-                              backgroundColor: chat.id === selectedChatId ? 'var(--accent)' : 'var(--accent-light)',
-                            }}
-                          >
-                            {chat.chatType === 'oneOnOne' ? (
-                              <Chat
-                                className="h-5 w-5"
-                                style={{ color: chat.id === selectedChatId ? '#fff' : 'var(--accent)' }}
-                                aria-hidden
-                              />
-                            ) : (
-                              <Users
-                                className="h-5 w-5"
-                                style={{ color: chat.id === selectedChatId ? '#fff' : 'var(--accent)' }}
-                                aria-hidden
-                              />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium" style={{ color: 'var(--text)' }}>
-                              {getChatDisplayName(chat)}
-                            </p>
-                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {chat.chatType === 'oneOnOne'
-                                ? 'Direct message'
-                                : chat.chatType === 'group'
-                                  ? 'Group chat'
-                                  : 'Meeting chat'}
-                              {chat.members && ` • ${chat.members.length} members`}
-                              {' • '}
-                              {formatDate(chat.lastMessageDateTime || chat.lastUpdatedDateTime)}
-                            </p>
-                          </div>
-                          <div className="relative shrink-0">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuChatId(openMenuChatId === chat.id ? null : chat.id);
-                              }}
-                              className="chat-menu-icon rounded-md p-2 transition-all"
-                              aria-label="Chat actions"
-                            >
-                              <MoreVertical style={{ width: '22px', height: '22px' }} aria-hidden />
-                            </button>
-
-                            {openMenuChatId === chat.id ? (
-                              <div
-                                className="absolute right-0 top-full z-10 mt-1 min-w-32 rounded-lg py-1 shadow-lg"
-                                style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOpenMenuChatId(null);
-                                    navigate(`/history?chat_id=${encodeURIComponent(chat.id)}`);
-                                  }}
-                                  className="chat-menu-item flex w-full items-center gap-2 px-4 py-2 text-sm transition-all"
-                                >
-                                  <ListOrdered className="h-4 w-4" aria-hidden />
-                                  History
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOpenMenuChatId(null);
-                                    if (chat.webUrl) window.open(chat.webUrl, '_blank');
-                                  }}
-                                  className="chat-menu-item flex w-full items-center gap-2 px-4 py-2 text-sm transition-all"
-                                >
-                                  <Chat className="h-4 w-4" aria-hidden />
-                                  Chat
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div
-              className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t px-4 py-3 sm:px-5"
-              style={{ borderColor: 'var(--border)' }}
-            >
-              {forwardError ? (
-                <p className="mr-auto text-sm" style={{ color: 'var(--error)' }}>
-                  {forwardError}
-                </p>
-              ) : null}
-              <button
-                type="button"
-                disabled={isForwarding}
-                onClick={() => setIsForwardTeamsModalOpen(false)}
-                className="rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
-                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-              >
-                {t('cancel')}
-              </button>
-              <button
-                type="button"
-                disabled={!selectedChatId || isForwarding || !editedSummary.trim()}
-                onClick={() => void handleForwardSummary()}
-                className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-              >
-                {isForwarding ? (
-                  <>
-                    <Loading className="h-4 w-4 animate-spin" aria-hidden />
-                    {t('sending')}
-                  </>
-                ) : (
-                  t('forwardSummary')
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <ShareNoteModal
         isOpen={isShareNoteModalOpen}
@@ -3536,7 +3174,6 @@ const TranscriptionSummary: React.FC = () => {
                   setGeneratedTitleDraft('');
                   setCurrentNoteId(null);
                   setResultsTab('summary');
-                  setIsForwardTeamsModalOpen(false);
                   setShowDiscardModal(false);
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium transition-all"

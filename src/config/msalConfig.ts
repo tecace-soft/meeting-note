@@ -48,25 +48,19 @@ export const msalConfig: Configuration = {
   },
 };
 
-// Scopes needed for MS Teams chat access and OneDrive
+// Minimal scopes: sign-in + directory read (speaker roster) + calendar (meeting brief).
+// Teams-chat and OneDrive export were removed (rarely used; team decision 2026-08-21), so
+// their Chat.*/Files.* scopes are no longer requested — keeps consent to the minimum.
 export const loginRequest = {
   scopes: [
     'User.Read',
-    'Chat.Read',
-    'Chat.ReadWrite',
-    'ChatMessage.Read',
-    'Files.ReadWrite',
-    'Files.ReadWrite.All',
     'User.ReadBasic.All',
     'Calendars.Read',
   ],
 };
 
-// Graph API scopes for accessing Teams data and OneDrive
+// Graph API scopes by feature.
 export const graphScopes = {
-  chats: ['Chat.Read', 'Chat.ReadWrite'],
-  messages: ['ChatMessage.Read'],
   user: ['User.Read', 'User.ReadBasic.All'],
-  files: ['Files.ReadWrite', 'Files.ReadWrite.All'],
   calendar: ['Calendars.Read'],
 };
