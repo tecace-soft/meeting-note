@@ -107,18 +107,30 @@ const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
 const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-3.1-flash-lite'];
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 
+// Supabase kills a request idle for 150s (observed IDLE_TIMEOUT on a heavy speaker). Bound our
+// own time well under that: abort any single Gemini call, and stop starting new attempts once
+// the total budget is spent, so we ALWAYS return a clean error instead of the platform killing us.
+const GEMINI_CALL_TIMEOUT_MS = 55_000;
+const TOTAL_TIME_BUDGET_MS = 120_000;
+
 // O-2: force structurally-valid ontology JSON at the source (OpenAPI subset, same trick
 // note_insight uses). Without it, a large UPDATE could truncate at maxOutputTokens into
 // invalid JSON, which used to fall back to an EMPTY ontology and wipe the saved profile.
 // Bound the output at the SCHEMA level. IMPORTANT: Gemini hard-enforces `maxItems` on
 // arrays but IGNORES `maxLength` on strings (verified 2026-08-18/-19 — a maxLength:120
-// field still returns 800+ char strings). So maxItems:6 caps array COUNT, but a heavy
-// speaker's long string fields still bloat the output: 4 arrays × 6 items × several long
-// fields ≈ 50k chars, which overran maxOutputTokens and truncated mid-JSON (finishReason
-// MAX_TOKENS) → parse failure → Sync Profile error. Mitigation is two-sided: enough output
-// headroom to CLOSE the JSON (see maxOutputTokens below) + post-parse clampStr to trim.
-const MAX_ARRAY_ITEMS = 6;
+// field still returns 800+ char strings). So maxItems caps array COUNT, but a heavy
+// speaker's long string fields still bloat the output, which used to overrun maxOutputTokens
+// and truncate mid-JSON (MAX_TOKENS) → retry → the two slow calls stacked past Supabase's
+// 150s request limit (IDLE_TIMEOUT). Fix is layered: keep the item cap LOW (4, hard-enforced),
+// bake brevity into the base prompt so the FIRST attempt is small + fast, cap the transcript
+// input, add enough output headroom to CLOSE the JSON, and post-parse clampStr to trim.
+const MAX_ARRAY_ITEMS = 4;
 const MAX_STR_LEN = 120;
+// The transcript is embedded whole in the prompt. A long meeting (e.g. 2h) makes generation
+// slow and pushes the model toward verbose output — the main driver of the 150s timeout. Cap
+// it so a single Sync Profile call stays comfortably under the platform limit. Keep it roomy
+// enough that a normal meeting is untouched (~10k tokens).
+const MAX_TRANSCRIPT_CHARS = 40000;
 // On a MAX_TOKENS truncation the retry raises the output ceiling AND forces much shorter
 // output (maxLength is unenforced, so the prompt is the only way to shrink string fields).
 const MAX_TOKENS_RETRY_BUDGET = 32768;
@@ -188,12 +200,20 @@ async function callGeminiGenerateContent(
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  maxOutputTokens?: number
+  maxOutputTokens?: number,
+  timeoutMs: number = GEMINI_CALL_TIMEOUT_MS
 ): Promise<{ rawText: string; error?: string; status?: number; finishReason?: string }> {
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const res = await fetch(url, {
+  // Abort a call that hangs so the retry loop stays inside the total time budget. Gemini is
+  // non-streaming here, so `fetch` resolves only after generation finishes — the slow part.
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs));
+  let res: Response;
+  try {
+    res = await fetch(url, {
     method: 'POST',
+    signal: controller.signal,
     headers: {
       'Content-Type': 'application/json',
       'x-goog-api-key': apiKey,
@@ -205,7 +225,7 @@ async function callGeminiGenerateContent(
         temperature: 0.2,
         // maxLength is NOT enforced (see ONTOLOGY_SCHEMA note), so a heavy speaker's verbose
         // string fields can push the JSON well past 8192 tokens and truncate mid-object
-        // (observed: len 50421, finishReason MAX_TOKENS). maxItems:6 still bounds the STRUCTURE,
+        // (observed: len 50421, finishReason MAX_TOKENS). The item cap still bounds the STRUCTURE,
         // so the output is large-but-finite; this ceiling gives enough room to always CLOSE the
         // JSON so it parses (then clampStr trims the long strings). thinkingBudget:0 prevents
         // reasoning-token runaway. Billed on ACTUAL output, so a small ontology costs the same.
@@ -216,6 +236,18 @@ async function callGeminiGenerateContent(
       },
     }),
   });
+  } catch (err) {
+    clearTimeout(abortTimer);
+    const timedOut = err instanceof Error && err.name === 'AbortError';
+    return {
+      rawText: '',
+      error: timedOut
+        ? `Gemini call exceeded ${timeoutMs}ms and was aborted.`
+        : `Gemini request failed: ${err instanceof Error ? err.message : String(err)}`,
+      status: 504, // retryable, but the caller's total-time budget stops the loop
+    };
+  }
+  clearTimeout(abortTimer);
 
   const responseBody = await res.text();
   let data: GeminiGenerateContentResponse;
@@ -279,7 +311,9 @@ async function callGeminiWithRetryAndFallback(
   const models = parseFallbackModels(primaryModel);
   let lastError = 'Gemini profile generation failed after retries and fallback models.';
   let lastStatus = 502;
+  const start = Date.now();
 
+  outer:
   for (const model of models) {
     const maxAttempts = 3;
     // Escalation state (reset per model): a MAX_TOKENS truncation means the output overran
@@ -288,7 +322,14 @@ async function callGeminiWithRetryAndFallback(
     let attemptUserPrompt = userPrompt;
     let attemptBudget: number | undefined = undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const result = await callGeminiGenerateContent(apiKey, model, systemPrompt, attemptUserPrompt, attemptBudget);
+      // Stop before we blow the total budget (else Supabase kills us at 150s with IDLE_TIMEOUT).
+      const remaining = TOTAL_TIME_BUDGET_MS - (Date.now() - start);
+      if (remaining <= 5_000) {
+        lastError = `Sync Profile timed out after ${Math.round((Date.now() - start) / 1000)}s (heavy speaker/transcript). Try again.`;
+        lastStatus = 504;
+        break outer;
+      }
+      const result = await callGeminiGenerateContent(apiKey, model, systemPrompt, attemptUserPrompt, attemptBudget, Math.min(GEMINI_CALL_TIMEOUT_MS, remaining));
       if (!result.error) {
         // O-1/O-2: an HTTP-200 body that is truncated/garbage (unparseable ontology) is
         // retryable — NOT a silent empty success that would wipe the saved profile.
@@ -636,6 +677,7 @@ Rules:
 - If a field is unknown, use an empty string, empty array, or set the containing object's confidence to 0.0.
 - Include every "confidence" field shown in the structure for professional_context and each array item.
 - Keep the ontology compact and useful for downstream meeting notes.
+- Be BRIEF: at most 3 items in each array (keep only the most important, highest-confidence facts and drop the rest), and every string field a short phrase of at most 80 characters, never a sentence or paragraph. A short, COMPLETE ontology is better than a long one.
 - Output valid JSON only. Do not output markdown.
 - Output ONLY the keys in the required structure below. Never output summary_for_meeting_context or any other extra key.
 
@@ -663,6 +705,7 @@ Rules:
 - Use only information that is explicitly stated or strongly supported.
 - Do not add sensitive personal information.
 - Keep the ontology compact and useful for downstream meeting notes.
+- Be BRIEF: at most 3 items in each array (merge/drop to keep only the most important, highest-confidence facts), and every string field a short phrase of at most 80 characters, never a sentence or paragraph. A short, COMPLETE ontology is better than a long one.
 - Output valid JSON only. Do not output markdown.
 - Output ONLY the keys in the required structure below. Never output summary_for_meeting_context or any other extra key, even if it appeared in the existing ontology.
 - Refresh confidence scores on merge: each object's confidence should reflect current transcript support for that block.
@@ -748,10 +791,13 @@ serve(async (req) => {
       }
     }
 
+    // Cap the transcript so a long meeting can't push a single call past the 150s limit.
+    const cappedTranscript = transcriptText.slice(0, MAX_TRANSCRIPT_CHARS);
+
     const systemPrompt = existingOntologyJson ? UPDATE_PROFILE_SYSTEM : NEW_PROFILE_SYSTEM;
     const userPrompt = existingOntologyJson
-      ? buildUpdateProfilePrompt(speakerName, resolvedSpeakerId, existingOntologyJson, transcriptText, currentDate)
-      : buildNewProfilePrompt(speakerName, resolvedSpeakerId, transcriptText, currentDate);
+      ? buildUpdateProfilePrompt(speakerName, resolvedSpeakerId, existingOntologyJson, cappedTranscript, currentDate)
+      : buildNewProfilePrompt(speakerName, resolvedSpeakerId, cappedTranscript, currentDate);
 
     const geminiResult = await callGeminiWithRetryAndFallback(apiKey, model, systemPrompt, userPrompt, speakerName, resolvedSpeakerId);
     // O-1: on failure return an ERROR (not an empty ontology). The client then throws and
