@@ -103,6 +103,12 @@ class SettingsScreen extends ConsumerWidget {
               ),
               onTap: () => context.push('/settings/mcp-setup'),
             ),
+            const SizedBox(height: 12),
+            _SettingsNavCard(
+              title: t('settings.issues'),
+              subtitle: t('settings.issuesSub'),
+              onTap: () => context.push('/settings/issues'),
+            ),
             const SizedBox(height: 28),
             Center(
               child: TextButton(

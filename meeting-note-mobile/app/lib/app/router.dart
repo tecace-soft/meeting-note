@@ -7,6 +7,7 @@ import '../features/auth/ui/sign_in_screen.dart';
 import '../features/notes/ui/history_screen.dart';
 import '../features/notes/ui/new_note_screen.dart';
 import '../features/notes/ui/processing_screen.dart';
+import '../features/issues/ui/issues_screen.dart';
 import '../features/notes/ui/summary_screen.dart';
 import '../features/projects/ui/projects_screen.dart';
 import '../features/record/ui/record_screen.dart';
@@ -102,6 +103,10 @@ final routerProvider = Provider<GoRouter>((ref) {
                 GoRoute(
                   path: 'mcp-setup',
                   builder: (context, state) => const McpSetupScreen(),
+                ),
+                GoRoute(
+                  path: 'issues',
+                  builder: (context, state) => const IssuesScreen(),
                 ),
               ],
             ),
