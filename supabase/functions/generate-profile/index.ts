@@ -97,20 +97,26 @@ interface RequestBody {
   existingProfile?: string | null;
 }
 
-/** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
-// gemini-2.0-* were RETIRED (verified 404 2026-08-18: "no longer available") — their
-// presence here meant any failover chain ended on a dead model, surfacing a confusing
-// "gemini-2.0-flash is no longer available" 404 to the user on Sync Profile. LITE-ONLY
-// for cost (no gemini-2.5-flash — too expensive): primary stays gemini-2.5-flash-lite,
-// fallback is the other live lite model.
-const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-3.1-flash-lite'];
+/** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-3.1-flash-lite`. */
+// PRIMARY is gemini-3.1-flash-lite: with the nested ONTOLOGY_SCHEMA, gemini-2.5-flash-lite
+// INTERMITTENTLY HANGS in the Supabase edge runtime (the diarization/identify twin dropped its
+// responseSchema for exactly this reason), which burned the whole retry budget and surfaced as
+// a 150s IDLE_TIMEOUT / our 120s clean timeout. 3.1-flash-lite returns cleanly in ~2-3s WITH the
+// schema (measured against real transcripts). 2.5-flash-lite stays as the fallback. LITE-ONLY
+// for cost (no gemini-2.5-flash). gemini-2.0-* are RETIRED (404) — do not add them back.
+const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
+// Include 3.1-flash-lite in the fallback list too, so that even if a GEMINI_MODEL secret pins
+// the primary to the hang-prone 2.5-flash-lite, the chain still reaches the reliable 3.1 after
+// the timeout-advance (parseFallbackModels dedupes, so listing it twice is harmless).
+const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 // Supabase kills a request idle for 150s (observed IDLE_TIMEOUT on a heavy speaker). Bound our
 // own time well under that: abort any single Gemini call, and stop starting new attempts once
 // the total budget is spent, so we ALWAYS return a clean error instead of the platform killing us.
-const GEMINI_CALL_TIMEOUT_MS = 55_000;
+// Keep the per-call timeout tight: a healthy call is ~2-3s, so 30s is generous, and a HUNG call
+// (2.5-flash-lite + schema) is abandoned fast enough to still reach the working fallback in budget.
+const GEMINI_CALL_TIMEOUT_MS = 30_000;
 const TOTAL_TIME_BUDGET_MS = 120_000;
 
 // O-2: force structurally-valid ontology JSON at the source (OpenAPI subset, same trick
@@ -203,7 +209,7 @@ async function callGeminiGenerateContent(
   userPrompt: string,
   maxOutputTokens?: number,
   timeoutMs: number = GEMINI_CALL_TIMEOUT_MS
-): Promise<{ rawText: string; error?: string; status?: number; finishReason?: string }> {
+): Promise<{ rawText: string; error?: string; status?: number; finishReason?: string; timedOut?: boolean }> {
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   // Abort a call that hangs so the retry loop stays inside the total time budget. Gemini is
@@ -245,7 +251,8 @@ async function callGeminiGenerateContent(
       error: timedOut
         ? `Gemini call exceeded ${timeoutMs}ms and was aborted.`
         : `Gemini request failed: ${err instanceof Error ? err.message : String(err)}`,
-      status: 504, // retryable, but the caller's total-time budget stops the loop
+      status: 504,
+      timedOut, // a hung model: the caller advances to the fallback instead of retrying it
     };
   }
   clearTimeout(abortTimer);
@@ -350,6 +357,10 @@ async function callGeminiWithRetryAndFallback(
 
       lastError = result.error;
       lastStatus = result.status ?? 502;
+      // A TIMEOUT means this model is hung (e.g. 2.5-flash-lite on the nested schema): retrying
+      // the SAME model just burns 3× the timeout and never reaches the working fallback. Advance
+      // to the next model immediately.
+      if (result.timedOut) break;
       const retryable = typeof result.status === 'number' && RETRYABLE_GEMINI_STATUSES.has(result.status);
       if (!retryable) break;
       if (attempt < maxAttempts) {
