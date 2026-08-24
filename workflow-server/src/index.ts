@@ -2650,6 +2650,16 @@ async function autoIdentifySpeakersAtIngest(input: {
   const anonLabels = Array.from(new Set(segments.map((s) => s.speaker).filter((name) => /^speaker\s/i.test(name))));
   if (anonLabels.length === 0) return;
 
+  // Single-speaker note = the owner's own recording, so the one voice IS the self. Name it
+  // deterministically instead of asking the model, which abstains on a context-free monologue
+  // (no vocatives / self-intro / interaction-role signals to reason from). Skips the Gemini
+  // call entirely. Needs the owner's name; without it we leave the label for a manual rename.
+  if (anonLabels.length === 1) {
+    if (!selfName?.trim()) return;
+    await applyNamedSpeakers(noteId, userId, segments, new Map([[anonLabels[0], selfName.trim()]]));
+    return;
+  }
+
   const { data: rosterRows } = await supabase.from('speaker').select('id, name, profile').eq('user_id', userId);
   const roster = ((rosterRows ?? []) as Array<{ id: string | number; name: string; profile: string | null }>)
     .filter((r) => r.name)
@@ -2684,12 +2694,23 @@ async function autoIdentifySpeakersAtIngest(input: {
     if (name && s.confidence >= AUTO_IDENTIFY_CONFIDENCE) nameByLabel.set(s.label, name);
   }
   if (nameByLabel.size === 0) return;
+  await applyNamedSpeakers(noteId, userId, segments, nameByLabel);
+}
 
+// Apply resolved speaker names to a note's diarization and re-extract note_insight from the
+// named transcript (so owners/participants resolve to real people). Shared by the ingest
+// auto-identify paths (single-speaker self-naming + multi-speaker identification).
+async function applyNamedSpeakers(
+  noteId: string,
+  userId: string,
+  segments: TranscriptSegment[],
+  nameByLabel: Map<string, string>,
+): Promise<void> {
+  if (nameByLabel.size === 0) return;
   const namedSegments = segments.map((seg) => {
     const name = nameByLabel.get(seg.speaker);
     return name ? { ...seg, speaker: name } : seg;
   });
-
   const { error: updateError } = await supabase.from('note').update({ diarization: namedSegments }).eq('id', noteId);
   if (updateError) {
     console.warn(`Diarization update failed for note ${noteId}: ${updateError.message}`);
@@ -2703,7 +2724,7 @@ async function autoIdentifySpeakersAtIngest(input: {
     transcript: formatTranscriptText(namedSegments, 'original'),
     speakerContext: buildSpeakerContextFromSegments(namedSegments),
   });
-  console.log(`Auto-identified ${nameByLabel.size}/${anonLabels.length} speakers for note ${noteId}: ${Array.from(nameByLabel.values()).join(', ')}`);
+  console.log(`Auto-named ${nameByLabel.size} speaker(s) for note ${noteId}: ${Array.from(nameByLabel.values()).join(', ')}`);
 }
 
 // F5.0: re-extract note_insight for a note from its NAMED diarization, so action owners
