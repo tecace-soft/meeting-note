@@ -47,6 +47,7 @@ class NewNoteScreen extends ConsumerStatefulWidget {
 class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   late final TextEditingController _title;
   final _instructions = TextEditingController();
+  final _peopleCount = TextEditingController();
   SummaryPrompt? _prompt;
   late String? _audioPath;
   late final List<String> _attachmentPaths;
@@ -67,6 +68,7 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   void dispose() {
     _title.dispose();
     _instructions.dispose();
+    _peopleCount.dispose();
     super.dispose();
   }
 
@@ -140,6 +142,15 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                       minHeight: 84,
                       maxLines: 3,
                       hintText: t('newNote.instructionsHint'),
+                    ),
+                    const SizedBox(height: 23),
+                    _FieldLabel(t('newNote.peopleCountLabel')),
+                    const SizedBox(height: 8),
+                    _FigmaTextField(
+                      controller: _peopleCount,
+                      minHeight: 51,
+                      keyboardType: TextInputType.number,
+                      hintText: t('newNote.peopleCountHint'),
                     ),
                     const SizedBox(height: 23),
                     _FieldLabel(t('newNote.summaryPromptLabel')),
@@ -484,6 +495,10 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
               : _instructions.text.trim(),
           promptId: selectedPrompt.id,
           userName: user?.displayName,
+          maxSpeakers: () {
+            final n = int.tryParse(_peopleCount.text.trim());
+            return (n != null && n >= 1) ? n : null;
+          }(),
           attachmentPaths: [..._attachmentPaths],
         ),
       );
@@ -655,12 +670,14 @@ class _FigmaTextField extends StatelessWidget {
     required this.minHeight,
     this.maxLines = 1,
     this.hintText,
+    this.keyboardType,
   });
 
   final TextEditingController controller;
   final double minHeight;
   final int maxLines;
   final String? hintText;
+  final TextInputType? keyboardType;
 
   @override
   Widget build(BuildContext context) {
@@ -675,6 +692,7 @@ class _FigmaTextField extends StatelessWidget {
       child: TextField(
         controller: controller,
         maxLines: maxLines,
+        keyboardType: keyboardType,
         style: TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w400,

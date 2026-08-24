@@ -323,6 +323,10 @@ const TranscriptionSummary: React.FC = () => {
   const [summaryPromptsLoading, setSummaryPromptsLoading] = useState(true);
   /** Optional free-text instructions; separate from the saved summarization template (`promptId`). */
   const [optionalInstructions, setOptionalInstructions] = useState('');
+  // Optional "how many people were present" hint. Kept as a string so the field can be
+  // empty (no hint). Sent as maxSpeakers = a HARD upper limit on diarization speaker labels
+  // so one person is not over-split into several. Empty/invalid → omitted (auto-detect).
+  const [peopleCount, setPeopleCount] = useState<string>('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summaryProgress, setSummaryProgress] = useState<{ stage: string; progress: number } | null>(null);
   const [summaryResult, setSummaryResult] = useState<SummaryResultState | null>(null);
@@ -1266,6 +1270,9 @@ const TranscriptionSummary: React.FC = () => {
         noteId,
         language: appLanguage,
         attachments: summaryAttachments,
+        ...(Number.isFinite(Number(peopleCount)) && Number(peopleCount) >= 1
+          ? { maxSpeakers: Math.trunc(Number(peopleCount)) }
+          : {}),
       };
 
       const response = await fetch(`${WORKFLOW_API_URL}/summarize-audio/jobs`, {
@@ -2262,6 +2269,30 @@ const TranscriptionSummary: React.FC = () => {
                       }}
                       disabled={isSummarizing}
                       aria-label="Optional additional instructions"
+                    />
+                  </div>
+                  <div className="flex min-w-0 w-full flex-col md:w-auto md:max-w-full md:shrink-0">
+                    <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
+                      {t('peopleCountLabel')}
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={26}
+                      step={1}
+                      inputMode="numeric"
+                      value={peopleCount}
+                      onChange={(e) => setPeopleCount(e.target.value)}
+                      placeholder={t('peopleCountPlaceholder')}
+                      className="box-border h-10 w-full min-w-0 rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60 md:w-28"
+                      style={{
+                        backgroundColor: 'var(--bg-secondary)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text)',
+                      }}
+                      disabled={isSummarizing}
+                      aria-label={t('peopleCountLabel')}
+                      title={t('peopleCountHint')}
                     />
                   </div>
                   <div className="flex min-w-0 w-full flex-col md:w-auto md:max-w-full md:shrink-0">

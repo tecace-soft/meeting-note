@@ -35,6 +35,7 @@ interface SummarizeAudioRequest {
   speakerContext?: unknown;
   attachments?: unknown;
   language?: unknown;
+  maxSpeakers?: unknown;
 }
 
 interface TranscriptionTestRequest {
@@ -557,6 +558,17 @@ function parseRegenerateSummaryInput(body: RegenerateSummaryRequest): {
   };
 }
 
+// Parse the optional "people present" hint into a bounded speaker-label cap. Accepts a
+// number or a numeric string (multipart fields arrive as strings). AssemblyAI labels
+// speakers A..Z, so 26 is the ceiling; anything <1 or unparseable → null (no hint).
+function parseMaxSpeakers(raw: unknown): number | null {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return null;
+  const cap = Math.trunc(n);
+  if (cap < 1) return null;
+  return Math.min(cap, 26);
+}
+
 function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
   const meetingAt = typeof body.meetingAt === 'string' && body.meetingAt.trim()
     ? new Date(body.meetingAt)
@@ -582,6 +594,7 @@ function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
     speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
     attachments: parseSummaryAttachments(body.attachments),
     language: body.language === 'ko' ? 'ko' : 'en',
+    maxSpeakers: parseMaxSpeakers(body.maxSpeakers),
   };
 }
 
@@ -658,6 +671,10 @@ interface SummarizeAudioInput {
   speakerContext: string;
   attachments: SummaryAttachmentInput[];
   language: 'en' | 'ko';
+  // Optional hint: the number of PEOPLE present, used as a HARD UPPER LIMIT on speaker
+  // labels (AssemblyAI speaker_options.max_speakers_expected) to stop diarization from
+  // over-splitting one person into several labels. Null = no hint (auto-detect, legacy).
+  maxSpeakers: number | null;
 }
 
 interface SummarizeAudioResult {
@@ -1206,6 +1223,7 @@ async function transcribeWithAssembly(input: {
   noteId: string;
   userId: string;
   settings: TranscriptionSettings;
+  maxSpeakers?: number | null;
 }): Promise<{ segments: TranscriptSegment[]; latencyMs: number; audioDurationSeconds: number | null; detectedLanguage: 'en' | 'ko' | null }> {
   if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
   const startedAt = performance.now();
@@ -1220,6 +1238,13 @@ async function transcribeWithAssembly(input: {
   if (input.settings.customSpelling.length > 0) {
     submitBody.custom_spelling = input.settings.customSpelling;
   }
+  // Cap the speaker labels at the number of people present (a HARD upper limit), so
+  // diarization cannot over-split one person into several labels. Not "exact": fewer
+  // speakers than people (a silent attendee) is still fine. Only applied when the client
+  // sent the hint; otherwise AssemblyAI auto-detects as before.
+  if (typeof input.maxSpeakers === 'number' && input.maxSpeakers >= 1) {
+    submitBody.speaker_options = { max_speakers_expected: input.maxSpeakers };
+  }
   console.log('AssemblyAI transcript submit config:', JSON.stringify({
     speech_models: submitBody.speech_models,
     languageSettings: 'none',
@@ -1228,6 +1253,7 @@ async function transcribeWithAssembly(input: {
     translationMatchOriginalUtterance: false,
     hasKeytermsPrompt: Array.isArray(submitBody.keyterms_prompt) && submitBody.keyterms_prompt.length > 0,
     customSpellingCount: Array.isArray(submitBody.custom_spelling) ? submitBody.custom_spelling.length : 0,
+    maxSpeakersHint: input.maxSpeakers ?? null,
   }));
   const createResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
@@ -1787,6 +1813,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     noteId: input.noteId,
     userId: input.userId,
     settings: transcriptionSettings,
+    maxSpeakers: input.maxSpeakers,
   });
   if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
   const transcriptText = formatTranscriptText(segments, 'original');
@@ -2176,6 +2203,7 @@ async function createAndroidRecordingJob(req: IncomingMessage, res: ServerRespon
       speakerContext: '',
       attachments: [],
       language: upload.fields.language === 'ko' ? 'ko' : 'en',
+      maxSpeakers: parseMaxSpeakers(upload.fields.maxSpeakers),
     };
     const { data, error } = await supabase.from('workflow_job').insert({
       user_id: tokenUserId,

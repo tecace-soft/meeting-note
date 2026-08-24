@@ -245,6 +245,7 @@ class NotesRepository {
     String? instructions,
     String? promptId,
     String? userName,
+    int? maxSpeakers,
     List<String> attachmentPaths = const [],
   }) async {
     final microsoftToken =
@@ -284,6 +285,9 @@ class NotesRepository {
         'noteId': resolvedNoteId,
         'language': appLanguage,
         'attachments': attachments,
+        // Optional hint: people present, used as a HARD upper limit on speaker labels so
+        // diarization does not over-split one person. Omitted when not provided.
+        if (maxSpeakers != null && maxSpeakers >= 1) 'maxSpeakers': maxSpeakers,
       };
       final requestOptions = Options(
         headers: {
