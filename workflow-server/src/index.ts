@@ -2641,10 +2641,18 @@ async function autoIdentifySpeakersAtIngest(input: {
     return;
   }
 
-  // Auto-apply only high-confidence, named suggestions. isSelf resolves to the owner name.
+  // Auto-apply ONLY the self identification at ingest. A backtest over real labeled meetings
+  // (eval/speaker-backtest.ts) showed non-self suggestions at conf>=0.8 are ~14-25% correct
+  // (the confidence signal is nearly meaningless for non-self), so silently stamping them
+  // wrong-labels most speakers and corrupts downstream owner attribution. Restricting
+  // auto-apply to self cut wrong auto-applies 22->8 and lifted precision 37%->50% on the
+  // same model output. Non-self names are NOT lost: the Suggest sheet still pre-checks
+  // confident guesses for one-tap USER confirmation (human-in-the-loop). Self is the owner's
+  // own label via a reliable self prior, so a rare miss is immediately obvious to them.
   const nameByLabel = new Map<string, string>();
   for (const s of identified.suggestions) {
-    const name = s.isSelf && selfName?.trim() ? selfName.trim() : s.name;
+    if (!s.isSelf) continue;
+    const name = selfName?.trim() ? selfName.trim() : s.name;
     if (name && s.confidence >= AUTO_IDENTIFY_CONFIDENCE) nameByLabel.set(s.label, name);
   }
   if (nameByLabel.size === 0) return;

@@ -13,6 +13,7 @@
     "eval:stability": "tsx eval/stability.ts",
     "eval:inspect": "tsx eval/inspect.ts",
     "eval:speaker-ab": "tsx eval/speaker-memory-ab.ts",
+    "eval:speaker-backtest": "tsx eval/speaker-backtest.ts",
     "eval:summary-mem": "tsx eval/summary-memory-check.ts",
     "memory:gc": "tsx scripts/consolidate-memory-gc.ts",
     "speaker:feedback": "tsx scripts/speaker-feedback-report.ts",
