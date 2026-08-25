@@ -13,7 +13,7 @@ import { calculateGeminiUsageCost } from './costs.js';
 import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
-import { extractAndStoreInsight, foldNoteIntoMemory, identifySpeakers, renderMemoryForContext } from './memory.js';
+import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryForContext } from './memory.js';
 import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 
@@ -2632,12 +2632,16 @@ function buildSpeakerContextFromSegments(segments: TranscriptSegment[]): string 
   return `Meeting participants (the transcript's speaker labels are these real names): ${names.join(', ')}.`;
 }
 
-// F5.1: at ingest, auto-identify anonymous speakers from context (text signals + the
-// owner's saved-speaker roster) and apply ONLY high-confidence names to the diarization,
-// then refresh note_insight from the named transcript so owners/people resolve without any
-// manual rename. Conservative: it does NOT re-fold personal memory (the memory fold above
-// kept the generic labels, so a misidentification can't corrupt memory). Best-effort.
-const AUTO_IDENTIFY_CONFIDENCE = 0.8;
+// F5.1: at ingest, auto-name speakers ONLY in the reliable SINGLE-speaker case (a solo
+// recording = the owner's own voice, named deterministically below). Multi-speaker self
+// auto-apply was REMOVED 2026-08-25: a read-only measurement (eval/self-autoapply-precision.ts)
+// found it only ~60% precise at conf>=0.8-0.9 with NO safe note-size bucket, so ~40% of the time
+// it stamped a TEAMMATE's label as the owner and corrupted note_insight owner attribution (the
+// "wrong-self" error class, root-caused via eval/speaker-diagnose.ts — the one confusion type a
+// self-only policy does NOT protect against). Multi-speaker naming is now human-in-the-loop via
+// the Suggest sheet (client-side identify, self guess pre-checked for one-tap confirmation).
+// Re-extracts note_insight from the named transcript; does NOT re-fold personal memory (the fold
+// above kept generic labels, so a misID can't corrupt memory). Best-effort.
 
 async function autoIdentifySpeakersAtIngest(input: {
   noteId: string;
@@ -2660,41 +2664,10 @@ async function autoIdentifySpeakersAtIngest(input: {
     return;
   }
 
-  const { data: rosterRows } = await supabase.from('speaker').select('id, name, profile').eq('user_id', userId);
-  const roster = ((rosterRows ?? []) as Array<{ id: string | number; name: string; profile: string | null }>)
-    .filter((r) => r.name)
-    // speaker.id is an integer PK → a NUMBER at runtime; stringify so the returned speakerId
-    // validates against the roster (an unstringified number gets nulled in parseSuggestions).
-    .map((r) => ({ speakerId: String(r.id), name: r.name, summary: r.profile ?? '' }));
-
-  const identified = await identifySpeakers({
-    apiKey: env.geminiApiKey,
-    transcript: formatTranscriptText(segments, 'original'),
-    labels: anonLabels,
-    roster,
-    selfName,
-  });
-  if ('error' in identified) {
-    console.warn(`Speaker identify failed for note ${noteId}: ${identified.error}`);
-    return;
-  }
-
-  // Auto-apply ONLY the self identification at ingest. A backtest over real labeled meetings
-  // (eval/speaker-backtest.ts) showed non-self suggestions at conf>=0.8 are ~14-25% correct
-  // (the confidence signal is nearly meaningless for non-self), so silently stamping them
-  // wrong-labels most speakers and corrupts downstream owner attribution. Restricting
-  // auto-apply to self cut wrong auto-applies 22->8 and lifted precision 37%->50% on the
-  // same model output. Non-self names are NOT lost: the Suggest sheet still pre-checks
-  // confident guesses for one-tap USER confirmation (human-in-the-loop). Self is the owner's
-  // own label via a reliable self prior, so a rare miss is immediately obvious to them.
-  const nameByLabel = new Map<string, string>();
-  for (const s of identified.suggestions) {
-    if (!s.isSelf) continue;
-    const name = selfName?.trim() ? selfName.trim() : s.name;
-    if (name && s.confidence >= AUTO_IDENTIFY_CONFIDENCE) nameByLabel.set(s.label, name);
-  }
-  if (nameByLabel.size === 0) return;
-  await applyNamedSpeakers(noteId, userId, segments, nameByLabel);
+  // Multi-speaker note: do NOT auto-identify or auto-apply "self" at ingest (see the header
+  // comment for the measured rationale — ~60% precision, no safe note-size bucket, ~40%
+  // wrong-self corruption). The Suggest sheet handles multi-speaker naming with the user in the
+  // loop. This also skips a Gemini identify call whose only ingest purpose was the self apply.
 }
 
 // Apply resolved speaker names to a note's diarization and re-extract note_insight from the
