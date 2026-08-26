@@ -237,7 +237,6 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
             instructions: job.instructions,
             promptId: job.promptId,
             userName: job.userName,
-            maxSpeakers: job.maxSpeakers,
             attachmentPaths: job.attachmentPaths,
           );
       if (!mounted) return;
@@ -421,7 +420,6 @@ class PendingProcessingJob {
     required this.promptId,
     this.instructions,
     this.userName,
-    this.maxSpeakers,
     this.attachmentPaths = const [],
   });
 
@@ -435,7 +433,6 @@ class PendingProcessingJob {
   final String promptId;
   final String? instructions;
   final String? userName;
-  final int? maxSpeakers;
   final List<String> attachmentPaths;
 }
 

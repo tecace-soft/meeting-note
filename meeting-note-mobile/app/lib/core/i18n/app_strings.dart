@@ -260,8 +260,6 @@ const Map<String, Map<String, String>> _appStrings = {
   'newNote.titleLabel': {'en': 'Title', 'ko': '제목'},
   'newNote.instructionsLabel': {'en': 'Instructions (optional)', 'ko': '지시사항 (선택)'},
   'newNote.instructionsHint': {'en': 'e.g. Focus on action items, summarize in Korean', 'ko': '예: 액션 아이템 중심으로, 한국어로 요약'},
-  'newNote.peopleCountLabel': {'en': 'People present (optional)', 'ko': '참석 인원 (선택)'},
-  'newNote.peopleCountHint': {'en': 'e.g. 5 — caps detected speakers so one person is not split', 'ko': '예: 5 — 감지 화자 수 상한 (한 사람이 쪼개지는 것 방지)'},
   'newNote.summaryPromptLabel': {'en': 'Summary prompt', 'ko': '요약 프롬프트'},
   'newNote.loadingPrompts': {'en': 'Loading prompts...', 'ko': '프롬프트 불러오는 중...'},
   'newNote.chooseSummaryPrompt': {'en': 'Choose summary prompt', 'ko': '요약 프롬프트 선택'},
