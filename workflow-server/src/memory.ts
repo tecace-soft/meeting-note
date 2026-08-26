@@ -492,7 +492,12 @@ export async function callJsonModel<T>(input: {
   parse: (text: string) => T | null;
   maxOutputTokens?: number;
   responseSchema?: unknown;
+  // Thinking budget. Default (undefined) = 0 (prod: all budget to the JSON, no reasoning
+  // tokens). A NEGATIVE value = OMIT thinkingConfig so the model decides for itself — needed
+  // for models that REJECT thinkingBudget:0 with a 400 (e.g. gemini-3.5-flash-lite). Eval-only.
+  thinkingBudget?: number;
 }): Promise<{ value: T; model: string } | { error: string }> {
+  const thinkingBudget = input.thinkingBudget === undefined ? 0 : (input.thinkingBudget < 0 ? undefined : input.thinkingBudget);
   let lastError = 'no models attempted';
   for (const model of input.models) {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt += 1) {
@@ -503,10 +508,11 @@ export async function callJsonModel<T>(input: {
           parts: [{ text: `${input.systemPrompt}\n\n${input.userPrompt}` }],
           responseMimeType: 'application/json',
           responseSchema: input.responseSchema,
-          // thinkingBudget 0 → all output budget goes to the JSON.
+          // thinkingBudget 0 (default) → all output budget goes to the JSON; undefined here
+          // (negative input) omits thinkingConfig for models that reject 0.
           maxOutputTokens: input.maxOutputTokens ?? 8192,
           temperature: 0.1,
-          thinkingBudget: 0,
+          thinkingBudget,
         });
         const parsed = input.parse(result.text);
         if (parsed !== null) return { value: parsed, model };
@@ -802,6 +808,8 @@ export async function identifySpeakers(input: {
   // F8 A/B experiment only. Prod leaves this undefined → prompt unchanged. When set, the
   // user's durable personal memory is injected as an extra identification prior.
   personalMemory?: string | null;
+  // Eval-only thinking override (see callJsonModel). Prod leaves undefined → thinkingBudget 0.
+  thinkingBudget?: number;
 }): Promise<{ suggestions: SpeakerSuggestion[] } | { error: string }> {
   const labels = Array.from(new Set(input.labels.map((l) => l.trim()).filter(Boolean))).slice(0, MAX_IDENTIFY_LABELS);
   if (labels.length === 0) return { suggestions: [] };
@@ -813,6 +821,7 @@ export async function identifySpeakers(input: {
     systemPrompt: IDENTIFY_SYSTEM_PROMPT,
     userPrompt: buildIdentifyUserPrompt(input.transcript.trim(), labels, roster, input.selfName ?? null, input.personalMemory ?? null),
     parse: (text) => parseSuggestions(text, validIds, labels),
+    thinkingBudget: input.thinkingBudget,
   });
   if ('error' in out) return { error: out.error };
   return { suggestions: out.value };

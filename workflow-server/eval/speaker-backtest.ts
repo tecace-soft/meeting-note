@@ -65,6 +65,13 @@ const RUNS = clampInt(process.env.BACKTEST_RUNS, 1, 1, 10);
 const SCAN_LIMIT = clampInt(process.env.BACKTEST_SCAN_LIMIT, 500, 50, 5000);
 const ROSTER_MODE = ((process.env.BACKTEST_ROSTER || 'both').trim().toLowerCase()) as 'full' | 'excluded' | 'both';
 const BEFORE_DATE = (process.env.BACKTEST_BEFORE_DATE || '').trim() || null;
+// When set, ISOLATE one model (no fallback chain) so the run measures THAT model alone — the
+// model-comparison A/B. Empty = prod default chain (resolveModels' primary + fallbacks).
+const MODEL = (process.env.BACKTEST_MODEL || '').trim() || null;
+// Thinking override for the isolated model. Unset = prod behavior (thinkingBudget 0). Set to
+// -1 to OMIT thinkingConfig (let the model think) for models that reject 0 (gemini-3.5-flash-lite).
+const THINK = process.env.BACKTEST_THINKING_BUDGET !== undefined && process.env.BACKTEST_THINKING_BUDGET !== ''
+  ? Number(process.env.BACKTEST_THINKING_BUDGET) : null;
 const CONF_BUCKETS = [0.5, 0.6, 0.7, 0.8, 0.9, 1.01]; // right-open edges
 
 // Auto-apply policies compared on identical model output. A policy returns the name to
@@ -161,7 +168,12 @@ const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 async function collectRecords(c: BacktestCase, apiKey: string, roster: SpeakerRosterEntry[], selfName: string | null): Promise<LabelRecord[]> {
   const out: LabelRecord[] = [];
   for (let i = 0; i < RUNS; i += 1) {
-    const res = await identifySpeakers({ apiKey, transcript: c.transcript, labels: c.labels, roster, selfName });
+    // MODEL set → isolate that one model (fallbackModels:[] so resolveModels returns just it).
+    const res = await identifySpeakers({
+      apiKey, transcript: c.transcript, labels: c.labels, roster, selfName,
+      ...(MODEL ? { model: MODEL, fallbackModels: [] } : {}),
+      ...(THINK !== null && Number.isFinite(THINK) ? { thinkingBudget: THINK } : {}),
+    });
     if ('error' in res) {
       // A failed call = the model produced nothing → every label is an abstain.
       for (const label of c.labels) out.push({ conf: 0, isSelf: false, suggestedName: null, expectedName: c.expected.get(label) ?? null });
@@ -249,7 +261,7 @@ async function main(): Promise<void> {
     : await discoverUsers(db);
 
   process.stdout.write(`\nSPEAKER-ID BACKTEST — replay identify over real labeled meetings\n`);
-  process.stdout.write(`users=${users.length}  notes/user<=${NOTES_PER_USER}  min-named=${MIN_NAMED}  runs=${RUNS}  roster=${ROSTER_MODE}${BEFORE_DATE ? `  before=${BEFORE_DATE}` : ''}\n\n`);
+  process.stdout.write(`users=${users.length}  notes/user<=${NOTES_PER_USER}  min-named=${MIN_NAMED}  runs=${RUNS}  roster=${ROSTER_MODE}  model=${MODEL ?? 'prod-chain'}  thinking=${THINK === null ? '0(prod)' : (THINK < 0 ? 'model-decides' : THINK)}${BEFORE_DATE ? `  before=${BEFORE_DATE}` : ''}\n\n`);
 
   const doFull = ROSTER_MODE === 'full' || ROSTER_MODE === 'both';
   const doExcl = ROSTER_MODE === 'excluded' || ROSTER_MODE === 'both';
@@ -329,9 +341,10 @@ async function main(): Promise<void> {
 
   mkdirSync(RESULTS_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const snapPath = join(RESULTS_DIR, `speaker-backtest-${stamp}.json`);
+  const modelTag = MODEL ? `-${MODEL.replace(/[^a-z0-9.]/gi, '_')}` : '';
+  const snapPath = join(RESULTS_DIR, `speaker-backtest${modelTag}-${stamp}.json`);
   writeFileSync(snapPath, JSON.stringify({
-    params: { NOTES_PER_USER, MIN_NAMED, RUNS, ROSTER_MODE, BEFORE_DATE },
+    params: { NOTES_PER_USER, MIN_NAMED, RUNS, ROSTER_MODE, BEFORE_DATE, MODEL },
     aggregate: { full: fullProd, excluded: exclProd },
     calibration: calib.map((c, i) => ({ bucket: `${CONF_BUCKETS[i]}-${CONF_BUCKETS[i + 1]}`, ...c })),
     policies: policyRows.map((r) => ({ key: r.key, precision: r.s.precision, recall: r.s.recall, applied: r.applied, wrongApplied: r.s.fp })),
