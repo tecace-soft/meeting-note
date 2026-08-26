@@ -51,6 +51,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { identifySpeakers, type SpeakerRosterEntry, type SpeakerSuggestion } from '../src/memory.js';
+import { gateSuggestionsWithAnchors } from '../src/speakerAnchors.js';
 import { containsMatch } from './lib/scoring.js';
 import { norm } from './lib/util.js';
 
@@ -165,8 +166,13 @@ function scoreUnder(records: LabelRecord[], policy: Policy): PRF {
 
 const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 
-async function collectRecords(c: BacktestCase, apiKey: string, roster: SpeakerRosterEntry[], selfName: string | null): Promise<LabelRecord[]> {
-  const out: LabelRecord[] = [];
+// Paired anchor A/B: identify ONCE per run, then score the SAME model output both raw (off) and
+// through the deterministic evidence-anchor layer (on). Pairing removes model stochasticity from
+// the comparison AND halves the Gemini calls vs two separate runs.
+interface ArmRecords { off: LabelRecord[]; on: LabelRecord[] }
+
+async function collectRecords(c: BacktestCase, apiKey: string, roster: SpeakerRosterEntry[], selfName: string | null): Promise<ArmRecords> {
+  const out: ArmRecords = { off: [], on: [] };
   for (let i = 0; i < RUNS; i += 1) {
     // MODEL set → isolate that one model (fallbackModels:[] so resolveModels returns just it).
     const res = await identifySpeakers({
@@ -174,14 +180,30 @@ async function collectRecords(c: BacktestCase, apiKey: string, roster: SpeakerRo
       ...(MODEL ? { model: MODEL, fallbackModels: [] } : {}),
       ...(THINK !== null && Number.isFinite(THINK) ? { thinkingBudget: THINK } : {}),
     });
-    if ('error' in res) {
-      // A failed call = the model produced nothing → every label is an abstain.
-      for (const label of c.labels) out.push({ conf: 0, isSelf: false, suggestedName: null, expectedName: c.expected.get(label) ?? null });
-      continue;
-    }
-    out.push(...toRecords(res.suggestions, c, selfName));
+    // A failed call = the model produced nothing → toRecords yields an abstain for every label,
+    // identically for both arms (the anchor layer over [] is still []).
+    const raw: SpeakerSuggestion[] = 'error' in res ? [] : res.suggestions;
+    const anchored = gateSuggestionsWithAnchors(raw, c.transcript, c.labels, roster, selfName);
+    out.off.push(...toRecords(raw, c, selfName));
+    out.on.push(...toRecords(anchored, c, selfName));
   }
   return out;
+}
+
+// Suggestion quality for the NON-SELF picks the user is actually shown (the boss's complaint is
+// about garbage SUGGESTIONS, not auto-apply, which is already self-only). precision = of non-self
+// names shown at/above the display floor, the fraction correct. confident-WRONG = non-self names
+// asserted at >=0.8 that are wrong — the number the anchor layer must drive DOWN.
+interface SuggQuality { shown: number; correct: number; precision: number; confShown: number; confWrong: number }
+function suggestionQuality(records: LabelRecord[], floor = 0.5): SuggQuality {
+  let shown = 0, correct = 0, confShown = 0, confWrong = 0;
+  for (const r of records) {
+    if (r.isSelf || !r.suggestedName) continue;
+    const right = !!r.expectedName && containsMatch(r.expectedName, r.suggestedName);
+    if (r.conf >= floor) { shown += 1; if (right) correct += 1; }
+    if (r.conf >= 0.8) { confShown += 1; if (!right) confWrong += 1; }
+  }
+  return { shown, correct, precision: shown ? correct / shown : 1, confShown, confWrong };
 }
 
 async function loadRoster(db: SupabaseClient, userId: string): Promise<SpeakerRosterEntry[]> {
@@ -266,9 +288,10 @@ async function main(): Promise<void> {
   const doFull = ROSTER_MODE === 'full' || ROSTER_MODE === 'both';
   const doExcl = ROSTER_MODE === 'excluded' || ROSTER_MODE === 'both';
 
-  const fullRecords: LabelRecord[] = [];
-  const exclRecords: LabelRecord[] = [];
+  const full: ArmRecords = { off: [], on: [] };
+  const excl: ArmRecords = { off: [], on: [] };
   const perUser: Array<{ userId: string; basis: string; cases: number; full: PRF | null; excl: PRF | null }> = [];
+  const prodPolicy = POLICIES[0].apply;
 
   for (const userId of users) {
     const cases = await loadUserCases(db, userId);
@@ -276,17 +299,16 @@ async function main(): Promise<void> {
     const roster = await loadRoster(db, userId);
     const { name: selfName, basis } = resolveSelfName(userId, cases, pinned);
 
-    const uFull: LabelRecord[] = [];
-    const uExcl: LabelRecord[] = [];
+    const uFull: ArmRecords = { off: [], on: [] };
+    const uExcl: ArmRecords = { off: [], on: [] };
     for (const c of cases) {
-      if (doFull) uFull.push(...await collectRecords(c, apiKey, roster, selfName));
-      if (doExcl) uExcl.push(...await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName));
+      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName); uFull.off.push(...r.off); uFull.on.push(...r.on); }
+      if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName); uExcl.off.push(...r.off); uExcl.on.push(...r.on); }
     }
-    fullRecords.push(...uFull);
-    exclRecords.push(...uExcl);
-    const prodPolicy = POLICIES[0].apply;
-    const f = doFull ? scoreUnder(uFull, prodPolicy) : null;
-    const e = doExcl ? scoreUnder(uExcl, prodPolicy) : null;
+    full.off.push(...uFull.off); full.on.push(...uFull.on);
+    excl.off.push(...uExcl.off); excl.on.push(...uExcl.on);
+    const f = doFull ? scoreUnder(uFull.off, prodPolicy) : null;
+    const e = doExcl ? scoreUnder(uExcl.off, prodPolicy) : null;
     perUser.push({ userId, basis, cases: cases.length, full: f, excl: e });
     process.stdout.write(
       `• ${userId.slice(0, 8)}…  self=${basis}  cases=${cases.length}  ` +
@@ -295,20 +317,35 @@ async function main(): Promise<void> {
     );
   }
 
-  // ---- Aggregate under the prod policy (micro-avg over all labels) ----
-  const fullProd = scoreUnder(fullRecords, POLICIES[0].apply);
-  const exclProd = doExcl ? scoreUnder(exclRecords, POLICIES[0].apply) : null;
+  // ---- ANCHOR A/B: aggregate under the prod policy, off vs on (micro-avg over all labels) ----
   process.stdout.write('\n──────────────────────────────────────────────────────────────\n');
-  process.stdout.write(`AGGREGATE under prod policy (micro-avg over ${perUser.length} users)\n`);
-  if (doFull) process.stdout.write(`  full roster (prod today):   acc ${pct(fullProd.accuracy)}  recall ${pct(fullProd.recall)}  precision ${pct(fullProd.precision)}\n`);
-  if (exclProd) process.stdout.write(`  meeting excluded (general): acc ${pct(exclProd.accuracy)}  recall ${pct(exclProd.recall)}  precision ${pct(exclProd.precision)}\n`);
-  if (doFull && exclProd) {
-    const gap = (fullProd.recall - exclProd.recall) * 100;
-    process.stdout.write(`  roster contribution (recall gap): ${gap >= 0 ? '+' : ''}${gap.toFixed(1)}pt\n`);
+  process.stdout.write(`ANCHOR A/B — deterministic evidence-anchor layer OFF vs ON (${perUser.length} users)\n`);
+  const line = (tag: string, s: PRF) => `  ${tag.padEnd(26)} acc ${pct(s.accuracy)}  recall ${pct(s.recall)}  precision ${pct(s.precision)}\n`;
+  if (doFull) {
+    process.stdout.write('full roster (prod today):\n');
+    process.stdout.write(line('OFF (raw model)', scoreUnder(full.off, prodPolicy)));
+    process.stdout.write(line('ON  (anchored)', scoreUnder(full.on, prodPolicy)));
   }
+  if (doExcl) {
+    process.stdout.write('meeting excluded (general):\n');
+    process.stdout.write(line('OFF (raw model)', scoreUnder(excl.off, prodPolicy)));
+    process.stdout.write(line('ON  (anchored)', scoreUnder(excl.on, prodPolicy)));
+  }
+  process.stdout.write('  GATE: self recall must NOT drop OFF→ON (the anchor layer never touches the self path).\n');
 
-  // ---- Calibration (full arm — reproduces the live over-confidence signal) ----
-  const src = doFull ? fullRecords : exclRecords;
+  // ---- SUGGESTION QUALITY (non-self) — the headline the anchor layer targets ----
+  process.stdout.write('\nSUGGESTION QUALITY (non-self picks shown to the user)\n');
+  process.stdout.write('arm / anchors     shown(>=0.5)  precision   confident(>=0.8)  confident-WRONG\n');
+  const sqRow = (tag: string, q: SuggQuality) =>
+    `${tag.padEnd(18)}${String(q.shown).padStart(9)}   ${pct(q.precision).padStart(7)}   ${String(q.confShown).padStart(12)}   ${String(q.confWrong).padStart(13)}\n`;
+  const fullOffSQ = suggestionQuality(full.off), fullOnSQ = suggestionQuality(full.on);
+  const exclOffSQ = suggestionQuality(excl.off), exclOnSQ = suggestionQuality(excl.on);
+  if (doFull) { process.stdout.write(sqRow('full  OFF', fullOffSQ)); process.stdout.write(sqRow('full  ON', fullOnSQ)); }
+  if (doExcl) { process.stdout.write(sqRow('excl  OFF', exclOffSQ)); process.stdout.write(sqRow('excl  ON', exclOnSQ)); }
+  process.stdout.write('  GATE: confident-WRONG should DROP and precision hold/rise OFF→ON.\n');
+
+  // ---- Calibration (full arm, ON = the anchored proposal) ----
+  const src = doFull ? full.on : excl.on;
   const calib = CONF_BUCKETS.slice(0, -1).map(() => ({ self: { n: 0, ok: 0 }, other: { n: 0, ok: 0 } }));
   for (const r of src) {
     if (!r.suggestedName) continue;
@@ -318,7 +355,7 @@ async function main(): Promise<void> {
     cell.n += 1;
     if (r.expectedName && containsMatch(r.expectedName, r.suggestedName)) cell.ok += 1;
   }
-  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? 'full' : 'excluded'} arm)\n`);
+  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? 'full' : 'excluded'} arm, anchors ON)\n`);
   process.stdout.write('bucket        self acc (n)        non-self acc (n)\n');
   for (let i = 0; i < calib.length; i += 1) {
     const lo = CONF_BUCKETS[i], hi = CONF_BUCKETS[i + 1];
@@ -327,27 +364,21 @@ async function main(): Promise<void> {
   }
   process.stdout.write('  Well-calibrated = empirical accuracy ≈ the bucket; a high bucket far below 100% is overconfidence.\n');
 
-  // ---- Auto-apply POLICY comparison (the immediate lever), full arm ----
-  process.stdout.write('\nAUTO-APPLY POLICY comparison (full arm — quantifies the lever)\n');
-  process.stdout.write('policy                          precision   recall   applied  wrong-applied\n');
-  const policyRows = POLICIES.map((p) => {
-    const s = scoreUnder(fullRecords, p.apply);
-    return { key: p.key, label: p.label, s, applied: s.tp + s.fp };
-  });
-  for (const row of policyRows) {
-    process.stdout.write(`${row.label.padEnd(30).slice(0, 30)}  ${pct(row.s.precision).padStart(7)}   ${pct(row.s.recall).padStart(6)}   ${String(row.applied).padStart(6)}   ${String(row.s.fp).padStart(6)}\n`);
-  }
-  process.stdout.write('  "wrong-applied" = names auto-applied that were WRONG (fp). Lower is safer; a wrong auto-apply is worse than a mere suggestion.\n');
-
   mkdirSync(RESULTS_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const modelTag = MODEL ? `-${MODEL.replace(/[^a-z0-9.]/gi, '_')}` : '';
   const snapPath = join(RESULTS_DIR, `speaker-backtest${modelTag}-${stamp}.json`);
   writeFileSync(snapPath, JSON.stringify({
     params: { NOTES_PER_USER, MIN_NAMED, RUNS, ROSTER_MODE, BEFORE_DATE, MODEL },
-    aggregate: { full: fullProd, excluded: exclProd },
+    anchorAB: {
+      full: { off: scoreUnder(full.off, prodPolicy), on: scoreUnder(full.on, prodPolicy) },
+      excluded: doExcl ? { off: scoreUnder(excl.off, prodPolicy), on: scoreUnder(excl.on, prodPolicy) } : null,
+    },
+    suggestionQuality: {
+      full: { off: fullOffSQ, on: fullOnSQ },
+      excluded: doExcl ? { off: exclOffSQ, on: exclOnSQ } : null,
+    },
     calibration: calib.map((c, i) => ({ bucket: `${CONF_BUCKETS[i]}-${CONF_BUCKETS[i + 1]}`, ...c })),
-    policies: policyRows.map((r) => ({ key: r.key, precision: r.s.precision, recall: r.s.recall, applied: r.applied, wrongApplied: r.s.fp })),
     users: perUser.map((u) => ({ userId: u.userId, selfBasis: u.basis, cases: u.cases, full: u.full, excluded: u.excl })),
   }, null, 2));
   process.stdout.write(`\nsnapshot: ${snapPath}\n`);
