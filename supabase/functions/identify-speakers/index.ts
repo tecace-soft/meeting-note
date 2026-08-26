@@ -396,6 +396,142 @@ function parseSuggestions(rawText: string, validSpeakerIds: Set<string>, request
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// DETERMINISTIC EVIDENCE-ANCHOR LAYER — keep behaviorally in sync with
+// workflow-server/src/speakerAnchors.ts (that module has the full doc + unit tests, and the
+// backtest's "anchors ON" arm measures exactly this). The model confidently picks the wrong
+// same-team member; this reshapes each suggestion against high-precision textual anchors from the
+// same transcript, with NO extra Gemini call: VETO a non-self pick a negative anchor contradicts,
+// BOOST/OVERRIDE one a self-introduction confirms, and CAP any non-self pick with no concrete
+// anchor to <=0.6 so "confident and wrong" is impossible. The self path is never touched.
+// ---------------------------------------------------------------------------
+const CAP_NO_ANCHOR = 0.6;
+const CAP_VETOED = 0.35;
+const CONFIRM = 0.9;
+
+type Anchor = { kind: 'self-intro' | 'address'; label: string; name: string };
+
+const hasHangul = (s: string): boolean => /[가-힣]/.test(s);
+const hangulCore = (s: string): string => (s.toLowerCase().match(/[가-힣]+/g) ?? []).join('');
+const stripParen = (s: string): string => s.toLowerCase().replace(/\s*[(（【\[].*$/, '').trim();
+const latinParts = (s: string): string[] =>
+  stripParen(s).replace(/[()（）【】\[\]·,]/g, ' ').split(/\s+/).filter((p) => p.length >= 2 && /[a-z]/.test(p));
+
+function matchToken(token: string, knownNames: string[]): string | null {
+  const t = token.trim().toLowerCase();
+  if (t.length < 2) return null;
+  for (const full of knownNames) {
+    if (hasHangul(t)) {
+      const core = hangulCore(full);
+      if (core && (core.includes(t) || t.includes(core))) return full;
+    } else if (latinParts(full).includes(t)) {
+      return full;
+    }
+  }
+  return null;
+}
+
+function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  if (stripParen(a) && stripParen(a) === stripParen(b)) return true;
+  const ha = hangulCore(a), hb = hangulCore(b);
+  if (ha && hb && (ha.includes(hb) || hb.includes(ha))) return true;
+  const pa = latinParts(a), pb = latinParts(b);
+  if (pa.length && pb.length) {
+    if (pa.length === 1 && pa[0] === pb[0]) return true;
+    if (pb.length === 1 && pb[0] === pa[0]) return true;
+  }
+  return false;
+}
+
+function parseTurns(transcript: string, labels: string[]): Array<{ label: string; text: string }> {
+  const known = new Set(labels.map((l) => l.trim()));
+  const turns: Array<{ label: string; text: string }> = [];
+  let current: { label: string; text: string } | null = null;
+  for (const rawLine of transcript.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    const m = /^\s*([^:]{1,40}?):\s?(.*)$/.exec(line);
+    if (m && known.has(m[1].trim())) {
+      if (current) turns.push(current);
+      current = { label: m[1].trim(), text: m[2] };
+    } else if (current) {
+      current.text += `\n${line}`;
+    }
+  }
+  if (current) turns.push(current);
+  return turns;
+}
+
+const SELF_INTRO_PATTERNS: RegExp[] = [
+  /(?:제가|저는|나는|난|전)\s*([가-힣]{2,4}|[A-Za-z][A-Za-z]+)\s*(?:입니다|이에요|예요|이라고|라고|이라고요|라고요)/g,
+  /(?:^|[\s"“'])(?:i['’`]m|i am|this is|my name is|name['’`]s)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)/gi,
+];
+const ADDRESS_PATTERNS: RegExp[] = [
+  /([가-힣]{2,4})\s*(?:님|씨)(?![가-힣])/g,
+  /\b(?:thanks|thank you),?\s+([A-Z][a-zA-Z]+)\b/gi,
+  /\b([A-Z][a-zA-Z]+),\s+(?:can|could|would|will|what|how|do|are|please)\b/g,
+  /\bover to you,?\s+([A-Z][a-zA-Z]+)/gi,
+];
+
+function collectNames(patterns: RegExp[], text: string, knownNames: string[]): string[] {
+  const out: string[] = [];
+  for (const re of patterns) {
+    for (const m of text.matchAll(re)) {
+      const resolved = matchToken((m[1] ?? '').trim(), knownNames);
+      if (resolved && !out.includes(resolved)) out.push(resolved);
+    }
+  }
+  return out;
+}
+
+function extractAnchors(turns: Array<{ label: string; text: string }>, knownNames: string[]): Anchor[] {
+  const anchors: Anchor[] = [];
+  for (const turn of turns) {
+    for (const name of collectNames(SELF_INTRO_PATTERNS, turn.text, knownNames)) anchors.push({ kind: 'self-intro', label: turn.label, name });
+    for (const name of collectNames(ADDRESS_PATTERNS, turn.text, knownNames)) anchors.push({ kind: 'address', label: turn.label, name });
+  }
+  return anchors;
+}
+
+function rosterIdFor(name: string, roster: Array<{ speakerId: string; name: string }>): string | null {
+  const hit = roster.find((r) => sameName(r.name, name));
+  return hit ? hit.speakerId : null;
+}
+
+function applyAnchors(suggestions: Suggestion[], anchors: Anchor[], roster: Array<{ speakerId: string; name: string }>, selfName: string | null): Suggestion[] {
+  const positive = new Map<string, Set<string>>();
+  const negative = new Map<string, Set<string>>();
+  for (const a of anchors) {
+    const bucket = a.kind === 'self-intro' ? positive : negative;
+    const set = bucket.get(a.label) ?? new Set<string>();
+    set.add(a.name);
+    bucket.set(a.label, set);
+  }
+  return suggestions.map((s) => {
+    const posSet = positive.get(s.label);
+    const posName = posSet && posSet.size === 1 ? [...posSet][0] : null;
+    const posIsSelf = posName != null && sameName(posName, selfName);
+    if (posName && !posIsSelf) {
+      if (s.name && sameName(s.name, posName)) return { ...s, confidence: Math.max(s.confidence, CONFIRM) };
+      return { label: s.label, name: posName, speakerId: rosterIdFor(posName, roster), confidence: CONFIRM, isSelf: false, rationale: `self-introduction anchor: "${posName}"` };
+    }
+    if (posName && posIsSelf && s.isSelf) return { ...s, confidence: Math.max(s.confidence, CONFIRM) };
+    const negSet = negative.get(s.label);
+    if (!s.isSelf && s.name && negSet && [...negSet].some((n) => sameName(s.name, n))) {
+      return { label: s.label, name: null, speakerId: null, confidence: Math.min(s.confidence, CAP_VETOED), isSelf: false, rationale: `contradicted by address anchor` };
+    }
+    if (!s.isSelf && s.name) return { ...s, confidence: Math.min(s.confidence, CAP_NO_ANCHOR) };
+    return s;
+  });
+}
+
+function gateSuggestionsWithAnchors(suggestions: Suggestion[], transcript: string, labels: string[], roster: Array<{ speakerId: string; name: string }>, selfName: string | null): Suggestion[] {
+  const knownNames = [...roster.map((r) => r.name), ...(selfName ? [selfName] : [])].filter(Boolean);
+  if (knownNames.length === 0) return suggestions;
+  const anchors = extractAnchors(parseTurns(transcript, labels), knownNames);
+  return applyAnchors(suggestions, anchors, roster, selfName);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS });
@@ -468,6 +604,12 @@ serve(async (req) => {
   }
 
   const validSpeakerIds = new Set(roster.map((r) => r.speakerId));
-  const suggestions = parseSuggestions(result.rawText, validSpeakerIds, labels.slice(0, MAX_LABELS));
+  const requestedLabels = labels.slice(0, MAX_LABELS);
+  const raw = parseSuggestions(result.rawText, validSpeakerIds, requestedLabels);
+  // Reshape against deterministic textual anchors so a non-self name is never asserted at high
+  // confidence without concrete evidence (the boss's confident-garbage complaint). The self path
+  // is untouched. Measured OFF/ON in eval:speaker-backtest.
+  const selfName = typeof body.selfName === 'string' ? body.selfName : null;
+  const suggestions = gateSuggestionsWithAnchors(raw, transcriptText, requestedLabels, roster, selfName);
   return jsonResponse({ suggestions });
 });

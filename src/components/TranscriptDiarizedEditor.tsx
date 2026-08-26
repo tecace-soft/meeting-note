@@ -113,6 +113,13 @@ function setEditableCaretOffset(editable: HTMLElement, offset: number | null): v
   selection?.addRange(range);
 }
 
+// A non-self suggestion below this confidence is shown DE-EMPHASIZED (dimmed + a "low
+// confidence" tag + a secondary Apply). The backend anchor layer now caps a non-self pick with
+// no concrete textual evidence at 0.6 and only lets an anchored (self-introduction) pick exceed
+// it, so this floor cleanly separates evidence-backed names from tentative guesses. The self
+// path is never capped, so this never dims a self suggestion. See SPEAKER_DISCRIMINABILITY_DESIGN.md.
+const LOW_CONFIDENCE_NONSELF = 0.7;
+
 export interface TranscriptDiarizedEditorProps {
   segments: TranscriptSegment[];
   onSegmentsChange: (next: TranscriptSegment[]) => void;
@@ -990,18 +997,22 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
 
           {suggestions && suggestions.length > 0 && (
             <div className="mt-2 space-y-1.5">
-              {suggestions.map((s) => (
+              {suggestions.map((s) => {
+                // A non-self pick below the floor is a tentative GUESS (no concrete anchor): dim
+                // it, tag it, and make Apply secondary so it never looks like a confident match.
+                const lowConf = !!s.name && !s.isSelf && s.confidence < LOW_CONFIDENCE_NONSELF;
+                return (
                 <div
                   key={s.label}
                   className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5"
-                  style={{ backgroundColor: 'var(--surface)' }}
+                  style={{ backgroundColor: 'var(--surface)', opacity: lowConf ? 0.6 : 1 }}
                 >
                   <div className="min-w-0">
                     <div className="truncate text-sm" style={{ color: 'var(--text)' }}>
                       <span className="font-medium">{s.label}</span>
                       {' → '}
                       {s.name ? (
-                        <span className="font-semibold">{s.name}{s.isSelf ? ' (me)' : ''}</span>
+                        <span className={lowConf ? 'font-medium' : 'font-semibold'} style={lowConf ? { color: 'var(--text-muted)' } : undefined}>{s.name}{s.isSelf ? ' (me)' : ''}</span>
                       ) : (
                         <span style={{ color: 'var(--text-muted)' }}>{t('unknownSpeakerLabel')}</span>
                       )}
@@ -1009,6 +1020,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                         <span className="ml-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                           {Math.round(s.confidence * 100)}%
                         </span>
+                      ) : null}
+                      {lowConf ? (
+                        <span className="ml-1 rounded px-1 text-[10px] font-medium" style={{ border: '1px solid var(--border)', color: 'var(--text-muted)' }}>{t('lowConfidenceTag')}</span>
                       ) : null}
                     </div>
                     {s.rationale ? (
@@ -1020,14 +1034,17 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
                       type="button"
                       disabled={applyingSuggestions}
                       onClick={() => void handleAcceptSuggestion(s)}
-                      className="shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
-                      style={{ backgroundColor: 'var(--accent)' }}
+                      className="shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
+                      style={lowConf
+                        ? { border: '1px solid var(--border)', color: 'var(--text)', backgroundColor: 'transparent' }
+                        : { color: '#fff', backgroundColor: 'var(--accent)' }}
                     >
                       {t('applySuggestion')}
                     </button>
                   ) : null}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

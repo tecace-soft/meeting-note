@@ -1906,6 +1906,8 @@ class _SuggestSpeakersSheetState extends ConsumerState<_SuggestSpeakersSheet> {
             label: s.label,
             name: _appliedName(s),
             confidence: s.confidence,
+            isSelf: s.isSelf,
+            lowConfidenceLabel: t('note.lowConfidence'),
             selected: _selected.contains(s.label),
             onChanged: (v) => setState(() {
               if (v) {
@@ -1937,6 +1939,8 @@ class _SuggestionRow extends StatelessWidget {
     required this.label,
     required this.name,
     required this.confidence,
+    required this.isSelf,
+    required this.lowConfidenceLabel,
     required this.selected,
     required this.onChanged,
   });
@@ -1944,46 +1948,71 @@ class _SuggestionRow extends StatelessWidget {
   final String label;
   final String name;
   final double confidence;
+  final bool isSelf;
+  final String lowConfidenceLabel;
   final bool selected;
   final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
+    // A non-self pick below this floor is a tentative GUESS (the backend anchor layer caps an
+    // unanchored non-self pick at 0.6). Dim it and tag it so it never reads as a confident match.
+    // The self path is never capped, so a self suggestion is never dimmed.
+    final lowConf = !isSelf && confidence < 0.7;
     return InkWell(
       onTap: () => onChanged(!selected),
       borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(
-          children: [
-            Checkbox(
-              value: selected,
-              onChanged: (v) => onChanged(v ?? false),
-              visualDensity: VisualDensity.compact,
-            ),
-            Expanded(
-              child: Row(
-                children: [
-                  Text(label, style: TextStyle(color: palette.textMuted, fontSize: 13)),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 6),
-                    child: Icon(Icons.arrow_forward_rounded, size: 14, color: Color(0xFF9AA4B5)),
-                  ),
-                  Flexible(
-                    child: Text(
-                      name,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: palette.text, fontSize: 14, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ],
+      child: Opacity(
+        opacity: lowConf ? 0.55 : 1,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              Checkbox(
+                value: selected,
+                onChanged: (v) => onChanged(v ?? false),
+                visualDensity: VisualDensity.compact,
               ),
-            ),
-            const SizedBox(width: 8),
-            Text('${(confidence * 100).round()}%',
-                style: TextStyle(color: palette.textMuted, fontSize: 12)),
-          ],
+              Expanded(
+                child: Row(
+                  children: [
+                    Text(label, style: TextStyle(color: palette.textMuted, fontSize: 13)),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6),
+                      child: Icon(Icons.arrow_forward_rounded, size: 14, color: Color(0xFF9AA4B5)),
+                    ),
+                    Flexible(
+                      child: Text(
+                        name,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: lowConf ? palette.textMuted : palette.text,
+                          fontSize: 14,
+                          fontWeight: lowConf ? FontWeight.w500 : FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (lowConf) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: palette.textMuted.withValues(alpha: 0.5)),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(lowConfidenceLabel,
+                            style: TextStyle(color: palette.textMuted, fontSize: 10, fontWeight: FontWeight.w500)),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('${(confidence * 100).round()}%',
+                  style: TextStyle(color: palette.textMuted, fontSize: 12)),
+            ],
+          ),
         ),
       ),
     );

@@ -388,6 +388,7 @@ const Map<String, Map<String, String>> _appStrings = {
   'note.suggestFailed': {'en': 'Could not suggest speakers', 'ko': '화자를 추천하지 못했습니다'},
   'note.noSuggestions': {'en': 'No speaker suggestions', 'ko': '화자 추천이 없습니다'},
   'note.applySuggestions': {'en': 'Apply', 'ko': '적용'},
+  'note.lowConfidence': {'en': 'low confidence', 'ko': '낮은 신뢰도'},
   'note.applying': {'en': 'Applying…', 'ko': '적용 중…'},
 
   // ---- History screen ----
