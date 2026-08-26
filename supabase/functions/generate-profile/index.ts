@@ -98,12 +98,11 @@ interface RequestBody {
 }
 
 /** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-3.1-flash-lite`. */
-// PRIMARY is gemini-3.1-flash-lite: with the nested ONTOLOGY_SCHEMA, gemini-2.5-flash-lite
-// INTERMITTENTLY HANGS in the Supabase edge runtime (the diarization/identify twin dropped its
-// responseSchema for exactly this reason), which burned the whole retry budget and surfaced as
-// a 150s IDLE_TIMEOUT / our 120s clean timeout. 3.1-flash-lite returns cleanly in ~2-3s WITH the
-// schema (measured against real transcripts). 2.5-flash-lite stays as the fallback. LITE-ONLY
-// for cost (no gemini-2.5-flash). gemini-2.0-* are RETIRED (404) — do not add them back.
+// PRIMARY is gemini-3.1-flash-lite. The heavy-speaker timeout was NOT a model/runtime hang — it
+// was the nested responseSchema making the model run away to MAX_TOKENS (measured 2026-08-26; see
+// callGeminiGenerateContent). Schema-less, 3.1-flash-lite returns compact valid JSON in ~3.4s.
+// 2.5-flash-lite stays as the fallback. LITE-ONLY for cost (no gemini-2.5-flash). gemini-2.0-*
+// are RETIRED (404) — do not add them back.
 const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
 // Include 3.1-flash-lite in the fallback list too, so that even if a GEMINI_MODEL secret pins
 // the primary to the hang-prone 2.5-flash-lite, the chain still reaches the reliable 3.1 after
@@ -114,22 +113,20 @@ const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 // Supabase kills a request idle for 150s (observed IDLE_TIMEOUT on a heavy speaker). Bound our
 // own time well under that: abort any single Gemini call, and stop starting new attempts once
 // the total budget is spent, so we ALWAYS return a clean error instead of the platform killing us.
-// Keep the per-call timeout tight: a healthy call is ~2-3s, so 30s is generous, and a HUNG call
-// (2.5-flash-lite + schema) is abandoned fast enough to still reach the working fallback in budget.
+// Keep the per-call timeout tight: a healthy (schema-less) call is ~3-4s, so 30s is generous and
+// abandons any stuck call fast enough to still reach the working fallback within the total budget.
 const GEMINI_CALL_TIMEOUT_MS = 30_000;
 const TOTAL_TIME_BUDGET_MS = 120_000;
 
-// O-2: force structurally-valid ontology JSON at the source (OpenAPI subset, same trick
-// note_insight uses). Without it, a large UPDATE could truncate at maxOutputTokens into
-// invalid JSON, which used to fall back to an EMPTY ontology and wipe the saved profile.
-// Bound the output at the SCHEMA level. IMPORTANT: Gemini hard-enforces `maxItems` on
-// arrays but IGNORES `maxLength` on strings (verified 2026-08-18/-19 — a maxLength:120
-// field still returns 800+ char strings). So maxItems caps array COUNT, but a heavy
-// speaker's long string fields still bloat the output, which used to overrun maxOutputTokens
-// and truncate mid-JSON (MAX_TOKENS) → retry → the two slow calls stacked past Supabase's
-// 150s request limit (IDLE_TIMEOUT). Fix is layered: keep the item cap LOW (4, hard-enforced),
-// bake brevity into the base prompt so the FIRST attempt is small + fast, cap the transcript
-// input, add enough output headroom to CLOSE the JSON, and post-parse clampStr to trim.
+// Structural correctness is enforced in APP code, NOT via a Gemini responseSchema. History:
+// a responseSchema (O-2) was added to prevent truncation-into-invalid-JSON wipes, but MEASURED
+// 2026-08-26 it BACKFIRED — constrained decoding to the nested schema made 3.1-flash-lite run
+// away to ~165k chars / MAX_TOKENS (~50s, never closing the JSON), the real cause of the
+// `exceeded 30000ms` timeout. Schema dropped (see callGeminiGenerateContent). The wipe risk it
+// was meant to cover is already handled without it: parseOntologyStrict (O-1) returns null on
+// bad JSON so we retry/fail instead of writing an empty ontology, and clampStr/clampStrArray/
+// mapObjectArray enforce these caps on the parsed output. NOTE (still true): Gemini ignores
+// `maxLength` on strings, so string trimming MUST live in app code (clampStr), not the prompt.
 const MAX_ARRAY_ITEMS = 4;
 const MAX_STR_LEN = 120;
 // Generous DEFENSIVE backstop, not a real trim: the timeout is driven by OUTPUT generation
@@ -147,46 +144,6 @@ const BREVITY_ESCALATION =
   'field at most 60 characters (a short phrase, never a sentence or paragraph). Keep only the ' +
   'highest-confidence, most important facts and drop the rest. Returning COMPLETE, valid JSON is ' +
   'more important than being comprehensive.';
-const CONF = { type: 'NUMBER' } as const;
-const STR = { type: 'STRING', maxLength: MAX_STR_LEN } as const;
-const STR_ARRAY = { type: 'ARRAY', maxItems: MAX_ARRAY_ITEMS, items: { type: 'STRING', maxLength: MAX_STR_LEN } } as const;
-const ONTOLOGY_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    schema_version: STR,
-    speaker_id: STR,
-    display_name: STR,
-    aliases: STR_ARRAY,
-    identity_confidence: CONF,
-    professional_context: {
-      type: 'OBJECT',
-      properties: { company: STR, role: STR, domains: STR_ARRAY, confidence: CONF },
-    },
-    active_projects: {
-      type: 'ARRAY',
-      maxItems: MAX_ARRAY_ITEMS,
-      items: { type: 'OBJECT', properties: { name: STR, role_in_project: STR, status: STR, importance: STR, confidence: CONF } },
-    },
-    relationships: {
-      type: 'ARRAY',
-      maxItems: MAX_ARRAY_ITEMS,
-      items: { type: 'OBJECT', properties: { person_or_group: STR, relationship_type: STR, context: STR, related_projects: STR_ARRAY, confidence: CONF } },
-    },
-    responsibilities: {
-      type: 'ARRAY',
-      maxItems: MAX_ARRAY_ITEMS,
-      items: { type: 'OBJECT', properties: { description: STR, scope: STR, related_projects: STR_ARRAY, status: STR, confidence: CONF } },
-    },
-    open_threads: {
-      type: 'ARRAY',
-      maxItems: MAX_ARRAY_ITEMS,
-      items: { type: 'OBJECT', properties: { topic: STR, status: STR, priority: STR, summary: STR, related_projects: STR_ARRAY, confidence: CONF } },
-    },
-    last_updated_at: STR,
-  },
-  required: ['schema_version', 'speaker_id', 'display_name', 'professional_context', 'active_projects', 'relationships', 'responsibilities', 'open_threads', 'last_updated_at'],
-} as const;
-
 interface GeminiGenerateContentResponse {
   candidates?: {
     content?: { parts?: { text?: string }[] };
@@ -230,15 +187,17 @@ async function callGeminiGenerateContent(
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       generationConfig: {
         temperature: 0.2,
-        // maxLength is NOT enforced (see ONTOLOGY_SCHEMA note), so a heavy speaker's verbose
-        // string fields can push the JSON well past 8192 tokens and truncate mid-object
-        // (observed: len 50421, finishReason MAX_TOKENS). The item cap still bounds the STRUCTURE,
-        // so the output is large-but-finite; this ceiling gives enough room to always CLOSE the
-        // JSON so it parses (then clampStr trims the long strings). thinkingBudget:0 prevents
-        // reasoning-token runaway. Billed on ACTUAL output, so a small ontology costs the same.
+        // NO responseSchema. MEASURED 2026-08-26 (probe-generate-profile.ts, real heavy speaker
+        // vs live Gemini): constrained decoding to the nested ONTOLOGY_SCHEMA makes
+        // gemini-3.1-flash-lite RUN AWAY — it fills the structure to the item/string caps and
+        // keeps going to ~165k chars / finishReason MAX_TOKENS, taking ~50s (past the 30s abort)
+        // and NEVER closing the JSON. Dropping the schema (same as the identify/diarize twin, which
+        // never hangs) makes the model obey the prompt's brevity rules → compact valid JSON in
+        // ~3.4s. Structural correctness is enforced in APP code instead: parseOntologyStrict (O-1)
+        // returns null on bad JSON (retry/fail, never an empty wipe) and clampStr/clampStrArray/
+        // mapObjectArray enforce MAX_STR_LEN + MAX_ARRAY_ITEMS. thinkingBudget:0 stays.
         maxOutputTokens: maxOutputTokens ?? 24576,
         responseMimeType: 'application/json',
-        responseSchema: ONTOLOGY_SCHEMA,
         thinkingConfig: { thinkingBudget: 0 },
       },
     }),
