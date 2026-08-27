@@ -1835,40 +1835,50 @@ class _SuggestSpeakersSheetState extends ConsumerState<_SuggestSpeakersSheet> {
   Widget build(BuildContext context) {
     final palette = FigmaDesign.of(context);
     final t = ref.watch(appTextProvider);
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
-        ),
-        child: FutureBuilder<List<SpeakerSuggestion>>(
-          future: _future,
-          builder: (context, snapshot) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  t('note.suggestTitle'),
-                  style: TextStyle(color: palette.text, fontSize: 17, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  t('note.suggestSubtitle'),
-                  style: TextStyle(color: palette.textMuted, fontSize: 12, height: 1.4),
-                ),
-                const SizedBox(height: 16),
-                _buildBody(context, t, snapshot),
-              ],
-            );
-          },
+    final mq = MediaQuery.of(context);
+    // Clamp the system font scale for this dense control sheet: very large accessibility scales
+    // overflow the row (the name was truncating to "M...") without helping legibility here.
+    final clampedScaler = TextScaler.linear(mq.textScaler.scale(1.0).clamp(1.0, 1.15).toDouble());
+    // Cap the suggestion list's height so a long roster scrolls instead of pushing Apply off-screen.
+    final maxListHeight = mq.size.height * 0.42;
+    return MediaQuery(
+      data: mq.copyWith(textScaler: clampedScaler),
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 4,
+            bottom: mq.viewInsets.bottom + 16,
+          ),
+          child: FutureBuilder<List<SpeakerSuggestion>>(
+            future: _future,
+            builder: (context, snapshot) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    t('note.suggestTitle'),
+                    style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    t('note.suggestSubtitle'),
+                    style: TextStyle(color: palette.textMuted, fontSize: 12, height: 1.4),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildBody(context, t, snapshot, maxListHeight),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildBody(BuildContext context, AppText t, AsyncSnapshot<List<SpeakerSuggestion>> snapshot) {
+  Widget _buildBody(BuildContext context, AppText t, AsyncSnapshot<List<SpeakerSuggestion>> snapshot, double maxListHeight) {
     final palette = FigmaDesign.of(context);
     if (snapshot.connectionState == ConnectionState.waiting) {
       return Padding(
@@ -1901,27 +1911,40 @@ class _SuggestSpeakersSheetState extends ConsumerState<_SuggestSpeakersSheet> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        for (final s in applicable)
-          _SuggestionRow(
-            label: s.label,
-            name: _appliedName(s),
-            confidence: s.confidence,
-            isSelf: s.isSelf,
-            lowConfidenceLabel: t('note.lowConfidence'),
-            selected: _selected.contains(s.label),
-            onChanged: (v) => setState(() {
-              if (v) {
-                _selected.add(s.label);
-              } else {
-                _selected.remove(s.label);
-              }
-            }),
+        // The list scrolls within a bounded height so a long roster never pushes Apply off-screen.
+        ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxListHeight),
+          child: Scrollbar(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final s in applicable)
+                    _SuggestionRow(
+                      label: s.label,
+                      name: _appliedName(s),
+                      confidence: s.confidence,
+                      isSelf: s.isSelf,
+                      lowConfidenceLabel: t('note.lowConfidence'),
+                      selected: _selected.contains(s.label),
+                      onChanged: (v) => setState(() {
+                        if (v) {
+                          _selected.add(s.label);
+                        } else {
+                          _selected.remove(s.label);
+                        }
+                      }),
+                    ),
+                ],
+              ),
+            ),
           ),
+        ),
         if (_error != null) ...[
           const SizedBox(height: 8),
           Text(_error!, style: const TextStyle(color: Color(0xFFFF3B3B), fontSize: 12)),
         ],
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         SizedBox(
           width: double.infinity,
           child: FilledButton(
@@ -1964,53 +1987,69 @@ class _SuggestionRow extends StatelessWidget {
       onTap: () => onChanged(!selected),
       borderRadius: BorderRadius.circular(12),
       child: Opacity(
-        opacity: lowConf ? 0.55 : 1,
+        opacity: lowConf ? 0.6 : 1,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Checkbox(
                 value: selected,
                 onChanged: (v) => onChanged(v ?? false),
                 visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
+              const SizedBox(width: 6),
+              // Name gets the full remaining width (it was truncating to "M..."); the low-confidence
+              // tag drops to its own line below instead of squeezing the name.
               Expanded(
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(label, style: TextStyle(color: palette.textMuted, fontSize: 13)),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 6),
-                      child: Icon(Icons.arrow_forward_rounded, size: 14, color: Color(0xFF9AA4B5)),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Text(label, style: TextStyle(color: palette.textMuted, fontSize: 13)),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 6),
+                          child: Icon(Icons.arrow_forward_rounded, size: 14, color: Color(0xFF9AA4B5)),
+                        ),
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: lowConf ? palette.textMuted : palette.text,
+                              fontSize: 14,
+                              fontWeight: lowConf ? FontWeight.w500 : FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    Flexible(
-                      child: Text(
-                        name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: lowConf ? palette.textMuted : palette.text,
-                          fontSize: 14,
-                          fontWeight: lowConf ? FontWeight.w500 : FontWeight.w600,
+                    if (lowConf)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: palette.textMuted.withValues(alpha: 0.5)),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(lowConfidenceLabel,
+                              style: TextStyle(color: palette.textMuted, fontSize: 10, fontWeight: FontWeight.w500)),
                         ),
                       ),
-                    ),
-                    if (lowConf) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: palette.textMuted.withValues(alpha: 0.5)),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(lowConfidenceLabel,
-                            style: TextStyle(color: palette.textMuted, fontSize: 10, fontWeight: FontWeight.w500)),
-                      ),
-                    ],
                   ],
                 ),
               ),
               const SizedBox(width: 8),
-              Text('${(confidence * 100).round()}%',
-                  style: TextStyle(color: palette.textMuted, fontSize: 12)),
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('${(confidence * 100).round()}%',
+                    style: TextStyle(color: palette.textMuted, fontSize: 12, fontFeatures: const [FontFeature.tabularFigures()])),
+              ),
             ],
           ),
         ),
