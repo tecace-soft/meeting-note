@@ -339,8 +339,8 @@ class NotesRepository {
       final coldStart = _isTransientConnectFailure(error);
       if (coldStart) {
         throw StateError(
-          'The server is waking up and did not respond in time. '
-          'Please tap Try again in a moment.',
+          'The connection was interrupted (the app went to the background, or the '
+          'server is waking up). It will retry automatically when you return, or tap Try again.',
         );
       }
       throw StateError(
@@ -1801,10 +1801,24 @@ String _preview(String value) {
 // instead of the scary generic "Could not reach ...". Retry stays safe: noteId +
 // fileId are stable idempotency keys, so a resubmit dedupes server-side.
 bool _isTransientConnectFailure(DioException error) {
-  return error.type == DioExceptionType.connectionTimeout ||
+  if (error.type == DioExceptionType.connectionTimeout ||
       error.type == DioExceptionType.connectionError ||
+      error.type == DioExceptionType.sendTimeout ||
       error.type == DioExceptionType.receiveTimeout ||
-      (error.type == DioExceptionType.unknown && error.error is SocketException);
+      // The OS aborts an in-flight request when the app is backgrounded (power button / screen
+      // off) right after tapping generate; Dio surfaces that as a cancel or a raw SocketException.
+      error.type == DioExceptionType.cancel) {
+    return true;
+  }
+  if (error.error is SocketException) return true;
+  // Backgrounding / screen-off drops the socket mid-flight with platform-specific wording.
+  final detail = '${error.message ?? ''} ${error.error ?? ''}'.toLowerCase();
+  return detail.contains('connection abort') ||
+      detail.contains('connection closed') ||
+      detail.contains('connection reset') ||
+      detail.contains('software caused') ||
+      detail.contains('network is unreachable') ||
+      detail.contains('failed host lookup');
 }
 
 String _dioMessage(DioException error, String fallback) {

@@ -18,7 +18,7 @@ class ProcessingScreen extends ConsumerStatefulWidget {
   ConsumerState<ProcessingScreen> createState() => _ProcessingScreenState();
 }
 
-class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
+class _ProcessingScreenState extends ConsumerState<ProcessingScreen> with WidgetsBindingObserver {
   static const _steps = [
     'Upload',
     'Transcribe',
@@ -30,10 +30,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
   WorkflowJobSnapshot? _snapshot;
   String? _error;
   late String _jobId;
+  bool _starting = false; // a createNote() submission is in flight
+  bool _jobCreated = false; // the job POST has succeeded (a real jobId exists)
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _jobId = widget.jobId;
     final pendingJob = widget.pendingJob;
     if (pendingJob == null) {
@@ -45,8 +48,25 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Backgrounding the app (power button / screen off) right after tapping generate aborts the
+    // in-flight job-creation POST. When the user returns, retry it automatically (the backend is
+    // usually awake by then) instead of leaving them on the failure screen. Only for a job that
+    // was never created — a running job resumes via polling on its own.
+    final pendingJob = widget.pendingJob;
+    if (state == AppLifecycleState.resumed &&
+        pendingJob != null &&
+        _error != null &&
+        !_starting &&
+        !_jobCreated) {
+      _startPendingJob(pendingJob);
+    }
   }
 
   @override
@@ -222,6 +242,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
   }
 
   Future<void> _startPendingJob(PendingProcessingJob job) async {
+    if (_starting || _jobCreated) return;
+    _starting = true;
     try {
       if (_snapshot != null || _error != null) {
         setState(() {
@@ -240,11 +262,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
             attachmentPaths: job.attachmentPaths,
           );
       if (!mounted) return;
+      _jobCreated = true;
       _jobId = jobId;
       _startPolling();
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = '$error');
+    } finally {
+      _starting = false;
     }
   }
 }
