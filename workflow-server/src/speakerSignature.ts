@@ -30,7 +30,10 @@ export interface DecideOptions {
   tMargin?: number; // min (top1 - top2) cosine margin to promote
   minSigTokens?: number; // min tokens of history for a usable signature
 }
-const DEFAULTS: Required<DecideOptions> = { tScore: 0.08, tMargin: 0.02, minSigTokens: 8 };
+// Tuned on the backtest sweep (2026-08-27): t10/m08 is the highest-accuracy operating point whose
+// promoted picks are ~72% correct (honest for the ~0.8 confidence band) — acc 55.6% (OFF 39.6% /
+// ON 35.6%), non-self suggestion precision 45.4% (2.5x OFF), confident-WRONG 27 (vs 60 untuned).
+const DEFAULTS: Required<DecideOptions> = { tScore: 0.10, tMargin: 0.08, minSigTokens: 8 };
 
 const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
 // Content tokens: Korean runs (>=2 chars) + Latin words (>=2). Drops 1-char noise + digits.

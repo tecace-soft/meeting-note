@@ -175,7 +175,18 @@ const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 //   sig = SIGNATURE-primary (a warm+strong signature pick wins, and is EVIDENCE so it is kept
 //         as-is, not capped) + the anchored LLM suggestion for every fallback label.
 // Pairing removes model stochasticity from the comparison and reuses the one Gemini call.
-interface ArmRecords { off: LabelRecord[]; on: LabelRecord[]; sig: LabelRecord[] }
+// SIG arm sweep: since the signature decision is deterministic and independent of the Gemini
+// call, several (tScore, tMargin) operating points are computed from the SAME identify calls at
+// zero extra cost. Pick the point where promoted precision earns its confidence (confident-WRONG
+// low) while keeping the accuracy lift.
+const SWEEP: Array<{ label: string; tScore: number; tMargin: number }> = [
+  { label: 't08/m02', tScore: 0.08, tMargin: 0.02 },
+  { label: 't08/m05', tScore: 0.08, tMargin: 0.05 },
+  { label: 't10/m08', tScore: 0.10, tMargin: 0.08 },
+  { label: 't14/m12', tScore: 0.14, tMargin: 0.12 },
+];
+interface ArmRecords { off: LabelRecord[]; on: LabelRecord[]; sig: LabelRecord[][] } // sig[settingIdx]
+const emptyArm = (): ArmRecords => ({ off: [], on: [], sig: SWEEP.map(() => []) });
 
 // Per-user speaker corpora from all the user's cases (leave-one-meeting-out is applied per case
 // via excludeNoteId), keyed by name — exactly what the shipped edge fn will read from the DB.
@@ -192,12 +203,14 @@ async function collectRecords(
   c: BacktestCase, apiKey: string, roster: SpeakerRosterEntry[], selfName: string | null,
   corpora: Corpora, idf: Map<string, number>,
 ): Promise<ArmRecords> {
-  const out: ArmRecords = { off: [], on: [], sig: [] };
-  // Signature decision is deterministic (no per-run variation) — compute it once per case.
+  const out = emptyArm();
+  // Signature decision is deterministic (no per-run variation) — compute it once per setting.
   const labelsWithText = c.labels.map((l) => ({ label: l, text: c.labelText.get(l) ?? '' }));
-  const dec = decideSuggestions(labelsWithText, corpora, idf, c.noteId,
-    roster.map((r) => ({ speakerId: r.speakerId, name: r.name })), selfName);
-  const sigByLabel = new Map(dec.signature.map((s) => [s.label, s]));
+  const rosterMapped = roster.map((r) => ({ speakerId: r.speakerId, name: r.name }));
+  const sigMaps = SWEEP.map((s) => {
+    const dec = decideSuggestions(labelsWithText, corpora, idf, c.noteId, rosterMapped, selfName, { tScore: s.tScore, tMargin: s.tMargin });
+    return new Map(dec.signature.map((x) => [x.label, x]));
+  });
 
   for (let i = 0; i < RUNS; i += 1) {
     // MODEL set → isolate that one model (fallbackModels:[] so resolveModels returns just it).
@@ -206,21 +219,22 @@ async function collectRecords(
       ...(MODEL ? { model: MODEL, fallbackModels: [] } : {}),
       ...(THINK !== null && Number.isFinite(THINK) ? { thinkingBudget: THINK } : {}),
     });
-    // A failed call = the model produced nothing → toRecords yields an abstain for every label,
-    // identically for all arms (the anchor layer over [] is still []).
     const raw: SpeakerSuggestion[] = 'error' in res ? [] : res.suggestions;
     const anchored = gateSuggestionsWithAnchors(raw, c.transcript, c.labels, roster, selfName);
-    // sig arm: signature pick where we have one (kept as-is = evidence, not capped), else the
-    // anchored LLM suggestion for that label.
     const anchoredByLabel = new Map(anchored.map((s) => [s.label, s]));
-    const merged: SpeakerSuggestion[] = c.labels.map((label) => {
-      const s = sigByLabel.get(label);
-      if (s) return { label, name: s.name, speakerId: s.speakerId, confidence: s.confidence, isSelf: s.isSelf, rationale: 'signature' };
-      return anchoredByLabel.get(label) ?? { label, name: null, speakerId: null, confidence: 0, isSelf: false, rationale: '' };
-    });
     out.off.push(...toRecords(raw, c, selfName));
     out.on.push(...toRecords(anchored, c, selfName));
-    out.sig.push(...toRecords(merged, c, selfName));
+    // sig arm per setting: signature pick where promoted (kept as-is = evidence), else the
+    // anchored LLM suggestion for that label.
+    for (let si = 0; si < SWEEP.length; si += 1) {
+      const sm = sigMaps[si];
+      const merged: SpeakerSuggestion[] = c.labels.map((label) => {
+        const s = sm.get(label);
+        if (s) return { label, name: s.name, speakerId: s.speakerId, confidence: s.confidence, isSelf: s.isSelf, rationale: 'signature' };
+        return anchoredByLabel.get(label) ?? { label, name: null, speakerId: null, confidence: 0, isSelf: false, rationale: '' };
+      });
+      out.sig[si].push(...toRecords(merged, c, selfName));
+    }
   }
   return out;
 }
@@ -323,8 +337,8 @@ async function main(): Promise<void> {
   const doFull = ROSTER_MODE === 'full' || ROSTER_MODE === 'both';
   const doExcl = ROSTER_MODE === 'excluded' || ROSTER_MODE === 'both';
 
-  const full: ArmRecords = { off: [], on: [], sig: [] };
-  const excl: ArmRecords = { off: [], on: [], sig: [] };
+  const full = emptyArm();
+  const excl = emptyArm();
   const perUser: Array<{ userId: string; basis: string; cases: number; full: PRF | null; sig: PRF | null; excl: PRF | null }> = [];
   const prodPolicy = POLICIES[0].apply;
 
@@ -337,22 +351,22 @@ async function main(): Promise<void> {
     const corpora = buildUserCorpora(cases);
     const idf = computeIdf(corpora);
 
-    const uFull: ArmRecords = { off: [], on: [], sig: [] };
-    const uExcl: ArmRecords = { off: [], on: [], sig: [] };
+    const uFull = emptyArm();
+    const uExcl = emptyArm();
     for (const c of cases) {
-      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName, corpora, idf); uFull.off.push(...r.off); uFull.on.push(...r.on); uFull.sig.push(...r.sig); }
+      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName, corpora, idf); uFull.off.push(...r.off); uFull.on.push(...r.on); r.sig.forEach((rec, si) => uFull.sig[si].push(...rec)); }
       if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName, corpora, idf); uExcl.off.push(...r.off); uExcl.on.push(...r.on); }
     }
-    full.off.push(...uFull.off); full.on.push(...uFull.on); full.sig.push(...uFull.sig);
+    full.off.push(...uFull.off); full.on.push(...uFull.on); uFull.sig.forEach((rec, si) => full.sig[si].push(...rec));
     excl.off.push(...uExcl.off); excl.on.push(...uExcl.on);
     const f = doFull ? scoreUnder(uFull.off, prodPolicy) : null;
-    const g = doFull ? scoreUnder(uFull.sig, prodPolicy) : null;
+    const g = doFull ? scoreUnder(uFull.sig[0], prodPolicy) : null; // SWEEP[0] for a per-user glance
     const e = doExcl ? scoreUnder(uExcl.off, prodPolicy) : null;
     perUser.push({ userId, basis, cases: cases.length, full: f, sig: g, excl: e });
     process.stdout.write(
       `• ${userId.slice(0, 8)}…  self=${basis}  cases=${cases.length}  ` +
       (f ? `full acc=${pct(f.accuracy)}  ` : '') +
-      (g ? `SIG acc=${pct(g.accuracy)} rec=${pct(g.recall)} prec=${pct(g.precision)}  ` : '') +
+      (g ? `SIG[${SWEEP[0].label}] acc=${pct(g.accuracy)} rec=${pct(g.recall)} prec=${pct(g.precision)}  ` : '') +
       (e ? `excl acc=${pct(e.accuracy)}` : '') + '\n',
     );
   }
@@ -365,28 +379,35 @@ async function main(): Promise<void> {
     process.stdout.write('full roster (prod today):\n');
     process.stdout.write(line('OFF (raw model)', scoreUnder(full.off, prodPolicy)));
     process.stdout.write(line('ON  (anchored)', scoreUnder(full.on, prodPolicy)));
-    process.stdout.write(line('SIG (signature+LLM)', scoreUnder(full.sig, prodPolicy)));
   }
   if (doExcl) {
     process.stdout.write('meeting excluded (general):\n');
     process.stdout.write(line('OFF (raw model)', scoreUnder(excl.off, prodPolicy)));
     process.stdout.write(line('ON  (anchored)', scoreUnder(excl.on, prodPolicy)));
   }
-  process.stdout.write('  GATE: SIG accuracy beats OFF/ON materially; self recall must NOT drop.\n');
 
-  // ---- SUGGESTION QUALITY (non-self) — the headline the anchor layer targets ----
-  process.stdout.write('\nSUGGESTION QUALITY (non-self picks shown to the user)\n');
-  process.stdout.write('arm / anchors     shown(>=0.5)  precision   confident(>=0.8)  confident-WRONG\n');
-  const sqRow = (tag: string, q: SuggQuality) =>
-    `${tag.padEnd(18)}${String(q.shown).padStart(9)}   ${pct(q.precision).padStart(7)}   ${String(q.confShown).padStart(12)}   ${String(q.confWrong).padStart(13)}\n`;
-  const fullOffSQ = suggestionQuality(full.off), fullOnSQ = suggestionQuality(full.on), fullSigSQ = suggestionQuality(full.sig);
-  const exclOffSQ = suggestionQuality(excl.off), exclOnSQ = suggestionQuality(excl.on);
-  if (doFull) { process.stdout.write(sqRow('full  OFF', fullOffSQ)); process.stdout.write(sqRow('full  ON', fullOnSQ)); process.stdout.write(sqRow('full  SIG', fullSigSQ)); }
-  if (doExcl) { process.stdout.write(sqRow('excl  OFF', exclOffSQ)); process.stdout.write(sqRow('excl  ON', exclOnSQ)); }
-  process.stdout.write('  GATE: SIG precision UP with confident-WRONG staying ~0.\n');
+  // ---- SIGNATURE SWEEP (full arm) — pick the operating point where confident-WRONG is low ----
+  const sqRowFn = (tag: string, q: SuggQuality) =>
+    `${tag.padEnd(12)}${String(q.shown).padStart(7)}   ${pct(q.precision).padStart(7)}   ${String(q.confShown).padStart(10)}   ${String(q.confWrong).padStart(9)}\n`;
+  if (doFull) {
+    process.stdout.write('\nSIGNATURE SWEEP (full arm, prod policy) — tune tScore/tMargin\n');
+    process.stdout.write('setting        acc     recall   prec   | nonself: shown  prec   conf>=.8  conf-WRONG\n');
+    for (let si = 0; si < SWEEP.length; si += 1) {
+      const s = scoreUnder(full.sig[si], prodPolicy);
+      const q = suggestionQuality(full.sig[si]);
+      process.stdout.write(
+        `${SWEEP[si].label.padEnd(9)} ${pct(s.accuracy).padStart(6)}  ${pct(s.recall).padStart(6)}  ${pct(s.precision).padStart(6)}  | ` +
+        `${String(q.shown).padStart(5)}  ${pct(q.precision).padStart(6)}  ${String(q.confShown).padStart(7)}  ${String(q.confWrong).padStart(9)}\n`,
+      );
+    }
+    process.stdout.write('  For reference: OFF nonself-prec ' + pct(suggestionQuality(full.off).precision) +
+      ', ON confident-WRONG ' + String(suggestionQuality(full.on).confWrong) + '.\n');
+    process.stdout.write('  GATE: acc beats OFF/ON materially AND confident-WRONG stays low; self recall not down.\n');
+  }
 
-  // ---- Calibration (full arm, SIG = the signature-primary proposal) ----
-  const src = doFull ? full.sig : excl.on;
+  // ---- Calibration (full arm, SIG = the LAST/tightest sweep setting) ----
+  const SIG_CAL = SWEEP.length - 1;
+  const src = doFull ? full.sig[SIG_CAL] : excl.on;
   const calib = CONF_BUCKETS.slice(0, -1).map(() => ({ self: { n: 0, ok: 0 }, other: { n: 0, ok: 0 } }));
   for (const r of src) {
     if (!r.suggestedName) continue;
@@ -396,7 +417,7 @@ async function main(): Promise<void> {
     cell.n += 1;
     if (r.expectedName && containsMatch(r.expectedName, r.suggestedName)) cell.ok += 1;
   }
-  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? 'full arm, SIG' : 'excluded arm, ON'})\n`);
+  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? `full arm, SIG ${SWEEP[SIG_CAL].label}` : 'excluded arm, ON'})\n`);
   process.stdout.write('bucket        self acc (n)        non-self acc (n)\n');
   for (let i = 0; i < calib.length; i += 1) {
     const lo = CONF_BUCKETS[i], hi = CONF_BUCKETS[i + 1];
@@ -412,13 +433,13 @@ async function main(): Promise<void> {
   writeFileSync(snapPath, JSON.stringify({
     params: { NOTES_PER_USER, MIN_NAMED, RUNS, ROSTER_MODE, BEFORE_DATE, MODEL },
     identifierAB: {
-      full: { off: scoreUnder(full.off, prodPolicy), on: scoreUnder(full.on, prodPolicy), sig: scoreUnder(full.sig, prodPolicy) },
+      full: { off: scoreUnder(full.off, prodPolicy), on: scoreUnder(full.on, prodPolicy) },
       excluded: doExcl ? { off: scoreUnder(excl.off, prodPolicy), on: scoreUnder(excl.on, prodPolicy) } : null,
     },
-    suggestionQuality: {
-      full: { off: fullOffSQ, on: fullOnSQ, sig: fullSigSQ },
-      excluded: doExcl ? { off: exclOffSQ, on: exclOnSQ } : null,
-    },
+    signatureSweep: SWEEP.map((s, si) => ({
+      setting: s.label, tScore: s.tScore, tMargin: s.tMargin,
+      prf: scoreUnder(full.sig[si], prodPolicy), nonself: suggestionQuality(full.sig[si]),
+    })),
     calibration: calib.map((c, i) => ({ bucket: `${CONF_BUCKETS[i]}-${CONF_BUCKETS[i + 1]}`, ...c })),
     users: perUser.map((u) => ({ userId: u.userId, selfBasis: u.basis, cases: u.cases, full: u.full, sig: u.sig, excluded: u.excl })),
   }, null, 2));

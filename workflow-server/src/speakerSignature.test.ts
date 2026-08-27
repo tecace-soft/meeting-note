@@ -94,7 +94,8 @@ test('decideSuggestions promotes strong warm matches and resolves speakerId + is
     { label: 'Speaker C', text: 'memory summary injection eval' }, // -> Andrew (self)
     { label: 'Speaker D', text: 'okay yeah sure thanks everyone' }, // -> no signal, fallback
   ];
-  const { signature, fallbackLabels } = decideSuggestions(labels, c, idf, 'nT', ROSTER, SELF, { minSigTokens: 4 });
+  // Explicit loose thresholds so this tests the PROMOTION logic, not the shipped default tuning.
+  const { signature, fallbackLabels } = decideSuggestions(labels, c, idf, 'nT', ROSTER, SELF, { minSigTokens: 4, tScore: 0.02, tMargin: 0 });
 
   const byLabel = new Map(signature.map((s) => [s.label, s]));
   assert.equal(byLabel.get('Speaker A')?.name, 'Hansoo Lee (이한수)');
@@ -126,7 +127,7 @@ test('decideSuggestions never emits two selves (keeps the strongest, demotes the
     { label: 'Speaker A', text: 'memory summary injection eval harness backtest' },
     { label: 'Speaker B', text: 'memory summary injection eval' },
   ];
-  const { signature, fallbackLabels } = decideSuggestions(labels, c, idf, 'nT', ROSTER, SELF, { minSigTokens: 4 });
+  const { signature, fallbackLabels } = decideSuggestions(labels, c, idf, 'nT', ROSTER, SELF, { minSigTokens: 4, tScore: 0.02, tMargin: 0 });
   assert.equal(signature.filter((s) => s.isSelf).length, 1);
   assert.equal(signature.length + fallbackLabels.length, 2);
 });
