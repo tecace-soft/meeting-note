@@ -61,7 +61,8 @@ export async function requestSpeakerSuggestions(
   segments: TranscriptSegment[],
   savedSpeakers: SavedSpeakerLike[],
   selfName: string | null,
-  auth: IdentifyAuth
+  auth: IdentifyAuth,
+  noteId?: string | null,
 ): Promise<SpeakerSuggestion[]> {
   const labels = anonymousLabelsInTranscript(segments);
   if (labels.length === 0) return [];
@@ -91,7 +92,7 @@ export async function requestSpeakerSuggestions(
       Authorization: `Bearer ${auth.appToken ?? SUPABASE_ANON_KEY}`,
       ...(auth.msToken ? { 'x-ms-access-token': auth.msToken } : {}),
     },
-    body: JSON.stringify({ transcriptText, labels, roster, selfName }),
+    body: JSON.stringify({ transcriptText, labels, roster, selfName, noteId: noteId ?? null }),
   });
 
   const raw = await response.text();

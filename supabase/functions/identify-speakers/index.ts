@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.87.1';
 
 // Suggests, for each anonymous diarization label ("Speaker A/B/C") in a transcript,
 // which known person it most likely is — using text/context only (name mentions,
@@ -106,6 +107,7 @@ interface RequestBody {
   labels: string[];
   roster: RosterEntry[];
   selfName?: string | null;
+  noteId?: string | null; // optional: the note being suggested, excluded from the signature corpus
 }
 
 // Bounds to keep the prompt (and cost) sane on long meetings / large speaker directories.
@@ -113,6 +115,7 @@ const MAX_TRANSCRIPT_CHARS = 24000;
 const MAX_ROSTER_ENTRIES = 40;
 const MAX_LABELS = 30;
 const MAX_SUMMARY_CHARS = 700;
+const SIG_MAX_NOTES = 60; // recent labeled notes scanned to build per-speaker signatures
 
 /** Override with `GEMINI_MODEL` secret. If a model 404s, set e.g. `gemini-2.5-flash-lite` or `gemini-2.5-flash`. */
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
@@ -532,6 +535,104 @@ function gateSuggestionsWithAnchors(suggestions: Suggestion[], transcript: strin
   return applyAnchors(suggestions, anchors, roster, selfName);
 }
 
+// ---------------------------------------------------------------------------
+// SIGNATURE IDENTIFIER — keep behaviorally in sync with workflow-server/src/speakerSignature.ts
+// (that module has the doc + unit tests; the backtest SIG arm measures exactly this). Each roster
+// member gets a TF-IDF text signature from their PAST labeled utterances; an anonymous label is
+// matched to the nearest signature. Signature-primary, LLM fallback. Thresholds tuned on the
+// backtest (t10/m08). Reuses sameName/stripParen/latinParts/hangul* from the anchor block above.
+// ---------------------------------------------------------------------------
+const SIG_TSCORE = 0.10, SIG_TMARGIN = 0.08, SIG_MIN_TOKENS = 8;
+interface SigCorpus { key: string; display: string; docs: Array<{ noteId: string; tokens: string[] }> }
+interface SigUtterance { noteId: string; name: string; text: string }
+
+const sigTokenize = (s: string): string[] => (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []);
+const sigCanon = (s: string): string => s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+function sigBuildCorpora(utterances: SigUtterance[]): Map<string, SigCorpus> {
+  const corpora = new Map<string, SigCorpus>();
+  for (const u of utterances) {
+    const display = (u.name ?? '').trim();
+    const key = sigCanon(display);
+    if (!key) continue;
+    const tokens = sigTokenize(u.text ?? '');
+    if (tokens.length === 0) continue;
+    const person = corpora.get(key) ?? { key, display, docs: [] };
+    person.docs.push({ noteId: u.noteId, tokens });
+    corpora.set(key, person);
+  }
+  return corpora;
+}
+function sigIdf(corpora: Map<string, SigCorpus>): Map<string, number> {
+  const df = new Map<string, number>();
+  for (const person of corpora.values()) {
+    const seen = new Set<string>();
+    for (const d of person.docs) for (const t of d.tokens) seen.add(t);
+    for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const P = corpora.size;
+  const idf = new Map<string, number>();
+  for (const [t, d] of df) idf.set(t, Math.log((P + 1) / (d + 1)) + 1);
+  return idf;
+}
+const sigTf = (tokens: string[]): Map<string, number> => {
+  const tf = new Map<string, number>();
+  for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+  return tf;
+};
+function sigSignature(corpora: Map<string, SigCorpus>, key: string, excludeNoteId: string | null): Map<string, number> {
+  const toks: string[] = [];
+  for (const d of corpora.get(key)?.docs ?? []) if (d.noteId !== excludeNoteId) toks.push(...d.tokens);
+  return sigTf(toks);
+}
+function sigCosine(a: Map<string, number>, b: Map<string, number>, idf: Map<string, number>): number {
+  let dot = 0, na = 0, nb = 0;
+  for (const [t, fa] of a) { const w = fa * (idf.get(t) ?? 0); na += w * w; const fb = b.get(t); if (fb) dot += w * (fb * (idf.get(t) ?? 0)); }
+  for (const [t, fb] of b) { const w = fb * (idf.get(t) ?? 0); nb += w * w; }
+  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+}
+const sigSat = (x: number, k: number): number => (x > 0 ? x / (x + k) : 0);
+function sigConfidence(top1: number, top2: number): number {
+  const margin = Math.max(0, top1 - top2);
+  const v = 0.72 + 0.16 * sigSat(margin, 0.08) + 0.08 * sigSat(top1, 0.25);
+  return Math.min(1, Math.max(0, v));
+}
+
+interface SigDecision { label: string; name: string; speakerId: string | null; confidence: number; isSelf: boolean }
+// Decide per label: a WARM + STRONG match is promoted; else the label is a fallback for the LLM.
+function sigDecide(
+  labels: Array<{ label: string; text: string }>, corpora: Map<string, SigCorpus>, idf: Map<string, number>,
+  excludeNoteId: string | null, roster: RosterEntry[], selfName: string | null,
+): { promoted: Map<string, SigDecision>; fallback: string[] } {
+  const promoted = new Map<string, SigDecision>();
+  const fallback: string[] = [];
+  for (const { label, text } of labels) {
+    const labelVec = sigTf(sigTokenize(text));
+    if (labelVec.size === 0) { fallback.push(label); continue; }
+    let top1 = { key: '', display: '', score: -1, warm: false };
+    let top2Score = 0;
+    for (const person of corpora.values()) {
+      const otherTokens = person.docs.filter((d) => d.noteId !== excludeNoteId).reduce((n, d) => n + d.tokens.length, 0);
+      const score = otherTokens ? sigCosine(labelVec, sigSignature(corpora, person.key, excludeNoteId), idf) : 0;
+      if (score > top1.score) { top2Score = top1.score < 0 ? 0 : top1.score; top1 = { key: person.key, display: person.display, score, warm: otherTokens >= SIG_MIN_TOKENS }; }
+      else if (score > top2Score) { top2Score = score; }
+    }
+    const margin = Math.max(0, top1.score - top2Score);
+    if (!top1.warm || top1.score < SIG_TSCORE || margin < SIG_TMARGIN) { fallback.push(label); continue; }
+    const rosterHit = roster.find((r) => sameName(r.name, top1.display));
+    promoted.set(label, {
+      label, name: top1.display, speakerId: rosterHit ? rosterHit.speakerId : null,
+      confidence: sigConfidence(top1.score, top2Score), isSelf: sameName(top1.display, selfName),
+    });
+  }
+  // never two selves among promoted: keep the highest-confidence, demote the rest to fallback.
+  const selves = [...promoted.values()].filter((s) => s.isSelf).sort((a, b) => b.confidence - a.confidence);
+  for (const extra of selves.slice(1)) { promoted.delete(extra.label); fallback.push(extra.label); }
+  return { promoted, fallback };
+}
+
+const isAnonSpeakerName = (s: string): boolean => /^(speaker|unknown)\b/i.test(s.trim()) || s.trim() === '';
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS });
@@ -595,21 +696,74 @@ serve(async (req) => {
     return jsonResponse({ error: 'No Gemini API key. Set GEMINI_API_KEY (or GOOGLE_API_KEY) as a Supabase secret.' }, 500);
   }
 
-  const normalizedBody: RequestBody = { transcriptText, labels, roster, selfName: body.selfName };
-  const userPrompt = buildIdentifyUserPrompt(normalizedBody);
-
-  const result = await callGeminiWithRetryAndFallback(apiKey, model, IDENTIFY_SYSTEM_PROMPT, userPrompt);
-  if (result.error) {
-    return jsonResponse({ error: result.error }, result.status ?? 502);
-  }
-
   const validSpeakerIds = new Set(roster.map((r) => r.speakerId));
   const requestedLabels = labels.slice(0, MAX_LABELS);
-  const raw = parseSuggestions(result.rawText, validSpeakerIds, requestedLabels);
-  // Reshape against deterministic textual anchors so a non-self name is never asserted at high
-  // confidence without concrete evidence (the boss's confident-garbage complaint). The self path
-  // is untouched. Measured OFF/ON in eval:speaker-backtest.
   const selfName = typeof body.selfName === 'string' ? body.selfName : null;
-  const suggestions = gateSuggestionsWithAnchors(raw, transcriptText, requestedLabels, roster, selfName);
-  return jsonResponse({ suggestions });
+  const noteId = typeof body.noteId === 'string' && body.noteId.trim() ? body.noteId.trim() : null;
+
+  // 1. Build per-speaker signatures from the user's PAST labeled notes (best-effort; any failure
+  //    just leaves the corpus empty → pure LLM behavior, never a failed suggestion).
+  let corpora = new Map<string, SigCorpus>();
+  let idf = new Map<string, number>();
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? Deno.env.get('MEETING_NOTE_SUPABASE_URL') ?? '';
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('MEETING_NOTE_SERVICE_ROLE_KEY') ?? '';
+  if (supabaseUrl && serviceRoleKey) {
+    try {
+      const db = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+      const { data } = await db.from('note').select('id, diarization')
+        .eq('user_id', authResult.userId).order('created_at', { ascending: false }).limit(SIG_MAX_NOTES);
+      const utt: SigUtterance[] = [];
+      for (const n of (data ?? []) as Array<{ id: string; diarization: unknown }>) {
+        if (noteId && n.id === noteId) continue; // leave-one-out
+        const segs = Array.isArray(n.diarization) ? n.diarization : [];
+        for (const s of segs as Array<{ speaker?: unknown; text?: unknown }>) {
+          const name = typeof s.speaker === 'string' ? s.speaker.trim() : '';
+          const text = typeof s.text === 'string' ? s.text : '';
+          if (name && !isAnonSpeakerName(name) && text) utt.push({ noteId: n.id, name, text });
+        }
+      }
+      corpora = sigBuildCorpora(utt);
+      idf = sigIdf(corpora);
+    } catch (_err) { corpora = new Map(); idf = new Map(); }
+  }
+
+  // 2. Signature decision on the current transcript's anonymous labels.
+  const textByLabel = new Map<string, string>();
+  for (const turn of parseTurns(transcriptText, requestedLabels)) {
+    textByLabel.set(turn.label, `${textByLabel.get(turn.label) ?? ''} ${turn.text}`.trim());
+  }
+  const labelsWithText = requestedLabels.map((l) => ({ label: l, text: textByLabel.get(l) ?? '' }));
+  const dec = corpora.size
+    ? sigDecide(labelsWithText, corpora, idf, noteId, roster, selfName)
+    : { promoted: new Map<string, SigDecision>(), fallback: requestedLabels };
+
+  // 3. LLM identify ONLY for labels the signature did not resolve (cold-start / weak signal).
+  let anchoredByLabel = new Map<string, Suggestion>();
+  if (dec.fallback.length > 0) {
+    const userPrompt = buildIdentifyUserPrompt({ transcriptText, labels, roster, selfName: body.selfName });
+    const result = await callGeminiWithRetryAndFallback(apiKey, model, IDENTIFY_SYSTEM_PROMPT, userPrompt);
+    if (result.error) {
+      // The LLM failed: still return whatever the signatures resolved rather than error out.
+      if (dec.promoted.size === 0) return jsonResponse({ error: result.error }, result.status ?? 502);
+    } else {
+      const raw = parseSuggestions(result.rawText, validSpeakerIds, requestedLabels);
+      // Anchor the LLM suggestions (confident-garbage guard); signature picks are evidence, kept as-is.
+      const anchored = gateSuggestionsWithAnchors(raw, transcriptText, requestedLabels, roster, selfName);
+      anchoredByLabel = new Map(anchored.map((s) => [s.label, s]));
+    }
+  }
+
+  // 4. Merge: a promoted signature pick wins; otherwise the anchored LLM suggestion for that label.
+  const merged: Suggestion[] = requestedLabels.map((label) => {
+    const s = dec.promoted.get(label);
+    if (s) return { label, name: s.name, speakerId: s.speakerId, confidence: s.confidence, isSelf: s.isSelf, rationale: 'signature' };
+    return anchoredByLabel.get(label) ?? { label, name: null, speakerId: null, confidence: 0, isSelf: false, rationale: '' };
+  });
+  // Enforce a single self across the merged list (signature + LLM could each pick a self): keep the
+  // highest-confidence self, and abstain the rest (preserves the isSelf ⟺ self-name invariant).
+  const mergedSelves = merged.filter((s) => s.isSelf).sort((a, b) => b.confidence - a.confidence);
+  for (const extra of mergedSelves.slice(1)) {
+    extra.isSelf = false; extra.name = null; extra.speakerId = null; extra.confidence = Math.min(extra.confidence, 0.3); extra.rationale = 'demoted duplicate self';
+  }
+  return jsonResponse({ suggestions: merged });
 });

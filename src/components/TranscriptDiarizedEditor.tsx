@@ -474,7 +474,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       const appToken = await getSupabaseAccessTokenForRequest();
       const msToken = appToken ? null : await getAccessToken();
       if (!appToken && !msToken) throw new Error('Could not get access. Please sign in again.');
-      const result = await requestSpeakerSuggestions(segments, roster, user?.displayName ?? null, { appToken, msToken });
+      const result = await requestSpeakerSuggestions(segments, roster, user?.displayName ?? null, { appToken, msToken }, noteId);
       setSuggestions(result);
     } catch (err: unknown) {
       setSuggestError(err instanceof Error ? err.message : 'Speaker suggestion failed');
