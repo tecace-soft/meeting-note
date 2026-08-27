@@ -383,9 +383,11 @@ function parseSuggestions(rawText: string, validSpeakerIds: Set<string>, request
     let speakerId = typeof o.speakerId === 'string' && o.speakerId.trim() ? o.speakerId.trim() : null;
     if (speakerId && !validSpeakerIds.has(speakerId)) speakerId = null; // never trust an invented id
     let name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
-    // Reject a new-name suggestion (no roster match) whose name is not a real person — an echoed
-    // label or the product name. This is unknown, not an identity: null it so no bogus "Apply".
-    if (name && speakerId === null && isNonPersonName(name, requestedLabels)) name = null;
+    // Coerce a non-person name to UNKNOWN — an echoed label ("Speaker C") or the product name
+    // ("meeting note"). Do this REGARDLESS of speakerId: past bad "Apply"s created roster rows
+    // literally named "Speaker X"/"meeting note", so such a name can arrive WITH a valid roster id
+    // and would otherwise slip through. Drop both fields so nothing bogus is offered to Apply.
+    if (name && isNonPersonName(name, requestedLabels)) { name = null; speakerId = null; }
 
     out.push({
       label,
@@ -631,7 +633,6 @@ function sigDecide(
   return { promoted, fallback };
 }
 
-const isAnonSpeakerName = (s: string): boolean => /^(speaker|unknown)\b/i.test(s.trim()) || s.trim() === '';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -719,7 +720,9 @@ serve(async (req) => {
         for (const s of segs as Array<{ speaker?: unknown; text?: unknown }>) {
           const name = typeof s.speaker === 'string' ? s.speaker.trim() : '';
           const text = typeof s.text === 'string' ? s.text : '';
-          if (name && !isAnonSpeakerName(name) && text) utt.push({ noteId: n.id, name, text });
+          // Never let a non-person label ("Speaker X") or the product name ("meeting note") — left
+          // in old diarization by a past bad rename — become a signature candidate.
+          if (name && !isNonPersonName(name, []) && text) utt.push({ noteId: n.id, name, text });
         }
       }
       corpora = sigBuildCorpora(utt);

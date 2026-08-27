@@ -777,9 +777,10 @@ export function parseSuggestions(rawText: string, validSpeakerIds: Set<string>, 
     let speakerId = typeof o.speakerId === 'string' && o.speakerId.trim() ? o.speakerId.trim() : null;
     if (speakerId && !validSpeakerIds.has(speakerId)) speakerId = null;
     let name = typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null;
-    // Reject a new-name suggestion (no roster match) whose name is not a real person — an echoed
-    // label or the product name. This is unknown, not an identity: null it so nothing bogus folds.
-    if (name && speakerId === null && isNonPersonName(name, requestedLabels)) name = null;
+    // Coerce a non-person name to UNKNOWN — an echoed label or the product name. Done REGARDLESS
+    // of speakerId: past bad "Apply"s created roster rows named "Speaker X"/"meeting note", so such
+    // a name can arrive WITH a valid roster id and would otherwise slip through. Drop both fields.
+    if (name && isNonPersonName(name, requestedLabels)) { name = null; speakerId = null; }
     out.push({
       label,
       speakerId,

@@ -39,6 +39,16 @@ test('buildCorpora groups utterances by canonical name across notes', () => {
   assert.equal(c.get('andrew yoo')?.docs.length, 1);
 });
 
+test('buildCorpora skips non-person names (echoed labels + product name)', () => {
+  const c = buildCorpora([
+    { noteId: 'n1', name: 'Hansoo Lee (이한수)', text: 'backend diarization deploy' },
+    { noteId: 'n1', name: 'Speaker C', text: 'this is an echoed label from bad data' },
+    { noteId: 'n1', name: 'meeting note', text: 'the product name is not a person' },
+    { noteId: 'n1', name: 'Speaker 4', text: 'another echoed label' },
+  ]);
+  assert.deepEqual([...c.keys()], ['hansoo lee']);
+});
+
 test('computeIdf gives a shared term lower idf than a rare one', () => {
   const idf = computeIdf(buildCorpora(HISTORY));
   // "update" is in 2 people, "backend" in 1 → backend is more discriminative (higher idf).

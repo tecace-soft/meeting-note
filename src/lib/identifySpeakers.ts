@@ -34,6 +34,20 @@ export function isAnonymousSpeakerLabel(label: string): boolean {
   return /^(speaker|transcript|unknown)\b/i.test(t) || /^speaker\s*#?\s*\d+$/i.test(t);
 }
 
+/**
+ * A name that is NOT a real person and must never be saved as a speaker row: an anonymous
+ * diarization label ("Speaker A") OR the product name ("meeting note"). Past bad renames/Sync
+ * Profiles created such rows, which then polluted the roster and re-surfaced as suggestions.
+ * Keep the product-name tokens in sync with the identify-speakers edge fn.
+ */
+export function isNonPersonSpeakerName(name: string): boolean {
+  const t = name.trim();
+  if (!t) return true;
+  if (isAnonymousSpeakerLabel(t)) return true;
+  const lc = t.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return lc === 'meetingnote' || lc === 'meetingnotes';
+}
+
 /** Distinct anonymous labels present in the transcript, in first-seen order. */
 export function anonymousLabelsInTranscript(segments: TranscriptSegment[]): string[] {
   const seen = new Set<string>();

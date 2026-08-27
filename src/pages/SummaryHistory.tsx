@@ -51,6 +51,7 @@ import {
   updateTranslationMap,
 } from '../lib/transcriptTranslationDisplay';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
+import { isNonPersonSpeakerName } from '../lib/identifySpeakers';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { getNoteImageCounts } from '../lib/noteImages';
 import { getOutlookCalendarEvents, type OutlookCalendarEvent } from '../services/graphService';
@@ -2081,6 +2082,9 @@ const SummaryHistory: React.FC = () => {
 
   const handleSaveHistoryProfile = async (speakerName: string): Promise<{ ok: boolean; error?: string }> => {
     if (!user?.id) return { ok: false, error: 'Missing authenticated user.' };
+    // Never create a speaker row for a non-person name (an anonymous label like "Speaker A" or the
+    // product name "meeting note") — these polluted the roster and re-surfaced as suggestions.
+    if (isNonPersonSpeakerName(speakerName)) return { ok: false, error: `"${speakerName}" is not a person name and was not saved as a speaker.` };
     const profile = generatedProfiles.find((p) => p.speakerName === speakerName);
     if (!profile) return { ok: false, error: `Profile "${speakerName}" not found.` };
     setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === speakerName ? { ...p, saving: true, saveError: null } : p));

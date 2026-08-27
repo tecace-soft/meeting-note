@@ -42,13 +42,24 @@ export const tokenize = (s: string): string[] => (s.toLowerCase().match(/[가-�
 export const canonName = (s: string): string =>
   s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
 
+// A non-person name that must never become a signature candidate: an echoed diarization label
+// ("Speaker C", "Speaker 4") or the product name ("meeting note"), left in old data by a bad
+// rename. Keep in sync with isNonPersonName in memory.ts / the identify-speakers edge fn.
+export function isNonPersonName(name: string): boolean {
+  const t = name.trim();
+  if (!t) return true;
+  if (/^(speaker|unknown|transcript)\b/i.test(t) || /^speaker\s*#?\s*\d+$/i.test(t)) return true;
+  const lc = t.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return lc === 'meetingnote' || lc === 'meetingnotes';
+}
+
 /** Group labeled utterances into per-person corpora, keyed by canonical name. */
 export function buildCorpora(utterances: LabeledUtterance[]): Corpora {
   const corpora: Corpora = new Map();
   for (const u of utterances) {
     const display = (u.name ?? '').trim();
     const key = canonName(display);
-    if (!key) continue;
+    if (!key || isNonPersonName(display)) continue;
     const tokens = tokenize(u.text ?? '');
     if (tokens.length === 0) continue;
     const person = corpora.get(key) ?? { key, display, docs: [] };
