@@ -52,6 +52,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { identifySpeakers, type SpeakerRosterEntry, type SpeakerSuggestion } from '../src/memory.js';
 import { gateSuggestionsWithAnchors } from '../src/speakerAnchors.js';
+import { buildCorpora, computeIdf, decideSuggestions, type Corpora, type LabeledUtterance } from '../src/speakerSignature.js';
 import { containsMatch } from './lib/scoring.js';
 import { norm } from './lib/util.js';
 
@@ -105,6 +106,7 @@ interface BacktestCase {
   transcript: string; // rendered with speakerKey labels (what ingest saw)
   labels: string[]; // distinct speakerKeys present
   expected: Map<string, string | null>; // speakerKey -> real name, or null (user left it anonymous)
+  labelText: Map<string, string>; // speakerKey -> that label's concatenated utterance text (for signatures)
   groundTruthNames: string[]; // distinct real names in this note (for roster exclusion + self)
 }
 
@@ -119,19 +121,21 @@ function toCase(note: NoteRow): BacktestCase | null {
   if (keyed.length < segs.length) return null;
 
   const expected = new Map<string, string | null>();
+  const labelText = new Map<string, string>();
   for (const s of keyed) {
     const key = (s.speakerKey as string).trim();
     const display = (s.speaker || '').trim();
     const real = !isAnonName(display) ? display : null;
     if (!expected.has(key)) expected.set(key, real);
     else if (real && !expected.get(key)) expected.set(key, real);
+    labelText.set(key, `${labelText.get(key) ?? ''} ${s.text}`.trim());
   }
   const labels = Array.from(expected.keys());
   const groundTruthNames = Array.from(new Set(Array.from(expected.values()).filter((v): v is string => !!v)));
   if (groundTruthNames.length < MIN_NAMED) return null;
 
   const transcript = keyed.map((s) => `${(s.speakerKey as string).trim()}: ${s.text}`).join('\n');
-  return { noteId: note.id, createdAt: note.created_at, transcript, labels, expected, groundTruthNames };
+  return { noteId: note.id, createdAt: note.created_at, transcript, labels, expected, labelText, groundTruthNames };
 }
 
 /** Turn one identify result into per-label records (one per label in the case). */
@@ -166,13 +170,35 @@ function scoreUnder(records: LabelRecord[], policy: Policy): PRF {
 
 const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 
-// Paired anchor A/B: identify ONCE per run, then score the SAME model output both raw (off) and
-// through the deterministic evidence-anchor layer (on). Pairing removes model stochasticity from
-// the comparison AND halves the Gemini calls vs two separate runs.
-interface ArmRecords { off: LabelRecord[]; on: LabelRecord[] }
+// Paired A/B: identify ONCE per run, then score the SAME model output three ways —
+//   off = raw model; on = raw + deterministic anchor layer (shipped today);
+//   sig = SIGNATURE-primary (a warm+strong signature pick wins, and is EVIDENCE so it is kept
+//         as-is, not capped) + the anchored LLM suggestion for every fallback label.
+// Pairing removes model stochasticity from the comparison and reuses the one Gemini call.
+interface ArmRecords { off: LabelRecord[]; on: LabelRecord[]; sig: LabelRecord[] }
 
-async function collectRecords(c: BacktestCase, apiKey: string, roster: SpeakerRosterEntry[], selfName: string | null): Promise<ArmRecords> {
-  const out: ArmRecords = { off: [], on: [] };
+// Per-user speaker corpora from all the user's cases (leave-one-meeting-out is applied per case
+// via excludeNoteId), keyed by name — exactly what the shipped edge fn will read from the DB.
+function buildUserCorpora(cases: BacktestCase[]): Corpora {
+  const utt: LabeledUtterance[] = [];
+  for (const c of cases) for (const [label, name] of c.expected) {
+    if (!name) continue;
+    utt.push({ noteId: c.noteId, name, text: c.labelText.get(label) ?? '' });
+  }
+  return buildCorpora(utt);
+}
+
+async function collectRecords(
+  c: BacktestCase, apiKey: string, roster: SpeakerRosterEntry[], selfName: string | null,
+  corpora: Corpora, idf: Map<string, number>,
+): Promise<ArmRecords> {
+  const out: ArmRecords = { off: [], on: [], sig: [] };
+  // Signature decision is deterministic (no per-run variation) — compute it once per case.
+  const labelsWithText = c.labels.map((l) => ({ label: l, text: c.labelText.get(l) ?? '' }));
+  const dec = decideSuggestions(labelsWithText, corpora, idf, c.noteId,
+    roster.map((r) => ({ speakerId: r.speakerId, name: r.name })), selfName);
+  const sigByLabel = new Map(dec.signature.map((s) => [s.label, s]));
+
   for (let i = 0; i < RUNS; i += 1) {
     // MODEL set → isolate that one model (fallbackModels:[] so resolveModels returns just it).
     const res = await identifySpeakers({
@@ -181,11 +207,20 @@ async function collectRecords(c: BacktestCase, apiKey: string, roster: SpeakerRo
       ...(THINK !== null && Number.isFinite(THINK) ? { thinkingBudget: THINK } : {}),
     });
     // A failed call = the model produced nothing → toRecords yields an abstain for every label,
-    // identically for both arms (the anchor layer over [] is still []).
+    // identically for all arms (the anchor layer over [] is still []).
     const raw: SpeakerSuggestion[] = 'error' in res ? [] : res.suggestions;
     const anchored = gateSuggestionsWithAnchors(raw, c.transcript, c.labels, roster, selfName);
+    // sig arm: signature pick where we have one (kept as-is = evidence, not capped), else the
+    // anchored LLM suggestion for that label.
+    const anchoredByLabel = new Map(anchored.map((s) => [s.label, s]));
+    const merged: SpeakerSuggestion[] = c.labels.map((label) => {
+      const s = sigByLabel.get(label);
+      if (s) return { label, name: s.name, speakerId: s.speakerId, confidence: s.confidence, isSelf: s.isSelf, rationale: 'signature' };
+      return anchoredByLabel.get(label) ?? { label, name: null, speakerId: null, confidence: 0, isSelf: false, rationale: '' };
+    });
     out.off.push(...toRecords(raw, c, selfName));
     out.on.push(...toRecords(anchored, c, selfName));
+    out.sig.push(...toRecords(merged, c, selfName));
   }
   return out;
 }
@@ -288,9 +323,9 @@ async function main(): Promise<void> {
   const doFull = ROSTER_MODE === 'full' || ROSTER_MODE === 'both';
   const doExcl = ROSTER_MODE === 'excluded' || ROSTER_MODE === 'both';
 
-  const full: ArmRecords = { off: [], on: [] };
-  const excl: ArmRecords = { off: [], on: [] };
-  const perUser: Array<{ userId: string; basis: string; cases: number; full: PRF | null; excl: PRF | null }> = [];
+  const full: ArmRecords = { off: [], on: [], sig: [] };
+  const excl: ArmRecords = { off: [], on: [], sig: [] };
+  const perUser: Array<{ userId: string; basis: string; cases: number; full: PRF | null; sig: PRF | null; excl: PRF | null }> = [];
   const prodPolicy = POLICIES[0].apply;
 
   for (const userId of users) {
@@ -298,54 +333,60 @@ async function main(): Promise<void> {
     if (cases.length === 0) { process.stdout.write(`• ${userId.slice(0, 8)}… no qualifying notes\n`); continue; }
     const roster = await loadRoster(db, userId);
     const { name: selfName, basis } = resolveSelfName(userId, cases, pinned);
+    // Signature corpora = this user's own labeled history; leave-one-meeting-out is per case.
+    const corpora = buildUserCorpora(cases);
+    const idf = computeIdf(corpora);
 
-    const uFull: ArmRecords = { off: [], on: [] };
-    const uExcl: ArmRecords = { off: [], on: [] };
+    const uFull: ArmRecords = { off: [], on: [], sig: [] };
+    const uExcl: ArmRecords = { off: [], on: [], sig: [] };
     for (const c of cases) {
-      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName); uFull.off.push(...r.off); uFull.on.push(...r.on); }
-      if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName); uExcl.off.push(...r.off); uExcl.on.push(...r.on); }
+      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName, corpora, idf); uFull.off.push(...r.off); uFull.on.push(...r.on); uFull.sig.push(...r.sig); }
+      if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName, corpora, idf); uExcl.off.push(...r.off); uExcl.on.push(...r.on); }
     }
-    full.off.push(...uFull.off); full.on.push(...uFull.on);
+    full.off.push(...uFull.off); full.on.push(...uFull.on); full.sig.push(...uFull.sig);
     excl.off.push(...uExcl.off); excl.on.push(...uExcl.on);
     const f = doFull ? scoreUnder(uFull.off, prodPolicy) : null;
+    const g = doFull ? scoreUnder(uFull.sig, prodPolicy) : null;
     const e = doExcl ? scoreUnder(uExcl.off, prodPolicy) : null;
-    perUser.push({ userId, basis, cases: cases.length, full: f, excl: e });
+    perUser.push({ userId, basis, cases: cases.length, full: f, sig: g, excl: e });
     process.stdout.write(
       `• ${userId.slice(0, 8)}…  self=${basis}  cases=${cases.length}  ` +
-      (f ? `full acc=${pct(f.accuracy)} rec=${pct(f.recall)} prec=${pct(f.precision)}  ` : '') +
-      (e ? `excl acc=${pct(e.accuracy)} rec=${pct(e.recall)} prec=${pct(e.precision)}` : '') + '\n',
+      (f ? `full acc=${pct(f.accuracy)}  ` : '') +
+      (g ? `SIG acc=${pct(g.accuracy)} rec=${pct(g.recall)} prec=${pct(g.precision)}  ` : '') +
+      (e ? `excl acc=${pct(e.accuracy)}` : '') + '\n',
     );
   }
 
   // ---- ANCHOR A/B: aggregate under the prod policy, off vs on (micro-avg over all labels) ----
   process.stdout.write('\n──────────────────────────────────────────────────────────────\n');
-  process.stdout.write(`ANCHOR A/B — deterministic evidence-anchor layer OFF vs ON (${perUser.length} users)\n`);
+  process.stdout.write(`IDENTIFIER A/B — OFF (raw) vs ON (anchored) vs SIG (signature-primary) (${perUser.length} users)\n`);
   const line = (tag: string, s: PRF) => `  ${tag.padEnd(26)} acc ${pct(s.accuracy)}  recall ${pct(s.recall)}  precision ${pct(s.precision)}\n`;
   if (doFull) {
     process.stdout.write('full roster (prod today):\n');
     process.stdout.write(line('OFF (raw model)', scoreUnder(full.off, prodPolicy)));
     process.stdout.write(line('ON  (anchored)', scoreUnder(full.on, prodPolicy)));
+    process.stdout.write(line('SIG (signature+LLM)', scoreUnder(full.sig, prodPolicy)));
   }
   if (doExcl) {
     process.stdout.write('meeting excluded (general):\n');
     process.stdout.write(line('OFF (raw model)', scoreUnder(excl.off, prodPolicy)));
     process.stdout.write(line('ON  (anchored)', scoreUnder(excl.on, prodPolicy)));
   }
-  process.stdout.write('  GATE: self recall must NOT drop OFF→ON (the anchor layer never touches the self path).\n');
+  process.stdout.write('  GATE: SIG accuracy beats OFF/ON materially; self recall must NOT drop.\n');
 
   // ---- SUGGESTION QUALITY (non-self) — the headline the anchor layer targets ----
   process.stdout.write('\nSUGGESTION QUALITY (non-self picks shown to the user)\n');
   process.stdout.write('arm / anchors     shown(>=0.5)  precision   confident(>=0.8)  confident-WRONG\n');
   const sqRow = (tag: string, q: SuggQuality) =>
     `${tag.padEnd(18)}${String(q.shown).padStart(9)}   ${pct(q.precision).padStart(7)}   ${String(q.confShown).padStart(12)}   ${String(q.confWrong).padStart(13)}\n`;
-  const fullOffSQ = suggestionQuality(full.off), fullOnSQ = suggestionQuality(full.on);
+  const fullOffSQ = suggestionQuality(full.off), fullOnSQ = suggestionQuality(full.on), fullSigSQ = suggestionQuality(full.sig);
   const exclOffSQ = suggestionQuality(excl.off), exclOnSQ = suggestionQuality(excl.on);
-  if (doFull) { process.stdout.write(sqRow('full  OFF', fullOffSQ)); process.stdout.write(sqRow('full  ON', fullOnSQ)); }
+  if (doFull) { process.stdout.write(sqRow('full  OFF', fullOffSQ)); process.stdout.write(sqRow('full  ON', fullOnSQ)); process.stdout.write(sqRow('full  SIG', fullSigSQ)); }
   if (doExcl) { process.stdout.write(sqRow('excl  OFF', exclOffSQ)); process.stdout.write(sqRow('excl  ON', exclOnSQ)); }
-  process.stdout.write('  GATE: confident-WRONG should DROP and precision hold/rise OFF→ON.\n');
+  process.stdout.write('  GATE: SIG precision UP with confident-WRONG staying ~0.\n');
 
-  // ---- Calibration (full arm, ON = the anchored proposal) ----
-  const src = doFull ? full.on : excl.on;
+  // ---- Calibration (full arm, SIG = the signature-primary proposal) ----
+  const src = doFull ? full.sig : excl.on;
   const calib = CONF_BUCKETS.slice(0, -1).map(() => ({ self: { n: 0, ok: 0 }, other: { n: 0, ok: 0 } }));
   for (const r of src) {
     if (!r.suggestedName) continue;
@@ -355,7 +396,7 @@ async function main(): Promise<void> {
     cell.n += 1;
     if (r.expectedName && containsMatch(r.expectedName, r.suggestedName)) cell.ok += 1;
   }
-  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? 'full' : 'excluded'} arm, anchors ON)\n`);
+  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? 'full arm, SIG' : 'excluded arm, ON'})\n`);
   process.stdout.write('bucket        self acc (n)        non-self acc (n)\n');
   for (let i = 0; i < calib.length; i += 1) {
     const lo = CONF_BUCKETS[i], hi = CONF_BUCKETS[i + 1];
@@ -370,16 +411,16 @@ async function main(): Promise<void> {
   const snapPath = join(RESULTS_DIR, `speaker-backtest${modelTag}-${stamp}.json`);
   writeFileSync(snapPath, JSON.stringify({
     params: { NOTES_PER_USER, MIN_NAMED, RUNS, ROSTER_MODE, BEFORE_DATE, MODEL },
-    anchorAB: {
-      full: { off: scoreUnder(full.off, prodPolicy), on: scoreUnder(full.on, prodPolicy) },
+    identifierAB: {
+      full: { off: scoreUnder(full.off, prodPolicy), on: scoreUnder(full.on, prodPolicy), sig: scoreUnder(full.sig, prodPolicy) },
       excluded: doExcl ? { off: scoreUnder(excl.off, prodPolicy), on: scoreUnder(excl.on, prodPolicy) } : null,
     },
     suggestionQuality: {
-      full: { off: fullOffSQ, on: fullOnSQ },
+      full: { off: fullOffSQ, on: fullOnSQ, sig: fullSigSQ },
       excluded: doExcl ? { off: exclOffSQ, on: exclOnSQ } : null,
     },
     calibration: calib.map((c, i) => ({ bucket: `${CONF_BUCKETS[i]}-${CONF_BUCKETS[i + 1]}`, ...c })),
-    users: perUser.map((u) => ({ userId: u.userId, selfBasis: u.basis, cases: u.cases, full: u.full, excluded: u.excl })),
+    users: perUser.map((u) => ({ userId: u.userId, selfBasis: u.basis, cases: u.cases, full: u.full, sig: u.sig, excluded: u.excl })),
   }, null, 2));
   process.stdout.write(`\nsnapshot: ${snapPath}\n`);
 }

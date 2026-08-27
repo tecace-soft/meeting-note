@@ -112,13 +112,16 @@ export function matchLabel(
   return matches.sort((a, b) => b.score - a.score);
 }
 
-// Honest confidence, monotonic in top1 and in the margin (top1 - top2). Saturating so a modest
-// bag-of-words cosine still maps into a usable range; the exact shape is TUNED on the backtest
-// calibration table, not trusted as-is.
+// Confidence for a PROMOTED pick (one that already passed tScore + tMargin, so it is evidence).
+// A promoted warm signature match measured ~77% accurate in the ceiling probe, so anchor it near
+// 0.8 and let a larger margin / top1 push toward ~0.9 — every promoted pick clears the 0.7 UI
+// floor. Bag-of-words cosines are small in absolute terms, so this maps the MARGIN (not the raw
+// cosine) into the band. Monotonic in top1 and margin. The exact shape is TUNED on the backtest
+// calibration table (tighten tScore/tMargin if a high bucket is not actually accurate).
 const sat = (x: number, k: number): number => (x > 0 ? x / (x + k) : 0);
 export function confidenceFrom(top1: number, top2: number): number {
   const margin = Math.max(0, top1 - top2);
-  return clamp01(0.6 * sat(top1, 0.25) + 0.4 * sat(margin, 0.12));
+  return clamp01(0.72 + 0.16 * sat(margin, 0.08) + 0.08 * sat(top1, 0.25));
 }
 
 function resolveSpeakerId(display: string, roster: RosterEntry[]): string | null {

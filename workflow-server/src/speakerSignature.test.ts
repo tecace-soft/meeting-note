@@ -72,12 +72,13 @@ test('matchLabel returns empty for a label with no content tokens', () => {
 
 // ---- confidenceFrom ----
 
-test('confidenceFrom is bounded [0,1] and monotonic in top1 and margin', () => {
-  assert.equal(confidenceFrom(0, 0), 0);
+test('confidenceFrom maps a promoted pick into the honest high band, monotonic in top1 and margin', () => {
   const a = confidenceFrom(0.4, 0.1);
   const bHigherTop1 = confidenceFrom(0.6, 0.1);
   const cHigherMargin = confidenceFrom(0.4, 0.0);
-  assert.ok(a > 0 && a < 1);
+  // Every promoted pick clears the 0.7 UI floor and stays honest (< 1).
+  assert.ok(a >= 0.7 && a < 1);
+  assert.ok(confidenceFrom(0.08, 0.02) >= 0.7); // the weakest promotable pick still clears the floor
   assert.ok(bHigherTop1 > a);
   assert.ok(cHigherMargin > a);
 });
