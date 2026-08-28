@@ -51,8 +51,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { identifySpeakers, type SpeakerRosterEntry, type SpeakerSuggestion } from '../src/memory.js';
-import { gateSuggestionsWithAnchors } from '../src/speakerAnchors.js';
-import { buildCorpora, computeIdf, decideSuggestions, type Corpora, type LabeledUtterance } from '../src/speakerSignature.js';
+import { gateSuggestionsWithAnchors, sameName } from '../src/speakerAnchors.js';
+import { buildCorpora, computeIdf, decideSuggestions, matchLabel, type Corpora, type LabeledUtterance } from '../src/speakerSignature.js';
 import { containsMatch } from './lib/scoring.js';
 import { norm } from './lib/util.js';
 
@@ -170,23 +170,22 @@ function scoreUnder(records: LabelRecord[], policy: Policy): PRF {
 
 const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 
-// Paired A/B: identify ONCE per run, then score the SAME model output three ways —
+// Paired A/B: identify ONCE per run, then score the SAME model output several ways —
 //   off = raw model; on = raw + deterministic anchor layer (shipped today);
-//   sig = SIGNATURE-primary (a warm+strong signature pick wins, and is EVIDENCE so it is kept
-//         as-is, not capped) + the anchored LLM suggestion for every fallback label.
-// Pairing removes model stochasticity from the comparison and reuses the one Gemini call.
-// SIG arm sweep: since the signature decision is deterministic and independent of the Gemini
-// call, several (tScore, tMargin) operating points are computed from the SAME identify calls at
-// zero extra cost. Pick the point where promoted precision earns its confidence (confident-WRONG
-// low) while keeping the accuracy lift.
-const SWEEP: Array<{ label: string; tScore: number; tMargin: number }> = [
-  { label: 't08/m02', tScore: 0.08, tMargin: 0.02 },
-  { label: 't08/m05', tScore: 0.08, tMargin: 0.05 },
-  { label: 't10/m08', tScore: 0.10, tMargin: 0.08 },
-  { label: 't14/m12', tScore: 0.14, tMargin: 0.12 },
-];
-interface ArmRecords { off: LabelRecord[]; on: LabelRecord[]; sig: LabelRecord[][] } // sig[settingIdx]
-const emptyArm = (): ArmRecords => ({ off: [], on: [], sig: SWEEP.map(() => []) });
+//   sig = SIGNATURE-primary at the shipped operating point (H9 + t08/m02);
+//   h2a = sig + ENSEMBLE cross-check on WEAK labels only (a label the signature would fall back
+//         to the LLM for, promoted when the LLM's pick agrees with the signature top1) — ZERO
+//         extra cost (those labels already call the LLM);
+//   h2b = h2a + on STRONG signature picks, boost when the LLM agrees / soften when it disagrees
+//         (measures the value of also cross-checking strong picks — which in prod would cost an
+//         extra LLM call, since a strong signature currently skips the LLM).
+// Pairing removes model stochasticity and reuses the one Gemini call for all arms.
+const OP = { tScore: 0.08, tMargin: 0.02 }; // shipped operating point (H9-tuned)
+const AGREE_WEAK = 0.75; // confidence for a weak signature confirmed by the LLM (H2a)
+const AGREE_STRONG = 0.92; // boosted confidence for a strong signature the LLM agrees with (H2b)
+const DISAGREE_SOFT = 0.55; // softened confidence for a strong signature the LLM contradicts (H2b)
+interface ArmRecords { off: LabelRecord[]; on: LabelRecord[]; sig: LabelRecord[]; h2a: LabelRecord[]; h2b: LabelRecord[] }
+const emptyArm = (): ArmRecords => ({ off: [], on: [], sig: [], h2a: [], h2b: [] });
 
 // Per-user speaker corpora from all the user's cases (leave-one-meeting-out is applied per case
 // via excludeNoteId), keyed by name — exactly what the shipped edge fn will read from the DB.
@@ -199,21 +198,25 @@ function buildUserCorpora(cases: BacktestCase[]): Corpora {
   return buildCorpora(utt);
 }
 
+function rosterIdFor(name: string, roster: SpeakerRosterEntry[]): string | null {
+  const hit = roster.find((r) => sameName(r.name, name));
+  return hit ? hit.speakerId : null;
+}
+
 async function collectRecords(
   c: BacktestCase, apiKey: string, roster: SpeakerRosterEntry[], selfName: string | null,
   corpora: Corpora, idf: Map<string, number>,
 ): Promise<ArmRecords> {
   const out = emptyArm();
-  // Signature decision is deterministic (no per-run variation) — compute it once per setting.
   const labelsWithText = c.labels.map((l) => ({ label: l, text: c.labelText.get(l) ?? '' }));
   const rosterMapped = roster.map((r) => ({ speakerId: r.speakerId, name: r.name }));
-  const sigMaps = SWEEP.map((s) => {
-    const dec = decideSuggestions(labelsWithText, corpora, idf, c.noteId, rosterMapped, selfName, { tScore: s.tScore, tMargin: s.tMargin });
-    return new Map(dec.signature.map((x) => [x.label, x]));
-  });
+  // sig: the shipped signature decision (promoted picks) at the operating point.
+  const dec = decideSuggestions(labelsWithText, corpora, idf, c.noteId, rosterMapped, selfName, OP);
+  const sigByLabel = new Map(dec.signature.map((x) => [x.label, x]));
+  // Per-label signature ranking (top1/top2/warm) — needed to cross-check WEAK labels for H2.
+  const rankByLabel = new Map(c.labels.map((l) => [l, matchLabel(c.labelText.get(l) ?? '', corpora, idf, c.noteId)]));
 
   for (let i = 0; i < RUNS; i += 1) {
-    // MODEL set → isolate that one model (fallbackModels:[] so resolveModels returns just it).
     const res = await identifySpeakers({
       apiKey, transcript: c.transcript, labels: c.labels, roster, selfName,
       ...(MODEL ? { model: MODEL, fallbackModels: [] } : {}),
@@ -224,17 +227,43 @@ async function collectRecords(
     const anchoredByLabel = new Map(anchored.map((s) => [s.label, s]));
     out.off.push(...toRecords(raw, c, selfName));
     out.on.push(...toRecords(anchored, c, selfName));
-    // sig arm per setting: signature pick where promoted (kept as-is = evidence), else the
-    // anchored LLM suggestion for that label.
-    for (let si = 0; si < SWEEP.length; si += 1) {
-      const sm = sigMaps[si];
-      const merged: SpeakerSuggestion[] = c.labels.map((label) => {
-        const s = sm.get(label);
-        if (s) return { label, name: s.name, speakerId: s.speakerId, confidence: s.confidence, isSelf: s.isSelf, rationale: 'signature' };
-        return anchoredByLabel.get(label) ?? { label, name: null, speakerId: null, confidence: 0, isSelf: false, rationale: '' };
-      });
-      out.sig[si].push(...toRecords(merged, c, selfName));
+
+    const sigMerged: SpeakerSuggestion[] = [];
+    const h2aMerged: SpeakerSuggestion[] = [];
+    const h2bMerged: SpeakerSuggestion[] = [];
+    for (const label of c.labels) {
+      const promoted = sigByLabel.get(label);
+      const llm = anchoredByLabel.get(label) ?? null;
+      const fallback: SpeakerSuggestion = llm ?? { label, name: null, speakerId: null, confidence: 0, isSelf: false, rationale: '' };
+      const ranked = rankByLabel.get(label) ?? [];
+      const top1 = ranked[0];
+
+      // --- sig (shipped): promoted signature pick, else anchored LLM. ---
+      const sigPick: SpeakerSuggestion = promoted
+        ? { label, name: promoted.name, speakerId: promoted.speakerId, confidence: promoted.confidence, isSelf: promoted.isSelf, rationale: 'signature' }
+        : fallback;
+      sigMerged.push(sigPick);
+
+      // --- H2a: same as sig, but a WEAK (non-promoted) label whose warm signature top1 AGREES
+      //     with the LLM's non-self pick is promoted at AGREE_WEAK (cross-validation, zero cost). ---
+      let h2aPick = sigPick;
+      if (!promoted && top1 && top1.warm && llm?.name && !llm.isSelf && sameName(llm.name, top1.display)) {
+        h2aPick = { label, name: top1.display, speakerId: rosterIdFor(top1.display, roster), confidence: AGREE_WEAK, isSelf: false, rationale: 'signature+llm agree' };
+      }
+      h2aMerged.push(h2aPick);
+
+      // --- H2b: H2a, plus on a PROMOTED pick, boost when the LLM agrees / soften when it
+      //     contradicts (non-self only; self is never softened). ---
+      let h2bPick = h2aPick;
+      if (promoted && !promoted.isSelf && llm?.name) {
+        if (sameName(llm.name, promoted.name)) h2bPick = { ...sigPick, confidence: Math.max(sigPick.confidence, AGREE_STRONG), rationale: 'signature boosted' };
+        else h2bPick = { ...sigPick, confidence: Math.min(sigPick.confidence, DISAGREE_SOFT), rationale: 'signature softened' };
+      }
+      h2bMerged.push(h2bPick);
     }
+    out.sig.push(...toRecords(sigMerged, c, selfName));
+    out.h2a.push(...toRecords(h2aMerged, c, selfName));
+    out.h2b.push(...toRecords(h2bMerged, c, selfName));
   }
   return out;
 }
@@ -354,19 +383,19 @@ async function main(): Promise<void> {
     const uFull = emptyArm();
     const uExcl = emptyArm();
     for (const c of cases) {
-      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName, corpora, idf); uFull.off.push(...r.off); uFull.on.push(...r.on); r.sig.forEach((rec, si) => uFull.sig[si].push(...rec)); }
-      if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName, corpora, idf); uExcl.off.push(...r.off); uExcl.on.push(...r.on); }
+      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName, corpora, idf); uFull.off.push(...r.off); uFull.on.push(...r.on); uFull.sig.push(...r.sig); uFull.h2a.push(...r.h2a); uFull.h2b.push(...r.h2b); }
+      if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName, corpora, idf); uExcl.off.push(...r.off); uExcl.on.push(...r.on); uExcl.sig.push(...r.sig); uExcl.h2a.push(...r.h2a); }
     }
-    full.off.push(...uFull.off); full.on.push(...uFull.on); uFull.sig.forEach((rec, si) => full.sig[si].push(...rec));
-    excl.off.push(...uExcl.off); excl.on.push(...uExcl.on);
+    full.off.push(...uFull.off); full.on.push(...uFull.on); full.sig.push(...uFull.sig); full.h2a.push(...uFull.h2a); full.h2b.push(...uFull.h2b);
+    excl.off.push(...uExcl.off); excl.on.push(...uExcl.on); excl.sig.push(...uExcl.sig); excl.h2a.push(...uExcl.h2a);
     const f = doFull ? scoreUnder(uFull.off, prodPolicy) : null;
-    const g = doFull ? scoreUnder(uFull.sig[0], prodPolicy) : null; // SWEEP[0] for a per-user glance
+    const g = doFull ? scoreUnder(uFull.sig, prodPolicy) : null;
     const e = doExcl ? scoreUnder(uExcl.off, prodPolicy) : null;
     perUser.push({ userId, basis, cases: cases.length, full: f, sig: g, excl: e });
     process.stdout.write(
       `• ${userId.slice(0, 8)}…  self=${basis}  cases=${cases.length}  ` +
       (f ? `full acc=${pct(f.accuracy)}  ` : '') +
-      (g ? `SIG[${SWEEP[0].label}] acc=${pct(g.accuracy)} rec=${pct(g.recall)} prec=${pct(g.precision)}  ` : '') +
+      (g ? `SIG acc=${pct(g.accuracy)} rec=${pct(g.recall)} prec=${pct(g.precision)}  ` : '') +
       (e ? `excl acc=${pct(e.accuracy)}` : '') + '\n',
     );
   }
@@ -386,28 +415,30 @@ async function main(): Promise<void> {
     process.stdout.write(line('ON  (anchored)', scoreUnder(excl.on, prodPolicy)));
   }
 
-  // ---- SIGNATURE SWEEP (full arm) — pick the operating point where confident-WRONG is low ----
-  const sqRowFn = (tag: string, q: SuggQuality) =>
-    `${tag.padEnd(12)}${String(q.shown).padStart(7)}   ${pct(q.precision).padStart(7)}   ${String(q.confShown).padStart(10)}   ${String(q.confWrong).padStart(9)}\n`;
+  // ---- H2 ENSEMBLE A/B (full arm): sig (shipped) vs h2a (weak-label cross-check, zero cost) vs
+  //      h2b (also cross-check strong picks, would cost an extra LLM call in prod). ----
   if (doFull) {
-    process.stdout.write('\nSIGNATURE SWEEP (full arm, prod policy) — tune tScore/tMargin\n');
-    process.stdout.write('setting        acc     recall   prec   | nonself: shown  prec   conf>=.8  conf-WRONG\n');
-    for (let si = 0; si < SWEEP.length; si += 1) {
-      const s = scoreUnder(full.sig[si], prodPolicy);
-      const q = suggestionQuality(full.sig[si]);
+    process.stdout.write('\nH2 ENSEMBLE (full arm, prod policy) — signature + LLM cross-check\n');
+    process.stdout.write('arm    acc     recall   prec   | nonself: shown  prec   conf>=.8  conf-WRONG   cost\n');
+    const armRow = (tag: string, recs: LabelRecord[], cost: string) => {
+      const s = scoreUnder(recs, prodPolicy);
+      const q = suggestionQuality(recs);
       process.stdout.write(
-        `${SWEEP[si].label.padEnd(9)} ${pct(s.accuracy).padStart(6)}  ${pct(s.recall).padStart(6)}  ${pct(s.precision).padStart(6)}  | ` +
-        `${String(q.shown).padStart(5)}  ${pct(q.precision).padStart(6)}  ${String(q.confShown).padStart(7)}  ${String(q.confWrong).padStart(9)}\n`,
+        `${tag.padEnd(6)} ${pct(s.accuracy).padStart(6)}  ${pct(s.recall).padStart(6)}  ${pct(s.precision).padStart(6)}  | ` +
+        `${String(q.shown).padStart(5)}  ${pct(q.precision).padStart(6)}  ${String(q.confShown).padStart(7)}  ${String(q.confWrong).padStart(9)}   ${cost}\n`,
       );
-    }
+    };
+    armRow('sig', full.sig, 'shipped');
+    armRow('h2a', full.h2a, 'zero+');
+    armRow('h2b', full.h2b, 'extraLLM');
     process.stdout.write('  For reference: OFF nonself-prec ' + pct(suggestionQuality(full.off).precision) +
       ', ON confident-WRONG ' + String(suggestionQuality(full.on).confWrong) + '.\n');
-    process.stdout.write('  GATE: acc beats OFF/ON materially AND confident-WRONG stays low; self recall not down.\n');
+    process.stdout.write('  GATE: h2a beats sig on acc/precision with confident-WRONG not worse (ship it, zero cost).\n');
+    process.stdout.write('        h2b shows the extra headroom that would cost an LLM call per strong pick.\n');
   }
 
-  // ---- Calibration (full arm, SIG = the LAST/tightest sweep setting) ----
-  const SIG_CAL = SWEEP.length - 1;
-  const src = doFull ? full.sig[SIG_CAL] : excl.on;
+  // ---- Calibration (full arm, H2A = the zero-cost ensemble proposal) ----
+  const src = doFull ? full.h2a : excl.on;
   const calib = CONF_BUCKETS.slice(0, -1).map(() => ({ self: { n: 0, ok: 0 }, other: { n: 0, ok: 0 } }));
   for (const r of src) {
     if (!r.suggestedName) continue;
@@ -417,7 +448,7 @@ async function main(): Promise<void> {
     cell.n += 1;
     if (r.expectedName && containsMatch(r.expectedName, r.suggestedName)) cell.ok += 1;
   }
-  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? `full arm, SIG ${SWEEP[SIG_CAL].label}` : 'excluded arm, ON'})\n`);
+  process.stdout.write(`\nCALIBRATION — empirical accuracy per stated-confidence bucket (${doFull ? 'full arm, H2A' : 'excluded arm, ON'})\n`);
   process.stdout.write('bucket        self acc (n)        non-self acc (n)\n');
   for (let i = 0; i < calib.length; i += 1) {
     const lo = CONF_BUCKETS[i], hi = CONF_BUCKETS[i + 1];
@@ -436,10 +467,11 @@ async function main(): Promise<void> {
       full: { off: scoreUnder(full.off, prodPolicy), on: scoreUnder(full.on, prodPolicy) },
       excluded: doExcl ? { off: scoreUnder(excl.off, prodPolicy), on: scoreUnder(excl.on, prodPolicy) } : null,
     },
-    signatureSweep: SWEEP.map((s, si) => ({
-      setting: s.label, tScore: s.tScore, tMargin: s.tMargin,
-      prf: scoreUnder(full.sig[si], prodPolicy), nonself: suggestionQuality(full.sig[si]),
-    })),
+    h2Ensemble: {
+      sig: { prf: scoreUnder(full.sig, prodPolicy), nonself: suggestionQuality(full.sig) },
+      h2a: { prf: scoreUnder(full.h2a, prodPolicy), nonself: suggestionQuality(full.h2a) },
+      h2b: { prf: scoreUnder(full.h2b, prodPolicy), nonself: suggestionQuality(full.h2b) },
+    },
     calibration: calib.map((c, i) => ({ bucket: `${CONF_BUCKETS[i]}-${CONF_BUCKETS[i + 1]}`, ...c })),
     users: perUser.map((u) => ({ userId: u.userId, selfBasis: u.basis, cases: u.cases, full: u.full, sig: u.sig, excluded: u.excl })),
   }, null, 2));
