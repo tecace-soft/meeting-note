@@ -28,6 +28,7 @@
 import { config } from 'dotenv';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { norm } from './lib/util.js';
+import { tokenize as prodTokenize } from '../src/speakerSignature.js';
 
 config();
 
@@ -108,10 +109,39 @@ const tokenizeH4 = (s: string): string[] => {
   return [...content, ...weighted];
 };
 
-// base = the SHIPPED tokenizer (H9: stopwords + sublinear). h4 = base + role/stance tokens.
-const TOKENIZERS: Record<string, (s: string) => string[]> = { base: tokenizeH9, h4: tokenizeH4 };
-const SUBLINEAR: Record<string, boolean> = { base: true, h4: true };
-const ARMS = ['base', 'h4'] as const;
+// H5 — META features: a speaker's utterance-length HABITS (short backchannels vs long explanations)
+// are a stable style axis independent of content. On the label's concatenated blob we can only see
+// aggregate style, so we bucket the average token-run length + the share of very short vs long
+// utterances into coarse tokens (prefixed "m:") so a terse speaker vs a verbose one separate.
+function metaTokens(s: string): string[] {
+  // Split into utterances on sentence-ish boundaries; measure content-token counts per utterance.
+  const utts = s.split(/[.?!。？！\n]+/).map((u) => tokenizeH9(u).length).filter((n) => n > 0);
+  if (utts.length === 0) return [];
+  const avg = utts.reduce((a, b) => a + b, 0) / utts.length;
+  const shortShare = utts.filter((n) => n <= 2).length / utts.length;
+  const longShare = utts.filter((n) => n >= 12).length / utts.length;
+  const avgBucket = avg <= 3 ? 'lo' : avg <= 8 ? 'mid' : 'hi';
+  const shortBucket = shortShare >= 0.4 ? 'terse' : shortShare >= 0.2 ? 'some' : 'few';
+  const longBucket = longShare >= 0.2 ? 'verbose' : 'notlong';
+  return [`m:avg_${avgBucket}`, `m:short_${shortBucket}`, `m:long_${longBucket}`];
+}
+const META_WEIGHT = 5;
+const tokenizeH5 = (s: string): string[] => {
+  const out = prodTokenize(s); // shipped features (H9 + H4)
+  for (const m of metaTokens(s)) for (let i = 0; i < META_WEIGHT; i += 1) out.push(m);
+  return out;
+};
+// H5 (meta/style) TESTED 2026-08-28 → slightly NEGATIVE (open-WARM 82.0% → 80.9%): coarse
+// utterance-length buckets add noise, not signal, on top of the already-strong H4 base. Not shipped.
+
+// base = SHIPPED tokenizer (prodTokenize = H9 + H4). h6 = base tokenizer + an ATTENDANCE PRIOR in
+// SCORING: a candidate who appears in MORE of the user's notes is a-priori more likely present, so
+// nudge the cosine by + PRIOR_WEIGHT * log(1 + noteCount). This is a scoring change, not a
+// tokenizer change, so h6 shares base's tokenizer and only the scoreAgainst differs.
+const TOKENIZERS: Record<string, (s: string) => string[]> = { base: prodTokenize, h6: prodTokenize };
+const SUBLINEAR: Record<string, boolean> = { base: true, h6: true };
+const PRIOR_WEIGHT = 0.02;
+const ARMS = ['base', 'h6'] as const;
 type Arm = typeof ARMS[number];
 
 // One label inside one note: its true person (or null) and its concatenated utterance text.
@@ -186,19 +216,19 @@ async function main(): Promise<void> {
   const arg = (process.env.SIG_USERS || 'all').trim();
   const users = arg && arg !== 'all' ? arg.split(',').map((u) => u.trim()).filter(Boolean) : await discoverUsers(db);
 
-  process.stdout.write(`\nSPEAKER SIGNATURE PROBE (TF-IDF, no LLM) — H4 role-stance A/B — users=${users.length}  notes/user<=${NOTES_PER_USER}\n\n`);
+  process.stdout.write(`\nSPEAKER SIGNATURE PROBE (TF-IDF, no LLM) — H6 attendance-prior A/B — users=${users.length}  notes/user<=${NOTES_PER_USER}\n\n`);
 
-  // Per-arm tallies (base = shipped H9, h4 = + role tokens).
+  // Per-arm tallies (base = shipped H9+H4, h5 = + meta/style).
   const T = (): { closed: Tally; closedWarm: Tally; open: Tally; openWarm: Tally } =>
     ({ closed: { total: 0, correct: 0 }, closedWarm: { total: 0, correct: 0 }, open: { total: 0, correct: 0 }, openWarm: { total: 0, correct: 0 } });
-  const tallies: Record<Arm, ReturnType<typeof T>> = { base: T(), h4: T() };
+  const tallies: Record<Arm, ReturnType<typeof T>> = { base: T(), h6: T() };
   let randomExpected = 0, randomN = 0; // sum of 1/|participants| over closed-set labels (chance baseline)
 
   for (const userId of users) {
     const notes = await loadUserNotes(db, userId);
     // Build a per-arm corpus (different tokenizers → different token streams + IDF).
     const cases: NoteCase[] = [];
-    const corpusByArm: Record<Arm, Map<string, Array<{ noteId: string; tokens: string[] }>>> = { base: new Map(), h4: new Map() };
+    const corpusByArm: Record<Arm, Map<string, Array<{ noteId: string; tokens: string[] }>>> = { base: new Map(), h6: new Map() };
     for (const n of notes) {
       const labels = toLabels(n);
       if (!labels) continue;
@@ -235,9 +265,12 @@ async function main(): Promise<void> {
       };
       const hasHistory = (personKey: string, excludeNoteId: string): boolean =>
         (corpus.get(personKey) ?? []).some((d) => d.noteId !== excludeNoteId && d.tokens.length > 0);
-      return { idf, signature, hasHistory };
+      // H6 attendance prior: distinct OTHER notes this person appears in (frequency = presence prior).
+      const noteCount = (personKey: string, excludeNoteId: string): number =>
+        new Set((corpus.get(personKey) ?? []).filter((d) => d.noteId !== excludeNoteId).map((d) => d.noteId)).size;
+      return { idf, signature, hasHistory, noteCount };
     };
-    const scorers: Record<Arm, ReturnType<typeof scorer>> = { base: scorer('base'), h4: scorer('h4') };
+    const scorers: Record<Arm, ReturnType<typeof scorer>> = { base: scorer('base'), h6: scorer('h6') };
 
     for (const c of cases) {
       for (const l of c.labels) {
@@ -245,16 +278,18 @@ async function main(): Promise<void> {
         // Chance baseline is arm-independent; count once per label (using base's non-empty check).
         if (termFreq(TOKENIZERS.base(l.text)).size > 0) { randomExpected += 1 / Math.max(1, c.participantKeys.length); randomN += 1; }
         for (const arm of ARMS) {
-          const { idf, signature, hasHistory } = scorers[arm];
+          const { idf, signature, hasHistory, noteCount } = scorers[arm];
           const labelVec = termFreq(TOKENIZERS[arm](l.text), SUBLINEAR[arm]);
           if (labelVec.size === 0) continue;
           const warm = hasHistory(l.trueKey, c.noteId);
+          const usePrior = arm === 'h6';
           const scoreAgainst = (candidates: string[]): string | null => {
             let best: string | null = null, bestScore = -1;
             for (const cand of candidates) {
               const sig = signature(cand, c.noteId);
               if (sig.size === 0) continue;
-              const sc = cosineTfidf(labelVec, sig, idf);
+              let sc = cosineTfidf(labelVec, sig, idf);
+              if (usePrior) sc += PRIOR_WEIGHT * Math.log(1 + noteCount(cand, c.noteId));
               if (sc > bestScore) { bestScore = sc; best = cand; }
             }
             return best;
@@ -272,7 +307,7 @@ async function main(): Promise<void> {
 
   const chance = randomN ? randomExpected / randomN : 0;
   process.stdout.write('\n──────────────────────────────────────────────────────────────\n');
-  process.stdout.write('SIGNATURE-MATCH ACCURACY — base (shipped H9) vs H4 (+ role/stance)\n');
+  process.stdout.write('SIGNATURE-MATCH ACCURACY — base (shipped) vs H6 (+ attendance prior)\n');
   process.stdout.write(`  random-within-set chance: ${(chance * 100).toFixed(1)}%   identify baseline (ref): ~37%\n\n`);
   process.stdout.write('arm    closed-set      closed-WARM     open-set        open-WARM\n');
   for (const arm of ARMS) {
@@ -284,8 +319,8 @@ async function main(): Promise<void> {
       `${pctOf(t.openWarm).padStart(6)}(${String(t.openWarm.total).padStart(3)})\n`,
     );
   }
-  process.stdout.write('\nRead: H4 open-WARM > base open-WARM = interaction-stance adds a signal content misses (and\n');
-  process.stdout.write('helps thin-history speakers). No gain = stance is not separable from content at this size.\n');
+  process.stdout.write('\nRead: H6 open-WARM > base = attendance prior helps disambiguate; ship the prior weight into\n');
+  process.stdout.write('the signature scorer. No gain / worse = frequency is not a useful prior at this data size.\n');
   process.stdout.write('(legacy note) closed-set WARM well above chance = discriminative text signal EXISTS.\n');
 }
 
