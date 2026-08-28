@@ -68,10 +68,50 @@ const STOPWORDS = new Set<string>([
 ]);
 const tokenizeH9 = (s: string): string[] => tokenizeBase(s).filter((t) => !STOPWORDS.has(t));
 
-const TOKENIZERS: Record<string, (s: string) => string[]> = { base: tokenizeBase, h9: tokenizeH9 };
-// H9 also uses SUBLINEAR term frequency (1 + log tf) so a repeated filler cannot dominate.
-const SUBLINEAR: Record<string, boolean> = { base: false, h9: true };
-const ARMS = ['base', 'h9'] as const;
+// H3 (bigrams) TESTED 2026-08-28 → NEGATIVE (identical to base): word pairs are too sparse at this
+// data size (few notes per person), so a leave-one-out signature rarely shares an exact bigram.
+// Kept the tokenizer for reference; not used in the shipped arm.
+const tokenizeH3 = (s: string): string[] => {
+  const uni = tokenizeH9(s);
+  const out = [...uni];
+  for (let i = 0; i + 1 < uni.length; i += 1) out.push(`2:${uni[i]}_${uni[i + 1]}`);
+  return out;
+};
+
+// H4 — ROLE / INTERACTION-STANCE features, added on top of H9 content words. Content signatures
+// need HISTORY (cold speakers have none); a person's conversational STANCE (who ASKS/DIRECTS vs who
+// REPORTS/DEFERS) is a different axis that can separate same-team members and works even with thin
+// history. Encode each utterance's stance as special tokens (prefixed "r:") from cheap surface
+// cues, so a person who consistently directs accumulates "r:direct" mass vs a reporter's "r:report".
+const R_DIRECT = [/어때요|어떻게 생각|해주세요|해달라|하면 좋겠|합시다|해야 (?:돼|되|할)|정리해|확인해|검토|보내주|주세요/];
+const R_REPORT = [/했습니다|완료|끝냈|진행했|해봤|확인했|만들었|적용했|배포했|테스트해/];
+const R_ASK = [/\?|나요|까요|인가요|건가요|맞나요|무엇|언제|어디|누가|왜/];
+const R_DEFER = [/알겠습니다|알겠어요|네네|그렇게 하겠|그러겠|맞아요|동의/];
+function roleTokens(text: string): string[] {
+  const out: string[] = [];
+  const hit = (res: RegExp[]) => res.some((re) => re.test(text));
+  if (hit(R_DIRECT)) out.push('r:direct');
+  if (hit(R_REPORT)) out.push('r:report');
+  if (hit(R_ASK)) out.push('r:ask');
+  if (hit(R_DEFER)) out.push('r:defer');
+  return out;
+}
+// Per-utterance role tokens are emitted at the SEGMENT level in real data; here the label text is
+// already the person's concatenated utterances, so we scan the whole blob and weight role tokens so
+// they are comparable to content mass without swamping it.
+const ROLE_WEIGHT = 6;
+const tokenizeH4 = (s: string): string[] => {
+  const content = tokenizeH9(s);
+  const roles = roleTokens(s);
+  const weighted: string[] = [];
+  for (const r of roles) for (let i = 0; i < ROLE_WEIGHT; i += 1) weighted.push(r);
+  return [...content, ...weighted];
+};
+
+// base = the SHIPPED tokenizer (H9: stopwords + sublinear). h4 = base + role/stance tokens.
+const TOKENIZERS: Record<string, (s: string) => string[]> = { base: tokenizeH9, h4: tokenizeH4 };
+const SUBLINEAR: Record<string, boolean> = { base: true, h4: true };
+const ARMS = ['base', 'h4'] as const;
 type Arm = typeof ARMS[number];
 
 // One label inside one note: its true person (or null) and its concatenated utterance text.
@@ -146,19 +186,19 @@ async function main(): Promise<void> {
   const arg = (process.env.SIG_USERS || 'all').trim();
   const users = arg && arg !== 'all' ? arg.split(',').map((u) => u.trim()).filter(Boolean) : await discoverUsers(db);
 
-  process.stdout.write(`\nSPEAKER SIGNATURE PROBE (TF-IDF, no LLM) — H9 IDF-tuning A/B — users=${users.length}  notes/user<=${NOTES_PER_USER}\n\n`);
+  process.stdout.write(`\nSPEAKER SIGNATURE PROBE (TF-IDF, no LLM) — H4 role-stance A/B — users=${users.length}  notes/user<=${NOTES_PER_USER}\n\n`);
 
-  // Per-arm tallies (base = shipped tokenizer, h9 = stopword-filtered + sublinear TF).
+  // Per-arm tallies (base = shipped H9, h4 = + role tokens).
   const T = (): { closed: Tally; closedWarm: Tally; open: Tally; openWarm: Tally } =>
     ({ closed: { total: 0, correct: 0 }, closedWarm: { total: 0, correct: 0 }, open: { total: 0, correct: 0 }, openWarm: { total: 0, correct: 0 } });
-  const tallies: Record<Arm, ReturnType<typeof T>> = { base: T(), h9: T() };
+  const tallies: Record<Arm, ReturnType<typeof T>> = { base: T(), h4: T() };
   let randomExpected = 0, randomN = 0; // sum of 1/|participants| over closed-set labels (chance baseline)
 
   for (const userId of users) {
     const notes = await loadUserNotes(db, userId);
     // Build a per-arm corpus (different tokenizers → different token streams + IDF).
     const cases: NoteCase[] = [];
-    const corpusByArm: Record<Arm, Map<string, Array<{ noteId: string; tokens: string[] }>>> = { base: new Map(), h9: new Map() };
+    const corpusByArm: Record<Arm, Map<string, Array<{ noteId: string; tokens: string[] }>>> = { base: new Map(), h4: new Map() };
     for (const n of notes) {
       const labels = toLabels(n);
       if (!labels) continue;
@@ -197,7 +237,7 @@ async function main(): Promise<void> {
         (corpus.get(personKey) ?? []).some((d) => d.noteId !== excludeNoteId && d.tokens.length > 0);
       return { idf, signature, hasHistory };
     };
-    const scorers: Record<Arm, ReturnType<typeof scorer>> = { base: scorer('base'), h9: scorer('h9') };
+    const scorers: Record<Arm, ReturnType<typeof scorer>> = { base: scorer('base'), h4: scorer('h4') };
 
     for (const c of cases) {
       for (const l of c.labels) {
@@ -232,7 +272,7 @@ async function main(): Promise<void> {
 
   const chance = randomN ? randomExpected / randomN : 0;
   process.stdout.write('\n──────────────────────────────────────────────────────────────\n');
-  process.stdout.write('SIGNATURE-MATCH ACCURACY — base (shipped) vs H9 (stopwords + sublinear TF)\n');
+  process.stdout.write('SIGNATURE-MATCH ACCURACY — base (shipped H9) vs H4 (+ role/stance)\n');
   process.stdout.write(`  random-within-set chance: ${(chance * 100).toFixed(1)}%   identify baseline (ref): ~37%\n\n`);
   process.stdout.write('arm    closed-set      closed-WARM     open-set        open-WARM\n');
   for (const arm of ARMS) {
@@ -244,8 +284,8 @@ async function main(): Promise<void> {
       `${pctOf(t.openWarm).padStart(6)}(${String(t.openWarm.total).padStart(3)})\n`,
     );
   }
-  process.stdout.write('\nRead: H9 open-WARM > base open-WARM = stopword/sublinear tuning helps; ship it into\n');
-  process.stdout.write('speakerSignature. No gain = the filler was already low-IDF and tuning is not the lever.\n');
+  process.stdout.write('\nRead: H4 open-WARM > base open-WARM = interaction-stance adds a signal content misses (and\n');
+  process.stdout.write('helps thin-history speakers). No gain = stance is not separable from content at this size.\n');
   process.stdout.write('(legacy note) closed-set WARM well above chance = discriminative text signal EXISTS.\n');
 }
 

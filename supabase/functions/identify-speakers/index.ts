@@ -561,8 +561,26 @@ const SIG_STOPWORDS = new Set<string>([
   'have', 'are', 'was', 'but', 'not', 'they', 'them', 'there', 'here', 'what', 'about', 'kind',
   'gonna', 'wanna', 'really', 'actually', 'basically', 'something', 'because',
 ]);
-const sigTokenize = (s: string): string[] =>
-  (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []).filter((t) => !SIG_STOPWORDS.has(t));
+// H4: role/interaction-stance tokens (who ASKS/DIRECTS vs REPORTS/DEFERS) — a signal content words
+// miss, and it helps thin-history speakers. Keep in sync with speakerSignature.ts roleTokens.
+const SIG_R_DIRECT = /어때요|어떻게 생각|해주세요|해달라|하면 좋겠|합시다|해야 (?:돼|되|할)|정리해|확인해|검토|보내주|주세요/;
+const SIG_R_REPORT = /했습니다|완료|끝냈|진행했|해봤|확인했|만들었|적용했|배포했|테스트해/;
+const SIG_R_ASK = /\?|나요|까요|인가요|건가요|맞나요|무엇|언제|어디|누가|왜/;
+const SIG_R_DEFER = /알겠습니다|알겠어요|네네|그렇게 하겠|그러겠|맞아요|동의/;
+const SIG_ROLE_WEIGHT = 6;
+function sigRoleTokens(text: string): string[] {
+  const out: string[] = [];
+  const push = (tok: string) => { for (let i = 0; i < SIG_ROLE_WEIGHT; i += 1) out.push(tok); };
+  if (SIG_R_DIRECT.test(text)) push('r:direct');
+  if (SIG_R_REPORT.test(text)) push('r:report');
+  if (SIG_R_ASK.test(text)) push('r:ask');
+  if (SIG_R_DEFER.test(text)) push('r:defer');
+  return out;
+}
+const sigTokenize = (s: string): string[] => [
+  ...(s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []).filter((t) => !SIG_STOPWORDS.has(t)),
+  ...sigRoleTokens(s),
+];
 const sigCanon = (s: string): string => s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 function sigBuildCorpora(utterances: SigUtterance[]): Map<string, SigCorpus> {

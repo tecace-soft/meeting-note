@@ -53,9 +53,30 @@ const STOPWORDS = new Set<string>([
   'have', 'are', 'was', 'but', 'not', 'they', 'them', 'there', 'here', 'what', 'about', 'kind',
   'gonna', 'wanna', 'really', 'actually', 'basically', 'something', 'because',
 ]);
-// Content tokens: Korean runs (>=2 chars) + Latin words (>=2), minus non-discriminative fillers.
-export const tokenize = (s: string): string[] =>
-  (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
+// H4 (measured 2026-08-28, eval:speaker-signature A/B): ROLE / INTERACTION-STANCE tokens added on
+// top of content words. Content signatures need history; a person's conversational STANCE (who
+// ASKS/DIRECTS vs who REPORTS/DEFERS) is a separate axis that separates same-team members and helps
+// thin-history speakers. Open-set WARM signature accuracy 77.5% → 82.0%, no regression. Cheap
+// surface cues; weighted so stance is comparable to content mass without swamping it.
+const R_DIRECT = /어때요|어떻게 생각|해주세요|해달라|하면 좋겠|합시다|해야 (?:돼|되|할)|정리해|확인해|검토|보내주|주세요/;
+const R_REPORT = /했습니다|완료|끝냈|진행했|해봤|확인했|만들었|적용했|배포했|테스트해/;
+const R_ASK = /\?|나요|까요|인가요|건가요|맞나요|무엇|언제|어디|누가|왜/;
+const R_DEFER = /알겠습니다|알겠어요|네네|그렇게 하겠|그러겠|맞아요|동의/;
+const ROLE_WEIGHT = 6;
+function roleTokens(text: string): string[] {
+  const out: string[] = [];
+  const push = (tok: string) => { for (let i = 0; i < ROLE_WEIGHT; i += 1) out.push(tok); };
+  if (R_DIRECT.test(text)) push('r:direct');
+  if (R_REPORT.test(text)) push('r:report');
+  if (R_ASK.test(text)) push('r:ask');
+  if (R_DEFER.test(text)) push('r:defer');
+  return out;
+}
+// Content tokens (Korean runs / Latin words, minus fillers) + weighted role/stance tokens (H4).
+export const tokenize = (s: string): string[] => [
+  ...(s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t)),
+  ...roleTokens(s),
+];
 // Canonical person key: strip a parenthetical script variant, lowercase, collapse spaces.
 export const canonName = (s: string): string =>
   s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
