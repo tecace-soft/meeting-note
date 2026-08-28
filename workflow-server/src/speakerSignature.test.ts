@@ -21,8 +21,9 @@ const HISTORY: LabeledUtterance[] = [
 
 // ---- tokenize / canonName ----
 
-test('tokenize keeps Korean runs and Latin words, drops 1-char noise and digits', () => {
-  assert.deepEqual(tokenize('Backend 2h fix 우리 팀 a'), ['backend', 'fix', '우리']);
+test('tokenize keeps content words, drops 1-char noise, digits, and filler stopwords', () => {
+  // "우리" is a filler stopword (H9) and is dropped; "팀" is 1-char and dropped.
+  assert.deepEqual(tokenize('Backend 2h fix 우리 diarization 그냥 팀'), ['backend', 'fix', 'diarization']);
 });
 
 test('canonName strips a parenthetical script variant', () => {

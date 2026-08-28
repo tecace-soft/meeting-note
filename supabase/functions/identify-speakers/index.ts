@@ -544,11 +544,25 @@ function gateSuggestionsWithAnchors(suggestions: Suggestion[], transcript: strin
 // matched to the nearest signature. Signature-primary, LLM fallback. Thresholds tuned on the
 // backtest (t10/m08). Reuses sameName/stripParen/latinParts/hangul* from the anchor block above.
 // ---------------------------------------------------------------------------
-const SIG_TSCORE = 0.10, SIG_TMARGIN = 0.08, SIG_MIN_TOKENS = 8;
+// Operating point re-tuned after H9 (see speakerSignature.ts DEFAULTS): t08/m02.
+const SIG_TSCORE = 0.08, SIG_TMARGIN = 0.02, SIG_MIN_TOKENS = 8;
 interface SigCorpus { key: string; display: string; docs: Array<{ noteId: string; tokens: string[] }> }
 interface SigUtterance { noteId: string; name: string; text: string }
 
-const sigTokenize = (s: string): string[] => (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []);
+// H9: drop non-discriminative filler (Korean fillers/backchannels + English stopwords) so a word
+// everyone says can't add cosine noise. Keep in sync with speakerSignature.ts STOPWORDS.
+const SIG_STOPWORDS = new Set<string>([
+  '그래서', '그러니까', '그러면', '그런데', '근데', '그리고', '그거', '그게', '이제', '이거', '저기',
+  '약간', '그냥', '진짜', '너무', '조금', '이렇게', '그렇게', '어떻게', '뭐지', '뭐야', '뭔가',
+  '아니', '아니요', '아니에요', '맞아요', '그렇죠', '그쵸', '그럼', '네네', '알겠습니다', '있어요',
+  '없어요', '해야', '하는', '하고', '해서', '해가지고', '있는', '있고', '거예요', '거죠', '건데',
+  '같아요', '같은', '같이', '우리', '저희', '제가', '지금', '오늘', '내일', '어제', '한번', '일단',
+  'the', 'and', 'that', 'this', 'with', 'for', 'you', 'yeah', 'okay', 'right', 'like', 'just',
+  'have', 'are', 'was', 'but', 'not', 'they', 'them', 'there', 'here', 'what', 'about', 'kind',
+  'gonna', 'wanna', 'really', 'actually', 'basically', 'something', 'because',
+]);
+const sigTokenize = (s: string): string[] =>
+  (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []).filter((t) => !SIG_STOPWORDS.has(t));
 const sigCanon = (s: string): string => s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 function sigBuildCorpora(utterances: SigUtterance[]): Map<string, SigCorpus> {
@@ -580,6 +594,7 @@ function sigIdf(corpora: Map<string, SigCorpus>): Map<string, number> {
 const sigTf = (tokens: string[]): Map<string, number> => {
   const tf = new Map<string, number>();
   for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+  for (const [t, c] of tf) tf.set(t, 1 + Math.log(c)); // H9: sublinear TF
   return tf;
 };
 function sigSignature(corpora: Map<string, SigCorpus>, key: string, excludeNoteId: string | null): Map<string, number> {

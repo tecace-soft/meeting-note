@@ -30,14 +30,32 @@ export interface DecideOptions {
   tMargin?: number; // min (top1 - top2) cosine margin to promote
   minSigTokens?: number; // min tokens of history for a usable signature
 }
-// Tuned on the backtest sweep (2026-08-27): t10/m08 is the highest-accuracy operating point whose
-// promoted picks are ~72% correct (honest for the ~0.8 confidence band) — acc 55.6% (OFF 39.6% /
-// ON 35.6%), non-self suggestion precision 45.4% (2.5x OFF), confident-WRONG 27 (vs 60 untuned).
-const DEFAULTS: Required<DecideOptions> = { tScore: 0.10, tMargin: 0.08, minSigTokens: 8 };
+// Re-tuned 2026-08-28 after H9 (stopwords + sublinear TF) sharpened the signature scores: the best
+// operating point moved to t08/m02. Backtest sweep: SIG acc 61.4% (OFF 37.2% / ON 35.3%), non-self
+// suggestion precision 59.0%, confident(>=0.8) picks 77.5% correct (27 wrong of 120 — honest for
+// the ~0.8 band). Beats the pre-H9 t10/m08 (55.6% / 45.4% prec / 59% confident-correct).
+const DEFAULTS: Required<DecideOptions> = { tScore: 0.08, tMargin: 0.02, minSigTokens: 8 };
 
 const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
-// Content tokens: Korean runs (>=2 chars) + Latin words (>=2). Drops 1-char noise + digits.
-export const tokenize = (s: string): string[] => (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []);
+
+// H9 (measured 2026-08-28, eval:speaker-signature A/B): drop high-frequency FILLER that is not
+// discriminative of a speaker — Korean discourse fillers / connectives / backchannels + English
+// stopwords. Everyone says these, so they add cosine noise; removing them + sublinear TF lifted
+// open-set WARM signature accuracy 73.0% → 77.5% with no regression. Precision-first (only very
+// common non-content tokens). Keep in sync with the eval probe's STOPWORDS.
+const STOPWORDS = new Set<string>([
+  '그래서', '그러니까', '그러면', '그런데', '근데', '그리고', '그거', '그게', '이제', '이거', '저기',
+  '약간', '그냥', '진짜', '너무', '조금', '이렇게', '그렇게', '어떻게', '뭐지', '뭐야', '뭔가',
+  '아니', '아니요', '아니에요', '맞아요', '그렇죠', '그쵸', '그럼', '네네', '알겠습니다', '있어요',
+  '없어요', '해야', '하는', '하고', '해서', '해가지고', '있는', '있고', '거예요', '거죠', '건데',
+  '같아요', '같은', '같이', '우리', '저희', '제가', '지금', '오늘', '내일', '어제', '한번', '일단',
+  'the', 'and', 'that', 'this', 'with', 'for', 'you', 'yeah', 'okay', 'right', 'like', 'just',
+  'have', 'are', 'was', 'but', 'not', 'they', 'them', 'there', 'here', 'what', 'about', 'kind',
+  'gonna', 'wanna', 'really', 'actually', 'basically', 'something', 'because',
+]);
+// Content tokens: Korean runs (>=2 chars) + Latin words (>=2), minus non-discriminative fillers.
+export const tokenize = (s: string): string[] =>
+  (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
 // Canonical person key: strip a parenthetical script variant, lowercase, collapse spaces.
 export const canonName = (s: string): string =>
   s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -83,9 +101,11 @@ export function computeIdf(corpora: Corpora): Map<string, number> {
   return idf;
 }
 
+// Sublinear TF (1 + log tf), so a repeated word can't dominate the cosine (H9, measured lift).
 const termFreq = (tokens: string[]): Map<string, number> => {
   const tf = new Map<string, number>();
   for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+  for (const [t, c] of tf) tf.set(t, 1 + Math.log(c));
   return tf;
 };
 

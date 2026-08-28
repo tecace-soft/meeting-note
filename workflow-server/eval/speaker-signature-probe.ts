@@ -49,7 +49,30 @@ const isAnonName = (s: string): boolean => /^speaker\s/i.test(s.trim()) || s.tri
 // "Andrew Yoo" are the same person across notes.
 const canonName = (s: string): string => norm(s.replace(/\s*[(（【\[].*$/, ''));
 // Content tokens: Korean runs (>=2 chars) + Latin words (>=2). Drops 1-char noise + digits.
-const tokenize = (s: string): string[] => (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []);
+const tokenizeBase = (s: string): string[] => (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []);
+
+// H9 (IDF tuning) — remove high-frequency FILLER that is not discriminative of a speaker: Korean
+// discourse fillers / connectives / backchannels + English stopwords. Everyone says these, so
+// they add cosine noise. Precision-first: only very common non-content tokens.
+const STOPWORDS = new Set<string>([
+  // Korean fillers / connectives / backchannels / generic verbs
+  '그래서', '그러니까', '그러면', '그런데', '근데', '그리고', '그거', '그게', '이제', '이거', '저기',
+  '약간', '그냥', '진짜', '너무', '조금', '좀', '이렇게', '그렇게', '어떻게', '뭐지', '뭐야', '뭔가',
+  '아니', '아니요', '아니에요', '맞아요', '그렇죠', '그쵸', '그럼', '네네', '알겠습니다', '있어요',
+  '없어요', '해야', '하는', '하고', '해서', '해가지고', '있는', '있고', '거예요', '거죠', '건데',
+  '같아요', '같은', '같이', '우리', '저희', '제가', '지금', '오늘', '내일', '어제', '한번', '일단',
+  // English stopwords
+  'the', 'and', 'that', 'this', 'with', 'for', 'you', 'yeah', 'okay', 'right', 'like', 'just',
+  'have', 'are', 'was', 'but', 'not', 'they', 'them', 'there', 'here', 'what', 'about', 'kind',
+  'gonna', 'wanna', 'really', 'actually', 'basically', 'something', 'because',
+]);
+const tokenizeH9 = (s: string): string[] => tokenizeBase(s).filter((t) => !STOPWORDS.has(t));
+
+const TOKENIZERS: Record<string, (s: string) => string[]> = { base: tokenizeBase, h9: tokenizeH9 };
+// H9 also uses SUBLINEAR term frequency (1 + log tf) so a repeated filler cannot dominate.
+const SUBLINEAR: Record<string, boolean> = { base: false, h9: true };
+const ARMS = ['base', 'h9'] as const;
+type Arm = typeof ARMS[number];
 
 // One label inside one note: its true person (or null) and its concatenated utterance text.
 interface LabelInstance { noteId: string; trueKey: string | null; trueRaw: string | null; text: string }
@@ -97,9 +120,10 @@ async function discoverUsers(db: SupabaseClient): Promise<string[]> {
 }
 
 // ---- TF-IDF cosine over a fixed IDF (computed once per user from full corpora) ----
-function termFreq(tokens: string[]): Map<string, number> {
+function termFreq(tokens: string[], sublinear = false): Map<string, number> {
   const tf = new Map<string, number>();
   for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+  if (sublinear) for (const [t, c] of tf) tf.set(t, 1 + Math.log(c));
   return tf;
 }
 function cosineTfidf(a: Map<string, number>, b: Map<string, number>, idf: Map<string, number>): number {
@@ -122,84 +146,85 @@ async function main(): Promise<void> {
   const arg = (process.env.SIG_USERS || 'all').trim();
   const users = arg && arg !== 'all' ? arg.split(',').map((u) => u.trim()).filter(Boolean) : await discoverUsers(db);
 
-  process.stdout.write(`\nSPEAKER SIGNATURE CEILING PROBE (TF-IDF, no LLM) — users=${users.length}  notes/user<=${NOTES_PER_USER}\n\n`);
+  process.stdout.write(`\nSPEAKER SIGNATURE PROBE (TF-IDF, no LLM) — H9 IDF-tuning A/B — users=${users.length}  notes/user<=${NOTES_PER_USER}\n\n`);
 
-  const closed: Tally = { total: 0, correct: 0 };
-  const closedWarm: Tally = { total: 0, correct: 0 };
-  const open: Tally = { total: 0, correct: 0 };
-  const openWarm: Tally = { total: 0, correct: 0 };
+  // Per-arm tallies (base = shipped tokenizer, h9 = stopword-filtered + sublinear TF).
+  const T = (): { closed: Tally; closedWarm: Tally; open: Tally; openWarm: Tally } =>
+    ({ closed: { total: 0, correct: 0 }, closedWarm: { total: 0, correct: 0 }, open: { total: 0, correct: 0 }, openWarm: { total: 0, correct: 0 } });
+  const tallies: Record<Arm, ReturnType<typeof T>> = { base: T(), h9: T() };
   let randomExpected = 0, randomN = 0; // sum of 1/|participants| over closed-set labels (chance baseline)
 
   for (const userId of users) {
     const notes = await loadUserNotes(db, userId);
+    // Build a per-arm corpus (different tokenizers → different token streams + IDF).
     const cases: NoteCase[] = [];
-    // person key -> list of { noteId, tokens } across ALL the user's notes (for signatures + IDF)
-    const corpus = new Map<string, Array<{ noteId: string; tokens: string[] }>>();
+    const corpusByArm: Record<Arm, Map<string, Array<{ noteId: string; tokens: string[] }>>> = { base: new Map(), h9: new Map() };
     for (const n of notes) {
       const labels = toLabels(n);
       if (!labels) continue;
       for (const l of labels) {
         if (!l.trueKey) continue;
-        const arrp = corpus.get(l.trueKey) ?? [];
-        arrp.push({ noteId: l.noteId, tokens: tokenize(l.text) });
-        corpus.set(l.trueKey, arrp);
+        for (const arm of ARMS) {
+          const arrp = corpusByArm[arm].get(l.trueKey) ?? [];
+          arrp.push({ noteId: l.noteId, tokens: TOKENIZERS[arm](l.text) });
+          corpusByArm[arm].set(l.trueKey, arrp);
+        }
       }
       const participantKeys = [...new Set(labels.filter((l) => l.trueKey).map((l) => l.trueKey as string))];
       if (participantKeys.length >= MIN_NAMED) cases.push({ noteId: n.id, labels, participantKeys });
     }
-    const roster = [...corpus.keys()];
+    const roster = [...corpusByArm.base.keys()];
     if (roster.length < 2 || cases.length === 0) continue;
 
-    // Per-user IDF from full per-person corpora (one document per person).
-    const df = new Map<string, number>();
-    for (const [, docs] of corpus) {
-      const seen = new Set<string>();
-      for (const d of docs) for (const t of d.tokens) seen.add(t);
-      for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
-    }
-    const P = corpus.size;
-    const idf = new Map<string, number>();
-    for (const [t, d] of df) idf.set(t, Math.log((P + 1) / (d + 1)) + 1);
-
-    // signature(personKey, excludeNoteId) = TF over that person's utterances in OTHER notes.
-    const signature = (personKey: string, excludeNoteId: string): Map<string, number> => {
-      const toks: string[] = [];
-      for (const d of corpus.get(personKey) ?? []) if (d.noteId !== excludeNoteId) toks.push(...d.tokens);
-      return termFreq(toks);
+    // Per-arm IDF + signature/hasHistory closures.
+    const scorer = (arm: Arm) => {
+      const corpus = corpusByArm[arm];
+      const df = new Map<string, number>();
+      for (const [, docs] of corpus) {
+        const seen = new Set<string>();
+        for (const d of docs) for (const t of d.tokens) seen.add(t);
+        for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
+      }
+      const P = corpus.size;
+      const idf = new Map<string, number>();
+      for (const [t, d] of df) idf.set(t, Math.log((P + 1) / (d + 1)) + 1);
+      const signature = (personKey: string, excludeNoteId: string): Map<string, number> => {
+        const toks: string[] = [];
+        for (const d of corpus.get(personKey) ?? []) if (d.noteId !== excludeNoteId) toks.push(...d.tokens);
+        return termFreq(toks, SUBLINEAR[arm]);
+      };
+      const hasHistory = (personKey: string, excludeNoteId: string): boolean =>
+        (corpus.get(personKey) ?? []).some((d) => d.noteId !== excludeNoteId && d.tokens.length > 0);
+      return { idf, signature, hasHistory };
     };
-    const hasHistory = (personKey: string, excludeNoteId: string): boolean =>
-      (corpus.get(personKey) ?? []).some((d) => d.noteId !== excludeNoteId && d.tokens.length > 0);
+    const scorers: Record<Arm, ReturnType<typeof scorer>> = { base: scorer('base'), h9: scorer('h9') };
 
     for (const c of cases) {
       for (const l of c.labels) {
         if (!l.trueKey) continue; // only score labels with a ground-truth name
-        const labelVec = termFreq(tokenize(l.text));
-        if (labelVec.size === 0) continue;
-        const warm = hasHistory(l.trueKey, c.noteId);
-
-        const scoreAgainst = (candidates: string[]): string | null => {
-          let best: string | null = null, bestScore = -1;
-          for (const cand of candidates) {
-            const sig = signature(cand, c.noteId);
-            if (sig.size === 0) continue;
-            const sc = cosineTfidf(labelVec, sig, idf);
-            if (sc > bestScore) { bestScore = sc; best = cand; }
-          }
-          return best;
-        };
-
-        // closed-set: candidates = this meeting's true participants
-        const closedPred = scoreAgainst(c.participantKeys);
-        const okClosed = closedPred === l.trueKey;
-        add(closed, okClosed);
-        if (warm) add(closedWarm, okClosed);
-        randomExpected += 1 / Math.max(1, c.participantKeys.length); randomN += 1;
-
-        // open-set: candidates = the whole roster (any person with a corpus)
-        const openPred = scoreAgainst(roster);
-        const okOpen = openPred === l.trueKey;
-        add(open, okOpen);
-        if (warm) add(openWarm, okOpen);
+        // Chance baseline is arm-independent; count once per label (using base's non-empty check).
+        if (termFreq(TOKENIZERS.base(l.text)).size > 0) { randomExpected += 1 / Math.max(1, c.participantKeys.length); randomN += 1; }
+        for (const arm of ARMS) {
+          const { idf, signature, hasHistory } = scorers[arm];
+          const labelVec = termFreq(TOKENIZERS[arm](l.text), SUBLINEAR[arm]);
+          if (labelVec.size === 0) continue;
+          const warm = hasHistory(l.trueKey, c.noteId);
+          const scoreAgainst = (candidates: string[]): string | null => {
+            let best: string | null = null, bestScore = -1;
+            for (const cand of candidates) {
+              const sig = signature(cand, c.noteId);
+              if (sig.size === 0) continue;
+              const sc = cosineTfidf(labelVec, sig, idf);
+              if (sc > bestScore) { bestScore = sc; best = cand; }
+            }
+            return best;
+          };
+          const t = tallies[arm];
+          const okClosed = scoreAgainst(c.participantKeys) === l.trueKey;
+          add(t.closed, okClosed); if (warm) add(t.closedWarm, okClosed);
+          const okOpen = scoreAgainst(roster) === l.trueKey;
+          add(t.open, okOpen); if (warm) add(t.openWarm, okOpen);
+        }
       }
     }
     process.stdout.write(`• ${userId.slice(0, 8)}…  roster=${roster.length}  cases=${cases.length}\n`);
@@ -207,16 +232,21 @@ async function main(): Promise<void> {
 
   const chance = randomN ? randomExpected / randomN : 0;
   process.stdout.write('\n──────────────────────────────────────────────────────────────\n');
-  process.stdout.write('SIGNATURE-MATCH ACCURACY (TF-IDF cosine, leave-one-meeting-out)\n');
-  process.stdout.write(`  random-within-set chance:        ${(chance * 100).toFixed(1)}%\n`);
-  process.stdout.write(`  identify baseline (for ref):     ~37%  (eval:speaker-backtest full arm)\n`);
-  process.stdout.write(`  closed-set (know the attendees): ${pctOf(closed)}  (n=${closed.total})\n`);
-  process.stdout.write(`    warm subset (has history):     ${pctOf(closedWarm)}  (n=${closedWarm.total})\n`);
-  process.stdout.write(`  open-set (whole roster):         ${pctOf(open)}  (n=${open.total})\n`);
-  process.stdout.write(`    warm subset (has history):     ${pctOf(openWarm)}  (n=${openWarm.total})\n`);
-  process.stdout.write('\nRead: closed-set WARM well above chance = discriminative text signal EXISTS (build it, likely\n');
-  process.stdout.write('stronger with embeddings). Closed-set ≈ chance = same-team utterances are non-distinctive and\n');
-  process.stdout.write('no text signature will help — report the ceiling to the boss instead of building it.\n');
+  process.stdout.write('SIGNATURE-MATCH ACCURACY — base (shipped) vs H9 (stopwords + sublinear TF)\n');
+  process.stdout.write(`  random-within-set chance: ${(chance * 100).toFixed(1)}%   identify baseline (ref): ~37%\n\n`);
+  process.stdout.write('arm    closed-set      closed-WARM     open-set        open-WARM\n');
+  for (const arm of ARMS) {
+    const t = tallies[arm];
+    process.stdout.write(
+      `${arm.padEnd(6)} ${pctOf(t.closed).padStart(6)}(${String(t.closed.total).padStart(3)})   ` +
+      `${pctOf(t.closedWarm).padStart(6)}(${String(t.closedWarm.total).padStart(3)})   ` +
+      `${pctOf(t.open).padStart(6)}(${String(t.open.total).padStart(3)})   ` +
+      `${pctOf(t.openWarm).padStart(6)}(${String(t.openWarm.total).padStart(3)})\n`,
+    );
+  }
+  process.stdout.write('\nRead: H9 open-WARM > base open-WARM = stopword/sublinear tuning helps; ship it into\n');
+  process.stdout.write('speakerSignature. No gain = the filler was already low-IDF and tuning is not the lever.\n');
+  process.stdout.write('(legacy note) closed-set WARM well above chance = discriminative text signal EXISTS.\n');
 }
 
 main().catch((e) => { process.stderr.write(`signature-probe failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`); process.exit(1); });
