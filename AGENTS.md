@@ -6,9 +6,8 @@ Audio transcription + summarization app (record/upload → transcribe → summar
 
 ## Architecture
 - `src/` — React 18 + Vite + TypeScript frontend. Auth via MSAL (Azure AD); data via Supabase (Postgres + RLS).
-- `workflow-server/` — Node HTTP backend for the transcribe/summarize pipeline (AssemblyAI + Gemini). Deploys on Render.
+- `workflow-server/` — Node HTTP backend for the transcribe/summarize pipeline (AssemblyAI + Gemini). Deploys on Render. Also hosts the MCP server (merged): `workflow-server/src/mcp/`, dispatched first in the request handler (owns `/mcp`, `/mcp-chatgpt`, `/.well-known/oauth-protected-resource*`, `/admin/*`).
 - `supabase/functions/` — Deno edge functions (token exchange, audio URLs, profile generation, admin).
-- `mcp-server/` — MCP server exposing notes/speakers/projects.
 
 ## Commands
 - Frontend: `npm run dev` (:5174), `npm run build` (tsc + vite), `npm run lint`.

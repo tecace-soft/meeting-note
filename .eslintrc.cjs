@@ -20,8 +20,7 @@ module.exports = {
   ignorePatterns: [
     'dist/',
     'node_modules/',
-    'mcp-server/build/',
-    'mcp-server/node_modules/',
+    'workflow-server/build/',
     'supabase/functions/',
   ],
   rules: {

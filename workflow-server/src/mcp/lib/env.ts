@@ -44,8 +44,13 @@ function resolveDefaultTimeZone(raw: string | undefined): string {
   }
 }
 
+// Merged into the workflow-server: this module compiles to
+// workflow-server/build/mcp/lib/env.js, so the workflow-server .env is three
+// levels up. On Render env vars are injected directly, and the host
+// (index.ts) also loads this same .env, so this is a redundant local-dev
+// convenience, not the source of truth.
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-const envPath = resolve(moduleDir, '../../.env');
+const envPath = resolve(moduleDir, '../../../.env');
 loadDotenv({ path: envPath, quiet: true });
 
 function requireEnv(name: string): string {

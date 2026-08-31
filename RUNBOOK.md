@@ -12,7 +12,8 @@ Last updated: 2026-08-17.
 |---|---|---|---|
 | Frontend (React/Vite) | Render **static site** | `meetingnote.tecace.com` (prev `meeting-note-fxms.onrender.com`) | load the page |
 | **workflow-server** (Node; aka `meeting-note-backend`) | Render web service | `meeting-note-backend-njfb.onrender.com` | `GET /health`, `GET /version` |
-| **MCP server** (`meeting-note-mcp`) | Render web service | `meeting-note-mcp.onrender.com` | `GET /version` |
+| **MCP server** | **MERGED into workflow-server** (same process, code under `workflow-server/src/mcp/`). Owns `/mcp`, `/mcp-chatgpt`, `/.well-known/oauth-protected-resource*`, `/admin/*`. | served by the workflow-server host | `GET /version` (host) |
+| MCP server — standalone (RETIRING) | old Render web service `meeting-note-mcp`, still live on the connector URL until deleted | `meeting-note-mcp.onrender.com` | `GET /version` |
 | Supabase (Postgres + Storage + Edge Functions) | Supabase cloud | project `smnnlamrwisqaquymsdl` | Supabase dashboard |
 | Android app (Flutter) | user devices | n/a | installed build / `adb` |
 
@@ -25,12 +26,12 @@ So audio upload keeps working even when the backend is down — only transcribe/
 
 ## 2. Deploy — each piece has a DIFFERENT target
 
-> **The single most important operational fact:** the three services deploy from three different sources. Pushing to `main` does NOT redeploy the MCP server.
+> **Operational fact:** the deployables ship from different sources. Frontend + workflow-server (now including the merged MCP) deploy from `main`; Edge Functions deploy via the Supabase CLI; the mobile app is a manual APK build. (Historically the MCP was a separate `mcp-server`-branch service — that is being retired; see below.)
 
 | Piece | Deploy trigger |
 |---|---|
 | **workflow-server** | auto-deploys on push to **`main`** |
-| **MCP server** | auto-deploys on push to the **`mcp-server`** branch → ship with `git push origin main:mcp-server` (fast-forward). Root Directory = `mcp-server/`. |
+| **MCP server** | **MERGED into workflow-server** → deploys from **`main`** with the backend (one process, one Render web service). ⚠️ Do NOT run `git push origin main:mcp-server` anymore: `main` no longer contains `mcp-server/`, so that push would break the still-live standalone service. The standalone `meeting-note-mcp` service (old `mcp-server` branch) is being retired — delete it after the merged MCP is verified on the cutover URL. |
 | **Frontend** | Render static site, auto-deploys from **`main`** (verify the connected branch on the Render dashboard) |
 | **Edge Functions** | Supabase CLI: `supabase functions deploy <name>`, not tied to a git push. The 8: `supabase-token` (mints the app JWT, tenant-gated), `mcp-token` (mints MCP personal tokens), `note-audio-url` (signed audio URL), `generate-profile` ("the gate": auth-required speaker profile), `identify-speakers` (speaker suggestion), `update-user-memory` (memory fold), `admin-analytics`, `admin-controls`. |
 | **Android app** | `meeting-note-mobile/build_apk.sh` → APK → `adb install` / manual share. Auto-tags `mobile-v<ver>` via GitHub Action on a pubspec version bump. |
@@ -81,7 +82,7 @@ F9 watches the workflow-server's OWN error events (job failure, HTTP 500, uncaug
 | `F9_OPS_AGENT_ENABLED`, `F9_MAX_NEW_TICKETS_PER_HOUR` | F9 on/off + storm cap |
 | `MEMORY_CONSOLIDATION_ENABLED` | F1'' memory dedup consolidation pass (default on; one extra flash-lite call per fold when memory has ≥6 items) |
 
-MCP server (Render → `meeting-note-mcp`): `MCP_API_KEY` (static-key auth; keep secret), `MCP_ALLOW_ANON_CHATGPT_FALLBACK` (default off), plus the same Supabase creds.
+MCP env vars (now live on the **workflow-server** service, since the MCP is merged there): `MCP_API_KEY` (static-key auth; keep secret), `MCP_ALLOW_ANON_CHATGPT_FALLBACK` (default off), `MCP_TOKEN_PEPPER`, `MCP_OAUTH_RESOURCE`/`MCP_OAUTH_SCOPE`/`MCP_AZURE_TENANT_ID` (ChatGPT OAuth), `MCP_ADMIN_EMAILS`/`MCP_ADMIN_MICROSOFT_IDS`/`MCP_ADMIN_CLIENT_ID` (admin dashboard), plus the same Supabase creds. At cutover, copy these from the old `meeting-note-mcp` service onto the workflow-server service.
 
 ---
 
@@ -102,7 +103,7 @@ Jobs are safe once submitted (server-side); the client resumes to `/processing/{
 `GET /version` on workflow-server and MCP. Frontend: check the Render deploy.
 
 **"Deployed to main but the MCP server didn't change."**
-Expected — MCP deploys from the `mcp-server` branch. Run `git push origin main:mcp-server`.
+No longer applicable — the MCP is merged into workflow-server and deploys from `main` with the backend. Do NOT run `git push origin main:mcp-server` (it would break the still-live standalone `meeting-note-mcp`). Verify the merged MCP with `GET /mcp` (expect 401 without a token) on the workflow-server host.
 
 **"Schema-dependent code broke after deploy."**
 A repo migration may not be applied in prod. Verify the column/table/function exists (Supabase SQL Editor / `information_schema`), apply the missing migration idempotently, and record it. See OPS_BACKLOG P1.4.

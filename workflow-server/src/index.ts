@@ -16,6 +16,7 @@ import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepair
 import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryForContext } from './memory.js';
 import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
+import { handleMcpRequest } from './mcp/transports/http.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -3236,6 +3237,11 @@ const server = createServer((req, res) => {
       return;
     }
     const url = new URL(req.url ?? '/', 'http://localhost');
+    // MCP server, merged into this process (formerly its own Render web service).
+    // Owns /mcp, /mcp-chatgpt, /.well-known/oauth-protected-resource*, and /admin/*
+    // dashboard routes; returns false (falls through) for everything else,
+    // including /health and /version which this host owns.
+    if (await handleMcpRequest(req, res, url)) return;
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
       sendJson(res, 200, {
         ok: true,
