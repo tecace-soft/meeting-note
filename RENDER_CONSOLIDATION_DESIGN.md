@@ -39,10 +39,10 @@ Three deploy targets, only TWO of which consume instance-hours:
 | **workflow-server** (Node) | Web service | YES | `meeting-note-backend-njfb.onrender.com` | web (`VITE_WORKFLOW_API_URL`), mobile (compiled) |
 | **MCP server** (Node) | Web service | YES | `meeting-note-mcp.onrender.com` | ChatGPT / Claude connectors (user-configured), web, mobile |
 
-Two always-active Node web services ≈ 2 × ~730h ≈ **1460h ≫ 750h** shared → suspension.
+Both free Node services draw against the **shared 750 instance-hour/month HARD CAP**. Free services spin down when idle, so the draw is usage-driven (NOT a flat 2 × ~744h); empirically the combined draw exhausted the 750h near **month-end**, suspending on the last day(s) of the cycle — not mid-month. (Earlier framing here claimed ~1460h → mid-cycle suspension; that was wrong.)
 History (git): the split ACCRETED — frontend first (2025-12), MCP added (2026-05-19 "MCP server init"), backend created (2026-06-01) by moving the workflow OUT of n8n into a custom Node server. Nobody sized the combined footprint for the free tier. So this is cost-optimization, not fixing a bug.
 
-Goal: get to **≤ 1 always-active Node web service on Render** → one 24/7 service ≈ 730h < 750h → survives the month.
+Goal: get to **≤ 1 free Node web service on Render** → removing the second service's separate instance-hour draw keeps the combined total under the shared 750h cap → survives to month-end.
 
 ## 2. Two ways to get there
 

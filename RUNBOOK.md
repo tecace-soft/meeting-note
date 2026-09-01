@@ -94,7 +94,7 @@ MCP env vars are now **live on the workflow-server service** (copied over from t
 
 **"The site / backend is down."**
 First check the Render dashboard Usage tab.
-Historically the free-tier **750h monthly suspension**: two always-on Node services (backend + MCP) exceeded the shared 750h, so both suspended partway through the billing cycle and auto-resumed at the next monthly reset.
+Historically the free-tier **750h monthly suspension**: two free Node services (backend + MCP) drew against the shared 750 instance-hour/month HARD CAP; their combined draw exhausted it near **month-end**, so they suspended on the last day(s) of the cycle and auto-resumed at the next monthly reset. (Free services spin down when idle, so the draw is usage-driven — not a flat 24/7 2× figure.)
 As of 2026-09-01 the MCP is merged into workflow-server and the standalone `meeting-note-mcp` is **suspended**, leaving ONE always-on free Node service (~730h) which should stay under 750h — check the Usage tab; a suspension should no longer happen once this holds through month-end.
 The static frontend and Supabase are unaffected (and audio upload still works).
 Options: wait for the reset, or take the paid-host decision (OPS_BACKLOG P1.3, on hold).
