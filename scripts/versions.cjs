@@ -14,7 +14,6 @@ const { execSync } = require('node:child_process');
 const TARGETS = [
   { name: 'frontend', url: 'https://meetingnote.tecace.com/version.json' },
   { name: 'workflow-server', url: 'https://meeting-note-backend-njfb.onrender.com/version' },
-  { name: 'mcp-server', url: 'https://meeting-note-mcp.onrender.com/version' },
 ];
 
 const TIMEOUT_MS = 65000; // tolerate a Render cold start

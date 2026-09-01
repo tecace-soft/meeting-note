@@ -23,8 +23,8 @@ import { DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 
 /** Supabase table name (exact identifier in your project). */
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
-const MCP_CHATGPT_URL = 'https://meeting-note-mcp.onrender.com/mcp-chatgpt';
-const MCP_CLAUDE_URL = 'https://meeting-note-mcp.onrender.com/mcp';
+const MCP_CHATGPT_URL = 'https://meeting-note-backend-njfb.onrender.com/mcp-chatgpt';
+const MCP_CLAUDE_URL = 'https://meeting-note-backend-njfb.onrender.com/mcp';
 
 type SettingsTab = 'account' | 'summary' | 'speaker' | 'memory' | 'mcp';
 type McpSetupView = 'chatgpt' | 'claude';

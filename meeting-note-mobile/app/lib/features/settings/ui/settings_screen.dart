@@ -715,7 +715,7 @@ class _McpSetupScreenState extends ConsumerState<McpSetupScreen> {
 
   Widget _chatGptSetup() {
     final t = ref.watch(appTextProvider);
-    const url = 'https://meeting-note-mcp.onrender.com/mcp-chatgpt';
+    const url = 'https://meeting-note-backend-njfb.onrender.com/mcp-chatgpt';
     return Column(
       children: [
         _InfoCard(
@@ -1990,7 +1990,7 @@ String _claudeConfig(String? token) {
         'args': [
           '-y',
           'mcp-remote',
-          'https://meeting-note-mcp.onrender.com/mcp',
+          'https://meeting-note-backend-njfb.onrender.com/mcp',
           '--header',
           r'Authorization:${AUTH_HEADER}',
         ],
