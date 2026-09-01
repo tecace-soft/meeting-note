@@ -184,8 +184,11 @@ const OP = { tScore: 0.08, tMargin: 0.02 }; // shipped operating point (H9-tuned
 const AGREE_WEAK = 0.75; // confidence for a weak signature confirmed by the LLM (H2a)
 const AGREE_STRONG = 0.92; // boosted confidence for a strong signature the LLM agrees with (H2b)
 const DISAGREE_SOFT = 0.55; // softened confidence for a strong signature the LLM contradicts (H2b)
-interface ArmRecords { off: LabelRecord[]; on: LabelRecord[]; sig: LabelRecord[]; h2a: LabelRecord[]; h2b: LabelRecord[] }
-const emptyArm = (): ArmRecords => ({ off: [], on: [], sig: [], h2a: [], h2b: [] });
+// h7s = on + H7 cold-start bootstrap (with role-noun stoplist); h7n = same, no stoplist. Both are
+// the anchored arm PLUS a corroborated self-intro of a NEW (non-roster) person surfaced as a
+// tentative suggestion — measured mainly on the EXCLUDED arm (the cold-start proxy).
+interface ArmRecords { off: LabelRecord[]; on: LabelRecord[]; sig: LabelRecord[]; h2a: LabelRecord[]; h2b: LabelRecord[]; h7s: LabelRecord[]; h7n: LabelRecord[] }
+const emptyArm = (): ArmRecords => ({ off: [], on: [], sig: [], h2a: [], h2b: [], h7s: [], h7n: [] });
 
 // Per-user speaker corpora from all the user's cases (leave-one-meeting-out is applied per case
 // via excludeNoteId), keyed by name — exactly what the shipped edge fn will read from the DB.
@@ -227,6 +230,9 @@ async function collectRecords(
     const anchoredByLabel = new Map(anchored.map((s) => [s.label, s]));
     out.off.push(...toRecords(raw, c, selfName));
     out.on.push(...toRecords(anchored, c, selfName));
+    // H7 cold-start bootstrap A/B (same LLM call, zero extra cost): with vs without the stoplist.
+    out.h7s.push(...toRecords(gateSuggestionsWithAnchors(raw, c.transcript, c.labels, roster, selfName, { bootstrap: true, stoplist: true }), c, selfName));
+    out.h7n.push(...toRecords(gateSuggestionsWithAnchors(raw, c.transcript, c.labels, roster, selfName, { bootstrap: true, stoplist: false }), c, selfName));
 
     const sigMerged: SpeakerSuggestion[] = [];
     const h2aMerged: SpeakerSuggestion[] = [];
@@ -383,11 +389,11 @@ async function main(): Promise<void> {
     const uFull = emptyArm();
     const uExcl = emptyArm();
     for (const c of cases) {
-      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName, corpora, idf); uFull.off.push(...r.off); uFull.on.push(...r.on); uFull.sig.push(...r.sig); uFull.h2a.push(...r.h2a); uFull.h2b.push(...r.h2b); }
-      if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName, corpora, idf); uExcl.off.push(...r.off); uExcl.on.push(...r.on); uExcl.sig.push(...r.sig); uExcl.h2a.push(...r.h2a); }
+      if (doFull) { const r = await collectRecords(c, apiKey, roster, selfName, corpora, idf); uFull.off.push(...r.off); uFull.on.push(...r.on); uFull.sig.push(...r.sig); uFull.h2a.push(...r.h2a); uFull.h2b.push(...r.h2b); uFull.h7s.push(...r.h7s); uFull.h7n.push(...r.h7n); }
+      if (doExcl) { const r = await collectRecords(c, apiKey, excludeMeetingSpeakers(roster, c.groundTruthNames), selfName, corpora, idf); uExcl.off.push(...r.off); uExcl.on.push(...r.on); uExcl.sig.push(...r.sig); uExcl.h2a.push(...r.h2a); uExcl.h7s.push(...r.h7s); uExcl.h7n.push(...r.h7n); }
     }
-    full.off.push(...uFull.off); full.on.push(...uFull.on); full.sig.push(...uFull.sig); full.h2a.push(...uFull.h2a); full.h2b.push(...uFull.h2b);
-    excl.off.push(...uExcl.off); excl.on.push(...uExcl.on); excl.sig.push(...uExcl.sig); excl.h2a.push(...uExcl.h2a);
+    full.off.push(...uFull.off); full.on.push(...uFull.on); full.sig.push(...uFull.sig); full.h2a.push(...uFull.h2a); full.h2b.push(...uFull.h2b); full.h7s.push(...uFull.h7s); full.h7n.push(...uFull.h7n);
+    excl.off.push(...uExcl.off); excl.on.push(...uExcl.on); excl.sig.push(...uExcl.sig); excl.h2a.push(...uExcl.h2a); excl.h7s.push(...uExcl.h7s); excl.h7n.push(...uExcl.h7n);
     const f = doFull ? scoreUnder(uFull.off, prodPolicy) : null;
     const g = doFull ? scoreUnder(uFull.sig, prodPolicy) : null;
     const e = doExcl ? scoreUnder(uExcl.off, prodPolicy) : null;
@@ -436,6 +442,27 @@ async function main(): Promise<void> {
     process.stdout.write('  GATE: h2a beats sig on acc/precision with confident-WRONG not worse (ship it, zero cost).\n');
     process.stdout.write('        h2b shows the extra headroom that would cost an LLM call per strong pick.\n');
   }
+
+  // ---- H7 cold-start bootstrap A/B: anchored(on) vs +bootstrap(stoplist) vs +bootstrap(no stoplist) ----
+  const falseName = (recs: LabelRecord[]): number => recs.filter((r) => r.suggestedName && !r.expectedName).length;
+  const h7row = (tag: string, recs: LabelRecord[]) => {
+    const s = scoreUnder(recs, prodPolicy);
+    process.stdout.write(`  ${tag.padEnd(18)} acc ${pct(s.accuracy).padStart(6)}  recall ${pct(s.recall).padStart(6)}  precision ${pct(s.precision).padStart(6)}  false-name ${String(falseName(recs)).padStart(3)}\n`);
+  };
+  process.stdout.write('\nH7 COLD-START BOOTSTRAP — anchored(on) vs +bootstrap(+stoplist) vs +bootstrap(no stoplist)\n');
+  if (doExcl) {
+    process.stdout.write('excluded arm (cold-start proxy — the recall win should show HERE):\n');
+    h7row('on (baseline)', excl.on);
+    h7row('h7 +stoplist', excl.h7s);
+    h7row('h7 no-stoplist', excl.h7n);
+  }
+  if (doFull) {
+    process.stdout.write('full arm (guard — must NOT regress; watch false-name):\n');
+    h7row('on (baseline)', full.on);
+    h7row('h7 +stoplist', full.h7s);
+    h7row('h7 no-stoplist', full.h7n);
+  }
+  process.stdout.write('  GATE: excluded recall/acc UP vs on, full not worse, false-name not worse. stoplist vs not = whichever holds precision/false-name.\n');
 
   // ---- Calibration (full arm, H2A = the zero-cost ensemble proposal) ----
   const src = doFull ? full.h2a : excl.on;

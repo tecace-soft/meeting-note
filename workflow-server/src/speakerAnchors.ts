@@ -22,6 +22,8 @@ import type { SpeakerSuggestion, SpeakerRosterEntry } from './memory.js';
 const CAP_NO_ANCHOR = 0.6; // non-self, no positive anchor: tentative suggestion, not "confident"
 const CAP_VETOED = 0.35; // non-self contradicted by a negative anchor: near-abstain
 const CONFIRM = 0.9; // self-introduction is strong evidence
+const BOOTSTRAP_CONFIRM = 0.8; // H7: a corroborated self-intro of a NEW (non-roster) person — strong,
+// but below a known-name self-intro (no roster cross-check), and tentative (speakerId null).
 
 export type Anchor =
   | { kind: 'self-intro'; label: string; name: string } // POSITIVE: this label IS name
@@ -213,20 +215,103 @@ export function applyAnchors(
   });
 }
 
-/** Convenience: extract from the transcript + roster and apply, in one call. */
+// ---------------------------------------------------------------------------
+// H7 — cold-start anchor bootstrap. The extractors above keep ONLY names already
+// in the roster/self (matchToken gate), so a first-time participant who introduces
+// themselves is dropped — the exact signal that identifies a new person is thrown
+// away. discoverBootstrapNames finds names that do NOT resolve to knownNames and
+// are CORROBORATED (>=2 independent anchor hits, spanning >=2 labels or >=2 kinds),
+// so a one-off common-noun misfire ("저는 담당자입니다") can't become a name. An
+// optional role-noun stoplist is an extra guard. Suggestion-only; the caller expands
+// knownNames + roster with these tentative names and reuses applyAnchors. See
+// SPEAKER_H7_ANCHOR_BOOTSTRAP_DESIGN.md.
+// ---------------------------------------------------------------------------
+
+// Obvious NON-name role/honorific nouns that can precede 입니다 / 님 — never a person.
+export const ROLE_STOPLIST = new Set<string>([
+  '담당자', '개발자', '디자이너', '기획자', '엔지니어', '매니저', '관리자', '책임자', '작업자', '운영자',
+  '대표', '사장', '부장', '과장', '차장', '대리', '팀장', '실장', '본부장', '이사', '상무', '전무',
+  '선생', '교수', '강사', '고객', '손님', '회원', '사용자', '여러분', '참석자', '발표자', '진행자', '사회자',
+]);
+const isNameShape = (s: string): boolean => /^[가-힣]{2,4}$/.test(s.trim()) || /^[A-Za-z][a-zA-Z]+( [A-Z][a-zA-Z]+)?$/.test(s.trim());
+// Group by the given (first) token so "Michael Knutsen" and "Michael" corroborate each other.
+const nameKey = (s: string): string => { const m = s.trim().toLowerCase().match(/[가-힣]{2,4}|[a-z]+/); return m ? m[0] : s.trim().toLowerCase(); };
+
+interface NameHit { name: string; kind: 'self-intro' | 'address'; label: string }
+function rawHits(turns: Array<{ label: string; text: string }>, patterns: RegExp[], kind: NameHit['kind']): NameHit[] {
+  const out: NameHit[] = [];
+  for (const turn of turns) for (const re of patterns) for (const m of turn.text.matchAll(re)) {
+    const raw = (m[1] ?? '').trim();
+    if (raw) out.push({ name: raw, kind, label: turn.label });
+  }
+  return out;
+}
+
+/** Find corroborated NEW (non-roster) speaker names + their self-intro label assignment. Pure. */
+export function discoverBootstrapNames(
+  turns: Array<{ label: string; text: string }>,
+  knownNames: string[],
+  opts: { stoplist?: boolean } = {},
+): { newNames: string[]; assignment: Map<string, string> } {
+  const useStop = opts.stoplist !== false;
+  const hits = [...rawHits(turns, SELF_INTRO_PATTERNS, 'self-intro'), ...rawHits(turns, ADDRESS_PATTERNS, 'address')]
+    .filter((h) => isNameShape(h.name) && !matchToken(h.name, knownNames) && !(useStop && ROLE_STOPLIST.has(nameKey(h.name))));
+  const byName = new Map<string, { display: string; hits: NameHit[] }>();
+  for (const h of hits) {
+    const k = nameKey(h.name);
+    const e = byName.get(k) ?? { display: h.name, hits: [] };
+    if (h.name.length > e.display.length) e.display = h.name; // prefer the fuller form (adds a surname)
+    e.hits.push(h);
+    byName.set(k, e);
+  }
+  const newNames: string[] = [];
+  const assignment = new Map<string, string>();
+  for (const { display, hits: hs } of byName.values()) {
+    const distinctLabels = new Set(hs.map((h) => h.label)).size;
+    const distinctKinds = new Set(hs.map((h) => h.kind)).size;
+    if (!(hs.length >= 2 && (distinctLabels >= 2 || distinctKinds >= 2))) continue; // corroboration
+    newNames.push(display);
+    const selfLabels = new Set(hs.filter((h) => h.kind === 'self-intro').map((h) => h.label));
+    if (selfLabels.size === 1) assignment.set([...selfLabels][0], display); // unique self-intro → assign
+  }
+  return { newNames, assignment };
+}
+
+/** Convenience: extract from the transcript + roster and apply, in one call. `opts.bootstrap`
+ *  (H7) additionally surfaces corroborated NEW speaker names; default off = unchanged behavior. */
 export function gateSuggestionsWithAnchors(
   suggestions: SpeakerSuggestion[],
   transcript: string,
   labels: string[],
   roster: SpeakerRosterEntry[],
   selfName: string | null,
+  opts: { bootstrap?: boolean; stoplist?: boolean } = {},
 ): SpeakerSuggestion[] {
   const knownNames = [...roster.map((r) => r.name), ...(selfName ? [selfName] : [])].filter(Boolean);
-  if (knownNames.length === 0) return suggestions;
-  const anchors = extractAnchors(parseTurns(transcript, labels), knownNames);
-  if (anchors.length === 0) {
-    // Still apply the CAP so a no-evidence confident pick can never be shown as confident.
-    return applyAnchors(suggestions, [], roster, selfName);
+  const turns = parseTurns(transcript, labels);
+
+  let effRoster = roster;
+  let effKnown = knownNames;
+  let bootstrapped = new Set<string>();
+  if (opts.bootstrap) {
+    const { newNames } = discoverBootstrapNames(turns, knownNames, { stoplist: opts.stoplist });
+    if (newNames.length) {
+      bootstrapped = new Set(newNames.map((n) => n.toLowerCase()));
+      effKnown = [...knownNames, ...newNames];
+      effRoster = [...roster, ...newNames.map((n) => ({ speakerId: '', name: n, summary: '' } as SpeakerRosterEntry))];
+    }
   }
-  return applyAnchors(suggestions, anchors, roster, selfName);
+  if (effKnown.length === 0) return suggestions;
+
+  // extractAnchors now resolves the new names, so their self-intro is a positive anchor (effect A
+  // assigns the label) and their address is a veto. Empty anchors still apply the CAP.
+  const anchors = extractAnchors(turns, effKnown);
+  const gated = applyAnchors(suggestions, anchors, effRoster, selfName);
+  if (bootstrapped.size === 0) return gated;
+
+  // A bootstrapped (non-roster) name stays a TENTATIVE suggestion: speakerId null (create on
+  // confirm), confidence capped to BOOTSTRAP_CONFIRM (below a known-name self-intro's 0.9).
+  return gated.map((s) => (s.name && !s.isSelf && bootstrapped.has(s.name.toLowerCase())
+    ? { ...s, speakerId: null, confidence: Math.min(s.confidence, BOOTSTRAP_CONFIRM), rationale: 'bootstrapped new speaker (corroborated self-intro)' }
+    : s));
 }

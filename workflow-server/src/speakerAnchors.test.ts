@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   matchToken, sameName, parseTurns, extractAnchors, applyAnchors, gateSuggestionsWithAnchors,
+  discoverBootstrapNames,
   type Anchor,
 } from './speakerAnchors.js';
 import type { SpeakerSuggestion, SpeakerRosterEntry } from './memory.js';
@@ -161,4 +162,51 @@ test('gate returns suggestions unchanged when there is no roster and no self', (
   const suggestions = [sug('Speaker A', 'Hansoo Lee (이한수)', 0.9)];
   const out = gateSuggestionsWithAnchors(suggestions, 'Speaker A: hi', ['Speaker A'], [], null);
   assert.deepEqual(out, suggestions);
+});
+
+// ---- H7 cold-start anchor bootstrap ----
+
+const LABELS3 = ['Speaker A', 'Speaker B', 'Speaker C'];
+// A new person (Michael, not in ROSTER/SELF) introduces themselves AND is addressed = corroborated.
+const NEW_INTRO = ['Speaker C: Hi everyone, this is Michael, nice to meet you.', 'Speaker A: Thanks, Michael. Let us start.'].join('\n');
+
+test('discoverBootstrapNames surfaces a corroborated new name + assigns its self-intro label', () => {
+  const { newNames, assignment } = discoverBootstrapNames(parseTurns(NEW_INTRO, LABELS3), KNOWN, {});
+  assert.deepEqual(newNames, ['Michael']);
+  assert.equal(assignment.get('Speaker C'), 'Michael'); // self-intro label
+});
+
+test('H7 bootstrap: corroborated self-intro of a new person is suggested (tentative, speakerId null, <=0.8)', () => {
+  const out = gateSuggestionsWithAnchors([sug('Speaker C', null, 0)], NEW_INTRO, LABELS3, ROSTER, SELF, { bootstrap: true });
+  const c = out.find((s) => s.label === 'Speaker C')!;
+  assert.equal(c.name, 'Michael');
+  assert.equal(c.speakerId, null); // not in roster yet — created on confirm
+  assert.equal(c.isSelf, false);
+  assert.ok(c.confidence <= 0.8 && c.confidence > 0);
+});
+
+test('H7 is OFF by default: the new name is NOT surfaced unless bootstrap is requested', () => {
+  const out = gateSuggestionsWithAnchors([sug('Speaker C', null, 0)], NEW_INTRO, LABELS3, ROSTER, SELF);
+  assert.equal(out.find((s) => s.label === 'Speaker C')!.name, null);
+});
+
+test('H7 requires CORROBORATION: a single uncorroborated self-intro is NOT bootstrapped', () => {
+  const once = 'Speaker C: this is Michael.\nSpeaker A: okay, great.';
+  const out = gateSuggestionsWithAnchors([sug('Speaker C', null, 0)], once, LABELS3, ROSTER, SELF, { bootstrap: true });
+  assert.equal(out.find((s) => s.label === 'Speaker C')!.name, null);
+});
+
+test('H7 stoplist decides a corroborated ROLE NOUN: dropped with stoplist, surfaced without', () => {
+  const role = 'Speaker C: 저는 담당자입니다.\nSpeaker A: 담당자님 안녕하세요.'; // 담당자 = "person in charge", not a name
+  const withStop = gateSuggestionsWithAnchors([sug('Speaker C', null, 0)], role, LABELS3, ROSTER, SELF, { bootstrap: true, stoplist: true });
+  assert.equal(withStop.find((s) => s.label === 'Speaker C')!.name, null); // guarded
+  const noStop = gateSuggestionsWithAnchors([sug('Speaker C', null, 0)], role, LABELS3, ROSTER, SELF, { bootstrap: true, stoplist: false });
+  assert.equal(noStop.find((s) => s.label === 'Speaker C')!.name, '담당자'); // false-name leaks through
+});
+
+test('H7 never touches the self path', () => {
+  const out = gateSuggestionsWithAnchors([sug('Speaker A', SELF, 0.9, { isSelf: true, speakerId: null })], NEW_INTRO, LABELS3, ROSTER, SELF, { bootstrap: true });
+  const a = out.find((s) => s.label === 'Speaker A')!;
+  assert.equal(a.isSelf, true);
+  assert.ok(a.confidence >= 0.9);
 });
