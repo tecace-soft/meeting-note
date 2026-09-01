@@ -2,7 +2,7 @@
 
 Operator-facing guide: how to run, deploy, monitor, and troubleshoot the system.
 For the WHY / decision history / backlog, see `OPS_BACKLOG.md`; this file is the "how do I operate it" companion.
-Last updated: 2026-08-17.
+Last updated: 2026-09-01.
 
 ---
 
@@ -13,7 +13,7 @@ Last updated: 2026-08-17.
 | Frontend (React/Vite) | Render **static site** | `meetingnote.tecace.com` (prev `meeting-note-fxms.onrender.com`) | load the page |
 | **workflow-server** (Node; aka `meeting-note-backend`) | Render web service | `meeting-note-backend-njfb.onrender.com` | `GET /health`, `GET /version` |
 | **MCP server** | **MERGED into workflow-server** (same process, code under `workflow-server/src/mcp/`). Owns `/mcp`, `/mcp-chatgpt`, `/.well-known/oauth-protected-resource*`, `/admin/*`. | served by the workflow-server host | `GET /version` (host) |
-| MCP server — standalone (RETIRING) | old Render web service `meeting-note-mcp`, still live on the connector URL until deleted | `meeting-note-mcp.onrender.com` | `GET /version` |
+| MCP server — standalone (SUSPENDED, rollback) | old Render web service `meeting-note-mcp`, now **suspended** on Render (kept as a rollback, not deleted). Its URL no longer serves while suspended. | `meeting-note-mcp.onrender.com` (dead while suspended) | n/a |
 | Supabase (Postgres + Storage + Edge Functions) | Supabase cloud | project `smnnlamrwisqaquymsdl` | Supabase dashboard |
 | Android app (Flutter) | user devices | n/a | installed build / `adb` |
 
@@ -26,18 +26,18 @@ So audio upload keeps working even when the backend is down — only transcribe/
 
 ## 2. Deploy — each piece has a DIFFERENT target
 
-> **Operational fact:** the deployables ship from different sources. Frontend + workflow-server (now including the merged MCP) deploy from `main`; Edge Functions deploy via the Supabase CLI; the mobile app is a manual APK build. (Historically the MCP was a separate `mcp-server`-branch service — that is being retired; see below.)
+> **Operational fact:** the deployables ship from different sources. Frontend + workflow-server (now including the merged MCP) deploy from `main`; Edge Functions deploy via the Supabase CLI; the mobile app is a manual APK build. (Historically the MCP was a separate `mcp-server`-branch service — now merged in and the standalone suspended as a rollback; see below.)
 
 | Piece | Deploy trigger |
 |---|---|
 | **workflow-server** | auto-deploys on push to **`main`** |
-| **MCP server** | **MERGED into workflow-server** → deploys from **`main`** with the backend (one process, one Render web service). ⚠️ Do NOT run `git push origin main:mcp-server` anymore: `main` no longer contains `mcp-server/`, so that push would break the still-live standalone service. The standalone `meeting-note-mcp` service (old `mcp-server` branch) is being retired — delete it after the merged MCP is verified on the cutover URL. |
+| **MCP server** | **MERGED into workflow-server** → deploys from **`main`** with the backend (one process, one Render web service). ⚠️ Do NOT run `git push origin main:mcp-server` anymore: `main` no longer contains `mcp-server/`, so that push would break the still-live standalone service. The standalone `meeting-note-mcp` service (old `mcp-server` branch) is now **suspended** on Render as a rollback (merged MCP verified on the backend URL 2026-09-01: auth + tools/list + a real tool call); NOT deleted yet — delete only after it has proven stable across a full month. |
 | **Frontend** | Render static site, auto-deploys from **`main`** (verify the connected branch on the Render dashboard) |
 | **Edge Functions** | Supabase CLI: `supabase functions deploy <name>`, not tied to a git push. The 8: `supabase-token` (mints the app JWT, tenant-gated), `mcp-token` (mints MCP personal tokens), `note-audio-url` (signed audio URL), `generate-profile` ("the gate": auth-required speaker profile), `identify-speakers` (speaker suggestion), `update-user-memory` (memory fold), `admin-analytics`, `admin-controls`. |
 | **Android app** | `meeting-note-mobile/build_apk.sh` → APK → `adb install` / manual share. Auto-tags `mobile-v<ver>` via GitHub Action on a pubspec version bump. |
 | **iOS** | Owned by the Korea side (needs a Mac); not built here. |
 
-**Confirm what is live:** `GET /version` on workflow-server and MCP returns `{ shortSha, branch, deployedAt }` (from `RENDER_GIT_COMMIT`).
+**Confirm what is live:** `GET /version` on workflow-server returns `{ shortSha, branch, deployedAt }` (from `RENDER_GIT_COMMIT`). The merged MCP shares this host, so there is no separate MCP `/version`.
 After any deploy, poll `/version` until the new SHA shows.
 
 **Prod DB schema changes:** apply via the **Supabase SQL Editor** (paste SQL), then record the migration.
@@ -82,7 +82,11 @@ F9 watches the workflow-server's OWN error events (job failure, HTTP 500, uncaug
 | `F9_OPS_AGENT_ENABLED`, `F9_MAX_NEW_TICKETS_PER_HOUR` | F9 on/off + storm cap |
 | `MEMORY_CONSOLIDATION_ENABLED` | F1'' memory dedup consolidation pass (default on; one extra flash-lite call per fold when memory has ≥6 items) |
 
-MCP env vars (now live on the **workflow-server** service, since the MCP is merged there): `MCP_API_KEY` (static-key auth; keep secret), `MCP_ALLOW_ANON_CHATGPT_FALLBACK` (default off), `MCP_TOKEN_PEPPER`, `MCP_OAUTH_RESOURCE`/`MCP_OAUTH_SCOPE`/`MCP_AZURE_TENANT_ID` (ChatGPT OAuth), `MCP_ADMIN_EMAILS`/`MCP_ADMIN_MICROSOFT_IDS`/`MCP_ADMIN_CLIENT_ID` (admin dashboard), plus the same Supabase creds. At cutover, copy these from the old `meeting-note-mcp` service onto the workflow-server service.
+MCP env vars are now **live on the workflow-server service** (copied over from the old `meeting-note-mcp` service 2026-09-01, since the MCP is merged there): `MCP_API_KEY` (static-key auth; keep secret), `MCP_ALLOW_ANON_CHATGPT_FALLBACK` (default off), `MCP_TOKEN_PEPPER`, `MCP_OAUTH_RESOURCE`/`MCP_OAUTH_SCOPE`/`MCP_AZURE_TENANT_ID` (ChatGPT OAuth), `MCP_ADMIN_EMAILS`/`MCP_ADMIN_MICROSOFT_IDS`/`MCP_ADMIN_CLIENT_ID` (admin dashboard), plus the same Supabase creds.
+
+- ⚠️ **`MCP_TOKEN_PEPPER` must match the value the standalone used** — personal MCP tokens are hashed with it (`sha256(pepper:token)`), so a different pepper 401s every existing token. If the standalone had no explicit pepper it falls back to `SUPABASE_SERVICE_ROLE_KEY`; in that case leave it unset here too (don't add one).
+- **`MCP_PUBLIC_BASE_URL` + `MCP_OAUTH_RESOURCE` are URL-specific** — set them to the workflow-server (backend) URL, not the old mcp URL.
+- ⚠️ **Env-wipe footgun (hit 2026-09-01):** MCP_* env added on Render vanished (unsaved changes / env group not linked). Always click **Save Changes** and reload to confirm they persisted. Note: the `.well-known/oauth-protected-resource*` payload is all code defaults/host-derivation, so it looks correct even with NO MCP env set — do NOT use it as proof the env is present; test `GET /mcp` with a real token instead.
 
 ---
 
@@ -90,7 +94,8 @@ MCP env vars (now live on the **workflow-server** service, since the MCP is merg
 
 **"The site / backend is down."**
 First check the Render dashboard Usage tab.
-The most common cause is the free-tier **750h monthly suspension**: two always-on Node services (backend + MCP) exceed the shared 750h, so both suspend partway through the billing cycle and auto-resume at the next monthly reset.
+Historically the free-tier **750h monthly suspension**: two always-on Node services (backend + MCP) exceeded the shared 750h, so both suspended partway through the billing cycle and auto-resumed at the next monthly reset.
+As of 2026-09-01 the MCP is merged into workflow-server and the standalone `meeting-note-mcp` is **suspended**, leaving ONE always-on free Node service (~730h) which should stay under 750h — check the Usage tab; a suspension should no longer happen once this holds through month-end.
 The static frontend and Supabase are unaffected (and audio upload still works).
 Options: wait for the reset, or take the paid-host decision (OPS_BACKLOG P1.3, on hold).
 
@@ -100,10 +105,10 @@ Check the `workflow_job` row status in Supabase.
 Jobs are safe once submitted (server-side); the client resumes to `/processing/{jobId}` on reopen.
 
 **"Which commit is live?"**
-`GET /version` on workflow-server and MCP. Frontend: check the Render deploy.
+`GET /version` on workflow-server (the merged MCP shares this host). Frontend: check the Render deploy.
 
 **"Deployed to main but the MCP server didn't change."**
-No longer applicable — the MCP is merged into workflow-server and deploys from `main` with the backend. Do NOT run `git push origin main:mcp-server` (it would break the still-live standalone `meeting-note-mcp`). Verify the merged MCP with `GET /mcp` (expect 401 without a token) on the workflow-server host.
+No longer applicable — the MCP is merged into workflow-server and deploys from `main` with the backend. Do NOT run `git push origin main:mcp-server` (the `mcp-server` branch is the rollback for the suspended standalone; pushing `main` there would clobber it). Verify the merged MCP with `GET /mcp` (expect 401 without a token) on the workflow-server host. The user-facing connector URL is now `meeting-note-backend-njfb.onrender.com/mcp` (Claude) and `/mcp-chatgpt` (ChatGPT).
 
 **"Schema-dependent code broke after deploy."**
 A repo migration may not be applied in prod. Verify the column/table/function exists (Supabase SQL Editor / `information_schema`), apply the missing migration idempotently, and record it. See OPS_BACKLOG P1.4.
@@ -112,7 +117,7 @@ A repo migration may not be applied in prod. Verify the column/table/function ex
 
 ## 7. Known fragilities / accounts to watch
 
-- **Free-tier 750h cap** → monthly suspension of both Node services (above). The durable fix (webhook-ize the backend to remove the always-on service) is OPS_BACKLOG P1.1, on hold.
+- **Free-tier 750h cap** → historically suspended both Node services monthly. Mitigated 2026-09-01 by merging the MCP into workflow-server + suspending the standalone `meeting-note-mcp`, leaving ONE free Node service. NOT yet proven across a full month. The durable fix (webhook-ize the backend to remove the always-on service) is OPS_BACKLOG P1.1, on hold.
 - **Azure auth app registration `f81ec595-…` is on Gene's PERSONAL account** (tenant `a141d6e8-…`). Escalate transfer to a TecAce org account — losing that account risks login for the whole app.
 - **Supabase Pro is paid** (storage). Render services are free-tier (hence the cap).
 - **Devices:** Z Fold (`adb R3CY405BXYW`) on `com.tecace` build; S23 (`R5CWB1HN1XN`). Boss has an Android.

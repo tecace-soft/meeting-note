@@ -1,26 +1,29 @@
 # Render Cost Consolidation — Design
 
-Status: CODE MERGE DONE (2026-08-31), infra cutover pending.
+Status: MERGE DEPLOYED + CUTOVER IN PROGRESS (2026-09-01). Standalone MCP suspended as a rollback (not deleted).
 Owner: Andrew Yoo.
 
-## 0. Status update (2026-08-31)
+## 0. Status update (2026-09-01)
 
-Decision (from the 3-service reality Gene Kim confirmed: `meeting-note` = frontend, PAID; `meeting-note-backend` + `meeting-note-mcp` = FREE Node web services that split the 750h and suspend at month-end):
+3-service reality (Gene Kim confirmed): `meeting-note` = frontend, PAID (the paid tier is required for the `tecace.com` custom domain); `meeting-note-backend` + `meeting-note-mcp` = FREE Node web services that split the 750h and suspend at month-end.
 
-- **Shape 2 chosen.** Frontend (`meeting-note`, a pure Vite SPA) → free Render **Static Site** (CDN, no cold-start, no hours). The **paid** instance is repurposed for the merged **backend + MCP** (no 750h limit → month-end suspension gone). This avoids coupling frontend uptime to a backend crash and stops paying a web service just to `serve` static files.
-- **Code merge = DONE and verified locally (Option A).** MCP moved from `mcp-server/` to `workflow-server/src/mcp/`; `startHttpServer()` refactored to `handleMcpRequest(req, res, url): Promise<boolean>`; dispatched FIRST in the workflow-server `node:http` handler. One npm package, unioned deps, one build/start. `npm run build` clean, `npm test` 67/67. E2E on a local `node build/index.js`:
+- **What actually shipped (diverged from Shape 2 below — simpler, no DNS / paid-instance work): merge the MCP into the free `meeting-note-backend`, then SUSPEND the standalone `meeting-note-mcp`.** Net = ONE always-on free Node service (~730h < 750h) instead of two → month-end suspension should be gone, at no new cost. The frontend stays paid as-is, so the Shape 2 "frontend → static site + backend → paid instance" rework was NOT needed and was skipped (kept below as history / fallback if the single-free-service footprint still breaches 750h).
+- **Code merge DONE + deployed to prod (`757c8c9`) + verified (Option A).** MCP moved from `mcp-server/` to `workflow-server/src/mcp/`; `startHttpServer()` refactored to `handleMcpRequest(req, res, url): Promise<boolean>`; dispatched FIRST in the workflow-server `node:http` handler. One npm package, unioned deps, one build/start. `npm run build` clean, `npm test` 67/67. Local E2E on `node build/index.js`:
   - host owns `/health` + `/version` (MCP falls through) ✓
   - `POST /mcp` no-auth → 401 (fail-closed) ✓; `POST /mcp-chatgpt` no-auth → 401 + `WWW-Authenticate` resource-metadata ✓
   - `/.well-known/oauth-protected-resource` → metadata JSON ✓; `/admin` → 200 ✓
   - workflow routes intact; unknown → host 404 ✓
-- Standalone `mcp-server/` dir removed on `main`; rollback lives on the **`mcp-server` branch** (untouched). ⚠️ Never `git push origin main:mcp-server` again (main has no `mcp-server/`; it would break the live standalone).
+- **Prod verify PASSED on the backend URL (authenticated):** `initialize` 200 (real serverInfo), `tools/list` 200 (26 tools), `tools/call list_recent_notes` 200 (real note) — with a personal MCP token, and again through the real Claude connector after re-pointing it while the standalone was suspended.
+- **Env footgun (hit 2026-09-01):** the MCP_* env added on the backend service VANISHED once (unsaved changes / env group not linked); env groups were then abandoned for direct service-level vars. `MCP_TOKEN_PEPPER` must equal the standalone's (or be unset if the standalone used the `SUPABASE_SERVICE_ROLE_KEY` fallback), else every existing personal token 401s. `MCP_PUBLIC_BASE_URL`/`MCP_OAUTH_RESOURCE` set to the backend URL. The `.well-known/oauth-protected-resource*` payload is all code defaults/host-derivation, so it looks correct even with NO MCP env — do not treat it as proof.
+- Standalone `mcp-server/` dir removed on `main`; the standalone service is **suspended** (rollback), not deleted; its code lives on the **`mcp-server` branch**. ⚠️ Never `git push origin main:mcp-server` again (would clobber the rollback branch).
+- **Connector URLs re-pointed** to `meeting-note-backend-njfb.onrender.com` in `src/pages/AccountSettings.tsx` + mobile `settings_screen.dart`, and the `mcp-server` row dropped from `scripts/versions.cjs` (commit `87837df`, local — push pending).
 
-**Remaining (infra / console — Andrew, cannot be done from code):**
-1. Convert `meeting-note` (frontend) to a Render **Static Site** (build `npm run build`, publish `dist/`, SPA rewrite `/* → /index.html`). Keep its custom domain.
-2. On the **paid** service, deploy the merged workflow-server from `main` (build+start = workflow-server). Copy the union of both services' env vars (workflow + all `MCP_*`) onto it.
-3. URL decision (Section 3): custom domains (`api.` + `mcp.`) vs one-time subdomain change + connector re-point. Update web `VITE_WORKFLOW_API_URL` + rebuild APK to the backend URL; point MCP connectors at the MCP URL.
-4. Verify merged `/mcp` (Claude) + `/mcp-chatgpt` (ChatGPT) + a real summarize job on the cutover URL, THEN delete the two free services (`meeting-note-backend`, `meeting-note-mcp`).
-5. At cutover, also: drop the `mcp-server` row in `scripts/versions.cjs`, and update the MCP connector URL shown to users in `src/pages/AccountSettings.tsx` + `meeting-note-mobile/.../settings_screen.dart`.
+**Remaining:**
+1. Push `87837df` → frontend redeploys, in-app connector URL updates.
+2. Tell the (all-internal) team to re-point their Claude/ChatGPT connectors to the backend URL (URL-only change; personal keys unchanged). The old mcp URL is dead while the standalone is suspended.
+3. Observe stability a few days (incl. teammate reconnects); confirm NO month-end suspension — the real success test of the 750h fix.
+4. Only AFTER a stable month: delete the suspended `meeting-note-mcp`.
+5. Later / not urgent: rebuild the mobile APK for the new in-app URL (recording is unaffected — it uses the workflow backend, not MCP); verify the ChatGPT OAuth path with a real reconnect (still unverified).
 
 ---
 
