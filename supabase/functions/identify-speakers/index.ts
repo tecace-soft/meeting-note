@@ -632,6 +632,9 @@ function sigConfidence(top1: number, top2: number): number {
   const v = 0.72 + 0.16 * sigSat(margin, 0.08) + 0.08 * sigSat(top1, 0.25);
   return Math.min(1, Math.max(0, v));
 }
+// Canonical person key for cross-speaker uniqueness (strip parenthetical script variant, lowercase,
+// collapse spaces) — mirrors canonName in speakerSignature.ts. Used to keep one person per meeting.
+const sigCanonName = (s: string): string => s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 interface SigDecision { label: string; name: string; speakerId: string | null; confidence: number; isSelf: boolean }
 // Decide per label: a WARM + STRONG match is promoted; else the label is a fallback for the LLM.
@@ -660,9 +663,17 @@ function sigDecide(
       confidence: sigConfidence(top1.score, top2Score), isSelf: sameName(top1.display, selfName),
     });
   }
-  // never two selves among promoted: keep the highest-confidence, demote the rest to fallback.
-  const selves = [...promoted.values()].filter((s) => s.isSelf).sort((a, b) => b.confidence - a.confidence);
-  for (const extra of selves.slice(1)) { promoted.delete(extra.label); fallback.push(extra.label); }
+  // Each person at most once (generalizes self-only): a dominant signature must not win multiple
+  // speakers ("3 speakers all = one colleague"). Keep the highest-confidence label per person; the
+  // rest fall to the LLM, which resolves them independently. Self is one person, so this subsumes
+  // the old "never two selves" rule.
+  const winnerLabelByPerson = new Map<string, string>();
+  for (const s of [...promoted.values()].sort((a, b) => b.confidence - a.confidence)) {
+    const personId = s.speakerId ?? sigCanonName(s.name);
+    if (!winnerLabelByPerson.has(personId)) winnerLabelByPerson.set(personId, s.label);
+  }
+  const winnerLabels = new Set(winnerLabelByPerson.values());
+  for (const s of [...promoted.values()]) if (!winnerLabels.has(s.label)) { promoted.delete(s.label); fallback.push(s.label); }
   return { promoted, fallback };
 }
 
@@ -795,11 +806,21 @@ serve(async (req) => {
     if (s) return { label, name: s.name, speakerId: s.speakerId, confidence: s.confidence, isSelf: s.isSelf, rationale: 'signature' };
     return anchoredByLabel.get(label) ?? { label, name: null, speakerId: null, confidence: 0, isSelf: false, rationale: '' };
   });
-  // Enforce a single self across the merged list (signature + LLM could each pick a self): keep the
-  // highest-confidence self, and abstain the rest (preserves the isSelf ⟺ self-name invariant).
-  const mergedSelves = merged.filter((s) => s.isSelf).sort((a, b) => b.confidence - a.confidence);
-  for (const extra of mergedSelves.slice(1)) {
-    extra.isSelf = false; extra.name = null; extra.speakerId = null; extra.confidence = Math.min(extra.confidence, 0.3); extra.rationale = 'demoted duplicate self';
+  // Enforce "each person at most once" across the merged list: the signature and LLM stages could
+  // each land on the same person, or the LLM could name two speakers the same. Keep the highest-
+  // confidence instance per person and abstain the rest (preserves the isSelf ⟺ self-name
+  // invariant, since self is one person). Kills the "same person for multiple speakers" output.
+  const winnerByPerson = new Map<string, Suggestion>();
+  for (const s of [...merged].filter((s) => s.name).sort((a, b) => b.confidence - a.confidence)) {
+    const personId = s.speakerId ?? sigCanonName(s.name as string);
+    if (!winnerByPerson.has(personId)) winnerByPerson.set(personId, s);
+  }
+  const keptPersons = new Set(winnerByPerson.values());
+  for (const s of merged) {
+    if (s.name && !keptPersons.has(s)) {
+      s.isSelf = false; s.name = null; s.speakerId = null;
+      s.confidence = Math.min(s.confidence, 0.3); s.rationale = 'demoted duplicate person';
+    }
   }
   return jsonResponse({ suggestions: merged });
 });

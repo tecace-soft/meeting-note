@@ -222,12 +222,18 @@ export function decideSuggestions(
     });
   }
 
-  // Enforce "at most one self": if the signature stage picked self for more than one label, keep
-  // the highest-confidence one as self and demote the rest to fallback (never two selves).
-  const selves = signature.filter((s) => s.isSelf).sort((a, b) => b.confidence - a.confidence);
-  for (const extra of selves.slice(1)) {
-    const i = signature.indexOf(extra);
-    if (i >= 0) { signature.splice(i, 1); fallbackLabels.push(extra.label); }
+  // Enforce "each person at most once" (generalizes the old self-only rule). A single dominant
+  // signature must not win multiple speakers — the "3 speakers all identified as one colleague"
+  // bug. Keep the highest-confidence label per person; the rest fall to the LLM, which resolves
+  // them independently. Self is just one person, so this subsumes the old "never two selves" rule.
+  const winnerLabelByPerson = new Map<string, string>();
+  for (const s of [...signature].sort((a, b) => b.confidence - a.confidence)) {
+    const personId = s.speakerId ?? canonName(s.name);
+    if (!winnerLabelByPerson.has(personId)) winnerLabelByPerson.set(personId, s.label);
+  }
+  const winnerLabels = new Set(winnerLabelByPerson.values());
+  for (let i = signature.length - 1; i >= 0; i -= 1) {
+    if (!winnerLabels.has(signature[i].label)) { fallbackLabels.push(signature[i].label); signature.splice(i, 1); }
   }
   return { signature, fallbackLabels };
 }

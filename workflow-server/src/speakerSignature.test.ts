@@ -142,3 +142,19 @@ test('decideSuggestions never emits two selves (keeps the strongest, demotes the
   assert.equal(signature.filter((s) => s.isSelf).length, 1);
   assert.equal(signature.length + fallbackLabels.length, 2);
 });
+
+test('decideSuggestions never suggests one non-self person for multiple speakers (the "3 speakers all = one colleague" bug)', () => {
+  const c = buildCorpora(HISTORY);
+  const idf = computeIdf(c);
+  // All three labels look like Hansoo (his distinctive backend terms). A dominant signature must NOT
+  // win every speaker: exactly the strongest keeps Hansoo, the other two fall to the LLM fallback.
+  const labels = [
+    { label: 'Speaker A', text: 'backend diarization deploy render update' },
+    { label: 'Speaker B', text: 'backend api latency polling fix' },
+    { label: 'Speaker C', text: 'backend diarization api latency deploy' },
+  ];
+  const { signature, fallbackLabels } = decideSuggestions(labels, c, idf, 'nT', ROSTER, SELF, { minSigTokens: 4, tScore: 0.02, tMargin: 0 });
+  assert.equal(signature.filter((s) => s.name === 'Hansoo Lee (이한수)').length, 1); // one speaker, not three
+  assert.equal(signature.length, 1);
+  assert.equal(fallbackLabels.length, 2); // the two losers go to the LLM, which resolves them independently
+});

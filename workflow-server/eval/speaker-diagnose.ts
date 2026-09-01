@@ -42,6 +42,9 @@ const DEFAULT_USER = '31d79bfe';
 const NOTES = clampInt(process.env.DIAG_NOTES, 20, 1, 60);
 const MIN_NAMED = clampInt(process.env.DIAG_MIN_NAMED, 2, 1, 10);
 const SHOW = clampInt(process.env.DIAG_SHOW, 40, 0, 500);
+// Pin the identify model (no fallback chain) — set DIAG_MODEL=gemini-2.5-flash-lite to stay strictly
+// on the lite tier (cost cap). Unset = prod default chain (lite primary + fallbacks).
+const MODEL = (process.env.DIAG_MODEL || '').trim() || null;
 
 function clampInt(raw: string | undefined, dflt: number, lo: number, hi: number): number {
   const n = Number(raw);
@@ -177,7 +180,7 @@ async function main(): Promise<void> {
     process.stdout.write(`\n══ ${userPrefix} (self=${selfName ?? 'unknown'}, roster=${roster.length}, notes=${cases.length}) ══\n`);
 
     for (const c of cases) {
-      const res = await identifySpeakers({ apiKey, transcript: c.transcript, labels: c.labels, roster, selfName });
+      const res = await identifySpeakers({ apiKey, transcript: c.transcript, labels: c.labels, roster, selfName, ...(MODEL ? { model: MODEL, fallbackModels: [] } : {}) });
       const byLabel = new Map(('suggestions' in res ? res.suggestions : []).map((s) => [s.label, s]));
       const noteOverSeg = c.overSegPersons > 0;
       if (noteOverSeg) overSegNotes += 1; else cleanNotes += 1;
