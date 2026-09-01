@@ -15,6 +15,7 @@
     "eval:speaker-ab": "tsx eval/speaker-memory-ab.ts",
     "eval:speaker-backtest": "tsx eval/speaker-backtest.ts",
     "eval:speaker-signature": "tsx eval/speaker-signature-probe.ts",
+    "eval:speaker-embed": "tsx eval/speaker-embedding-probe.ts",
     "eval:roster-coverage": "tsx eval/roster-coverage.ts",
     "eval:speaker-diagnose": "tsx eval/speaker-diagnose.ts",
     "eval:self-precision": "tsx eval/self-autoapply-precision.ts",
