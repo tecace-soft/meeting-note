@@ -26,7 +26,7 @@
 
 import { config } from 'dotenv';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { canonName, buildCorpora, computeIdf, matchLabel, type LabeledUtterance } from '../src/speakerSignature.js';
+import { canonName, buildCorpora, computeIdf, matchLabel, tokenize, type LabeledUtterance } from '../src/speakerSignature.js';
 
 config();
 
@@ -136,6 +136,27 @@ function meanPool(vecs: number[][]): number[] | null {
   for (let i = 0; i < n; i += 1) out[i] /= vecs.length;
   return out;
 }
+// Per-blob TF-IDF vector (sublinear TF x IDF), mirroring the shipped tokenizer/weighting, for the
+// pairwise-separation report. Sparse map so cosine is over shared terms only.
+function tfidfVec(text: string, idf: Map<string, number>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const t of tokenize(text)) counts.set(t, (counts.get(t) ?? 0) + 1);
+  const out = new Map<string, number>();
+  for (const [term, c] of counts) {
+    const w = idf.get(term);
+    if (w) out.set(term, (1 + Math.log(c)) * w);
+  }
+  return out;
+}
+function cosineMap(a: Map<string, number>, b: Map<string, number>): number {
+  let dot = 0, na = 0, nb = 0;
+  for (const v of a.values()) na += v * v;
+  for (const [k, v] of b) { nb += v * v; const av = a.get(k); if (av) dot += av * v; }
+  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+}
+interface Sep { same: number; sameN: number; diff: number; diffN: number }
+const meanSep = (s: Sep, kind: 'same' | 'diff'): string =>
+  (kind === 'same' ? (s.sameN ? s.same / s.sameN : 0) : (s.diffN ? s.diff / s.diffN : 0)).toFixed(3);
 
 interface Tally { total: number; correct: number }
 const add = (t: Tally, ok: boolean) => { t.total += 1; if (ok) t.correct += 1; };
@@ -160,6 +181,9 @@ async function main(): Promise<void> {
   const tfidf = mk();
   const emb = mk();
   let scored = 0, chance = 0, chanceN = 0;
+  // Pairwise cosine separation: same-speaker (two different notes) vs different-speaker blobs.
+  const tfSep: Sep = { same: 0, sameN: 0, diff: 0, diffN: 0 };
+  const embSep: Sep = { same: 0, sameN: 0, diff: 0, diffN: 0 };
 
   for (const userId of users) {
     if (embedCalls >= MAX_EMBEDS) { process.stdout.write(`• skip ${userId.slice(0, 8)}… (embed cap reached)\n`); continue; }
@@ -190,6 +214,26 @@ async function main(): Promise<void> {
     const idf = computeIdf(corpora);
     const roster = [...corpora.keys()];
     if (roster.length < 2 || cases.length === 0) continue;
+
+    // ---- pairwise separation (reuses already-embedded vectors; no extra API calls) ----
+    const blobs: Array<{ key: string; noteId: string; ev: number[]; tv: Map<string, number> }> = [];
+    for (const u of utt) {
+      const key = canonName(u.name);
+      const ev = (embCorpus.get(key) ?? []).find((d) => d.noteId === u.noteId)?.vec;
+      if (!ev) continue;
+      blobs.push({ key, noteId: u.noteId, ev, tv: tfidfVec(u.text, idf) });
+    }
+    for (let i = 0; i < blobs.length; i += 1) {
+      for (let j = i + 1; j < blobs.length; j += 1) {
+        const a = blobs[i], b = blobs[j];
+        if (a.noteId === b.noteId) continue; // skip within-meeting pairs (trivially same context)
+        const same = a.key === b.key;
+        const ec = cosine(a.ev, b.ev);
+        const tc = cosineMap(a.tv, b.tv);
+        if (same) { embSep.same += ec; embSep.sameN += 1; tfSep.same += tc; tfSep.sameN += 1; }
+        else { embSep.diff += ec; embSep.diffN += 1; tfSep.diff += tc; tfSep.diffN += 1; }
+      }
+    }
 
     // Embedding leave-one-out signature (mean-pool of a person's OTHER-note vectors).
     const embSig = (personKey: string, excludeNoteId: string): number[] | null =>
@@ -254,6 +298,18 @@ async function main(): Promise<void> {
   process.stdout.write(`delta   ${d(tfidf.closed, emb.closed).padStart(6)}         ${d(tfidf.closedWarm, emb.closedWarm).padStart(6)}         ${d(tfidf.open, emb.open).padStart(6)}         ${d(tfidf.openWarm, emb.openWarm).padStart(6)}\n`);
   process.stdout.write('\nRead: embed open-WARM > tfidf open-WARM by a clear margin = embeddings beat the TF-IDF ceiling,\n');
   process.stdout.write('worth building the cached embedding store. ~0 or negative = TF-IDF is enough; do not build it.\n');
+
+  // ---- pairwise separation report (the "why embeddings lost" evidence) ----
+  const tfSame = Number(meanSep(tfSep, 'same')), tfDiff = Number(meanSep(tfSep, 'diff'));
+  const emSame = Number(meanSep(embSep, 'same')), emDiff = Number(meanSep(embSep, 'diff'));
+  process.stdout.write('\n──────────────────────────────────────────────────────────────\n');
+  process.stdout.write(`PAIRWISE COSINE — same-speaker vs different-speaker (cross-meeting blobs)\n`);
+  process.stdout.write(`  same-pairs=${tfSep.sameN}  diff-pairs=${tfSep.diffN}\n\n`);
+  process.stdout.write('                     same-speaker    different-speaker    separation\n');
+  process.stdout.write(`TF-IDF                  ${tfSame.toFixed(3)}            ${tfDiff.toFixed(3)}            ${(tfSame - tfDiff).toFixed(3)}\n`);
+  process.stdout.write(`Embedding               ${emSame.toFixed(3)}            ${emDiff.toFixed(3)}            ${(emSame - emDiff).toFixed(3)}\n`);
+  process.stdout.write('\nRead: larger (same - different) = better speaker separation. If embedding different-speaker\n');
+  process.stdout.write('cosine is high (teammates look alike) and its separation < TF-IDF, that is the over-smoothing.\n');
 }
 
 main().catch((e) => { process.stderr.write(`embedding-probe failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`); process.exit(1); });
