@@ -450,6 +450,7 @@ function buildInsightUserPrompt(
   transcript: string,
   noteId: string | null | undefined,
   speakerContext: string | null | undefined,
+  personalMemoryContext?: string | null,
 ): string {
   const noteLine = noteId?.trim() ? `Meeting note id: "${noteId.trim()}"` : 'Meeting note id: (none)';
   // Transcript lines are prefixed with a speaker (a real name, or a generic "Speaker A/B"
@@ -458,8 +459,13 @@ function buildInsightUserPrompt(
   const speakerLine = speakerContext?.trim()
     ? `\nSPEAKER CONTEXT (maps transcript speaker labels to real people — use it to fill action "owner"):\n'''\n${speakerContext.trim()}\n'''\n`
     : '';
+  // Background memory (A/B only; empty in prod). This index is THIS meeting only, so memory
+  // may ONLY help attribute an owner or normalize a name/term actually discussed here.
+  const memoryLine = personalMemoryContext?.trim()
+    ? `\nBACKGROUND MEMORY (the owner's cross-meeting context — for attribution/normalization ONLY):\n'''\n${personalMemoryContext.trim()}\n'''\nUse it ONLY to attribute an owner or normalize a name/term that IS in the transcript below. NEVER add a person, action, decision, topic, or company that is not in the transcript.\n`
+    : '';
   return `${noteLine}
-${speakerLine}
+${speakerLine}${memoryLine}
 MEETING transcript (each line is prefixed with its speaker):
 ${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}`;
 }
@@ -574,6 +580,10 @@ export async function extractInsight(input: {
   transcript: string;
   noteId?: string | null;
   speakerContext?: string | null;
+  // Optional cross-meeting personal memory. Prod passes nothing (inert): the insight index
+  // is scoped to THIS meeting only. Only the F8 insight A/B feeds this, to MEASURE whether
+  // background memory improves per-meeting attribution without breaking that scope.
+  personalMemoryContext?: string | null;
 }): Promise<{ insight: NoteInsight } | { error: string }> {
   const transcript = input.transcript.trim();
   if (!transcript) return { error: 'empty transcript' };
@@ -581,7 +591,7 @@ export async function extractInsight(input: {
     apiKey: input.apiKey,
     models: resolveModels(input.model, input.fallbackModels),
     systemPrompt: INSIGHT_SYSTEM_PROMPT,
-    userPrompt: buildInsightUserPrompt(transcript, input.noteId ?? null, input.speakerContext ?? null),
+    userPrompt: buildInsightUserPrompt(transcript, input.noteId ?? null, input.speakerContext ?? null, input.personalMemoryContext ?? null),
     parse: (text) => parseInsight(text, null),
     responseSchema: INSIGHT_SCHEMA,
   });

@@ -1,14 +1,12 @@
-import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
-import { getSegmentText, type TranscriptSegment } from './transcriptSegments';
-import type { IdentifyAuth } from './identifySpeakers';
+import { supabase } from '../config/supabaseConfig';
 
 // F1' (dynamic relational memory): per-user personal memory as a list of
-// natural-language MEMORY ITEMS aggregated across all of a user's meetings. The
-// `update-user-memory` edge function does the LLM merge (emit add/update/
-// supersede/archive ops, applied server-side) and migrates the old F1c bucket
-// shape into seed items on the first write. This module reads the current base,
-// calls the function after a summary, and writes the merged result back
-// (best-effort, deduped per note). Mirrors F1a's accumulateSpeakerProfile flow.
+// natural-language MEMORY ITEMS aggregated across all of a user's meetings.
+// READ-ONLY client module: reads the current memory row and coerces it (v1 buckets
+// or v2 items) into display items for the "My Memory" screen, plus a delete control.
+// The write path (fold-after-summary) now lives server-side in the workflow-server
+// (foldNoteIntoMemory); the old client-driven `update-user-memory` edge function was
+// superseded and removed.
 
 export interface MemoryItem {
   id: string;
@@ -25,8 +23,6 @@ export interface UserMemory {
   version: 2;
   items: MemoryItem[];
 }
-
-export const EMPTY_USER_MEMORY: UserMemory = { version: 2, items: [] };
 
 interface UserMemoryRow {
   memory: unknown;
@@ -59,88 +55,6 @@ export async function fetchUserMemory(
 export async function clearUserMemory(userId: string): Promise<void> {
   const { error } = await supabase.from('user_memory').delete().eq('user_id', userId);
   if (error) throw error;
-}
-
-interface UpdateMemoryResponse {
-  memory?: unknown;
-  error?: string;
-}
-
-async function invokeUpdateUserMemory(
-  body: { transcriptText: string; selfName: string | null; noteId: string | null; existingMemory: unknown },
-  auth: IdentifyAuth
-): Promise<UserMemory> {
-  const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/update-user-memory`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${auth.appToken ?? SUPABASE_ANON_KEY}`,
-      ...(auth.msToken ? { 'x-ms-access-token': auth.msToken } : {}),
-    },
-    body: JSON.stringify(body),
-  });
-  const raw = await response.text();
-  let parsed: UpdateMemoryResponse;
-  try {
-    parsed = raw ? (JSON.parse(raw) as UpdateMemoryResponse) : {};
-  } catch {
-    parsed = { error: raw || `HTTP ${response.status}` };
-  }
-  if (!response.ok) throw new Error(parsed.error || raw || `HTTP ${response.status}`);
-  return coerceMemory(parsed.memory);
-}
-
-/**
- * Fold ONE note's transcript into the user's personal memory after its summary is
- * generated. Best-effort: the caller runs this in the background and logs
- * failures. Deduped per note via processed_note_ids (durable), so a resumed or
- * repeated summary never double-counts. Returns the merged memory, or null when
- * nothing was done (skipped/deduped).
- */
-export async function updateUserMemoryFromNote(params: {
-  userId: string;
-  noteId: string;
-  segments: TranscriptSegment[];
-  selfName: string | null;
-  auth: IdentifyAuth;
-}): Promise<UserMemory | null> {
-  const { userId, noteId, segments, selfName, auth } = params;
-  if (!userId || !noteId || segments.length === 0) return null;
-
-  const existing = await fetchUserMemory(userId);
-  // Pass the raw stored memory (v1 buckets or v2 items) — the edge function
-  // migrates v1 into seed items on the first write.
-  const existingMemory = existing?.rawMemory ?? EMPTY_USER_MEMORY;
-  const processedNoteIds = existing?.processedNoteIds ?? [];
-  if (processedNoteIds.includes(noteId)) return null; // already folded in
-
-  const transcriptText = segments
-    .map((s) => `${s.speaker}: ${getSegmentText(s, 'original')}`)
-    .join('\n')
-    .trim();
-  if (!transcriptText) return null;
-
-  const merged = await invokeUpdateUserMemory(
-    { transcriptText, selfName, noteId, existingMemory },
-    auth
-  );
-
-  const nextProcessed = [...processedNoteIds, noteId].slice(-500); // cap the dedup list
-  const { error } = await supabase
-    .from('user_memory')
-    .upsert(
-      {
-        user_id: userId,
-        memory: merged,
-        processed_note_ids: nextProcessed,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'user_id' }
-    );
-  if (error) throw error;
-
-  return merged;
 }
 
 function toArray(value: unknown): unknown[] {
