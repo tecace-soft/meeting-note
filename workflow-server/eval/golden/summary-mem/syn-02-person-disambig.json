@@ -1,0 +1,9 @@
+{
+  "name": "syn-02-person-disambig",
+  "kind": "synthetic",
+  "expectHelps": true,
+  "outputLanguage": "en",
+  "mechanism": "person disambiguation: the transcript uses ONLY bare first names + pronouns and never states anyone's role or what 'the contract'/'her piece' is; memory supplies who each person is and what they own. A good ON resolves them; OFF cannot.",
+  "transcript": "Dana: Any word from Marco?\nLee: Not yet, he said end of week.\nDana: And is Nina still on her piece?\nLee: Yeah, she pushed an update yesterday.\nDana: Okay. Let's hold the contract until Marco gets back to us.\nLee: Agreed, I'll nudge him Thursday if it's quiet.",
+  "memory": "- Marco is the product lead who owns pricing and the public API contract.\n- Nina is the design engineer responsible for the mobile onboarding flow.\n- The team froze the API contract two meetings ago pending Marco's pricing decision.\n- Lee (self) coordinates between product and engineering."
+}

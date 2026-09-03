@@ -1,0 +1,9 @@
+{
+  "name": "syn-03-acronym-term",
+  "kind": "synthetic",
+  "expectHelps": true,
+  "outputLanguage": "en",
+  "mechanism": "term/acronym resolution: transcript uses in-group shorthand ('the AX thing', 'FDE', 'the gate') with no expansion; memory defines them",
+  "transcript": "Kim: Is the AX thing ready for the demo?\nJun: The gate passes now, so yeah. FDE signed off on the numbers.\nKim: Good. Did we fix the runaway on the profile call?\nJun: Dropped the schema, it's fast again.\nKim: Ship it after the demo.",
+  "memory": "- AX is the internal billing product Sam's team is building on the metering pipeline.\n- 'The gate' is the F8 eval gate that must pass before any summary-pipeline change ships.\n- FDE (Field Development Engineer) is the on-site role that validates real-world accuracy numbers.\n- The generate-profile call had a MAX_TOKENS runaway fixed by dropping the nested response schema."
+}

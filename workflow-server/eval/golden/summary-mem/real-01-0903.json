@@ -1,0 +1,7 @@
+{
+  "name": "real-01-0903",
+  "kind": "real",
+  "expectHelps": false,
+  "noteId": "c729912a-3951-414c-abc5-cafc4f2233de",
+  "mechanism": "regression / do-no-harm arm: real Andrew note. Single-project, so transcript already covers memory. Expect ~0 lift and NO drift regression."
+}

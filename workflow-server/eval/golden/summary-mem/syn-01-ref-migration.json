@@ -1,0 +1,9 @@
+{
+  "name": "syn-01-ref-migration",
+  "kind": "synthetic",
+  "expectHelps": true,
+  "outputLanguage": "en",
+  "mechanism": "reference resolution: transcript says vague 'the migration' / 'the quota thing'; memory resolves what they are",
+  "transcript": "Alex: Okay, quick sync. Where are we on the migration?\nSam: Backend's basically done. I'm blocked on the quota thing again.\nAlex: Did you loop in Priya?\nSam: Yeah, she's reviewing it this week. Once she signs off we can cut over.\nAlex: Good. And the mobile side?\nSam: Jamie's still on the export bug, should land tomorrow.\nAlex: Let's aim to wrap the migration by end of month.",
+  "memory": "- Sam (self) owns the billing-system migration to the new metering pipeline; the recurring blocker has been the Supabase storage quota.\n- Priya is the finance lead who reviews billing budget changes before any cutover.\n- Jamie owns the mobile app; the recurring work is the OneDrive/Teams export feature.\n- The migration replaces the legacy 50MB-capped upload path."
+}

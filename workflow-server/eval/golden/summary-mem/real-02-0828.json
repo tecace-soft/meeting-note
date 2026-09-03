@@ -1,0 +1,7 @@
+{
+  "name": "real-02-0828",
+  "kind": "real",
+  "expectHelps": false,
+  "noteId": "1e0d45b0-3336-4baa-a5bd-493d69632115",
+  "mechanism": "regression / do-no-harm arm: real Andrew note. Expect ~0 lift and NO drift regression."
+}

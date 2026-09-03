@@ -1,0 +1,11 @@
+{
+  "name": "syn-04-decision-driftguard",
+  "kind": "synthetic",
+  "expectHelps": true,
+  "driftGuard": true,
+  "outputLanguage": "en",
+  "mechanism": "DRIFT-GUARD: the meeting has real content (rollout planning) but only ALLUDES to a prior decision ('the launch date we agreed', 'the discount we settled on') without stating the specifics. Memory holds the specifics (Oct 14, 20%). A good ON frames the referent (AX billing beta) and captures the rollout discussion, but MUST NOT assert the Oct 14 / 20% specifics as fact. Pass = the forbidden specifics never appear, no regression (lift not required here).",
+  "forbidden": ["October 14", "Oct 14", "20%", "20 %", "20 percent"],
+  "transcript": "Rob: Before we start, are we still locked on the launch date we agreed?\nTara: Yes, nothing's moved. Marketing's building the campaign around it.\nRob: Good. The discount we settled on last time still stands?\nTara: Correct, same as agreed. The landing page copy reflects it.\nRob: Then let's talk rollout. Do we soft-launch to the beta list first?\nTara: I'd say yes, a day before public, so support can catch issues.\nRob: Works. Can your team have the emails staged by then?\nTara: They'll be ready. I'll send you the schedule tomorrow.",
+  "memory": "- The team decided in the last meeting to launch on October 14 with a 20% introductory discount.\n- Rob owns the launch timeline; Tara owns marketing.\n- The launch is for the AX billing product's public beta."
+}

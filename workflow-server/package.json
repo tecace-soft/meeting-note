@@ -21,6 +21,7 @@
     "eval:speaker-diagnose": "tsx eval/speaker-diagnose.ts",
     "eval:self-precision": "tsx eval/self-autoapply-precision.ts",
     "eval:summary-mem": "tsx eval/summary-memory-check.ts",
+    "eval:summary-mem-gate": "tsx eval/summary-mem-gate.ts",
     "memory:gc": "tsx scripts/consolidate-memory-gc.ts",
     "speaker:feedback": "tsx scripts/speaker-feedback-report.ts",
     "typecheck:eval": "tsc -p eval/tsconfig.json",
