@@ -20,7 +20,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { buildSummaryPrompt } from '../src/prompts.js';
+import { buildSummaryPrompt, buildRegenerateSummaryPrompt } from '../src/prompts.js';
 import { callJsonModel, renderMemoryForContext } from '../src/memory.js';
 import { callGemini } from '../src/gemini.js';
 
@@ -34,6 +34,11 @@ const GEN_MODEL = process.env.GEMINI_SUMMARY_MODEL || 'gemini-2.5-flash-lite';
 const GEN_FALLBACK = 'gemini-3.1-flash-lite';
 const JUDGE_MODEL = process.env.EVAL_JUDGE_MODEL || 'gemini-2.5-flash';
 const GEN_RUNS = Math.min(8, Math.max(1, Number(process.env.GEN_RUNS || '6'))); // bounded avg over gen variance (6 stabilizes small synthetic cases)
+// 'fresh' = fresh-summary injection; 'regen' = regenerate over a memory-BLIND baseline (can it ADD
+// context?); 'regen-preserve' = regenerate over a memory-ON baseline (does memory-blind regen STRIP
+// the resolved context that memory-on regen preserves? the realistic case, since fresh already injects).
+const GATE_MODE = process.env.GATE_MODE === 'regen' ? 'regen' : (process.env.GATE_MODE === 'regen-preserve' ? 'regen-preserve' : 'fresh');
+const IS_REGEN = GATE_MODE === 'regen' || GATE_MODE === 'regen-preserve';
 const SUMMARY_RULES =
   'Write structured, actionable meeting notes in markdown: a short overview, key decisions, action items (with owner when stated), and open questions.';
 
@@ -133,7 +138,10 @@ function gateCase(c: GoldenCase, r: Omit<CaseResult, 'pass' | 'why'>): { pass: b
     if (r.lift < -REG_TOL) return { pass: false, why: `regressed ${r.lift.toFixed(1)} < -${REG_TOL}` };
     return { pass: true, why: 'ok' };
   }
-  if (c.kind === 'synthetic') {
+  // Fresh mode: memory must ADD continuity on the mechanism arm (large headroom).
+  // Regen modes: the previousSummary already carries the context, so the bar is do-no-harm
+  // (no regression, no drift/leak) + consistency with fresh, NOT a fresh-sized lift.
+  if (c.kind === 'synthetic' && !IS_REGEN) {
     if (r.lift < LIFT_MIN) return { pass: false, why: `mean lift ${r.lift.toFixed(1)} < ${LIFT_MIN}` };
     return { pass: true, why: 'ok' };
   }
@@ -155,10 +163,22 @@ async function main(): Promise<void> {
     const resolved = await resolveCase(db, c);
     if (!resolved) { process.stdout.write(`  [${c.name}] SKIP (unresolved)\n`); continue; }
     const common = { now: new Date().toISOString(), meetingDate: null, summaryRules: SUMMARY_RULES, fileName: c.name, transcript: resolved.transcript, outputLanguage: resolved.lang };
+    // In regen mode the A/B is regenerate(memory OFF) vs regenerate(memory ON) against a
+    // FIXED memory-blind baseline summary, so we isolate the regenerate-injection effect.
+    let baseline = '';
+    if (IS_REGEN) {
+      // regen: memory-blind baseline (test ADD). regen-preserve: memory-ON baseline (test PRESERVE).
+      const basePrompt = GATE_MODE === 'regen-preserve' ? buildSummaryPrompt({ ...common, personalMemoryContext: resolved.memory }) : buildSummaryPrompt(common);
+      baseline = (await generate(apiKey, basePrompt)) ?? '';
+      if (!baseline) { process.stdout.write(`  [${c.name}] SKIP (baseline gen failed)\n`); continue; }
+    }
+    const regenBase = { now: common.now, summaryRules: SUMMARY_RULES, diarizedTranscript: resolved.transcript, previousSummary: baseline, speakerProfiles: [] as unknown };
+    const offPrompt = () => IS_REGEN ? buildRegenerateSummaryPrompt({ ...regenBase }) : buildSummaryPrompt(common);
+    const onPrompt = () => IS_REGEN ? buildRegenerateSummaryPrompt({ ...regenBase, personalMemoryContext: resolved.memory }) : buildSummaryPrompt({ ...common, personalMemoryContext: resolved.memory });
     const offCont: number[] = []; const onCont: number[] = []; const offDrift: number[] = []; const onDrift: number[] = []; let forbidHits = 0;
     for (let k = 0; k < GEN_RUNS; k += 1) {
-      const off = await generate(apiKey, buildSummaryPrompt(common));
-      const on = await generate(apiKey, buildSummaryPrompt({ ...common, personalMemoryContext: resolved.memory }));
+      const off = await generate(apiKey, offPrompt());
+      const on = await generate(apiKey, onPrompt());
       if (!off || !on) continue;
       const jo = await judge(apiKey, resolved.transcript, resolved.memory, off);
       const jn = await judge(apiKey, resolved.transcript, resolved.memory, on);
@@ -172,8 +192,9 @@ async function main(): Promise<void> {
     results.push({ ...base, pass, why });
   }
 
-  process.stdout.write(`\n════════ STEP-0 GATE — memory injection A/B ════════\n`);
-  process.stdout.write(`gen=${GEN_MODEL} (temp 0.1, as prod)  judge=${JUDGE_MODEL}  genRuns/arm=${GEN_RUNS}\n\n`);
+  process.stdout.write(`\n════════ STEP-0 GATE — memory injection A/B (mode=${GATE_MODE}) ════════\n`);
+  const modeNote = GATE_MODE === 'regen' ? '  (regen off vs on; memory-blind baseline)' : (GATE_MODE === 'regen-preserve' ? '  (regen off vs on; memory-ON baseline: does memory-blind regen STRIP resolved context?)' : '');
+  process.stdout.write(`gen=${GEN_MODEL} (temp 0.1, as prod)  judge=${JUDGE_MODEL}  genRuns/arm=${GEN_RUNS}${modeNote}\n\n`);
   for (const r of results) {
     const guard = r.driftGuard ? `  forbidHits ${r.forbidHits}/${r.onCont.length}` : '';
     process.stdout.write(`  ${r.pass ? 'PASS' : 'FAIL'}  [${r.kind}] ${r.name.padEnd(26)}  cont ${mean(r.offCont).toFixed(0)}(±${spread(r.offCont)})→${mean(r.onCont).toFixed(0)}(±${spread(r.onCont)})  lift ${r.lift >= 0 ? '+' : ''}${r.lift.toFixed(1)}  drift ${mean(r.offDrift).toFixed(1)}→${mean(r.onDrift).toFixed(1)}${guard}  ${r.pass ? '' : '<< ' + r.why}\n`);

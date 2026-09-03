@@ -266,11 +266,22 @@ export function buildRegenerateSummaryPrompt(input: {
   diarizedTranscript: string;
   previousSummary: string;
   speakerProfiles: unknown;
+  personalMemoryContext?: string;
 }): string {
   const userInstructions = input.instructions?.trim() || '';
   const speakerProfiles = typeof input.speakerProfiles === 'string'
     ? input.speakerProfiles
     : JSON.stringify(input.speakerProfiles ?? [], null, 2);
+  // F1' personal memory, injected on regenerate the same way as on a fresh summary so a
+  // regenerated summary keeps the cross-meeting context a fresh one gets. Block + drift
+  // guard are added ONLY when memory is present, so a memory-less regenerate is byte-identical.
+  const personalMemoryBlock = input.personalMemoryContext?.trim()
+    ? `\nPERSONAL MEMORY CONTEXT:\n'''\n${input.personalMemoryContext.trim()}\n'''\n`
+    : '';
+  const personalMemoryRule = input.personalMemoryContext?.trim()
+    ? `\n- Personal memory context is the logged-in user's accumulated memory from PAST meetings. Use it ONLY to connect this meeting to ongoing work: recognize recurring projects, people, and threads, resolve vague references (for example expand "the migration", "the AX thing", or a bare first name to the project, product, or person the memory identifies), and note genuine continuity or contradiction with what the diarized transcript actually says. It must NOT introduce people, decisions, action items, numbers, or any fact that is not present in the diarized transcript. If it is irrelevant to this meeting, ignore it completely.
+- Resolving WHAT a reference points to (a project name, a product, who a person is) is allowed. Asserting a specific VALUE the transcript did not state is NOT: when the transcript only alludes to a prior decision, date, amount, or number without stating it (for example "the launch date we agreed", "the discount we settled on", "the budget"), you may name the topic being referred to, but you MUST NOT substitute the concrete date, number, amount, or decided value from memory. Keep it as "the previously agreed launch date" or "the agreed discount", never a specific value like "October 14" or "20%" unless the diarized transcript itself states it. Never restate a memory item as a fact of this meeting unless the diarized transcript supports it.`
+    : '';
 
   return `Today's date is [DateTime: ${input.now}]
 
@@ -323,7 +334,7 @@ REGENERATION GROUNDING RULES
 - Use speaker profiles only to improve context, speaker attribution, role understanding, relationship understanding, and action item ownership. Do not add facts from speaker profiles unless they help interpret something actually discussed in the transcript. If speaker profiles conflict with the transcript, trust the transcript.
 - Do not expose raw ontology JSON in the summary, and do not mention "ontology" or "speaker profile" unless the meeting itself discussed them.
 - Do not hallucinate. If speaker identity is uncertain, write "Speaker 1", "Speaker 2", etc. rather than guessing.
-- Write the summary in the meeting's original language (Korean meeting → Korean, English meeting → English, mixed → dominant language) unless the SUMMARIZATION RULES specify otherwise.
+- Write the summary in the meeting's original language (Korean meeting → Korean, English meeting → English, mixed → dominant language) unless the SUMMARIZATION RULES specify otherwise.${personalMemoryRule}
 
 <inputs>
 DIARIZED TRANSCRIPT:
@@ -340,7 +351,7 @@ SPEAKER PROFILES / ONTOLOGIES:
 '''
 ${speakerProfiles}
 '''
-</inputs>
+${personalMemoryBlock}</inputs>
 
 <final_check>
 Before responding:

@@ -2546,6 +2546,13 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
   // apply here too, not just on fresh summaries).
   const summaryRules = await resolveRegenerateSummaryRules(input.promptId, tokenUserId);
 
+  // F1' -> regenerate: inject the NOTE OWNER's personal memory (not the requester's) so a
+  // regenerated summary keeps the same cross-meeting context a fresh one gets, and a shared
+  // user regenerating never leaks their own memory into someone else's note. Best-effort.
+  const personalMemoryContext = await getPersonalMemoryContext(
+    typeof note.user_id === 'string' ? note.user_id : undefined,
+  );
+
   const result = await callGeminiWithFallback({
     stage: 'Summary regeneration',
     model: env.regenerateSummaryModel,
@@ -2560,6 +2567,7 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
         diarizedTranscript: formatTranscriptText(input.segments, 'original'),
         previousSummary: input.previousSummary,
         speakerProfiles: input.speakerProfiles,
+        personalMemoryContext,
       }),
     }],
   });
