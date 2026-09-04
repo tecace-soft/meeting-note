@@ -83,7 +83,7 @@ export function MeetingBriefing({ getAccessToken }: Props): JSX.Element | null {
 
   return (
     <section
-      className="card rounded-lg border p-4 sm:p-5"
+      className="card shrink-0 rounded-lg border p-4 sm:p-5"
       style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
     >
       <div className="flex items-start justify-between gap-3">
@@ -108,7 +108,7 @@ export function MeetingBriefing({ getAccessToken }: Props): JSX.Element | null {
       </div>
 
       {collapsed ? null : (
-        <div className="mt-4 grid gap-5 md:grid-cols-2">
+        <div className="mt-4 grid max-h-[40vh] gap-5 overflow-y-auto pr-1 md:grid-cols-2">
           {hasMemory ? (
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
