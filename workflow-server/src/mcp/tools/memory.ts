@@ -29,8 +29,8 @@ function toStr(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/** Active v2 items, most-recently-updated first. Empty for absent/empty/legacy-v1 memory. */
-function renderActiveItems(memory: unknown, limit: number): RenderedMemoryItem[] {
+/** All active v2 items, most-recently-updated first. Empty for absent/empty/legacy-v1 memory. */
+function activeItems(memory: unknown): RenderedMemoryItem[] {
   const obj = memory && typeof memory === 'object' && !Array.isArray(memory) ? (memory as Record<string, unknown>) : {};
   if (obj.version !== 2 || !Array.isArray(obj.items)) return [];
   const items: RenderedMemoryItem[] = [];
@@ -44,7 +44,36 @@ function renderActiveItems(memory: unknown, limit: number): RenderedMemoryItem[]
     items.push({ text, entities, updatedAt: toStr(it.updatedAt) || null, sourceNoteCount });
   }
   items.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
-  return items.slice(0, limit);
+  return items;
+}
+
+/** Active v2 items, most-recently-updated first, capped at limit. */
+function renderActiveItems(memory: unknown, limit: number): RenderedMemoryItem[] {
+  return activeItems(memory).slice(0, limit);
+}
+
+/**
+ * Deterministic entity/topic filter over active memory items (no LLM). An item matches when
+ * the query substring-matches an entity (either direction, so "billing" hits entity "AX Billing"
+ * and entity "AX" hits query "the AX project") or appears in the item text. Ranked entity-match
+ * first (score 2) then text-only (score 1), recency as the tiebreak (items already recency-sorted).
+ */
+function searchActiveItems(memory: unknown, query: string, limit: number): RenderedMemoryItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const scored: { item: RenderedMemoryItem; score: number }[] = [];
+  for (const item of activeItems(memory)) {
+    const entityHit = item.entities.some((e) => {
+      const el = e.toLowerCase();
+      return el.length > 0 && (el.includes(q) || q.includes(el));
+    });
+    const textHit = item.text.toLowerCase().includes(q);
+    if (!entityHit && !textHit) continue;
+    scored.push({ item, score: entityHit ? 2 : 1 });
+  }
+  // Stable sort keeps the recency order within equal scores.
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((s) => s.item);
 }
 
 export function registerMemoryTools(server: McpServer): void {
@@ -88,6 +117,56 @@ export function registerMemoryTools(server: McpServer): void {
         count: items.length,
         hasMemory: true,
         updatedAt: row.updated_at ?? null,
+        ...(isLegacy ? { note: 'Memory exists in a legacy pre-narrative format and will populate after the next meeting is processed.' } : {}),
+      });
+    },
+  );
+
+  server.registerTool(
+    'search_personal_context',
+    {
+      title: 'Search Personal Context',
+      description:
+        "Search the logged-in user's durable PERSONAL MEMORY for the items about a specific project, product, person, company, or topic. " +
+        "Use this (instead of recall_personal_context) when the question is SCOPED TO A NAMED ENTITY OR TOPIC, e.g. 'what do I know about the billing migration?', 'what's my history with Priya?', 'remind me about the AX project', 'what have we decided on pricing?'. " +
+        'recall_personal_context is for the BROAD "what have I been working on" with no specific subject; this one narrows to a query. ' +
+        "It is a deterministic keyword/entity filter over the caller's OWN standing memory (matches the query against each item's entities and text), returning matching items most-relevant first. " +
+        'Caller\'s own memory only: it cannot answer what a specific OTHER person did (use find_action_items / search_notes) nor per-meeting details (use get_meeting_brief / get_notes_by_date).',
+      inputSchema: {
+        query: z.string().min(1).max(200).describe('The project, product, person, company, or topic to find in the user\'s memory.'),
+        limit: z.preprocess(
+          (value) => (value === '' ? undefined : value),
+          z.coerce.number().int().min(1).max(200).optional(),
+        ),
+      },
+    },
+    async ({ query, limit }) => {
+      const userId = getScopedUserId();
+      // Personal memory is strictly per-user; without a caller identity, fail closed.
+      if (!userId) return errorResult('No caller identity available; personal memory is strictly per-user.');
+      const q = typeof query === 'string' ? query.trim() : '';
+      if (!q) return errorResult('A non-empty query (project, person, company, or topic) is required.');
+      const resolvedLimit = clampLimit(limit, 50, 200);
+      const { supabase } = getDataContext();
+      const { data, error } = await supabase
+        .from('user_memory')
+        .select('memory, updated_at')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error) return errorResult(error.message);
+      if (!data) {
+        return jsonResult({ items: [], count: 0, hasMemory: false, query: q, note: 'No personal memory has been accumulated yet.' });
+      }
+      const row = data as { memory?: unknown; updated_at?: string | null };
+      const items = searchActiveItems(row.memory ?? null, q, resolvedLimit);
+      const isLegacy = items.length === 0 && Boolean(row.memory) && (row.memory as { version?: unknown })?.version !== 2;
+      return jsonResult({
+        items,
+        count: items.length,
+        hasMemory: true,
+        query: q,
+        updatedAt: row.updated_at ?? null,
+        ...(items.length === 0 && !isLegacy ? { note: `No memory items match "${q}".` } : {}),
         ...(isLegacy ? { note: 'Memory exists in a legacy pre-narrative format and will populate after the next meeting is processed.' } : {}),
       });
     },
