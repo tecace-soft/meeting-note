@@ -367,7 +367,15 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
         hasBearerToken: Boolean(bearerToken),
         staticKeyConfigured: Boolean(env.mcpApiKey),
       });
-      sendJson(res, 401, { error: 'Unauthorized' });
+      // A protected resource MUST advertise its auth server on 401 (RFC 9728 §5.1 / MCP auth
+      // spec) via WWW-Authenticate, or the client cannot discover where to (re)authenticate.
+      // Without it an expired token wedges the connector: the proxy sees a bare 401 body it
+      // can't turn into an auth challenge and reports "invalid content" -32600 → 503. Mirror
+      // the mcp-chatgpt 401 path below.
+      const resourceMetadataUrl = `${requestBaseUrl}/.well-known/oauth-protected-resource`;
+      sendJsonWithHeaders(res, 401, { error: 'Unauthorized' }, {
+        'WWW-Authenticate': `Bearer resource_metadata="${resourceMetadataUrl}"`,
+      });
       return true;
     }
 
