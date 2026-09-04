@@ -14,11 +14,14 @@ interface Props {
 
 const COLLAPSE_KEY = 'meeting-note:briefing-collapsed';
 
+// Default to COLLAPSED so the briefing never pushes the history list out of reach — it ships
+// as a compact header the user taps to expand. Once a user expands it we store '0' and honor
+// that on return; only an explicit '0' keeps it open.
 function readCollapsed(): boolean {
   try {
-    return localStorage.getItem(COLLAPSE_KEY) === '1';
+    return localStorage.getItem(COLLAPSE_KEY) !== '0';
   } catch {
-    return false;
+    return true;
   }
 }
 
