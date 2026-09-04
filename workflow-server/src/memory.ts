@@ -857,6 +857,38 @@ export function renderMemoryForContext(memory: unknown, maxChars = 4000): string
   return out.length > maxChars ? out.slice(0, maxChars) : out;
 }
 
+export interface BriefingMemoryItem {
+  text: string;
+  entities: string[];
+  updatedAt: string;
+}
+
+/**
+ * Structured active v2 memory items for the deterministic meeting-briefing surface.
+ * Active items only, most-recently-updated first, bounded to `limit`. Pure (no DB).
+ * Returns [] for empty, absent, or legacy-v1 memory. Unlike renderMemoryForContext
+ * (a flat text block for the summary prompt) this keeps per-item structure so the UI
+ * can render a list, but it is the SAME active/archived filter and source data.
+ */
+export function renderMemoryItemsForBriefing(memory: unknown, limit = 8): BriefingMemoryItem[] {
+  const obj = memory && typeof memory === 'object' && !Array.isArray(memory) ? (memory as Record<string, unknown>) : {};
+  if (obj.version !== 2 || !Array.isArray(obj.items)) return [];
+  const items: BriefingMemoryItem[] = [];
+  for (const raw of obj.items) {
+    const it = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    if (it.status === 'archived') continue;
+    const text = typeof it.text === 'string' ? it.text.trim() : '';
+    if (!text) continue;
+    const entities = Array.isArray(it.entities)
+      ? it.entities.map((e) => (typeof e === 'string' ? e.trim() : '')).filter(Boolean).slice(0, 12)
+      : [];
+    const updatedAt = typeof it.updatedAt === 'string' ? it.updatedAt : '';
+    items.push({ text, entities, updatedAt });
+  }
+  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return items.slice(0, Math.max(0, limit));
+}
+
 export interface MemoryFoldComputation {
   priorActiveCount: number;
   ops: Op[];

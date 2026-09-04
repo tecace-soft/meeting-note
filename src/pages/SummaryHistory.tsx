@@ -34,6 +34,7 @@ import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
 } from '../components/TranscriptDiarizedEditor';
+import { MeetingBriefing } from '../components/MeetingBriefing';
 import {
   getNoteDiarizationRaw,
   getSegmentText,
@@ -2317,6 +2318,9 @@ const SummaryHistory: React.FC = () => {
               </label>
             </div>
           </div>
+
+          {/* Step-2 memory value surface: deterministic briefing (self-hides when empty). */}
+          <MeetingBriefing getAccessToken={getAccessToken} />
 
           {/* Notes List — flex-1 column; rows scroll, pagination pinned to bottom */}
           <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col">
