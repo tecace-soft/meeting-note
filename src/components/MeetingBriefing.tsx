@@ -12,19 +12,6 @@ interface Props {
   getAccessToken: () => Promise<string | null>;
 }
 
-const COLLAPSE_KEY = 'meeting-note:briefing-collapsed';
-
-// Default to COLLAPSED so the briefing never pushes the history list out of reach — it ships
-// as a compact header the user taps to expand. Once a user expands it we store '0' and honor
-// that on return; only an explicit '0' keeps it open.
-function readCollapsed(): boolean {
-  try {
-    return localStorage.getItem(COLLAPSE_KEY) !== '0';
-  } catch {
-    return true;
-  }
-}
-
 // Memory items today can be long multi-clause run-ons (a known memory-quality debt: the
 // old consolidation concatenated subjects). The briefing is a glance surface, so we show a
 // short preview here — the first semicolon clause when it is substantial, otherwise a capped
@@ -51,7 +38,10 @@ export function MeetingBriefing({ getAccessToken }: Props): JSX.Element | null {
   const ko = appLanguage === 'ko';
   const [data, setData] = useState<Briefing | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
+  // Always starts COLLAPSED (a compact header the user taps to expand) so the briefing never
+  // pushes the history list out of reach, and is not remembered across loads — every visit
+  // opens collapsed. Expand/collapse is in-session only.
+  const [collapsed, setCollapsed] = useState(true);
 
   const load = useCallback(async () => {
     const result = await fetchMeetingBriefing(getAccessToken);
@@ -63,17 +53,7 @@ export function MeetingBriefing({ getAccessToken }: Props): JSX.Element | null {
     void load();
   }, [load]);
 
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
-      } catch {
-        // ignore: collapse state is a convenience only.
-      }
-      return next;
-    });
-  }, []);
+  const toggleCollapsed = useCallback(() => setCollapsed((prev) => !prev), []);
 
   // Hide entirely until we know there is something worth showing.
   if (!loaded || !data) return null;
