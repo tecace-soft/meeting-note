@@ -1,0 +1,57 @@
+{
+  "name": "2026-09-08-runon-atomization",
+  "noteId": null,
+  "selfName": "Andrew Yoo",
+  "priorMemory": {
+    "version": 2,
+    "items": [
+      {
+        "id": "r1",
+        "text": "The AI agent service, 'recipient agent' or 'Olympus Spa', is being positioned as a new product with potential for a larger market than just voice transcription, requiring a promotion plan and pricing strategy based on cost analysis, and the team is exploring replacing the voicemail system with this AI agent that can handle basic questions and transcribe calls, which would involve a backend change and potentially increase costs due to using OpenAI and Twilio instead of Gemini for transcription; the current focus is on defining this product, its workflow, and pricing, with a promotion plan to be",
+        "entities": ["Recipient Agent", "Olympus Spa", "Voicemail", "OpenAI", "Twilio", "Gemini", "Pricing"]
+      },
+      {
+        "id": "r2",
+        "text": "The team is improving the suggestion feature to recursively enhance its accuracy based on user feedback and evaluation, aiming to develop an alpha/beta version by next Wednesday by improving current speaker identification methods and exploring context-based approaches; testing with three different models for speaker identification indicated that maintaining Gemini 2.5 Flash Lite is optimal due to Gemini 3.5 Flash being heavier and not significantly improving accuracy or reducing hallucinations, and the team will continue to use harness testing for continuous evaluation and reflection of change",
+        "entities": ["Suggestion", "Speaker Diarization", "Gemini", "Backend"]
+      },
+      {
+        "id": "r3",
+        "text": "The team is working on improving the accuracy of meeting note transcription and speaker identification, exploring the use of ontologies and speaker gesture analysis to further enhance meeting note capabilities, potentially integrating these with existing speaker diarization features and addressing issues where specific individuals' voices are not being correctly matched, while also exploring methods to increase the overall accuracy rate beyond 50%.",
+        "entities": ["Transcription Accuracy", "Speaker Identification", "Ontology", "Speaker Diarization"]
+      },
+      {
+        "id": "a1",
+        "text": "The team is investigating a phone-number call-forwarding issue where the forwarding number can cause an infinite loop, which must be resolved before the AI agent handles calls.",
+        "entities": ["Call Forwarding", "Infinite Loop", "AI Agent"]
+      },
+      {
+        "id": "a2",
+        "text": "Eun Seok Lee is the designer on the team and handles design work only, not software.",
+        "entities": ["Eun Seok Lee", "design"]
+      },
+      {
+        "id": "a3",
+        "text": "The AX Billing system uses Wix as the frontend and Stripe as the backend for invoicing.",
+        "entities": ["AX Billing", "Wix", "Stripe"]
+      }
+    ]
+  },
+  "transcript": "Andrew Yoo (유영준): 오늘은 메모리 원자화 작업만 짧게 상태 공유합니다. 큰 새 안건은 없어요.\nHansoo Lee: 네, 확인했습니다. 다음 주에 이어서 보죠.",
+  "recurringSubjects": [
+    "recipient agent product",
+    "speaker suggestion",
+    "transcription accuracy",
+    "AX Billing"
+  ],
+  "forbiddenAssertions": [
+    {
+      "claim": "The Recipient Agent product has launched, or its pricing has been finalized.",
+      "why": "The memory says the product is still being DEFINED (workflow and pricing to be determined) — atomization must not upgrade 'being defined' into 'launched/finalized'."
+    },
+    {
+      "claim": "Speaker identification accuracy has reached or exceeded 50%.",
+      "why": "The item says the team is EXPLORING methods to increase accuracy beyond 50%, not that it has been achieved."
+    }
+  ]
+}

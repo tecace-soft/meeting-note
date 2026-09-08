@@ -11,6 +11,19 @@ function dedupDefectCount(clusters: number[][]): number {
   return clusters.filter((c) => c.length > 1).reduce((acc, c) => acc + (c.length - 1), 0);
 }
 
+// Deterministic run-on / non-atomic detector (Step 4 auto-quality). Atomic memory items are
+// one short single-subject sentence; the legacy concatenating consolidation produced long
+// multi-subject blobs joined by "; ". Flag an item as a run-on when it is long OR stitches
+// several clauses together. No LLM — a cheap, stable signal the dup/drift judges miss (a
+// unique 600-char blob scores perfectly on those).
+function isRunOn(text: string): boolean {
+  const semicolonClauses = text.split('; ').length - 1;
+  return text.length > 320 || semicolonClauses >= 2;
+}
+function runOnCount(texts: string[]): number {
+  return texts.filter(isRunOn).length;
+}
+
 export async function runMemorySurface(golden: MemoryGolden, deps: EvalDeps): Promise<SurfaceScore> {
   const surface = `memory:${golden.name}`;
   const res = await computeMemoryFold({
@@ -44,6 +57,18 @@ export async function runMemorySurface(golden: MemoryGolden, deps: EvalDeps): Pr
   const forbidden = await judgeForbidden(deps, activeTextsAfter, golden.forbiddenAssertions);
   const asserted = forbidden.filter((f) => f.asserted);
 
+  // Step 4 auto-quality: run-on measurement + the split experiment. The shipped consolidation
+  // above is merge-only (never splits), so it cannot repair run-on blobs. Here we ALSO run
+  // consolidation with allowSplit=true and measure whether atomization (a) cuts run-on items
+  // WITHOUT (b) over-fragmenting (active count blowing up) or (c) introducing fact-drift.
+  const runOnFold = runOnCount(activeTexts);
+  const runOnMergeOnly = runOnCount(activeTextsAfter);
+  const split = await consolidateMemory({ apiKey: deps.geminiApiKey, items: res.items, now: deps.now, allowSplit: true });
+  const activeSplit = split.items.filter((i) => i.status === 'active');
+  const activeTextsSplit = activeSplit.map((i) => i.text);
+  const runOnSplit = runOnCount(activeTextsSplit);
+  const driftSplit = (await judgeForbidden(deps, activeTextsSplit, golden.forbiddenAssertions)).filter((f) => f.asserted).length;
+
   const opsAdd = res.ops.filter((o) => o.op === 'add').length;
   const opsFold = res.ops.filter((o) => o.op === 'update' || o.op === 'supersede').length;
   const opsArchive = res.ops.filter((o) => o.op === 'archive').length;
@@ -56,12 +81,21 @@ export async function runMemorySurface(golden: MemoryGolden, deps: EvalDeps): Pr
   for (const c of dupClusters) notes.push(`DUP cluster (pre): ${c.map((i) => `"${activeTexts[i]}"`).join(' ↔ ')}`);
   for (const f of asserted) notes.push(`DRIFT: memory asserts "${f.claim}"${f.itemIndex !== null ? ` via item "${activeTextsAfter[f.itemIndex]}"` : ''}`);
 
+  notes.push(
+    `run-on items: fold ${runOnFold} → merge-only ${runOnMergeOnly} → split ${runOnSplit} (active ${active.length} → split ${activeSplit.length}); split drift ${driftSplit}`,
+  );
+
   const metrics: Metric[] = [
     { label: 'duplicate items (count, lower better)', value: dedupDefectsAfter, detail: `pre-consolidation ${dedupDefects}` },
     { label: 'duplicate items pre-consolidation (count)', value: dedupDefects },
     { label: 'items merged by consolidation (count)', value: consolidated.merged },
     { label: 'fact-drift assertions (count, lower better)', value: asserted.length },
     { label: 'fold-share of ops (update+supersede)', value: foldShare, detail: `${opsFold}/${res.ops.length}` },
+    // Step 4 auto-quality signals:
+    { label: 'run-on items (count, lower better)', value: runOnMergeOnly, detail: `fold ${runOnFold}, after split ${runOnSplit}` },
+    { label: 'run-on items after split (count, lower better)', value: runOnSplit },
+    { label: 'active items after split (count, over-fragmentation guard)', value: activeSplit.length, detail: `merge-only ${activeAfter.length}` },
+    { label: 'fact-drift after split (count, lower better)', value: driftSplit },
   ];
   return { surface, ran: true, metrics, notes };
 }
