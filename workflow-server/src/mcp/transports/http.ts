@@ -260,6 +260,7 @@ function isMcpOwnedPath(pathname: string): boolean {
     pathname === '/mcp' ||
     pathname === '/mcp-chatgpt' ||
     pathname === '/.well-known/oauth-protected-resource' ||
+    pathname === '/.well-known/oauth-protected-resource/mcp' ||
     pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt' ||
     pathname === '/admin' ||
     pathname === '/admin/' ||
