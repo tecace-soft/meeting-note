@@ -153,8 +153,12 @@ function getHeaderValue(req: IncomingMessage, name: string): string | undefined 
 }
 
 function getRequestBaseUrl(req: IncomingMessage): string {
+  // The host the client actually reached us on (Render/Cloudflare set x-forwarded-host to the
+  // public URL). Empty when no host header is present, so the caller can fall back to a
+  // configured base URL.
+  const host = getHeaderValue(req, 'x-forwarded-host') ?? getHeaderValue(req, 'host');
+  if (!host) return '';
   const proto = getHeaderValue(req, 'x-forwarded-proto') ?? 'https';
-  const host = getHeaderValue(req, 'x-forwarded-host') ?? getHeaderValue(req, 'host') ?? 'localhost';
   return `${proto}://${host}`.replace(/\/$/, '');
 }
 
@@ -335,7 +339,12 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
       return true;
     }
 
-    const requestBaseUrl = env.mcpPublicBaseUrl ?? getRequestBaseUrl(req);
+    // RFC 9728: a protected resource advertises its metadata at its OWN url — the host the
+    // client actually reached. Prefer that so OAuth discovery self-heals. MCP_PUBLIC_BASE_URL
+    // had been pinned to the now-decommissioned standalone MCP host, which wedged discovery
+    // once a client re-pointed to this backend; keep it only as a fallback for the (prod-never)
+    // case where no forwarded host is present.
+    const requestBaseUrl = getRequestBaseUrl(req) || env.mcpPublicBaseUrl || '';
 
     if (
       url.pathname === '/.well-known/oauth-protected-resource' ||
