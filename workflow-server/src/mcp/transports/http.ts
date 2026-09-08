@@ -348,6 +348,10 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
 
     if (
       url.pathname === '/.well-known/oauth-protected-resource' ||
+      // RFC 9728 §3.1: for the resource at `/mcp`, the canonical metadata URL is the
+      // well-known prefix + the resource path. Modern clients (claude.ai) fetch this
+      // path-based URL directly, so serving only the bare path 404'd discovery.
+      url.pathname === '/.well-known/oauth-protected-resource/mcp' ||
       url.pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt'
     ) {
       sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, env.mcpOAuthResource, env.mcpOAuthScope));
