@@ -1114,6 +1114,69 @@ export async function consolidateMemory(input: {
   return { items: enforceCaps(items), merged, ran: true };
 }
 
+// Step 4 auto-quality: a RUN-ON is a legacy multi-subject blob (from the old concatenating
+// consolidation, or a fold op that returned several subjects in one sentence). Atomic items are
+// one short single-subject sentence. Deterministic detector (no LLM) — long text OR several
+// "; "-joined clauses. Shared by the fold, the GC script, and the F8 eval so all three agree.
+export function isRunOnText(text: string): boolean {
+  const semicolonClauses = text.split('; ').length - 1;
+  return text.length > 320 || semicolonClauses >= 2;
+}
+
+const MEMORY_ATOMIZE_SYSTEM_PROMPT = `You repair NON-ATOMIC items in a single user's long-term PERSONAL MEMORY. Every item you are given crams TWO OR MORE distinct subjects into one run-on sentence. Split each into one atomic sentence per subject.
+
+RULES:
+- For EACH given item, emit ONE split op: its id plus 2+ parts, one atomic single-subject sentence per distinct subject the item contains.
+- Use ONLY information already in that item. Never add, infer, or upgrade a fact (e.g. do NOT turn "being defined" into "finalized", or "exploring X" into "achieved X"). Together the parts must preserve everything the item said — drop nothing.
+- Keep each part in the SAME language as the item (do not translate). Each part is ONE self-contained sentence about ONE subject.
+- Operate on the GIVEN items ONLY. Do NOT merge, do NOT rewrite or reference any other memory, do NOT emit merge ops. If a given item turns out to be genuinely about one subject, omit it (emit no op for it).
+- Emit at most ${MAX_CONSOLIDATION_OPS} operations.
+Return ONLY JSON: {"ops":[{"kind":"split","id":"id1","parts":[{"text":"...","entities":["..."]},{"text":"...","entities":["..."]}]}]}`;
+
+/** Build the atomize user prompt from the flagged run-on items only. */
+export function buildAtomizePrompt(runOnItems: Array<{ id: string; text: string; entities: string[] }>): string {
+  return `RUN-ON MEMORY ITEMS (JSON):\n${JSON.stringify(runOnItems)}\n\nSplit each into atomic single-subject items per the rules above. Answer with the specified JSON only.`;
+}
+
+/**
+ * Surgical atomization: split ONLY the run-on items into atomic single-subject items and leave
+ * every already-atomic/unique item untouched. Unlike consolidateMemory({allowSplit:true}) — which
+ * hands the model the whole set and lets it freely merge/rewrite, destabilizing clean memory
+ * (measured: it turns clean cases WORSE, adding run-ons and dropping items) — this sends ONLY the
+ * flagged run-on items and accepts ONLY split ops on those exact ids. Best-effort: returns items
+ * unchanged (ran:false) when there are no run-ons or on any model/parse failure; never throws.
+ */
+export async function atomizeRunOns(input: {
+  apiKey: string;
+  model?: string;
+  fallbackModels?: string[];
+  items: MemoryItem[];
+  now?: string;
+}): Promise<{ items: MemoryItem[]; atomized: number; ran: boolean }> {
+  const now = input.now ?? new Date().toISOString();
+  const runOns = input.items.filter((i) => i.status === 'active' && isRunOnText(i.text));
+  if (runOns.length === 0) return { items: input.items, atomized: 0, ran: false };
+  const runOnIds = new Set(runOns.map((i) => i.id));
+  const forPrompt = runOns.map((i) => ({ id: i.id, text: i.text, entities: i.entities }));
+  const out = await callJsonModel<ConsolidationOp[]>({
+    apiKey: input.apiKey,
+    models: resolveModels(input.model, input.fallbackModels),
+    systemPrompt: MEMORY_ATOMIZE_SYSTEM_PROMPT,
+    userPrompt: buildAtomizePrompt(forPrompt),
+    parse: (text) => parseConsolidationOps(text),
+    maxOutputTokens: 4096,
+  });
+  if ('error' in out) return { items: input.items, atomized: 0, ran: false };
+  // Defensive: only split ops, and only for the run-on ids we sent — never merge, never touch
+  // any item we did not flag (applyConsolidation also ignores unknown/claimed ids).
+  const ops = out.value.filter(
+    (op): op is Extract<ConsolidationOp, { kind: 'split' }> => op.kind === 'split' && runOnIds.has(op.id),
+  );
+  if (ops.length === 0) return { items: input.items, atomized: 0, ran: false };
+  const { items } = applyConsolidation(input.items, ops, now);
+  return { items: enforceCaps(items), atomized: ops.length, ran: true };
+}
+
 export interface FoldNoteResult {
   memoryItemCount: number;
   insightWritten: boolean;
