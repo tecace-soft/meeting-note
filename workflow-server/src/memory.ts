@@ -346,6 +346,7 @@ STYLE:
   Good: "The team is moving memory from flat fact-buckets to a narrative + relational store because the boss wants ChatGPT-style memory that captures why decisions were made, not just a CRM-like list."
   Bad: "Memory feature development.", "50MB limit.", "Admin dashboard: no permission."
 - Do NOT split one subject across several items (one storage-limit topic → ONE memory, not four). Do NOT emit a roadmap/summary item that just restates other items.
+- Keep each item SHORT — ideally ONE clear sentence, and never a run-on that stacks clause after clause with "; ...; they are also ...". An item is the CURRENT ESSENCE of its subject, not a running log of everything ever said about it. If you cannot say it in one focused sentence, the item is probably really TWO subjects — keep them separate.
 
 HOW TO FOLD (follow this order — it is what prevents duplicate build-up):
 1. FIRST walk the EXISTING items one by one. For each, ask: does this meeting add detail to it, change it, or resolve/contradict it? If yes, emit an "update" (enrich in place) or "supersede" (replace stale/contradicted) on THAT id — reuse the id EXACTLY. Most meetings mostly CONTINUE existing threads, so expect more update/supersede than add.
@@ -353,7 +354,7 @@ HOW TO FOLD (follow this order — it is what prevents duplicate build-up):
 3. It is a DEFECT to "add" an item whose subject / project / person / entities already match an existing item — that creates a duplicate. When a subject already exists, you MUST update/supersede its id instead. When unsure whether something is new, treat it as an update to the closest existing item.
 
 OPERATIONS (emit an ordered JSON array; the server applies them in order):
-- {"op":"update","id":"...","text":"...","entities":["..."]}   PREFER THIS: refine/enrich an existing memory in place
+- {"op":"update","id":"...","text":"...","entities":["..."]}   PREFER THIS: REWRITE the memory concisely to its current state — do NOT append another clause onto the old text. Drop what is no longer the point; keep it one clear sentence. If the existing item has already grown into a long multi-clause run-on, tighten it back here (or, if it now truly covers two distinct subjects, supersede it and add the second subject as its own item).
 - {"op":"supersede","id":"...","text":"...","entities":["..."]} replace a stale or contradicted memory with corrected info
 - {"op":"add","text":"...","entities":["..."]}                 add a memory for a genuinely NEW subject only
 - {"op":"archive","id":"..."}                                  the memory is no longer relevant
