@@ -91,6 +91,7 @@ MCP env vars are now **live on the workflow-server service** (copied over from t
   - `MCP_AZURE_TENANT_ID`: only this tenant's accounts can sign in.
   - `MCP_OAUTH_SIGNING_SECRET`: at least 32 random characters. ⚠️ Changing it invalidates every ChatGPT connection (users re-add the plugin); that is also the kill switch to revoke all of them.
   - Optional `MCP_OAUTH_ALLOWED_REDIRECT_HOSTS` (default `chatgpt.com,chat.openai.com`).
+  - Keep the existing MCP_* vars as they are. Only check that `MCP_OAUTH_RESOURCE` is `https://<backend>/mcp-chatgpt`, or unset it so it is derived from the request host. It becomes the token audience and the `resource` ChatGPT sends, so a stale host there can make ChatGPT reject the connection. `MCP_OAUTH_SCOPE` is unused in proxy mode.
   - Access tokens last 1h; every refresh re-checks the user with Entra, so a disabled account stops working within about an hour. Personal-key auth on `/mcp` (Claude) is unaffected.
 - ⚠️ **Env-wipe footgun (hit 2026-09-01):** MCP_* env added on Render vanished (unsaved changes / env group not linked). Always click **Save Changes** and reload to confirm they persisted. Note: the `.well-known/oauth-protected-resource*` payload is all code defaults/host-derivation, so it looks correct even with NO MCP env set — do NOT use it as proof the env is present; test `GET /mcp` with a real token instead.
 
