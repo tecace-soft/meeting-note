@@ -349,7 +349,10 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
     const requestBaseUrl = getRequestBaseUrl(req) || env.mcpPublicBaseUrl || '';
     const oauthProxy = buildOAuthProxyConfig({
       issuer: requestBaseUrl,
-      resource: env.mcpOAuthResource ?? `${requestBaseUrl}/mcp-chatgpt`,
+      // Always the endpoint's own URL: ChatGPT sends this back as `resource` and expects it to name
+      // the MCP server it connected to. MCP_OAUTH_RESOURCE stays the Entra-direct audience (often an
+      // api:// App ID URI), which must not leak into proxy-mode metadata.
+      resource: `${requestBaseUrl}/mcp-chatgpt`,
       tenantId: env.mcpAzureTenantId,
       clientId: env.mcpOAuthClientId,
       clientSecret: env.mcpOAuthClientSecret,
@@ -370,7 +373,7 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
       url.pathname === '/.well-known/oauth-protected-resource/mcp' ||
       url.pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt'
     ) {
-      sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, env.mcpOAuthResource, env.mcpOAuthScope, env.mcpAzureTenantId, oauthProxy?.issuer));
+      sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, oauthProxy?.resource ?? env.mcpOAuthResource, env.mcpOAuthScope, env.mcpAzureTenantId, oauthProxy?.issuer));
       return true;
     }
 
