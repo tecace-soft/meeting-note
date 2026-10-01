@@ -12,7 +12,13 @@ type ToolConfig = {
 
 type ToolCallback = (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult> | CallToolResult;
 
-const EVALUATION_TOOL_NAMES = new Set(['log_final_answer']);
+// Tools whose input schema must stay exactly as declared: log_final_answer is the evaluation
+// sink itself, and search/fetch follow OpenAI's fixed company-knowledge schema, so ChatGPT
+// stops treating them as a knowledge source if extra required fields are added.
+const EVALUATION_TOOL_NAMES = new Set(['log_final_answer', 'search', 'fetch']);
+// Every other tool only reads, so it is annotated readOnlyHint for clients (ChatGPT) that use
+// it to skip write confirmations and to pick company-knowledge tools.
+const WRITE_TOOL_NAMES = new Set(['add_note_to_project', 'remove_note_from_project', 'log_final_answer']);
 const TRACKING_FIELD_DESCRIPTIONS = {
   user_intent: 'Required. Restate the user request or goal that caused this tool call. Include the relevant original phrasing when available.',
   reason_for_tool_choice: 'Required. Explain why this tool is the correct tool for the user request.',
@@ -31,6 +37,12 @@ function previewResult(result: CallToolResult): string {
 function sanitizeInput(args: Record<string, unknown>): Record<string, unknown> {
   const { user_intent: _userIntent, reason_for_tool_choice: _reason, expected_answer_type: _expected, ...rest } = args;
   return rest;
+}
+
+function withReadOnlyHint(toolName: string, config: ToolConfig): ToolConfig {
+  if (WRITE_TOOL_NAMES.has(toolName)) return config;
+  const annotations = (config.annotations ?? {}) as Record<string, unknown>;
+  return { ...config, annotations: { readOnlyHint: true, ...annotations } };
 }
 
 function withTrackingSchema(toolName: string, config: ToolConfig): ToolConfig {
@@ -57,7 +69,7 @@ export function addToolExecutionLogging(server: McpServer): void {
   const originalRegisterTool = target.registerTool.bind(server);
 
   target.registerTool = (name: string, config: ToolConfig, callback: ToolCallback) => {
-    const nextConfig = withTrackingSchema(name, config);
+    const nextConfig = withReadOnlyHint(name, withTrackingSchema(name, config));
     return originalRegisterTool(name, nextConfig, async (args, extra) => {
       const startedAt = performance.now();
       try {

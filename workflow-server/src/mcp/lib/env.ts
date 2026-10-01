@@ -11,6 +11,14 @@ export interface MeetingNoteEnv {
   mcpPublicBaseUrl?: string;
   mcpOAuthResource?: string;
   mcpOAuthScope?: string;
+  mcpOAuthClientId?: string;
+  // OAuth proxy (ChatGPT "URL + OAuth" connect): this server acts as the authorization server
+  // ChatGPT discovers and registers with (DCR), and delegates sign-in to the Entra app
+  // MCP_OAUTH_CLIENT_ID using this secret. Enabled only when client id, secret, signing
+  // secret and tenant are all set.
+  mcpOAuthClientSecret?: string;
+  mcpOAuthSigningSecret?: string;
+  mcpOAuthAllowedRedirectHosts: Set<string>;
   mcpAzureTenantId?: string;
   mcpAllowAnonChatgptFallback: boolean;
   mcpTokenPepper?: string;
@@ -123,6 +131,10 @@ export function getEnv(): MeetingNoteEnv {
     mcpPublicBaseUrl: process.env.MCP_PUBLIC_BASE_URL?.trim().replace(/\/$/, '') || undefined,
     mcpOAuthResource: process.env.MCP_OAUTH_RESOURCE?.trim() || undefined,
     mcpOAuthScope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
+    mcpOAuthClientId: process.env.MCP_OAUTH_CLIENT_ID?.trim() || undefined,
+    mcpOAuthClientSecret: process.env.MCP_OAUTH_CLIENT_SECRET?.trim() || undefined,
+    mcpOAuthSigningSecret: process.env.MCP_OAUTH_SIGNING_SECRET?.trim() || undefined,
+    mcpOAuthAllowedRedirectHosts: parseSet(process.env.MCP_OAUTH_ALLOWED_REDIRECT_HOSTS ?? 'chatgpt.com,chat.openai.com'),
     mcpAzureTenantId: process.env.MCP_AZURE_TENANT_ID?.trim() || undefined,
     mcpAllowAnonChatgptFallback: process.env.MCP_ALLOW_ANON_CHATGPT_FALLBACK?.trim().toLowerCase() === 'true',
     mcpTokenPepper: process.env.MCP_TOKEN_PEPPER?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,

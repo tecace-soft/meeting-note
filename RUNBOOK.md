@@ -86,6 +86,12 @@ MCP env vars are now **live on the workflow-server service** (copied over from t
 
 - ⚠️ **`MCP_TOKEN_PEPPER` must match the value the standalone used** — personal MCP tokens are hashed with it (`sha256(pepper:token)`), so a different pepper 401s every existing token. If the standalone had no explicit pepper it falls back to `SUPABASE_SERVICE_ROLE_KEY`; in that case leave it unset here too (don't add one).
 - **`MCP_PUBLIC_BASE_URL` + `MCP_OAUTH_RESOURCE` are URL-specific** — set them to the workflow-server (backend) URL, not the old mcp URL.
+- **ChatGPT "URL + OAuth" connect (OAuth proxy, `workflow-server/src/mcp/oauth/`).** ChatGPT's New Plugin form takes only the server URL + "OAuth", then discovers the auth server and self-registers (DCR). Entra supports neither DCR nor CIMD, so the backend acts as the authorization server (`/.well-known/oauth-authorization-server`, `/oauth/register|authorize|callback|token`) and delegates sign-in to the Entra app. It is stateless (signed/encrypted tokens, no DB tables). It turns on only when ALL of these are set; otherwise `/mcp-chatgpt` keeps the old Entra-direct metadata:
+  - `MCP_OAUTH_CLIENT_ID` / `MCP_OAUTH_CLIENT_SECRET`: the Entra app (Web redirect URI `https://<backend>/oauth/callback`, delegated `User.Read` + `offline_access`; no "Expose an API" needed).
+  - `MCP_AZURE_TENANT_ID`: only this tenant's accounts can sign in.
+  - `MCP_OAUTH_SIGNING_SECRET`: at least 32 random characters. ⚠️ Changing it invalidates every ChatGPT connection (users re-add the plugin); that is also the kill switch to revoke all of them.
+  - Optional `MCP_OAUTH_ALLOWED_REDIRECT_HOSTS` (default `chatgpt.com,chat.openai.com`).
+  - Access tokens last 1h; every refresh re-checks the user with Entra, so a disabled account stops working within about an hour. Personal-key auth on `/mcp` (Claude) is unaffected.
 - ⚠️ **Env-wipe footgun (hit 2026-09-01):** MCP_* env added on Render vanished (unsaved changes / env group not linked). Always click **Save Changes** and reload to confirm they persisted. Note: the `.well-known/oauth-protected-resource*` payload is all code defaults/host-derivation, so it looks correct even with NO MCP env set — do NOT use it as proof the env is present; test `GET /mcp` with a real token instead.
 
 ---
