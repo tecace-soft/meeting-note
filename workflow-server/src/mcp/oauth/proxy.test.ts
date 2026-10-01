@@ -215,3 +215,9 @@ test('a too-short signing secret disables the proxy instead of throwing', async 
   const config = buildOAuthProxyConfig({ issuer: 'https://x', resource: 'https://x/mcp-chatgpt', tenantId: 't', clientId: 'c', clientSecret: 's', signingSecret: 'short', allowedRedirectHosts: new Set() });
   assert.equal(config, undefined);
 });
+
+test('missing-settings diagnostic names only the absent env vars', async () => {
+  const { getMissingProxySettings } = await import('./proxy.js');
+  assert.deepEqual(getMissingProxySettings({ tenantId: 't', clientId: 'c' }), ['MCP_OAUTH_CLIENT_SECRET', 'MCP_OAUTH_SIGNING_SECRET']);
+  assert.deepEqual(getMissingProxySettings({ tenantId: 't', clientId: 'c', clientSecret: 's', signingSecret: 'x' }), []);
+});

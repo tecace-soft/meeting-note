@@ -100,13 +100,17 @@ export function buildOAuthProxyConfig(options: {
   allowedRedirectHosts: Set<string>;
 }): OAuthProxyConfig | undefined {
   const { tenantId, clientId, clientSecret, signingSecret } = options;
-  if (!options.issuer || !tenantId || !clientId || !clientSecret || !signingSecret) return undefined;
+  const missing = getMissingProxySettings(options);
+  if (!options.issuer || missing.length > 0) {
+    warnProxyDisabledOnce(`missing ${missing.join(', ') || 'request host'}`);
+    return undefined;
+  }
   let keys: OAuthKeys;
   try {
-    keys = deriveOAuthKeys(signingSecret);
+    keys = deriveOAuthKeys(signingSecret!);
   } catch (error) {
     // A bad secret must disable only the proxy, never break /mcp (Claude) on the same request path.
-    console.warn(`[oauth] proxy disabled: ${error instanceof Error ? error.message : String(error)}`);
+    warnProxyDisabledOnce(error instanceof Error ? error.message : String(error));
     return undefined;
   }
   return {
@@ -114,8 +118,28 @@ export function buildOAuthProxyConfig(options: {
     resource: options.resource,
     keys,
     allowedRedirectHosts: options.allowedRedirectHosts,
-    entra: createEntraClient(tenantId, clientId, clientSecret),
+    entra: createEntraClient(tenantId!, clientId!, clientSecret!),
   };
+}
+
+// Names (never values) of the env vars the proxy still needs, for the startup diagnostic.
+export function getMissingProxySettings(options: { tenantId?: string; clientId?: string; clientSecret?: string; signingSecret?: string }): string[] {
+  return [
+    ['MCP_AZURE_TENANT_ID', options.tenantId],
+    ['MCP_OAUTH_CLIENT_ID', options.clientId],
+    ['MCP_OAUTH_CLIENT_SECRET', options.clientSecret],
+    ['MCP_OAUTH_SIGNING_SECRET', options.signingSecret],
+  ]
+    .filter(([, value]) => !value)
+    .map(([name]) => name as string);
+}
+
+// The config is rebuilt per request, so log the reason once per process, not on every hit.
+let proxyDisabledWarned = false;
+function warnProxyDisabledOnce(reason: string): void {
+  if (proxyDisabledWarned) return;
+  proxyDisabledWarned = true;
+  console.warn(`[oauth] ChatGPT OAuth proxy disabled (${reason}); /mcp-chatgpt falls back to Entra-direct metadata.`);
 }
 
 export function getAuthorizationServerMetadata(issuer: string) {
