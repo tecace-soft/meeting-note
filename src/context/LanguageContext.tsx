@@ -263,7 +263,9 @@ const translations = {
     claudeDesktopSetup: 'Claude Desktop setup',
     keySafety: 'Key safety',
     quickTestPrompts: 'Quick test prompts',
-    mcpReadOnlyNote: 'The MCP can read meeting note data, but it should not edit or delete notes.',
+    mcpToolsTitle: 'Main tools',
+    mcpToolsDescription: 'No need to remember tool names. Just ask in plain language, like the examples below.',
+    mcpReadOnlyNote: 'add_note_to_project and remove_note_from_project are the only write tools, and they only change project membership. Note content is never edited or deleted.',
     allRightsReserved: 'All rights reserved.',
   },
   ko: {
@@ -514,7 +516,9 @@ const translations = {
     claudeDesktopSetup: 'Claude Desktop 설정',
     keySafety: '키 보안',
     quickTestPrompts: '빠른 테스트 프롬프트',
-    mcpReadOnlyNote: 'MCP는 회의록 데이터를 읽을 수 있지만 편집하거나 삭제해서는 안 됩니다.',
+    mcpToolsTitle: '사용 가능한 주요 툴',
+    mcpToolsDescription: '툴 이름을 외울 필요는 없습니다. 아래처럼 한국어로 물으면 됩니다.',
+    mcpReadOnlyNote: 'add_note_to_project·remove_note_from_project만 쓰기 도구이며, 프로젝트 소속만 바꿉니다. 회의록 내용은 수정하거나 삭제하지 않습니다.',
     allRightsReserved: '모든 권리 보유.',
   },
 } as const;
