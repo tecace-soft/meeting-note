@@ -25,6 +25,60 @@ import { DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 const MCP_CHATGPT_URL = 'https://meeting-note-backend-njfb.onrender.com/mcp-chatgpt';
 const MCP_CLAUDE_URL = 'https://meeting-note-backend-njfb.onrender.com/mcp';
+const CHATGPT_PLUGINS_URL = 'https://chatgpt.com/plugins';
+
+type LocalizedText = { ko: string; en: string };
+
+// Main MCP tools shown in the setup guide's tool table. Descriptions follow the tool definitions in
+// workflow-server/src/mcp/tools/*.ts; `write` marks the only tools that change data.
+const MCP_TOOL_GUIDE: Array<{ name: string; write?: boolean; description: LocalizedText; example: LocalizedText }> = [
+  {
+    name: 'list_recent_notes',
+    description: { ko: '최근 회의록 목록 (제목·날짜·태그·프로젝트)', en: 'Recent meeting notes (title, date, tags, projects)' },
+    example: { ko: '"최근 회의록 10개 보여줘"', en: '"Show my 10 most recent meeting notes"' },
+  },
+  {
+    name: 'search_notes',
+    description: { ko: '제목·요약·전사·사람·주제·회사로 회의록 검색', en: 'Search notes by title, summary, transcript, people, topics, companies' },
+    example: { ko: '"Samsung 미팅에서 가격 얘기 나온 회의 찾아줘"', en: '"Find meetings where pricing came up with Samsung"' },
+  },
+  {
+    name: 'get_note_summary',
+    description: { ko: '회의 하나의 요약 (편집본 우선)', en: 'Summary of one meeting (edited version first)' },
+    example: { ko: '"어제 주간회의 요약해줘"', en: '"Summarize yesterday\'s weekly meeting"' },
+  },
+  {
+    name: 'get_note_transcript',
+    description: { ko: '회의 전사 원문 또는 화자별 발언', en: 'Full transcript or speaker-by-speaker segments' },
+    example: { ko: '"그 회의에서 Andrew가 한 말만 보여줘"', en: '"Show only what Andrew said in that meeting"' },
+  },
+  {
+    name: 'get_meeting_brief',
+    description: { ko: '회의 한 건 패키지 — 요약·참석자·첨부·전사 발췌', en: 'One-meeting package: summary, speakers, attachments, transcript excerpt' },
+    example: { ko: '"오늘 오전 회의 브리핑해줘"', en: '"Brief me on this morning\'s meeting"' },
+  },
+  {
+    name: 'find_action_items',
+    description: { ko: '회의별 액션 아이템·후속 조치 (담당·기한·근거)', en: 'Action items and follow-ups (owner, due date, source)' },
+    example: { ko: '"지난주 회의 액션 아이템 정리해줘"', en: '"List action items from last week\'s meetings"' },
+  },
+  {
+    name: 'find_events',
+    description: { ko: '무슨 일이 있었고 무엇으로 이어졌는지 (원인→결과)', en: 'What happened and what it led to (cause → effect)' },
+    example: { ko: '"지난달 내가 결정한 것과 그 결과 알려줘"', en: '"What did I decide last month and what came of it?"' },
+  },
+  {
+    name: 'get_project_context',
+    description: { ko: '프로젝트의 최근 회의·요약·참석자', en: 'A project\'s recent meetings, summaries and speakers' },
+    example: { ko: '"ERP 프로젝트 최근 상황 정리해줘"', en: '"Catch me up on the ERP project"' },
+  },
+  {
+    name: 'add_note_to_project',
+    write: true,
+    description: { ko: '회의록을 내 프로젝트에 추가 (remove_note_from_project로 제거)', en: 'Add a note to one of your projects (remove_note_from_project removes it)' },
+    example: { ko: '"이 회의록 ERP 프로젝트에 넣어줘"', en: '"Add this note to the ERP project"' },
+  },
+];
 
 type SettingsTab = 'account' | 'summary' | 'speaker' | 'memory' | 'mcp';
 type McpSetupView = 'chatgpt' | 'claude';
@@ -1436,78 +1490,100 @@ const AccountSettings: React.FC = () => {
                       <div className="summary-note-row account-settings-row mcp-setup-row">
                       <span className="summary-note-row-rail" aria-hidden />
                       <div className="summary-note-row-content px-4 py-4">
-                        <div>
-                          <div>
-                            <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                              {t('chatgptSetup')}
-                            </h4>
-                            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                              {t('chatgptSetupDescription')}
-                            </p>
-                          </div>
-                        </div>
+                        <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                          {t('chatgptSetup')}
+                        </h4>
+                        <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {t('chatgptSetupDescription')}
+                        </p>
 
-                        <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                          <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
-                            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                              {t('chatgptMcpUrl')}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => void handleCopyText(MCP_CHATGPT_URL, 'mcp-chatgpt-url')}
-                              className="mcp-copy-btn"
-                            >
-                              {copiedKey === 'mcp-chatgpt-url' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
-                              {copiedKey === 'mcp-chatgpt-url' ? t('copied') : t('copy')}
-                            </button>
-                          </div>
-                          <code className="block overflow-x-auto px-3 py-2 text-xs" style={{ color: 'var(--text)' }}>
-                            {MCP_CHATGPT_URL}
-                          </code>
-                        </div>
-
-                        <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          {(appLanguage === 'ko'
-                            ? [
-                                'ChatGPT에서 설정 → 보안 및 로그인으로 이동해 개발자 모드를 켭니다.',
-                                'Plugins 페이지에서 + 를 눌러 New Plugin을 엽니다.',
-                                '이름(예: Meeting Note)을 입력하고 Server URL에 위의 ChatGPT MCP URL을 붙여넣은 뒤, Authentication은 OAuth로 둡니다. 고급 OAuth 설정은 건드리지 않아도 됩니다.',
-                                '위험 안내에 동의하고 Create를 누른 뒤 회사 Microsoft 계정으로 로그인합니다.',
-                                '채팅에서 Plugins 메뉴의 Meeting Note를 선택하면 회의 데이터를 사용합니다.',
-                              ]
-                            : [
-                                'In ChatGPT, open Settings → Security and login and turn on Developer mode.',
-                                'On the Plugins page, click + to open New Plugin.',
-                                'Enter a name (e.g. Meeting Note), paste the ChatGPT MCP URL above as the Server URL, and keep Authentication set to OAuth. Advanced OAuth settings can stay as discovered.',
-                                'Accept the risk notice, click Create, and sign in with your work Microsoft account.',
-                                'In a chat, pick Meeting Note from the Plugins menu when you want ChatGPT to use your meeting data.',
-                              ]).map((step, index) => (
-                            <li key={step}><span className="font-medium" style={{ color: 'var(--text)' }}>{index + 1}.</span> {step}</li>
+                        <ol className="mt-5 space-y-6">
+                          {[
+                            {
+                              title: 'Plugins → Add → Create MCP App',
+                              body: appLanguage === 'ko'
+                                ? 'chatgpt.com/plugins 오른쪽 위 Add 버튼 → Create MCP App을 고르고 아래 URL만 붙여 넣습니다. 이름은 자유(예: Meeting Note). 인증은 ChatGPT가 OAuth로 알아서 잡으므로 키나 Advanced OAuth settings는 넣지 않습니다.'
+                                : 'At chatgpt.com/plugins, click Add (top right) → Create MCP App and paste only the URL below. Any name works (e.g. Meeting Note). ChatGPT detects OAuth on its own, so leave keys and Advanced OAuth settings empty.',
+                              note: appLanguage === 'ko'
+                                ? 'Add 메뉴에 Create MCP App이 없으면: 개인(Plus·Pro)은 설정 → Security and login → Developer mode를 켜고, 회사 Business·Enterprise는 워크스페이스 관리자가 커스텀 MCP 앱을 허용해야 합니다. 관리자가 Workspace settings → Apps에서 한 번 등록하면 팀원은 연결만 누르면 됩니다.'
+                                : 'No Create MCP App in the Add menu? Personal (Plus/Pro): turn on Settings → Security and login → Developer mode. Business/Enterprise: a workspace admin must allow custom MCP apps; once an admin registers it under Workspace settings → Apps, members only click Connect.',
+                              extra: (
+                                <>
+                                  <a
+                                    href={CHATGPT_PLUGINS_URL}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mt-2 inline-block text-sm font-medium hover:underline"
+                                    style={{ color: 'var(--accent)' }}
+                                  >
+                                    chatgpt.com/plugins ↗
+                                  </a>
+                                  <div className="mt-3 overflow-hidden rounded-md" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                                    <div className="flex items-center justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
+                                      <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                                        {t('chatgptMcpUrl')}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCopyText(MCP_CHATGPT_URL, 'mcp-chatgpt-url')}
+                                        className="mcp-copy-btn"
+                                      >
+                                        {copiedKey === 'mcp-chatgpt-url' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                                        {copiedKey === 'mcp-chatgpt-url' ? t('copied') : t('copy')}
+                                      </button>
+                                    </div>
+                                    <code className="block overflow-x-auto px-3 py-2 text-xs" style={{ color: 'var(--text)' }}>
+                                      {MCP_CHATGPT_URL}
+                                    </code>
+                                  </div>
+                                </>
+                              ),
+                            },
+                            {
+                              title: appLanguage === 'ko' ? 'Microsoft 로그인 → 허용' : 'Sign in with Microsoft → Accept',
+                              body: appLanguage === 'ko'
+                                ? '회사 계정으로 로그인하고 동의 화면에서 "허용"을 누르면 연결이 끝납니다. ChatGPT에는 Meeting Note에서 내가 볼 수 있는 노트(내 노트 + 공유받은 노트)만 보입니다.'
+                                : 'Sign in with your work account and click Accept on the consent screen. ChatGPT sees only the notes you can access in Meeting Note (your own plus notes shared with you).',
+                              note: appLanguage === 'ko'
+                                ? '회사(TecAce) 계정만 로그인할 수 있습니다. 연결 오류나 로그인이 반복되면 Plugins → Meeting Note에서 연결을 해제한 뒤 다시 연결하세요. 회사 계정이 비활성화되면 약 1시간 안에 접근이 끊깁니다.'
+                                : 'Only work (TecAce) accounts can sign in. On a connection error or repeated sign-in, disconnect under Plugins → Meeting Note and connect again. If your work account is disabled, access stops within about an hour.',
+                            },
+                            {
+                              title: appLanguage === 'ko' ? '대화에서 쓰기' : 'Use it in a chat',
+                              body: appLanguage === 'ko'
+                                ? '만든 앱은 Plugins의 Personal 탭에 보입니다. 새 채팅에서 그 앱을 켜고 질문합니다. 예: "지난주 회의 액션 아이템 정리해줘"'
+                                : 'The app appears under the Personal tab in Plugins. Turn it on in a new chat and ask away, e.g. "List action items from last week\'s meetings".',
+                              note: appLanguage === 'ko'
+                                ? '조회 도구는 바로 실행되고, 노트를 프로젝트에 추가·제거하는 도구는 매번 ChatGPT가 확인을 받습니다 — ChatGPT 정책이라 끌 수 없습니다.'
+                                : 'Lookup tools run right away; adding or removing a note from a project asks for confirmation every time. That is ChatGPT policy and cannot be turned off.',
+                            },
+                          ].map((step, index) => (
+                            <li key={step.title} className="flex gap-3">
+                              <span
+                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+                                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                                aria-hidden
+                              >
+                                {index + 1}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <h5 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                                  {step.title}
+                                </h5>
+                                <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                                  {step.body}
+                                </p>
+                                {step.extra}
+                                <div
+                                  className="mt-3 rounded-md px-3 py-2 text-xs leading-relaxed"
+                                  style={{ backgroundColor: 'var(--warning-light)', color: 'var(--text-secondary)' }}
+                                >
+                                  {step.note}
+                                </div>
+                              </div>
+                            </li>
                           ))}
                         </ol>
-
-                        <h5 className="mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                          {appLanguage === 'ko' ? '참고 및 문제 해결' : 'Notes & troubleshooting'}
-                        </h5>
-                        <ul className="mt-2 space-y-1.5 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          {(appLanguage === 'ko'
-                            ? [
-                                'ChatGPT Business/Enterprise 워크스페이스: 관리자가 워크스페이스 설정 → Apps → Create에서 같은 URL로 한 번 등록하면, 팀원은 Plugins에서 Meeting Note를 찾아 연결만 누르면 됩니다.',
-                                '개발자 모드 토글이 보이지 않으면 워크스페이스 관리자가 막아 두었거나 ChatGPT 쪽 표시 문제일 수 있습니다. 관리자에게 확인해 주세요.',
-                                '노트를 프로젝트에 추가·제거하는 작업은 ChatGPT가 실행 전에 확인을 요청합니다. 조회는 확인 없이 바로 동작합니다.',
-                                '연결 오류나 로그인 반복이 생기면 Plugins → Meeting Note에서 연결을 해제한 뒤 다시 연결하세요. 회사 계정이 비활성화되면 약 1시간 안에 접근이 끊깁니다.',
-                                'Claude Desktop은 이 방식이 아니라 Claude 탭의 개인 MCP 키를 사용합니다.',
-                              ]
-                            : [
-                                'ChatGPT Business/Enterprise workspaces: an admin registers the same URL once under Workspace settings → Apps → Create, and members just find Meeting Note under Plugins and click Connect.',
-                                'If the Developer mode toggle is missing, your workspace admin may have disabled it, or it can be a ChatGPT display issue. Check with your admin.',
-                                'Adding or removing notes from projects asks for confirmation in ChatGPT before it runs. Lookups run without a prompt.',
-                                'On a connection error or repeated sign-in, open Plugins → Meeting Note, disconnect, and connect again. If your work account is disabled, access stops within about an hour.',
-                                'Claude Desktop does not use this flow. It uses a personal MCP key from the Claude tab.',
-                              ]).map((tip) => (
-                            <li key={tip} className="flex gap-2"><span aria-hidden style={{ color: 'var(--text-muted)' }}>•</span><span>{tip}</span></li>
-                          ))}
-                        </ul>
                       </div>
                     </div>
                     ) : null}
@@ -1598,25 +1674,40 @@ const AccountSettings: React.FC = () => {
                       <span className="summary-note-row-rail" aria-hidden />
                       <div className="summary-note-row-content px-4 py-4">
                         <h4 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                          {t('quickTestPrompts')}
+                          {t('mcpToolsTitle')}
                         </h4>
-                        <ul className="mt-3 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          {(appLanguage === 'ko'
-                            ? [
-                                '최근 회의록을 나열해 주세요.',
-                                '어제 회의록을 찾아 실행 항목을 요약해 주세요.',
-                                '프로젝트 리스크에 대해 논의한 전사를 검색해 주세요.',
-                                '저장된 화자의 프로필 컨텍스트를 보여 주세요.',
-                              ]
-                            : [
-                                'List my recent meeting notes.',
-                                'Find notes from yesterday and summarize the action items.',
-                                'Search my transcripts for a discussion about project risks.',
-                                'Show the profile context for a saved speaker.',
-                              ]).map((prompt) => <li key={prompt}>{prompt}</li>)}
-                        </ul>
-                        <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                          {t('mcpReadOnlyNote')}
+                        <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {t('mcpToolsDescription')}
+                        </p>
+                        <div className="mt-3 overflow-x-auto">
+                          <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+                            <thead>
+                              <tr className="border-b text-xs" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                                <th className="py-2 pr-4 font-medium">{appLanguage === 'ko' ? '툴' : 'Tool'}</th>
+                                <th className="py-2 pr-4 font-medium">{appLanguage === 'ko' ? '설명' : 'What it does'}</th>
+                                <th className="py-2 font-medium">{appLanguage === 'ko' ? '예시 요청' : 'Example request'}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {MCP_TOOL_GUIDE.map((tool) => (
+                                <tr key={tool.name} className="border-b align-top last:border-b-0" style={{ borderColor: 'var(--border)' }}>
+                                  <td className="whitespace-nowrap py-2.5 pr-4 font-mono text-xs" style={{ color: 'var(--text)' }}>
+                                    {tool.name}
+                                    {tool.write ? <span className="ml-1" title={appLanguage === 'ko' ? '쓰기 도구' : 'Write tool'} style={{ color: 'var(--warning)' }}>⚠</span> : null}
+                                  </td>
+                                  <td className="py-2.5 pr-4" style={{ color: 'var(--text-secondary)' }}>
+                                    {tool.description[appLanguage === 'ko' ? 'ko' : 'en']}
+                                  </td>
+                                  <td className="py-2.5 italic" style={{ color: 'var(--text-secondary)' }}>
+                                    {tool.example[appLanguage === 'ko' ? 'ko' : 'en']}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--warning)' }}>
+                          ⚠ {t('mcpReadOnlyNote')}
                         </p>
                       </div>
                     </div>
