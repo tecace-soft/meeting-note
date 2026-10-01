@@ -1486,11 +1486,28 @@ const AccountSettings: React.FC = () => {
                           ))}
                         </ol>
 
-                        <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                          {appLanguage === 'ko'
-                            ? '서버 업데이트 후 ChatGPT에서 계정 연결 오류가 표시되면 커넥터 연결을 해제한 뒤 다시 연결하여 OAuth 권한을 새로고침하세요.'
-                            : 'If ChatGPT reports an account connection error after a server update, disconnect the connector and reconnect it so ChatGPT refreshes the OAuth permission grant.'}
-                        </p>
+                        <h5 className="mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                          {appLanguage === 'ko' ? '참고 및 문제 해결' : 'Notes & troubleshooting'}
+                        </h5>
+                        <ul className="mt-2 space-y-1.5 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {(appLanguage === 'ko'
+                            ? [
+                                'ChatGPT Business/Enterprise 워크스페이스: 관리자가 워크스페이스 설정 → Apps → Create에서 같은 URL로 한 번 등록하면, 팀원은 Plugins에서 Meeting Note를 찾아 연결만 누르면 됩니다.',
+                                '개발자 모드 토글이 보이지 않으면 워크스페이스 관리자가 막아 두었거나 ChatGPT 쪽 표시 문제일 수 있습니다. 관리자에게 확인해 주세요.',
+                                '노트를 프로젝트에 추가·제거하는 작업은 ChatGPT가 실행 전에 확인을 요청합니다. 조회는 확인 없이 바로 동작합니다.',
+                                '연결 오류나 로그인 반복이 생기면 Plugins → Meeting Note에서 연결을 해제한 뒤 다시 연결하세요. 회사 계정이 비활성화되면 약 1시간 안에 접근이 끊깁니다.',
+                                'Claude Desktop은 이 방식이 아니라 Claude 탭의 개인 MCP 키를 사용합니다.',
+                              ]
+                            : [
+                                'ChatGPT Business/Enterprise workspaces: an admin registers the same URL once under Workspace settings → Apps → Create, and members just find Meeting Note under Plugins and click Connect.',
+                                'If the Developer mode toggle is missing, your workspace admin may have disabled it, or it can be a ChatGPT display issue. Check with your admin.',
+                                'Adding or removing notes from projects asks for confirmation in ChatGPT before it runs. Lookups run without a prompt.',
+                                'On a connection error or repeated sign-in, open Plugins → Meeting Note, disconnect, and connect again. If your work account is disabled, access stops within about an hour.',
+                                'Claude Desktop does not use this flow. It uses a personal MCP key from the Claude tab.',
+                              ]).map((tip) => (
+                            <li key={tip} className="flex gap-2"><span aria-hidden style={{ color: 'var(--text-muted)' }}>•</span><span>{tip}</span></li>
+                          ))}
+                        </ul>
                       </div>
                     </div>
                     ) : null}
