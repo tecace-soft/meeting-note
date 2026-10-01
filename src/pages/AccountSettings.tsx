@@ -1469,18 +1469,18 @@ const AccountSettings: React.FC = () => {
                         <ol className="mt-4 space-y-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
                           {(appLanguage === 'ko'
                             ? [
-                                'ChatGPT 설정을 엽니다.',
-                                '커넥터로 이동합니다. 필요한 경우 고급 커넥터 설정에서 개발자 모드를 켭니다.',
-                                '원격 MCP 서버를 추가하고 위의 ChatGPT MCP URL을 붙여넣습니다.',
-                                'Microsoft 로그인 및 동의 화면을 완료합니다.',
-                                '채팅을 시작하고 Meeting Note 데이터를 사용하고 싶을 때 커넥터/도구 메뉴에서 Meeting Note를 선택합니다.',
+                                'ChatGPT에서 설정 → 보안 및 로그인으로 이동해 개발자 모드를 켭니다.',
+                                'Plugins 페이지에서 + 를 눌러 New Plugin을 엽니다.',
+                                '이름(예: Meeting Note)을 입력하고 Server URL에 위의 ChatGPT MCP URL을 붙여넣은 뒤, Authentication은 OAuth로 둡니다. 고급 OAuth 설정은 건드리지 않아도 됩니다.',
+                                '위험 안내에 동의하고 Create를 누른 뒤 회사 Microsoft 계정으로 로그인합니다.',
+                                '채팅에서 Plugins 메뉴의 Meeting Note를 선택하면 회의 데이터를 사용합니다.',
                               ]
                             : [
-                                'Open ChatGPT settings.',
-                                'Go to Connectors. If needed, enable Developer mode under the advanced connector settings.',
-                                'Add a remote MCP server and paste the ChatGPT MCP URL above.',
-                                'Complete the Microsoft sign-in and consent screen.',
-                                'Start a chat and choose Meeting Note from the connector/tools menu when you want ChatGPT to use your meeting data.',
+                                'In ChatGPT, open Settings → Security and login and turn on Developer mode.',
+                                'On the Plugins page, click + to open New Plugin.',
+                                'Enter a name (e.g. Meeting Note), paste the ChatGPT MCP URL above as the Server URL, and keep Authentication set to OAuth. Advanced OAuth settings can stay as discovered.',
+                                'Accept the risk notice, click Create, and sign in with your work Microsoft account.',
+                                'In a chat, pick Meeting Note from the Plugins menu when you want ChatGPT to use your meeting data.',
                               ]).map((step, index) => (
                             <li key={step}><span className="font-medium" style={{ color: 'var(--text)' }}>{index + 1}.</span> {step}</li>
                           ))}

@@ -16,7 +16,9 @@ function getJwks(tenantId: string): ReturnType<typeof createRemoteJWKSet> {
 export async function getMeetingNoteUserIdFromAzureToken(
   accessToken: string,
   options: {
-    audience: string;
+    // v2 access tokens carry the app's client ID (GUID) as `aud`, while v1 tokens carry the
+    // Application ID URI, so callers pass both and either one is accepted.
+    audience: string | string[];
     scope?: string;
     tenantId?: string;
   }

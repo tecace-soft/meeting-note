@@ -5,10 +5,12 @@ import { handleAdminRequest } from '../admin/dashboard.js';
 import { getMeetingNoteUserIdFromAzureToken } from '../lib/azureToken.js';
 import { sendMcpAlert } from '../lib/alerts.js';
 import { getEnv } from '../lib/env.js';
+import { getMicrosoftUserIdFromGraph } from '../lib/microsoftGraph.js';
 import { logError, logEvent } from '../lib/logger.js';
 import { finishMcpSession, inferPlatform, runWithMcpTrackingContext, startMcpSession, type McpTrackingContext } from '../lib/mcpTracking.js';
 import { getDataContext, runWithScopedUserId } from '../lib/supabase.js';
 import { createMeetingNoteMcpServer } from '../server.js';
+import { buildOAuthProxyConfig, handleOAuthRequest, OAUTH_PATHS, resolveUserIdFromProxyAccessToken, type OAuthProxyConfig } from '../oauth/proxy.js';
 
 // In-process request counters. Kept for lifecycle logging; when the MCP ran as
 // its own Render web service these were surfaced via /health + a diagnostics
@@ -162,8 +164,19 @@ function getRequestBaseUrl(req: IncomingMessage): string {
   return `${proto}://${host}`.replace(/\/$/, '');
 }
 
-function getProtectedResourceMetadata(baseUrl: string, resource?: string, scope?: string) {
+export function getProtectedResourceMetadata(baseUrl: string, resource?: string, scope?: string, tenantId?: string, proxyIssuer?: string) {
   const resolvedResource = resource ?? `${baseUrl}/mcp-chatgpt`;
+  if (proxyIssuer) {
+    // OAuth proxy mode: this server is the authorization server (DCR + Entra-delegated sign-in),
+    // which is what a URL-only "OAuth" connect in ChatGPT needs.
+    return {
+      resource: resolvedResource,
+      authorization_servers: [proxyIssuer],
+      scopes_supported: ['mcp'],
+      bearer_methods_supported: ['header'],
+      resource_name: 'Meeting Note MCP',
+    };
+  }
   const resolvedScope = scope ?? 'https://graph.microsoft.com/User.Read';
   const scopes = Array.from(
     new Set([
@@ -179,41 +192,28 @@ function getProtectedResourceMetadata(baseUrl: string, resource?: string, scope?
 
   return {
     resource: resolvedResource,
-    authorization_servers: ['https://login.microsoftonline.com/common/v2.0'],
+    // Point at the tenant-specific Entra issuer when known. The `common` metadata advertises a
+    // templated issuer (`.../{tenantid}/v2.0`) that never equals the URL it was fetched from, so
+    // clients that validate issuer metadata (RFC 8414 §3.3), such as ChatGPT, can reject it.
+    authorization_servers: [`https://login.microsoftonline.com/${tenantId || 'common'}/v2.0`],
     scopes_supported: scopes,
     bearer_methods_supported: ['header'],
     resource_name: 'Meeting Note MCP',
   };
 }
 
-async function getMicrosoftUserIdFromGraph(accessToken: string): Promise<string | undefined> {
-  let response: Response;
-  try {
-    response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-      },
-      // Bound the auth hot path: without a timeout a stalled Graph call hangs the whole
-      // request (and leaks an "active" tracking session) indefinitely. Fail closed instead.
-      signal: AbortSignal.timeout(8000),
-    });
-  } catch (error) {
-    console.warn(`[auth] Graph /me lookup failed or timed out: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
-  }
-
-  if (!response.ok) return undefined;
-
-  const data = (await response.json()) as { id?: unknown };
-  return typeof data.id === 'string' && data.id.trim() ? data.id.trim() : undefined;
-}
-
-async function resolveChatGptUserId(bearerToken: string | undefined, env: ReturnType<typeof getEnv>): Promise<string | undefined> {
+async function resolveChatGptUserId(bearerToken: string | undefined, env: ReturnType<typeof getEnv>, oauthProxy?: OAuthProxyConfig): Promise<string | undefined> {
   if (!bearerToken) {
     // No credential presented. Only fall back to the single-user default when
     // explicitly opted in (MCP_ALLOW_ANON_CHATGPT_FALLBACK). Default is closed
     // so a public /mcp-chatgpt does not serve the default user's meetings.
     return env.mcpAllowAnonChatgptFallback ? env.meetingNoteUserId : undefined;
+  }
+
+  const proxyUserId = await resolveUserIdFromProxyAccessToken(oauthProxy, bearerToken);
+  if (proxyUserId) {
+    process.stderr.write('MCP ChatGPT auth resolved through OAuth proxy access token\n');
+    return proxyUserId;
   }
 
   const mappedUserId = env.mcpUserTokens.get(bearerToken);
@@ -226,7 +226,7 @@ async function resolveChatGptUserId(bearerToken: string | undefined, env: Return
     try {
       const scopeName = env.mcpOAuthScope?.split('/').pop();
       const azureUserId = await getMeetingNoteUserIdFromAzureToken(bearerToken, {
-        audience: env.mcpOAuthResource,
+        audience: [env.mcpOAuthResource, env.mcpOAuthClientId].filter((value): value is string => Boolean(value)),
         scope: scopeName,
         tenantId: env.mcpAzureTenantId,
       });
@@ -259,6 +259,7 @@ function isMcpOwnedPath(pathname: string): boolean {
   return (
     pathname === '/mcp' ||
     pathname === '/mcp-chatgpt' ||
+    OAUTH_PATHS.has(pathname) ||
     pathname === '/.well-known/oauth-protected-resource' ||
     pathname === '/.well-known/oauth-protected-resource/mcp' ||
     pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt' ||
@@ -346,6 +347,20 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
     // once a client re-pointed to this backend; keep it only as a fallback for the (prod-never)
     // case where no forwarded host is present.
     const requestBaseUrl = getRequestBaseUrl(req) || env.mcpPublicBaseUrl || '';
+    const oauthProxy = buildOAuthProxyConfig({
+      issuer: requestBaseUrl,
+      resource: env.mcpOAuthResource ?? `${requestBaseUrl}/mcp-chatgpt`,
+      tenantId: env.mcpAzureTenantId,
+      clientId: env.mcpOAuthClientId,
+      clientSecret: env.mcpOAuthClientSecret,
+      signingSecret: env.mcpOAuthSigningSecret,
+      allowedRedirectHosts: env.mcpOAuthAllowedRedirectHosts,
+    });
+
+    if (OAUTH_PATHS.has(url.pathname)) {
+      await handleOAuthRequest(req, res, url, oauthProxy);
+      return true;
+    }
 
     if (
       url.pathname === '/.well-known/oauth-protected-resource' ||
@@ -355,7 +370,7 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
       url.pathname === '/.well-known/oauth-protected-resource/mcp' ||
       url.pathname === '/.well-known/oauth-protected-resource/mcp-chatgpt'
     ) {
-      sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, env.mcpOAuthResource, env.mcpOAuthScope));
+      sendJson(res, 200, getProtectedResourceMetadata(requestBaseUrl, env.mcpOAuthResource, env.mcpOAuthScope, env.mcpAzureTenantId, oauthProxy?.issuer));
       return true;
     }
 
@@ -394,7 +409,7 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
     }
 
     const userId = isChatGptEndpoint
-      ? personalTokenUserId ?? (await resolveChatGptUserId(bearerToken, env))
+      ? personalTokenUserId ?? (await resolveChatGptUserId(bearerToken, env, oauthProxy))
       : personalTokenUserId ?? getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
 
     if (!userId) {
