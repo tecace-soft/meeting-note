@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { getDataContext } from './supabase.js';
 
 export interface McpToolCallRecord {
@@ -42,8 +43,10 @@ const trackingContext = new AsyncLocalStorage<McpTrackingContext>();
 const sessions: McpTrackingContext[] = [];
 const MAX_SESSIONS = 500;
 
-function randomId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+// UUIDs fit both tracking schemas in the migration history: the 20260629 tables use uuid ids
+// (a prefixed string id fails with "invalid input syntax for type uuid"), the 20260702 ones text.
+function newTrackingId(): string {
+  return randomUUID();
 }
 
 function pushSession(context: McpTrackingContext): void {
@@ -53,9 +56,30 @@ function pushSession(context: McpTrackingContext): void {
   if (sessions.length > MAX_SESSIONS) sessions.length = MAX_SESSIONS;
 }
 
+// Supabase/PostgREST errors are plain objects ({ code, message, details, hint }), not Error
+// instances, so String(error) printed "[object Object]" and hid the actual cause.
+export function formatTrackingError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const { code, message, details, hint } = error as Record<string, unknown>;
+    const parts = [
+      typeof code === 'string' && code ? `[${code}]` : '',
+      typeof message === 'string' ? message : '',
+      typeof details === 'string' && details ? `details: ${details}` : '',
+      typeof hint === 'string' && hint ? `hint: ${hint}` : '',
+    ].filter(Boolean);
+    if (parts.length) return parts.join(' ');
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
+
 function logTrackingPersistenceError(action: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`MCP tracking persistence failed during ${action}: ${message}\n`);
+  process.stderr.write(`MCP tracking persistence failed during ${action}: ${formatTrackingError(error)}\n`);
 }
 
 function toJsonValue(value: unknown): unknown {
@@ -153,7 +177,7 @@ export function inferPlatform(userAgent?: string, endpoint?: string): string {
 
 export async function startMcpSession(input: Omit<Partial<McpTrackingContext>, 'id' | 'startedAt' | 'toolCalls'> & { requestId: string }): Promise<McpTrackingContext> {
   const context = {
-    id: randomId('mcp-session'),
+    id: newTrackingId(),
     requestId: input.requestId,
     userId: input.userId,
     endpoint: input.endpoint,
@@ -204,7 +228,7 @@ export function recordMcpToolCall(call: Omit<McpToolCallRecord, 'id' | 'sessionI
   const context = trackingContext.getStore();
   if (!context) return;
   const record = {
-    id: randomId('mcp-tool'),
+    id: newTrackingId(),
     sessionId: context.id,
     time: new Date().toISOString(),
     userId: context.userId,
