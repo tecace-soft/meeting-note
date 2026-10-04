@@ -17,6 +17,8 @@ import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryForContext, ren
 import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 import { handleMcpRequest } from './mcp/transports/http.js';
+import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
+import { createMeetingKnowledgeStore } from './knowledge/store.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -3348,13 +3350,20 @@ const VERSION_INFO = {
   deployedAt: new Date().toISOString(),
 } as const;
 
+const handleMeetingKnowledgeRequest = createMeetingKnowledgeHttpHandler(createMeetingKnowledgeStore({
+  // Bound each new integration RPC independently of existing long workflow jobs.
+  rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(2_000)),
+}), process.env);
+
 const server = createServer((req, res) => {
   void (async () => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    // New private routes own their CORS, credential checks and content-free errors.
+    if (await handleMeetingKnowledgeRequest(req, res, url)) return;
     if (req.method === 'OPTIONS') {
       sendNoContent(res);
       return;
     }
-    const url = new URL(req.url ?? '/', 'http://localhost');
     // MCP server, merged into this process (formerly its own Render web service).
     // Owns /mcp, /mcp-chatgpt, /.well-known/oauth-protected-resource*, and /admin/*
     // dashboard routes; returns false (falls through) for everything else,
