@@ -30,8 +30,8 @@ the upgraded token exchange's CORS/header support precedes its frontend client.
 
 ## Validation and limits
 
-Latest backend suite: 505 passing tests. The PostgreSQL-WASM runner exercises
-35 ledger, 72 delivery and 66 extraction assertions, repeated migrations and
+Latest backend suite: 512 passing tests. The PostgreSQL-WASM runner exercises
+35 ledger, 72 delivery, 66 extraction and 33 evidence assertions, repeated migrations and
 UUID/integer project-array variants. Cross-repository runtime verification
 uses two PostgreSQL engines, actual policy/provider/job/delivery code and
 in-process Request/Response adapters with synthetic provider replies; 162
@@ -43,7 +43,9 @@ verification passed 41 synthetic-auth assertions; no UI changed in the durable
 extraction increment. Final independent review of this increment was interrupted
 by agent usage limits; root completed tests and manual review, but independent
 release review remains pending. Earlier PR2/core QA does not approve these new
-runtime changes for release.
+runtime changes for release. PR4 original-evidence/search has a separate
+independent review and actual-localhost-HTTP verification; it does not replace
+that earlier runtime release review.
 
 No staging exists. Before activation, validate native PostgREST/RLS, real
 Microsoft users/tokens, simultaneous worker connections, edit/delete races,
@@ -58,3 +60,12 @@ uses explicit per-revision operator approval; project defaults and a human
 classification UI are future work. A partial run stores failed/skipped coverage
 and raw fallback; there is no automatic failed-chunk resume or multipart packet
 delivery. Document/entity search and role views are not implemented here.
+
+The next increment adds `/knowledge/v1/evidence-fetch`, using the same dedicated
+access key/tenant/default-off access flag and a service-only additive migration.
+It returns at most eight exact delivery spans only when all source versions and
+current participant/share access match; management ownership alone never grants
+retrieval. See `EVIDENCE-FETCH.md`. AXKH's `codex/meeting-knowledge-search-Hans`
+branch contains the companion
+private read classification, document/meeting search page and Web/MCP evidence
+reads. That search is an excerpt baseline; role views and synthesis are pending.

@@ -1,5 +1,6 @@
 import type { MicrosoftIdentity } from './contract.js';
-import { isCanonicalMicrosoftId, isMeetingSourceBinding } from './access-contract.js';
+import { isCanonicalMicrosoftId, isMeetingSourceBinding, isMeetingLiveAccessRequest, type MeetingLiveAccessRequest } from './access-contract.js';
+import type { MeetingCurrentEvidence } from './evidence.js';
 import type { MeetingSourceAccessRecord } from './source-access.js';
 import { isManagementAcknowledgement, isMeetingOwnerStatus, type MeetingManagementAcknowledgement, type MeetingOwnerStatus } from './management-status.js';
 
@@ -72,6 +73,26 @@ export function createMeetingKnowledgeStore(client: MeetingKnowledgeRpcClient) {
     return { p_tenant_id: identity.tenantId, p_source_id: sourceId, p_owner_object_id: identity.objectId };
   }
   return {
+    async loadCurrentEvidence(request: MeetingLiveAccessRequest): Promise<MeetingCurrentEvidence | null> {
+      if (!isMeetingLiveAccessRequest(request)) throw new MeetingKnowledgeStoreError('INVALID_MUTATION');
+      let result: { data: unknown; error: unknown };
+      try { result = await client.rpc('meeting_knowledge_current_evidence', {
+        p_tenant_id: request.tenantId, p_source_id: request.sourceId, p_object_id: request.objectId,
+        p_content_revision: request.contentRevision, p_speaker_revision: request.speakerRevision,
+        p_access_revision: request.accessRevision, p_integration_generation: request.integrationGeneration,
+        p_source_hash: request.sourceHash,
+      }); } catch { throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE'); }
+      if (!result || result.error) throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');
+      if (result.data === null) return null;
+      const snapshot = result.data as MeetingCurrentEvidence;
+      if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
+        || Object.keys(snapshot).sort().join(',') !== 'plaintext,record'
+        || !validRecord(snapshot.record) || snapshot.record.tenantId !== request.tenantId
+        || snapshot.record.sourceId !== request.sourceId || typeof snapshot.plaintext !== 'string') {
+        throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');
+      }
+      return snapshot;
+    },
     async initialize(identity: MicrosoftIdentity, sourceId: string): Promise<MeetingSourceAccessRecord> {
       const record = await call('meeting_knowledge_initialize', manageArgs(identity, sourceId), identity.tenantId, sourceId, false);
       if (!record || record.owner.objectId !== identity.objectId) throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');

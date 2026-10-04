@@ -28,7 +28,7 @@ export const MEETING_EVENT_MAX_BYTES = 1024 * 1024;
 export const MEETING_RAW_SPAN_MAX_UTF16 = 8_000;
 const TIMEOUT_MS = 5_000;
 /** Pure positional evidence; no topic or speaker identity is inferred. */
-function rawSpans(sourceId: string, contentRevision: number, plaintext: string): SourcePayload['spans'] {
+export function rawSpans(sourceId: string, contentRevision: number, plaintext: string): SourcePayload['spans'] {
   const spans: SourcePayload['spans'] = [];
   const prefix = `raw-${sha256Text(sourceId).slice(0, 24)}-${contentRevision}`;
   for (let start = 0; start < plaintext.length;) {

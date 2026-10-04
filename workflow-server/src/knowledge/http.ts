@@ -4,6 +4,8 @@ import { isCanonicalMicrosoftId, isMeetingLiveAccessRequest } from './access-con
 import { verifyMeetingNoteIdentity, type MeetingIdentityVerification } from './identity.js';
 import { checkMeetingSourceAccess, type MeetingSourceAccessRecord } from './source-access.js';
 import type { MeetingManagementAcknowledgement, MeetingOwnerStatus } from './management-status.js';
+import { fetchMeetingEvidence, type MeetingEvidenceStore } from './evidence.js';
+import { isMeetingEvidenceFetchRequest } from './evidence-contract.js';
 
 export interface MeetingManagementCommand {
   action: 'status' | 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable';
@@ -18,6 +20,7 @@ type MeetingManagementMutation = Omit<MeetingManagementCommand, 'action' | 'expe
   expectedAccessRevision: number;
 };
 export interface MeetingKnowledgeHttpStore {
+  loadCurrentEvidence?: MeetingEvidenceStore['loadCurrentEvidence'];
   initialize(identity: Identity, sourceId: string): Promise<MeetingSourceAccessRecord>;
   mutate(identity: Identity, command: MeetingManagementMutation): Promise<MeetingSourceAccessRecord | MeetingManagementAcknowledgement>;
   getOwnedStatus(identity: Identity, sourceId: string): Promise<MeetingOwnerStatus>;
@@ -33,6 +36,7 @@ export interface MeetingKnowledgeHttpEnvironment {
   APP_FRONTEND_ORIGIN?: string;
 }
 const ACCESS_PATH = '/knowledge/v1/access-check';
+const EVIDENCE_PATH = '/knowledge/v1/evidence-fetch';
 const MANAGEMENT_PATH = '/knowledge/v1/source-access';
 const MAX_BODY_BYTES = 8_192;
 class HttpError extends Error {
@@ -116,14 +120,15 @@ function readJson(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** Separate server and owner credentials; no route returns stored meeting content. */
+/** Separate server and owner credentials; evidence requires current version-bound audience access. */
 export function createMeetingKnowledgeHttpHandler(store: MeetingKnowledgeHttpStore, environment: MeetingKnowledgeHttpEnvironment) {
   return async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> => {
-    if (url.pathname !== ACCESS_PATH && url.pathname !== MANAGEMENT_PATH) return false;
+    if (![ACCESS_PATH, EVIDENCE_PATH, MANAGEMENT_PATH].includes(url.pathname)) return false;
     try {
-      const access = url.pathname === ACCESS_PATH;
+      const evidence = url.pathname === EVIDENCE_PATH;
+      const access = url.pathname === ACCESS_PATH || evidence;
       if ((access ? environment.MEETING_KNOWLEDGE_ACCESS_ENABLED : environment.MEETING_KNOWLEDGE_MANAGEMENT_ENABLED) !== 'true') throw new HttpError(404, 'NOT_FOUND');
-      if (url.search) throw new HttpError(400, 'INVALID_REQUEST');
+      if (url.search) throw new HttpError(evidence ? 404 : 400, evidence ? 'NOT_FOUND' : 'INVALID_REQUEST');
       if (!access && req.headers.origin) {
         const allowedOrigin = environment.APP_FRONTEND_ORIGIN;
         if (!allowedOrigin || allowedOrigin === '*' || req.headers.origin !== allowedOrigin) throw new HttpError(403, 'ORIGIN_DENIED');
@@ -142,6 +147,18 @@ export function createMeetingKnowledgeHttpHandler(store: MeetingKnowledgeHttpSto
         const tenantId = environment.MEETING_KNOWLEDGE_TENANT_ID;
         if (!validSecret(key) || !isCanonicalMicrosoftId(tenantId)) throw new HttpError(503, 'KNOWLEDGE_CONFIG_UNAVAILABLE');
         if (!authorizedService(req, key)) throw new HttpError(401, 'UNAUTHORIZED');
+        if (evidence) {
+          // Content requests fail uniformly without echoing identifiers or stored metadata.
+          let body: unknown;
+          try { body = await readJson(req); } catch { throw new HttpError(404, 'NOT_FOUND'); }
+          if (!isMeetingEvidenceFetchRequest(body) || body.tenantId !== tenantId || !store.loadCurrentEvidence) throw new HttpError(404, 'NOT_FOUND');
+          const result = await fetchMeetingEvidence(body, {
+            loadCurrentSource: store.loadCurrentSource.bind(store), loadCurrentEvidence: store.loadCurrentEvidence.bind(store),
+          });
+          if (!result) throw new HttpError(404, 'NOT_FOUND');
+          respond(res, 200, result);
+          return true;
+        }
         const body = await readJson(req);
         if (!isMeetingLiveAccessRequest(body)) throw new HttpError(400, 'INVALID_ACCESS_REQUEST');
         if (body.tenantId !== tenantId) throw new HttpError(403, 'TENANT_DENIED');
