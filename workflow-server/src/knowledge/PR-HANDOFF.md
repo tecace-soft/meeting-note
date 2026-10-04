@@ -1,9 +1,9 @@
 # Meeting knowledge branch review handoff
 
-Branch: `codex/meeting-knowledge-contract`, based on `main` (`b829ac3`). Changes
-are local commits; no GitHub PR, remote push, hosted migration or deployment has
-been performed. Coordinate review with the Meeting Note maintainer before
-integration. Every new integration flag is default off.
+Review branch: `codex/meeting-knowledge-Hans`, based on `main` (`b829ac3`).
+This branch is intended for a draft GitHub PR and Meeting Note maintainer review
+before integration. Hosted migrations, deployment and activation remain pending.
+Every new integration flag is default off.
 
 ## Review scope
 
