@@ -1,6 +1,7 @@
 import type { MicrosoftIdentity } from './contract.js';
 import { isCanonicalMicrosoftId, isMeetingSourceBinding } from './access-contract.js';
 import type { MeetingSourceAccessRecord } from './source-access.js';
+import { isManagementAcknowledgement, isMeetingOwnerStatus, type MeetingManagementAcknowledgement, type MeetingOwnerStatus } from './management-status.js';
 
 /** Server-owned service-role client only. Never reuse a browser/user-token client. */
 export interface MeetingKnowledgeRpcClient {
@@ -76,7 +77,17 @@ export function createMeetingKnowledgeStore(client: MeetingKnowledgeRpcClient) {
       if (!record || record.owner.objectId !== identity.objectId) throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');
       return record;
     },
-    async mutate(identity: MicrosoftIdentity, command: MeetingKnowledgeMutation): Promise<MeetingSourceAccessRecord> {
+    async getOwnedStatus(identity: MicrosoftIdentity, sourceId: string): Promise<MeetingOwnerStatus> {
+      const args = manageArgs(identity, sourceId);
+      let result: { data: unknown; error: unknown };
+      try { result = await client.rpc('meeting_knowledge_owner_status', args); }
+      catch { throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE'); }
+      if (!result || result.error) throw sqlError(result?.error);
+      if (result.data === null) throw new MeetingKnowledgeStoreError('SOURCE_NOT_MANAGEABLE');
+      if (!isMeetingOwnerStatus(result.data, sourceId)) throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');
+      return result.data;
+    },
+    async mutate(identity: MicrosoftIdentity, command: MeetingKnowledgeMutation): Promise<MeetingSourceAccessRecord | MeetingManagementAcknowledgement> {
       if (!command || !Number.isSafeInteger(command.expectedAccessRevision) || command.expectedAccessRevision < 1
         || !['confirm_participant', 'revoke', 'restore', 'enable', 'disable'].includes(command.action)
         || Object.keys(command).some(key => !['sourceId', 'expectedAccessRevision', 'action', 'subjectObjectId', 'verificationRef'].includes(key))) {
@@ -92,6 +103,17 @@ export function createMeetingKnowledgeStore(client: MeetingKnowledgeRpcClient) {
       }
       const args = { ...manageArgs(identity, command.sourceId), p_expected_access_revision: command.expectedAccessRevision,
         p_action: command.action, p_subject_object_id: command.subjectObjectId ?? null, p_verification_ref: command.verificationRef ?? null };
+      if (command.action === 'disable') {
+        // A transcript may have been removed; disabling must remain possible.
+        let result: { data: unknown; error: unknown };
+        try { result = await client.rpc('meeting_knowledge_mutate', args); }
+        catch { throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE'); }
+        if (!result || result.error) throw sqlError(result?.error);
+        if (isManagementAcknowledgement(result.data, command.sourceId) && result.data.integrationEnabled === false) return result.data;
+        if (!validRecord(result.data) || result.data.sourceId !== command.sourceId || result.data.tenantId !== identity.tenantId
+          || result.data.owner.objectId !== identity.objectId || result.data.integrationEnabled !== false) throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');
+        return result.data;
+      }
       const record = await call('meeting_knowledge_mutate', args, identity.tenantId, command.sourceId, false);
       if (!record || record.owner.objectId !== identity.objectId) throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');
       return record;

@@ -1,0 +1,143 @@
+-- Local synthetic PostgreSQL assertions only. Fixture + both migrations required.
+-- Lease expiry is advanced directly in fixture state, never with a blocking sleep.
+begin;
+create temp table outbox_checks(name text primary key);
+grant select,insert on outbox_checks to service_role,authenticated,anon;
+create function pg_temp.outbox_expect(ok boolean,label text) returns void language plpgsql as $$
+begin if ok is distinct from true then raise exception 'FAILED: %',label; end if; insert into outbox_checks values(label); end $$;
+create function pg_temp.outbox_error(statement text,expected_state text,expected_message text,label text)
+returns void language plpgsql as $$
+declare actual_state text;actual_message text;
+begin begin execute statement; exception when others then get stacked diagnostics actual_state=returned_sqlstate,actual_message=message_text; end;
+ perform pg_temp.outbox_expect(actual_state=expected_state and (expected_message is null or actual_message=expected_message),label);end $$;
+create function pg_temp.outbox_event(id uuid,p_hash text default repeat('a',64)) returns jsonb language sql as $$
+  select jsonb_build_object('schemaVersion',1,'eventId',event_id::text,'eventSeq',event_seq,'integrationGeneration',integration_generation,
+    'sourceApp','meeting-note','sourceId',source_id,'tenantId',tenant_id::text,'payloadHash',p_hash,'eventType',event_type,
+    'payload',jsonb_build_object('syntheticTestMetadata','original')) from meeting_knowledge.outbox where event_id=id;
+$$;
+create temp table outbox_claims(data jsonb);
+grant select,insert,update,delete on outbox_claims to service_role;
+insert into public.note(id,user_id,transcription,name,meeting_at,shared_users,projects) values
+ ('outbox-note','22222222-2222-4222-8222-000000000001',E'  Synthetic raw.\n','Synthetic meeting','2026-01-01T01:00:00Z',array['22222222-2222-4222-8222-000000000002'],array['outbox-project']),
+ ('outbox-empty','22222222-2222-4222-8222-000000000001',null,'Empty',null,'{}','{}');
+insert into public.project values('outbox-project','22222222-2222-4222-8222-000000000001',array['22222222-2222-4222-8222-000000000003']);
+select pg_temp.outbox_expect(not has_table_privilege('authenticated','meeting_knowledge.outbox','SELECT'),'browser cannot read retained raw snapshots');
+select pg_temp.outbox_expect(not has_function_privilege('authenticated','public.meeting_knowledge_outbox_claim(uuid,uuid,integer,integer)','EXECUTE'),'browser cannot claim');
+select pg_temp.outbox_expect(not has_function_privilege('anon','public.meeting_knowledge_owner_status(uuid,text,uuid)','EXECUTE'),'anonymous cannot query owner status');
+select pg_temp.outbox_expect(not has_function_privilege('authenticated','public.meeting_knowledge_outbox_prepare(uuid,uuid,uuid,jsonb)','EXECUTE'),'browser cannot seal events');
+select pg_temp.outbox_expect(not has_function_privilege('service_role','meeting_knowledge.export_snapshot(uuid,text)','EXECUTE'),'private snapshot function has no direct grant');
+select pg_temp.outbox_expect((select bool_and(not p.prosecdef) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'meeting_knowledge_%'),'public RPCs all use invoker security');
+set local role service_role;
+select pg_temp.outbox_expect((public.meeting_knowledge_owner_status('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001')->>'enrolled')='false','status does not enroll note');
+select pg_temp.outbox_expect((public.meeting_knowledge_owner_status('11111111-1111-4111-8111-111111111111','outbox-empty','22222222-2222-4222-8222-000000000001')->>'unsupportedTranscript')='true','empty raw status available');
+select pg_temp.outbox_expect(public.meeting_knowledge_owner_status('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000002') is null,'shared reader cannot query management status');
+select public.meeting_knowledge_initialize('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001');
+select pg_temp.outbox_expect((select count(*)=0 from meeting_knowledge.outbox),'disabled enrollment produces no outbox payload');
+select pg_temp.outbox_expect(public.meeting_knowledge_owner_status('33333333-3333-4333-8333-333333333333','outbox-note','22222222-2222-4222-8222-000000000001') is null,'status binds immutable enrolled tenant');
+select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001',1,'enable');
+select pg_temp.outbox_expect((select count(*)=2 and min(event_seq)=1 and max(event_seq)=2 from meeting_knowledge.outbox),'enable atomically emits ordered source and access');
+select pg_temp.outbox_expect((select snapshot->>'plaintext'=E'  Synthetic raw.\n' and snapshot->'record'->>'sourceHash'=encode(sha256(convert_to(E'  Synthetic raw.\n','UTF8')),'hex') from meeting_knowledge.outbox where event_seq=1),'snapshot keeps exact whitespace and hash');
+select pg_temp.outbox_expect((select snapshot->>'title'='Synthetic meeting' and snapshot->>'meetingAt' is not null from meeting_knowledge.outbox where event_seq=1),'snapshot includes title and date without summary');
+select pg_temp.outbox_expect(jsonb_array_length(public.meeting_knowledge_outbox_claim('33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444'))=0,'claim never crosses tenant');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444',11,60)$sql$,'P0001','INVALID_OUTBOX_COMMAND','claim batch bounded');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444',1,61)$sql$,'P0001','INVALID_OUTBOX_COMMAND','lease duration bounded');
+insert into outbox_claims values(public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444',1,60));
+select pg_temp.outbox_expect((select data->0->>'eventSeq'='1' and data->0->>'attempts'='1' from outbox_claims),'claim includes durable sequence and attempt');
+select pg_temp.outbox_expect(jsonb_array_length(public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','55555555-5555-4555-8555-555555555555',10,60))=1,'second worker cannot reclaim live lease');
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),repeat('a',64)),'unsealed event cannot ACK');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)) || '{"sourceId":"wrong-source"}')$sql$,'P0001','INVALID_OUTBOX_COMMAND','prepare binds immutable source');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)) || '{"extra":"value"}')$sql$,'P0001','INVALID_OUTBOX_COMMAND','prepare rejects extra envelope fields');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)) || jsonb_build_object('payload',jsonb_build_object('tooLarge',repeat('x',1048576))))$sql$,'P0001','INVALID_OUTBOX_COMMAND','prepare bounds retained envelope bytes');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'55555555-5555-4555-8555-555555555555',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims))) is null,'wrong worker cannot seal');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)))=pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)),'first prepare seals original envelope');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)) || '{"payload":{"syntheticTestMetadata":"changed config"}}')=pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)),'repeat prepare returns original immutable envelope');
+-- Seal the second worker event so lifecycle cancellation checks retained envelopes.
+select public.meeting_knowledge_outbox_prepare(event_id,worker_id,lease_token,pg_temp.outbox_event(event_id)) from meeting_knowledge.outbox where event_seq=2;
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from outbox_claims),'55555555-5555-4555-8555-555555555555',(select (data->0->>'leaseToken')::uuid from outbox_claims),repeat('a',64)),'ack rejects wrong worker');
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444','66666666-6666-4666-8666-666666666666',repeat('a',64)),'ack rejects wrong lease token');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_fail((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),'DELIVERY_FAILED'),'matching failure releases for bounded retry');
+select pg_temp.outbox_expect((select status='pending' and snapshot is not null and available_at>clock_timestamp() and available_at<=clock_timestamp()+interval '300 seconds' from meeting_knowledge.outbox where event_seq=1),'retry retains immutable snapshot and bounded backoff');
+select pg_temp.outbox_expect(jsonb_array_length(public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444'))=0,'backoff and other lease prevent early retry');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_outbox_fail('77777777-7777-4777-8777-777777777777','44444444-4444-4444-8444-444444444444','66666666-6666-4666-8666-666666666666','raw secret text')$sql$,'P0001','INVALID_OUTBOX_COMMAND','failure persists only safe enum');
+update meeting_knowledge.outbox set available_at=clock_timestamp()-interval '1 second' where event_seq=1;
+update outbox_claims set data=public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444',1,60);
+select pg_temp.outbox_expect((select data->0->>'attempts'='2' from outbox_claims),'restart retry increments durable attempts');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims),repeat('b',64)))=pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims)),'reclaimed event preserves first payload hash and metadata');
+update meeting_knowledge.outbox set lease_until=clock_timestamp()-interval '1 second' where event_seq=1;
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),repeat('a',64)),'expired lease cannot ack');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_prepare((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),pg_temp.outbox_event((select (data->0->>'eventId')::uuid from outbox_claims))) is null,'expired lease cannot prepare sealed envelope');
+create temp table stale_claim as select * from outbox_claims;
+grant select on stale_claim to service_role;
+update outbox_claims set data=public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444',1,60);
+select pg_temp.outbox_expect((select data->0->>'attempts'='3' from outbox_claims),'expired lease is reclaimable');
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from stale_claim),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from stale_claim),repeat('a',64)),'late ack cannot overtake newer lease');
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),repeat('b',64)),'ACK cannot change sealed payload hash');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),repeat('a',64)),'current lease ack succeeds');
+select pg_temp.outbox_expect((select status='delivered' and snapshot is null and prepared_event is null and payload_hash=repeat('a',64) from meeting_knowledge.outbox where event_seq=1),'ack purges raw but retains hash receipt');
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select (data->0->>'eventId')::uuid from outbox_claims),'44444444-4444-4444-8444-444444444444',(select (data->0->>'leaseToken')::uuid from outbox_claims),repeat('a',64)),'repeat ack cannot write delivered event');
+select pg_temp.outbox_expect(public.meeting_knowledge_owner_status('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001')->'delivery'->>'lastDeliveredAt' is not null,'owner delivery includes receipt time without raw text');
+reset role;
+set local role authenticated;
+update public.note set transcription=E'New synthetic raw.\n' where id='outbox-note';
+reset role;
+select pg_temp.outbox_expect((select snapshot->>'plaintext'=E'New synthetic raw.\n' and snapshot->'record'->>'contentRevision'='2' from meeting_knowledge.outbox where event_seq=3),'AFTER browser edit snapshot sees new text and revision');
+select pg_temp.outbox_expect((select snapshot->>'plaintext'=E'  Synthetic raw.\n' from meeting_knowledge.outbox where event_seq=2),'previous leased snapshot remains immutable');
+set local role authenticated;
+update public.note set shared_users='{}' where id='outbox-note';
+update public.project set shared_users='{}' where id='outbox-project';
+reset role;
+select pg_temp.outbox_expect((select snapshot->'record'->'directShares'='[]'::jsonb from meeting_knowledge.outbox where event_seq=4),'AFTER note sharing snapshot sees removed audience');
+select pg_temp.outbox_expect((select snapshot->'record'->'projects'->0->'sharedWith'='[]'::jsonb from meeting_knowledge.outbox where event_seq=5),'AFTER project sharing snapshot sees removed audience');
+set local role service_role;
+select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001',4,'confirm_participant','22222222-2222-4222-8222-000000000002','synthetic-confirmed');
+select pg_temp.outbox_expect((select jsonb_array_length(snapshot->'record'->'confirmedParticipants')=1 from meeting_knowledge.outbox where event_seq=6),'participant confirmation and outbox commit together');
+select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001',5,'revoke','22222222-2222-4222-8222-000000000002');
+select pg_temp.outbox_expect((select jsonb_array_length(snapshot->'record'->'denies')=1 from meeting_knowledge.outbox where event_seq=7),'revoke snapshot contains current deny');
+savepoint cancelled_write;
+update public.note set transcription='Rolled back synthetic text' where id='outbox-note';
+rollback to savepoint cancelled_write;
+select pg_temp.outbox_expect((select max(event_seq)=7 from meeting_knowledge.outbox),'note rollback rolls back outbox and counter');
+select pg_temp.outbox_expect((select event_seq=7 from meeting_knowledge.stream where source_id='outbox-note'),'rolled back event leaves no sequence gap');
+create temp table cancelled_lease as select event_id,worker_id,lease_token from meeting_knowledge.outbox where event_seq=2;
+grant select on cancelled_lease to service_role;
+select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001',6,'disable');
+select pg_temp.outbox_expect(not public.meeting_knowledge_outbox_ack((select event_id from cancelled_lease),(select worker_id from cancelled_lease),(select lease_token from cancelled_lease),repeat('b',64)),'cancelled lease cannot ack after disable');
+select pg_temp.outbox_expect(public.meeting_knowledge_outbox_prepare((select event_id from cancelled_lease),(select worker_id from cancelled_lease),(select lease_token from cancelled_lease),pg_temp.outbox_event((select event_id from cancelled_lease))) is null,'cancelled lease cannot recover sealed raw event');
+select pg_temp.outbox_expect((select bool_and(snapshot is null and prepared_event is null) from meeting_knowledge.outbox where event_seq between 2 and 7),'disable purges pending and leased raw snapshots');
+select pg_temp.outbox_expect((select event_type='integration.disabled' and not(snapshot ? 'plaintext') and not(snapshot::text like '%synthetic raw%') from meeting_knowledge.outbox where event_seq=8),'disable event retains no raw or title');
+select pg_temp.outbox_expect(jsonb_array_length(public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444'))=1,'cancelled events never claim');
+select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001',7,'enable');
+select pg_temp.outbox_expect((select integration_generation=3 and event_type='source.upsert' from meeting_knowledge.outbox where event_seq=9),'re-enable produces fresh generation and sequence');
+reset role;
+set local role authenticated;
+update public.note set transcription='' where id='outbox-note';
+reset role;
+select pg_temp.outbox_expect((select not integration_enabled and active from meeting_knowledge.source where source_id='outbox-note'),'empty raw automatically disables without permanent delete');
+select pg_temp.outbox_expect((select event_type='integration.disabled' and not(snapshot ? 'plaintext') from meeting_knowledge.outbox where event_seq=11),'empty raw produces minimal disabled event');
+set local role service_role;
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000002',9,'disable')$sql$,'P0001','SOURCE_UNAVAILABLE','empty disable still requires original owner');
+select pg_temp.outbox_expect((public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001',9,'disable')->>'integrationEnabled')='false','owner can disable empty note without fake transcript');
+select pg_temp.outbox_expect((public.meeting_knowledge_owner_status('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001')->>'unsupportedTranscript')='true','empty enrolled owner can still inspect status');
+select pg_temp.outbox_expect(public.meeting_knowledge_current_source('11111111-1111-4111-8111-111111111111','outbox-note') is null,'empty current read remains denied');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001',9,'enable')$sql$,'P0001','SOURCE_UNAVAILABLE','empty note cannot re-enable');
+delete from public.note where id='outbox-note';
+select pg_temp.outbox_expect((select event_type='source.deleted' and not(snapshot ? 'plaintext') from meeting_knowledge.outbox where event_seq=12),'deletion emits permanent lifecycle tombstone');
+select pg_temp.outbox_expect((select bool_and(status in ('cancelled','delivered')) from meeting_knowledge.outbox where event_seq<12),'deletion cancels even previous lifecycle leases');
+select pg_temp.outbox_expect((public.meeting_knowledge_outbox_claim('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444')->0->>'eventType')='source.deleted','deletion has priority and only current lifecycle is claimable');
+insert into public.note(id,user_id,transcription) values('outbox-note','22222222-2222-4222-8222-000000000001','Synthetic reused note');
+select pg_temp.outbox_error($sql$select public.meeting_knowledge_initialize('11111111-1111-4111-8111-111111111111','outbox-note','22222222-2222-4222-8222-000000000001')$sql$,'P0001','SOURCE_UNAVAILABLE','deleted source cannot resurrect');
+reset role;
+-- Metadata changes need a source event even when the transcript hash is unchanged.
+insert into public.note(id,user_id,transcription,name,meeting_at) values('outbox-metadata','22222222-2222-4222-8222-000000000001','Synthetic metadata raw','Before',null);
+select public.meeting_knowledge_initialize('11111111-1111-4111-8111-111111111111','outbox-metadata','22222222-2222-4222-8222-000000000001');
+select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-metadata','22222222-2222-4222-8222-000000000001',1,'enable');
+update public.note set name='After',meeting_at='2026-01-02T02:00:00Z' where id='outbox-metadata';
+select pg_temp.outbox_expect((select snapshot->>'title'='After' and snapshot->'record'->>'contentRevision'='2' and event_type='source.upsert' from meeting_knowledge.outbox where source_id='outbox-metadata' and event_seq=3),'metadata edit emits fresh source snapshot');
+select pg_temp.outbox_expect((select snapshot->'record'->>'sourceHash'=encode(sha256(convert_to('Synthetic metadata raw','UTF8')),'hex') from meeting_knowledge.outbox where source_id='outbox-metadata' and event_seq=3),'metadata edit preserves exact raw hash');
+update meeting_knowledge.outbox set last_error_code='DELIVERY_FAILED' where source_id='outbox-metadata' and status='pending';
+select pg_temp.outbox_expect(public.meeting_knowledge_owner_status('11111111-1111-4111-8111-111111111111','outbox-metadata','22222222-2222-4222-8222-000000000001')->'delivery'->>'lastErrorCode'='DELIVERY_FAILED','pending errors remain visible to owner');
+select public.meeting_knowledge_mutate('11111111-1111-4111-8111-111111111111','outbox-metadata','22222222-2222-4222-8222-000000000001',
+  (select access_revision from meeting_knowledge.source where source_id='outbox-metadata'),'disable');
+select pg_temp.outbox_expect(public.meeting_knowledge_owner_status('11111111-1111-4111-8111-111111111111','outbox-metadata','22222222-2222-4222-8222-000000000001')->'delivery'->>'lastErrorCode' is null,'cancelled historical errors do not claim retry is pending');
+select count(*) as passed_outbox_checks from outbox_checks;
+rollback;

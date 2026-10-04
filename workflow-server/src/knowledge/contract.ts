@@ -1,7 +1,7 @@
 /**
- * Inactive PR0 boundary. Validation proves shape and supplied-content integrity,
+ * Shared event boundary. Validation proves shape and supplied-content integrity,
  * never authorization, issuer authenticity, classification, or lifecycle ordering.
- * No route, database writer, model invocation, or search path imports this module.
+ * Authenticating transports and stores own those additional boundaries.
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -155,7 +155,7 @@ function validUnicode(text: string): boolean {
 /**
  * Context-free unit validation proves only self-consistency, not source existence.
  * Supply the authenticated, current source revision to bind unit evidence to spans.
- * Caller identity, approved policy, live access, and tombstones remain PR1/PR2 gates.
+ * Caller identity, approved policy, live access, and tombstones are separate gates.
  * Error codes never include titles, identities, text, payloads, or AJV diagnostics.
  */
 export function validateMeetingKnowledgeEvent(input: unknown, sourceContext?: SourceUpsertEvent): ValidationResult {

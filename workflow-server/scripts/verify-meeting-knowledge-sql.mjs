@@ -11,17 +11,26 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const bootstrap = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_fixture_schema.sql'), 'utf8');
 const migration = await readFile(resolve(root, 'supabase/migrations/20261004034140_meeting_knowledge_access_ledger.sql'), 'utf8');
 const checks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_access_ledger.sql'), 'utf8');
+const outboxMigration = await readFile(resolve(root, 'supabase/migrations/20261004042544_meeting_knowledge_transactional_outbox.sql'), 'utf8');
+const outboxChecks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_outbox.sql'), 'utf8');
 const db = new PGlite();
 let passedSqlAssertions;
+let passedOutboxAssertions;
 let engine;
 try {
   engine = (await db.query('select version() as engine')).rows[0].engine;
   await db.exec(bootstrap);
   await db.exec(migration);
   await db.exec(migration);
+  await db.exec(outboxMigration);
+  await db.exec(outboxMigration);
   const results = await db.exec(checks);
   passedSqlAssertions = results.flatMap(result => result.rows).find(row => 'passed_ledger_checks' in row)?.passed_ledger_checks;
   assert.equal(passedSqlAssertions, 35);
+  const outboxResults = await db.exec(outboxChecks);
+  passedOutboxAssertions = outboxResults.flatMap(result => result.rows).find(row => 'passed_outbox_checks' in row)?.passed_outbox_checks;
+  assert.equal(passedOutboxAssertions, 72);
+  assert.equal((await db.query('select count(*)::int as count from meeting_knowledge.source')).rows[0].count, 0);
 } finally { await db.close(); }
 
 // Historical note/project schemas used both integer and UUID project arrays.
@@ -37,6 +46,8 @@ for (const type of ['uuid', 'integer']) {
       .replace('public.project (id text', `public.project (id ${type}`));
     await database.exec(migration);
     await database.exec(migration);
+    await database.exec(outboxMigration);
+    await database.exec(outboxMigration);
     await database.query('insert into public.project(id,user_id,shared_users) values ($1,$2,$3::text[])', [project, owner, [member]]);
     await database.query(`insert into public.note(id,user_id,transcription,projects) values ($1,$2,$3,$4::${type}[])`, ['synthetic-schema-variant', owner, text, [project]]);
     await database.exec('set role service_role');
@@ -51,4 +62,4 @@ for (const type of ['uuid', 'integer']) {
     assert.deepEqual(changed.projects[0].sharedWith, []);
   } finally { await database.close(); }
 }
-process.stdout.write(JSON.stringify({ engine, passedSqlAssertions, repeatedMigration: true, projectArrayVariants: ['uuid', 'integer'] }) + '\n');
+process.stdout.write(JSON.stringify({ engine, passedSqlAssertions, passedOutboxAssertions, repeatedMigration: true, rolledBackSyntheticChecks: true, projectArrayVariants: ['uuid', 'integer'] }) + '\n');

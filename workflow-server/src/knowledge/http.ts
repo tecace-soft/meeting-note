@@ -3,9 +3,10 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { isCanonicalMicrosoftId, isMeetingLiveAccessRequest } from './access-contract.js';
 import { verifyMeetingNoteIdentity, type MeetingIdentityVerification } from './identity.js';
 import { checkMeetingSourceAccess, type MeetingSourceAccessRecord } from './source-access.js';
+import type { MeetingManagementAcknowledgement, MeetingOwnerStatus } from './management-status.js';
 
 export interface MeetingManagementCommand {
-  action: 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable';
+  action: 'status' | 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable';
   sourceId: string;
   expectedAccessRevision?: number;
   subjectObjectId?: string;
@@ -13,12 +14,13 @@ export interface MeetingManagementCommand {
 }
 type Identity = { tenantId: string; objectId: string };
 type MeetingManagementMutation = Omit<MeetingManagementCommand, 'action' | 'expectedAccessRevision'> & {
-  action: Exclude<MeetingManagementCommand['action'], 'initialize'>;
+  action: Exclude<MeetingManagementCommand['action'], 'initialize' | 'status'>;
   expectedAccessRevision: number;
 };
 export interface MeetingKnowledgeHttpStore {
   initialize(identity: Identity, sourceId: string): Promise<MeetingSourceAccessRecord>;
-  mutate(identity: Identity, command: MeetingManagementMutation): Promise<MeetingSourceAccessRecord>;
+  mutate(identity: Identity, command: MeetingManagementMutation): Promise<MeetingSourceAccessRecord | MeetingManagementAcknowledgement>;
+  getOwnedStatus(identity: Identity, sourceId: string): Promise<MeetingOwnerStatus>;
   loadCurrentSource(tenantId: string, sourceId: string): Promise<MeetingSourceAccessRecord | null>;
 }
 export interface MeetingKnowledgeHttpEnvironment {
@@ -68,10 +70,10 @@ function managementCommand(value: unknown): MeetingManagementCommand {
   const command = value as MeetingManagementCommand;
   if (Object.keys(command).some(key => !['action', 'sourceId', 'expectedAccessRevision', 'subjectObjectId', 'verificationRef'].includes(key))
     || typeof command.sourceId !== 'string' || command.sourceId.length < 1 || command.sourceId.length > 256
-    || !['initialize', 'confirm_participant', 'revoke', 'restore', 'enable', 'disable'].includes(command.action)) {
+    || !['status', 'initialize', 'confirm_participant', 'revoke', 'restore', 'enable', 'disable'].includes(command.action)) {
     throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
   }
-  if (command.action === 'initialize') {
+  if (command.action === 'initialize' || command.action === 'status') {
     if (Object.keys(command).length !== 2) throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
     return command;
   }
@@ -148,6 +150,10 @@ export function createMeetingKnowledgeHttpHandler(store: MeetingKnowledgeHttpSto
         const identity = await verifyMeetingNoteIdentity(bearer(req), identityOptions(environment));
         if (!identity.authenticated) throw new HttpError(401, 'UNVERIFIED_IDENTITY');
         const command = managementCommand(await readJson(req));
+        if (command.action === 'status') {
+          respond(res, 200, await store.getOwnedStatus(identity.identity, command.sourceId));
+          return true;
+        }
         const source = command.action === 'initialize'
           ? await store.initialize(identity.identity, command.sourceId)
           : await store.mutate(identity.identity, command as MeetingManagementMutation);

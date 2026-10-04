@@ -113,3 +113,41 @@ test('caller and source validation occurs before RPC', async () => {
   await assert.rejects(store.initialize({ ...owner, tenantId: 'guessed.example' }, sourceId), isError('INVALID_MUTATION'));
   await assert.rejects(store.loadCurrentSource(tenantId, 'x'.repeat(257)), isError('INVALID_MUTATION'));
 });
+
+const ownerStatus = () => ({ sourceId, enrolled: false, unsupportedTranscript: false, integrationEnabled: false,
+  accessRevision: null, integrationGeneration: null, participants: [], denies: [], directShares: [], projectShares: [],
+  delivery: { pending: 0, lastDeliveredAt: null, lastErrorCode: null } });
+test('owner status is a read-only owner-scoped RPC and preserves unenrolled state', async () => {
+  const store = createMeetingKnowledgeStore({ rpc: async (name, args) => {
+    assert.equal(name, 'meeting_knowledge_owner_status');
+    assert.deepEqual(args, { p_tenant_id: tenantId, p_source_id: sourceId, p_owner_object_id: owner.objectId });
+    return { data: ownerStatus(), error: null };
+  } });
+  assert.deepEqual(await store.getOwnedStatus(owner, sourceId), ownerStatus());
+});
+for (const [name, data] of Object.entries({
+  'different source': { ...ownerStatus(), sourceId: 'another-note' },
+  'unenrolled enabled': { ...ownerStatus(), integrationEnabled: true },
+  'unenrolled revision': { ...ownerStatus(), accessRevision: 1 },
+  'missing enrolled revisions': { ...ownerStatus(), enrolled: true },
+  'named audience': { ...ownerStatus(), participants: ['Speaker A'] },
+  'duplicate audience': { ...ownerStatus(), directShares: [member.objectId, member.objectId] },
+  'private error': { ...ownerStatus(), delivery: { pending: 0, lastDeliveredAt: null, lastErrorCode: 'private diagnostic' } },
+  'negative queue': { ...ownerStatus(), delivery: { pending: -1, lastDeliveredAt: null, lastErrorCode: null } },
+  'extra plaintext': { ...ownerStatus(), plaintext: 'synthetic sensitive content' },
+})) {
+  test(`owner status rejects ${name} without returning database details`, async () => {
+    await assert.rejects(storeFor(data).getOwnedStatus(owner, sourceId), isError('STORE_UNAVAILABLE'));
+  });
+}
+test('owner status maps owner denial to content-free failure', async () => {
+  await assert.rejects(storeFor(null, { code: 'P0001', message: 'SOURCE_UNAVAILABLE' }).getOwnedStatus(owner, sourceId), isError('SOURCE_NOT_MANAGEABLE'));
+  await assert.rejects(storeFor(null).getOwnedStatus(owner, sourceId), isError('SOURCE_NOT_MANAGEABLE'));
+});
+test('removed transcript can still be disabled using a minimal fenced acknowledgement', async () => {
+  const ack = { sourceId, accessRevision: 2, integrationGeneration: 1, integrationEnabled: false };
+  assert.deepEqual(await storeFor(ack).mutate(owner, { sourceId, expectedAccessRevision: 1, action: 'disable' }), ack);
+  await assert.rejects(storeFor(ack).mutate(owner, { sourceId, expectedAccessRevision: 1, action: 'enable' }), isError('STORE_UNAVAILABLE'));
+  await assert.rejects(storeFor({ ...ack, integrationEnabled: true }).mutate(owner, { sourceId, expectedAccessRevision: 1, action: 'disable' }), isError('STORE_UNAVAILABLE'));
+  await assert.rejects(storeFor({ ...record(), integrationEnabled: true }).mutate(owner, { sourceId, expectedAccessRevision: 1, action: 'disable' }), isError('STORE_UNAVAILABLE'));
+});

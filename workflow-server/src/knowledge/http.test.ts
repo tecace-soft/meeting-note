@@ -36,6 +36,10 @@ async function fixture(run: (base: string, calls: unknown[], record: MeetingSour
   const calls: unknown[] = [];
   const record = current();
   const store: MeetingKnowledgeHttpStore = {
+    async getOwnedStatus(actor, source) { calls.push(['status', actor, source]); if (failure) throw { code: failure };
+      return { sourceId: source, enrolled: false, unsupportedTranscript: false, integrationEnabled: false,
+        accessRevision: null, integrationGeneration: null, participants: [], denies: [], directShares: [], projectShares: [],
+        delivery: { pending: 0, lastDeliveredAt: null, lastErrorCode: null } }; },
     async loadCurrentSource(tenant, source) { calls.push(['load', tenant, source]); if (failure) throw new Error('synthetic-private-db-detail'); return record; },
     async initialize(actor, source) { calls.push(['initialize', actor, source]); if (failure) throw { code: failure, message: 'synthetic-private-db-detail' }; return record; },
     async mutate(actor, command) { calls.push(['mutate', actor, command]); if (failure) throw { code: failure, message: 'synthetic-private-db-detail' }; return record; },
@@ -132,6 +136,15 @@ test('owner identity is derived from signed JWT and management exposes only mini
     const command = { action: 'confirm_participant', sourceId: binding.sourceId, expectedAccessRevision: 1, subjectObjectId: objectId, verificationRef: 'synthetic-owner-confirmation' };
     assert.equal((await post(base, management, command, `Bearer ${jwt}`)).status, 200);
     assert.deepEqual(calls[1], ['mutate', owner, command]);
+  });
+});
+test('status reads signed owner state without creating enrollment or granting access', async () => {
+  await fixture(async (base, calls) => {
+    const response = await post(base, management, { action: 'status', sourceId: binding.sourceId }, `Bearer ${await token()}`);
+    assert.equal(response.status, 200);
+    const status = await response.json() as { enrolled: boolean; integrationEnabled: boolean };
+    assert.equal(status.enrolled, false); assert.equal(status.integrationEnabled, false);
+    assert.deepEqual(calls, [['status', owner, binding.sourceId]]);
   });
 });
 for (const bad of [ { action: 'initialize', sourceId: binding.sourceId, tenantId },

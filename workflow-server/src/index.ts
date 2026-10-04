@@ -19,6 +19,8 @@ import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, o
 import { handleMcpRequest } from './mcp/transports/http.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
+import { createMeetingOutboxStore } from './knowledge/outbox.js';
+import { startMeetingKnowledgeDelivery } from './knowledge/delivery.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -3521,4 +3523,25 @@ server.listen(env.port, () => {
   console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
   void failOrphanedJobs();
   setInterval(() => void failOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
+  // Existing transcription and MCP startup remain independent of this opt-in.
+  if (process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED === 'true') {
+    try {
+      if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('CONFIG_UNAVAILABLE');
+      const stopDelivery = startMeetingKnowledgeDelivery(createMeetingOutboxStore({
+        rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+      }), {
+        MEETING_KNOWLEDGE_DELIVERY_ENABLED: process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED,
+        MEETING_KNOWLEDGE_AXKH_URL: process.env.MEETING_KNOWLEDGE_AXKH_URL,
+        MEETING_KNOWLEDGE_INGEST_KEY: process.env.MEETING_KNOWLEDGE_INGEST_KEY,
+        MEETING_KNOWLEDGE_ACCESS_KEY: process.env.MEETING_KNOWLEDGE_ACCESS_KEY,
+        MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+        MEETING_KNOWLEDGE_NOTE_BASE_URL: process.env.MEETING_KNOWLEDGE_NOTE_BASE_URL,
+        MEETING_KNOWLEDGE_TIMEZONE: process.env.MEETING_KNOWLEDGE_TIMEZONE,
+      });
+      server.once('close', stopDelivery);
+    } catch {
+      // Never print endpoint, secret, source data or upstream diagnostics.
+      console.warn('Meeting knowledge delivery: CONFIG_UNAVAILABLE');
+    }
+  }
 });

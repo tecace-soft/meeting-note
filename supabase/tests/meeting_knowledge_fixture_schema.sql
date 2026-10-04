@@ -7,7 +7,7 @@ do $$ begin
 end $$;
 create table public.note (
   id text primary key, user_id text not null, transcription text, diarization jsonb,
-  summary text, shared_users text[] default '{}', projects text[] default '{}'
+  summary text, name text, meeting_at timestamptz, shared_users text[] default '{}', projects text[] default '{}'
 );
 create table public.project (id text primary key, user_id text not null, shared_users text[] default '{}');
 create table public.speaker (id text primary key, user_id text not null, name text);
