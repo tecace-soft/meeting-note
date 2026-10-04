@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createMeetingOutboxStore, MeetingOutboxError, type MeetingOutboxClaim } from './outbox.js';
-import { hashPayload, sha256Text, type MeetingKnowledgeEvent } from './contract.js';
+import { hashPayload, sha256Text, type MeetingKnowledgeEvent, type SourceUpsertEvent, type UnitsPayload } from './contract.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const workerId = '22222222-2222-4222-8222-222222222222';
@@ -37,7 +37,7 @@ for(const [name, data] of Object.entries({
     {...claim,eventId:'33333333-3333-4333-8333-333333333335',eventSeq:3}],
   invalidSequence:[{...claim,eventSeq:0}], unsafeSequence:[{...claim,eventSeq:Number.MAX_SAFE_INTEGER+1}],
   invalidLease:[{...claim,leaseToken:'name'}], missingSnapshot:[{...claim,snapshot:null}],
-  unknownEvent:[{...claim,eventType:'units.upsert'}], extra:[{...claim,secret:'not-authoritative'}],
+  unknownEvent:[{...claim,eventType:'untrusted.event'}], extra:[{...claim,secret:'not-authoritative'}],
   invalidAttempts:[{...claim,attempts:0}], missingData:null,
 })) {
   test(`claim refuses untrusted ${name} result`,async()=>{
@@ -106,5 +106,42 @@ test('ACK/error inputs and malformed SQL statuses fail closed',async()=>{
 test('RPC failures never expose upstream secrets',async()=>{
   for(const rpc of [async()=>({data:null,error:{message:'private secret'}}),async()=>{throw new Error('private secret');}]) {
     await assert.rejects(createMeetingOutboxStore({rpc}).claim(tenantId,workerId),failure);
+  }
+});
+function unitsFixture(){
+  const plaintext='Synthetic proposal.';const sourceHash=sha256Text(plaintext);const span={spanId:'synthetic-span',start:0,end:plaintext.length,textHash:sourceHash};
+  const sourcePayload={contentRevision:1,speakerRevision:1,sourceHash,plaintext,title:'Synthetic',sourceUrl:'https://meeting.example.test',meetingAt:null,timezone:'UTC',spans:[span]};
+  const sourceEvent:SourceUpsertEvent={...event,eventId:'55555555-5555-4555-8555-555555555555',eventType:'source.upsert',payload:sourcePayload,payloadHash:hashPayload(sourcePayload)};
+  const payload:UnitsPayload={contentRevision:1,speakerRevision:1,sourceHash,
+    extractorRun:{runId:'66666666-6666-4666-8666-666666666666',model:'synthetic-model-v1',promptVersion:'meeting-candidates-v1'},
+    units:[{unitId:'synthetic-candidate',text:'A pilot was proposed.',lifecycle:'candidate',epistemic:'reported',
+      evidence:[{...span,sourceId:claim.sourceId,contentRevision:1,sourceHash}]}]};
+  const item:MeetingOutboxClaim={...claim,eventType:'units.upsert',snapshot:{record:{tenantId,sourceId:claim.sourceId,integrationGeneration:1,contentRevision:1,speakerRevision:1,sourceHash,accessRevision:1},sourceEvent,payload}};
+  const unitEvent:MeetingKnowledgeEvent={...event,eventType:'units.upsert',payload,payloadHash:hashPayload(payload)};
+  return{item,unitEvent};
+}
+test('claim and prepare accept source-bound units snapshots without owner/audience reconstruction',async()=>{
+  const {item,unitEvent}=unitsFixture();const store=createMeetingOutboxStore({rpc:async name=>({data:name==='meeting_knowledge_outbox_claim'?[item]:unitEvent,error:null})});
+  assert.deepEqual(await store.claim(tenantId,workerId),[item]);assert.deepEqual(await store.prepare(item,workerId,unitEvent),unitEvent);
+});
+test('units seal rejects a schema/hash-valid different candidate payload',async()=>{
+  const {item,unitEvent}=unitsFixture();if(unitEvent.eventType!=='units.upsert')assert.fail();
+  const changed={...unitEvent.payload,units:[{...unitEvent.payload.units[0],text:'Changed synthetic candidate.'}]};
+  const tampered={...unitEvent,payload:changed,payloadHash:hashPayload(changed)};
+  await assert.rejects(createMeetingOutboxStore({rpc:async()=>({data:tampered,error:null})}).prepare(item,workerId,unitEvent),failure);
+});
+test('units seal requires exact original source span evidence even when hash is recomputed',async()=>{
+  const {item,unitEvent}=unitsFixture();if(unitEvent.eventType!=='units.upsert')assert.fail();
+  unitEvent.payload.units[0].evidence[0].end--;unitEvent.payloadHash=hashPayload(unitEvent.payload);
+  await assert.rejects(createMeetingOutboxStore({rpc:()=>assert.fail('bad evidence reached SQL')}).prepare(item,workerId,unitEvent),failure);
+});
+test('units seal refuses another source context or mismatched snapshot revision',async()=>{
+  for(const mutate of [
+    (item:MeetingOutboxClaim)=>{(item.snapshot.sourceEvent as SourceUpsertEvent).tenantId=workerId;},
+    (item:MeetingOutboxClaim)=>{(item.snapshot.record as Record<string,unknown>).speakerRevision=2;},
+    (item:MeetingOutboxClaim)=>{delete item.snapshot.sourceEvent;},
+  ]){
+    const {item,unitEvent}=unitsFixture();mutate(item);
+    await assert.rejects(createMeetingOutboxStore({rpc:()=>assert.fail('invalid snapshot reached SQL')}).prepare(item,workerId,unitEvent),failure);
   }
 });

@@ -23,6 +23,9 @@ export interface GeminiUsageMetadata {
 export interface GeminiCallResult {
   text: string;
   usageMetadata: GeminiUsageMetadata;
+  /** Provider metadata is optional and is not an authenticated model identity. */
+  finishReason?: string;
+  modelVersion?: string;
 }
 
 // HTTP statuses worth retrying: rate limiting and transient server/gateway
@@ -50,10 +53,56 @@ interface GeminiGenerateContentResponse {
   promptFeedback?: { blockReason?: string };
   usageMetadata?: GeminiUsageMetadata;
   error?: { message?: string; code?: number };
+  modelVersion?: string;
 }
 
 function extractGeminiText(data: GeminiGenerateContentResponse): string {
   return data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('').trim() ?? '';
+}
+
+function abortable<T>(operation: Promise<T>, signal?: AbortSignal, onDiscard?: (value: T) => void): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) { void operation.then(value => { onDiscard?.(value); }, () => {}); return Promise.reject(new DOMException('Aborted', 'AbortError')); }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => { signal.removeEventListener('abort', onAbort); reject(new DOMException('Aborted', 'AbortError')); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(value => {
+      signal.removeEventListener('abort', onAbort);
+      if (signal.aborted) { onDiscard?.(value); reject(new DOMException('Aborted', 'AbortError')); } else resolve(value);
+    }, error => {
+      signal.removeEventListener('abort', onAbort); reject(error);
+    });
+  });
+}
+
+/** Optional bounded transport for sensitive callers; ordinary callers retain response.text(). */
+async function readGeminiResponseText(response: Response, maximum?: number, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) { void response.body?.cancel().catch(() => {}); throw new DOMException('Aborted', 'AbortError'); }
+  if (maximum === undefined) return abortable(response.text(), signal);
+  const length = response.headers.get('content-length');
+  if (length !== null && /^\d+$/.test(length) && Number(length) > maximum) {
+    void response.body?.cancel().catch(() => {}); throw new GeminiApiError('Gemini response exceeded its byte limit');
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const text: string[] = []; let bytes = 0;
+  try {
+    for (;;) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      const next = await abortable(reader.read(), signal);
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > maximum) throw new GeminiApiError('Gemini response exceeded its byte limit');
+      text.push(decoder.decode(next.value, { stream: true }));
+    }
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    text.push(decoder.decode());
+    return text.join('');
+  } catch (error) { cancel(); throw error; }
+  finally { signal?.removeEventListener('abort', cancel); try { reader.releaseLock(); } catch { /* Cancellation can settle a pending read asynchronously. */ } }
 }
 
 export async function callGemini(input: {
@@ -71,19 +120,35 @@ export async function callGemini(input: {
   // this forces structurally-valid JSON of the given shape, eliminating the malformed
   // / runaway JSON that otherwise fails to parse. Caller still validates semantics.
   responseSchema?: unknown;
+  // Additive opt-ins for callers that need cancellation, safe transport budgets,
+  // isolated instructions or offline testing. Existing callers keep their defaults.
+  signal?: AbortSignal;
+  fetch?: typeof globalThis.fetch;
+  maxResponseBytes?: number;
+  redirect?: RequestRedirect;
+  systemInstruction?: string;
+  // Let strict structured-output callers inspect native incomplete/blocked results.
+  allowIncompleteOutput?: boolean;
 }): Promise<GeminiCallResult> {
+  if (input.maxResponseBytes !== undefined && (!Number.isSafeInteger(input.maxResponseBytes) || input.maxResponseBytes < 1 || input.maxResponseBytes > 1048576)) {
+    throw new GeminiApiError('Invalid Gemini response byte limit');
+  }
+  if (input.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   let response: Response;
   try {
-    response = await fetch(
+    response = await abortable((input.fetch ?? globalThis.fetch)(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent`,
       {
         method: 'POST',
+        ...(input.signal ? { signal: input.signal } : {}),
+        ...(input.redirect ? { redirect: input.redirect } : {}),
         headers: {
           'Content-Type': 'application/json',
           'x-goog-api-key': input.apiKey,
         },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: input.parts }],
+          ...(input.systemInstruction !== undefined ? { systemInstruction: { parts: [{ text: input.systemInstruction }] } } : {}),
           generationConfig: {
             temperature: input.temperature ?? 0.2,
             maxOutputTokens: input.maxOutputTokens ?? 8192,
@@ -95,7 +160,7 @@ export async function callGemini(input: {
           },
         }),
       },
-    );
+    ), input.signal, discarded => { void discarded.body?.cancel().catch(() => {}); });
   } catch (error) {
     // Network-level failure (DNS, reset, timeout): transient, safe to retry.
     throw new GeminiApiError(fetchErrorMessage(`Gemini generateContent fetch for ${input.model}`, error), {
@@ -103,7 +168,7 @@ export async function callGemini(input: {
     });
   }
 
-  const text = await response.text();
+  const text = await readGeminiResponseText(response, input.maxResponseBytes, input.signal);
   let data: GeminiGenerateContentResponse;
   try {
     data = JSON.parse(text) as GeminiGenerateContentResponse;
@@ -121,16 +186,19 @@ export async function callGemini(input: {
     });
   }
   if (data.error?.message) throw new Error(`Gemini API error: ${data.error.message}`);
-  if (data.promptFeedback?.blockReason) throw new Error(`Gemini blocked the prompt: ${data.promptFeedback.blockReason}`);
+  if (data.promptFeedback?.blockReason && !input.allowIncompleteOutput) throw new Error(`Gemini blocked the prompt: ${data.promptFeedback.blockReason}`);
 
   const output = extractGeminiText(data);
-  if (!output) {
+  if (!output && !input.allowIncompleteOutput) {
     const finishReason = data.candidates?.[0]?.finishReason;
     throw new Error(`Gemini returned empty output${finishReason ? ` (${finishReason})` : ''}.`);
   }
   return {
     text: output,
     usageMetadata: data.usageMetadata ?? {},
+    ...(data.promptFeedback?.blockReason && input.allowIncompleteOutput ? { finishReason: 'PROMPT_BLOCKED' }
+      : typeof data.candidates?.[0]?.finishReason === 'string' ? { finishReason: data.candidates[0].finishReason } : {}),
+    ...(typeof data.modelVersion === 'string' ? { modelVersion: data.modelVersion } : {}),
   };
 }
 

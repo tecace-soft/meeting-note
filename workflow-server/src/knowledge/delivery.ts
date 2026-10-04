@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { canonicalJson, hashPayload, sha256Text, validateMeetingKnowledgeEvent, type AccessPayload, type MeetingKnowledgeEvent, type SourcePayload } from './contract.js';
+import { canonicalJson, hashPayload, sha256Text, validateMeetingKnowledgeEvent, type AccessPayload, type MeetingKnowledgeEvent, type SourcePayload, type UnitsPayload } from './contract.js';
 import { isCanonicalMicrosoftId, isMeetingSourceBinding } from './access-contract.js';
 import type { MeetingSourceAccessRecord } from './source-access.js';
 import type { MeetingOutboxClaim, MeetingOutboxStore, MeetingDeliveryErrorCode } from './outbox.js';
@@ -70,8 +70,11 @@ export function buildMeetingOutboxEvent(claim: MeetingOutboxClaim, noteBase: str
     const record = claim.snapshot.record as MeetingSourceAccessRecord;
     if (!record || record.sourceId !== claim.sourceId || record.tenantId !== claim.tenantId
       || record.integrationGeneration !== claim.integrationGeneration) throw new Error();
-    let payload: SourcePayload | AccessPayload | { lifecycleRevision: number; reason: string };
-    if (claim.eventType === 'source.upsert' || claim.eventType === 'access.changed') {
+    let payload: SourcePayload | AccessPayload | UnitsPayload | { lifecycleRevision: number; reason: string };
+    if (claim.eventType === 'units.upsert') {
+      if (!isMeetingSourceBinding(record)) throw new Error();
+      payload = claim.snapshot.payload as UnitsPayload;
+    } else if (claim.eventType === 'source.upsert' || claim.eventType === 'access.changed') {
       if (!isMeetingSourceBinding(record) || record.active !== true || record.integrationEnabled !== true
         || record.ownerIdentityVerified !== true || record.owner?.tenantId !== claim.tenantId || !isCanonicalMicrosoftId(record.owner.objectId)) throw new Error();
       if (claim.eventType === 'source.upsert') {
@@ -112,6 +115,7 @@ export function buildMeetingOutboxEvent(claim: MeetingOutboxClaim, noteBase: str
       sourceApp: 'meeting-note', sourceId: claim.sourceId, tenantId: claim.tenantId, eventType: claim.eventType, payload, payloadHash: hashPayload(payload) };
     const validated = validateMeetingKnowledgeEvent(event);
     if (!validated.valid) throw new Error();
+    if (claim.eventType === 'units.upsert') return validateMeetingOutboxSeal(claim, validated.event);
     return validated.event;
   } catch { throw new MeetingDeliveryError('INVALID_SNAPSHOT'); }
 }

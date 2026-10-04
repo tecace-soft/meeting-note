@@ -5,6 +5,9 @@ and legacy MCP dispatch. They are disabled by default. Hosted configuration,
 database schema and user meetings have not been changed. The new owner UI,
 outbox and export worker are implemented behind separate disabled flags. No
 search, model, document-ingest or new MCP consumer is activated by this increment.
+The separate default-off candidate extraction runtime is documented in
+`EXTRACTION-ROLLOUT.md`; its additive migration queues jobs after current-source
+ACKs but does not itself enable a model or approve a processing policy.
 
 ## Database boundary
 
@@ -163,7 +166,7 @@ node scripts/verify-meeting-knowledge-sql.mjs /tmp/meeting-knowledge-sql-tools/n
 ```
 
 Run these commands from `workflow-server`. The runner applies the migration
-twice, executes35 ledger and72 outbox SQL checks, and separately exercises UUID/integer project arrays
+twice, executes35 ledger,72 outbox and66 extraction SQL checks, and separately exercises UUID/integer project arrays
 and exact multilingual UTF-8 hashing. PGlite verifies real PostgreSQL SQL behavior
 in a modeled single-connection environment; it does not prove native Supabase
 transport, provider auth, actual deployed schema or concurrent lock behavior.

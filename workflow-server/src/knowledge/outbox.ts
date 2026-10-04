@@ -1,4 +1,4 @@
-import { canonicalJson, validateMeetingKnowledgeEvent, type MeetingKnowledgeEvent } from './contract.js';
+import { canonicalJson, validateMeetingKnowledgeEvent, type MeetingKnowledgeEvent, type SourceUpsertEvent } from './contract.js';
 import { isCanonicalMicrosoftId } from './access-contract.js';
 import { DELIVERY_ERROR_CODES } from './management-status.js';
 import type { MeetingKnowledgeRpcClient } from './store.js';
@@ -9,7 +9,7 @@ export interface MeetingOutboxClaim {
   sourceId: string;
   tenantId: string;
   integrationGeneration: number;
-  eventType: 'source.upsert' | 'access.changed' | 'source.deleted' | 'integration.disabled';
+  eventType: 'source.upsert' | 'access.changed' | 'units.upsert' | 'source.deleted' | 'integration.disabled';
   snapshot: Record<string, unknown>;
   leaseToken: string;
   attempts: number;
@@ -30,12 +30,19 @@ function validClaim(value: unknown, tenantId: string): value is MeetingOutboxCla
     && isCanonicalMicrosoftId(claim.eventId) && isCanonicalMicrosoftId(claim.leaseToken)
     && claim.tenantId === tenantId && positive(claim.eventSeq) && positive(claim.integrationGeneration)
     && positive(claim.attempts) && typeof claim.sourceId === 'string' && claim.sourceId.length > 0 && claim.sourceId.length <= 256
-    && ['source.upsert', 'access.changed', 'source.deleted', 'integration.disabled'].includes(claim.eventType)
+    && ['source.upsert', 'access.changed', 'units.upsert', 'source.deleted', 'integration.disabled'].includes(claim.eventType)
     && !!claim.snapshot && typeof claim.snapshot === 'object' && !Array.isArray(claim.snapshot);
 }
 /** Schema/hash validation plus immutable event/tenant/source/sequence binding. */
 export function validateMeetingOutboxSeal(claim: MeetingOutboxClaim, event: unknown): MeetingKnowledgeEvent {
-  const result = validateMeetingKnowledgeEvent(event);
+  let sourceContext: SourceUpsertEvent | undefined;
+  if (claim.eventType === 'units.upsert') {
+    const context = validateMeetingKnowledgeEvent(claim.snapshot.sourceEvent);
+    if (!context.valid || context.event.eventType !== 'source.upsert' || context.event.tenantId !== claim.tenantId
+      || context.event.sourceId !== claim.sourceId || context.event.integrationGeneration !== claim.integrationGeneration) throw new MeetingOutboxError();
+    sourceContext = context.event;
+  }
+  const result = validateMeetingKnowledgeEvent(event, sourceContext);
   if (!result.valid || !['eventId', 'eventSeq', 'sourceId', 'tenantId', 'integrationGeneration', 'eventType']
     .every(key => result.event[key as keyof MeetingKnowledgeEvent] === claim[key as keyof MeetingOutboxClaim])) throw new MeetingOutboxError();
   const record = claim.snapshot.record;
@@ -47,6 +54,10 @@ export function validateMeetingOutboxSeal(claim: MeetingOutboxClaim, event: unkn
       || source.sourceHash !== snapshot.sourceHash || source.plaintext !== claim.snapshot.plaintext) throw new MeetingOutboxError();
   } else if (result.event.eventType === 'access.changed') {
     if (result.event.payload.accessRevision !== snapshot.accessRevision) throw new MeetingOutboxError();
+  } else if (result.event.eventType === 'units.upsert') {
+    const units = result.event.payload;
+    if (units.contentRevision !== snapshot.contentRevision || units.speakerRevision !== snapshot.speakerRevision
+      || units.sourceHash !== snapshot.sourceHash || canonicalJson(units) !== canonicalJson(claim.snapshot.payload)) throw new MeetingOutboxError();
   } else if (result.event.eventType === 'source.deleted' || result.event.eventType === 'integration.disabled') {
     if (result.event.payload.lifecycleRevision !== snapshot.accessRevision) throw new MeetingOutboxError();
   }

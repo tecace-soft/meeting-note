@@ -1,9 +1,11 @@
-# Meeting extraction core (inactive)
+# Meeting candidate extraction (default off)
 
-`extraction.ts` is an isolated, provider-independent PR3 foundation. No route,
-worker, database writer, outbox, Gemini client, model key or feature flag imports
-or enables it. Existing source/access delivery continues unchanged. This module
-has not been evaluated against a live model or real meeting data.
+`extraction.ts` remains a provider-independent function. The optional
+`extraction-worker.ts` now connects it to a durable SQL job, the explicit Gemini
+adapter and AXKH processing-policy client. Startup is disabled unless
+`MEETING_KNOWLEDGE_EXTRACTION_ENABLED=true`; migration creates no approvals and
+enables no sources. Existing personal-memory extraction is a separate flow.
+This pipeline has not been evaluated against a live model or real meeting data.
 
 ## Trusted caller and policy
 
@@ -21,7 +23,7 @@ there is no default provider. Its response is:
 }
 ```
 
-The eventual adapter must authenticate its issuer and resolve the approved
+The runtime adapter must authenticate its issuer and resolve the approved
 model-processing policy for the tenant, source, security classification, region,
 retention and provider. Identity verification or permission to read a meeting
 alone does not grant permission to send it to a model. `authorizeModel(source)`
@@ -100,16 +102,51 @@ transcript logs or secrets. Each token total becomes `null` if any invoked provi
 or cannot report usage. Zero represents no provider calls or explicitly measured
 zero, never an estimate. A generated candidate is not an approved knowledge classification.
 
-## Next integration work
+## Durable runtime and policy boundary
 
-Durable extraction jobs, retries/deduplication, policy resolution, provider
-adapter, human review, current-source persistence and transactional units outbox
-are not implemented here. That integration must store coverage and provenance,
-retain current raw-source fallback, block stale/deleted/disabled sources, and
-validate the shared event contract before delivery. Consumers must continue to
-apply live access and approved AXKH classification gates before retrieval,
-model use, citation or graph traversal. This core does not publish knowledge to
-search or expand the curated-document ingest policy.
+A successful source-event ACK atomically queues one job for its exact current
+generation/content/speaker/hash. ACK replay never queues a second run. The worker
+claims one job, renews its fenced lease, checks current source state between
+calls, and saves coverage/provenance plus a `units.upsert` outbox event in one
+transaction. Completion releases its raw job snapshot; delivery uses the same
+immutable envelope sealing/retry mechanism as source events. Source changes
+cancel stale jobs and pending candidate packets. Disable/delete also erase job
+snapshots and metadata; AXKH lifecycle events purge the replicated candidates.
+
+After a crash, an expired lease restarts the whole unfinished job. There is no
+provider exactly-once guarantee: an interrupted call may already have incurred
+cost. Completed runs are deduplicated. Failed policy/current checks keep the job
+pending with backoff and publish no units. Ordinary failed chunks may complete
+with explicit raw-fallback coverage; they are not automatically retried as
+individual chunks. The worker defaults to 16 chunks, configurable up to 64;
+text beyond that budget is retained as an explicit skipped remainder. These are
+bounded initial operating budgets, not claims of complete semantic extraction.
+
+The metadata-only AXKH policy endpoint uses a third dedicated server key. It
+requires an explicit, unexpired operator-approved S1–S5 processing policy for
+the exact source revision, provider and model. Google `global` region and
+`provider-default` retention are explicit policy terms, not a promise of local
+processing or zero retention. Missing/revoked/stale policy denies. A person's
+clearance or access to a meeting cannot approve model processing. New content
+or speaker revision requires an updated policy; automated project policy
+inheritance and an authenticated classification UI remain future work.
+
+The adapter uses the existing Gemini transport with cancellation, a bounded
+response, separate system instructions, and only native STOP completion. It
+never silently switches model/provider. Provenance identifies the configured
+model; optional native model-version metadata is not an authenticated version
+attestation. Provider errors never enter coverage or application logs.
+
+## Remaining product integration
+
+Human correction/review, approved project policy inheritance, failed-chunk
+resume, search/indexing, document/entity links and role views remain separate
+work. Consumers must apply live access and approved AXKH read classification
+before retrieval, model context, citation or graph traversal. Processing-policy
+approval does not grant read access or publish candidates to the shared graph.
+The curated-document ingest policy is unchanged. Native SSO/PostgREST,
+multi-connection concurrency, provider quality/cost and real-meeting evaluation
+remain activation gates; see `EXTRACTION-ROLLOUT.md`.
 
 Synthetic verification:
 

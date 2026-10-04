@@ -5,6 +5,13 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
+// PostgreSQL errors may attach entire queries. Report only bounded diagnostic
+// metadata from synthetic checks, never dump SQL or database payloads.
+process.on('uncaughtException', error => {
+  process.stderr.write(JSON.stringify({ code: error.code ?? 'VERIFY_FAILED', message: String(error.message).slice(0,512) }) + '\n');
+  process.exit(1);
+});
+
 if (!process.argv[2]) throw new Error('Usage: node scripts/verify-meeting-knowledge-sql.mjs /absolute/path/to/pglite/dist/index.js');
 const { PGlite } = await import(pathToFileURL(resolve(process.argv[2])).href);
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -13,9 +20,12 @@ const migration = await readFile(resolve(root, 'supabase/migrations/202610040341
 const checks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_access_ledger.sql'), 'utf8');
 const outboxMigration = await readFile(resolve(root, 'supabase/migrations/20261004042544_meeting_knowledge_transactional_outbox.sql'), 'utf8');
 const outboxChecks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_outbox.sql'), 'utf8');
+const extractionMigration = await readFile(resolve(root, 'supabase/migrations/20261004155113_meeting_knowledge_durable_extraction.sql'), 'utf8');
+const extractionChecks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_extraction.sql'), 'utf8');
 const db = new PGlite();
 let passedSqlAssertions;
 let passedOutboxAssertions;
+let passedExtractionAssertions;
 let engine;
 try {
   engine = (await db.query('select version() as engine')).rows[0].engine;
@@ -24,12 +34,17 @@ try {
   await db.exec(migration);
   await db.exec(outboxMigration);
   await db.exec(outboxMigration);
+  await db.exec(extractionMigration);
+  await db.exec(extractionMigration);
   const results = await db.exec(checks);
   passedSqlAssertions = results.flatMap(result => result.rows).find(row => 'passed_ledger_checks' in row)?.passed_ledger_checks;
   assert.equal(passedSqlAssertions, 35);
   const outboxResults = await db.exec(outboxChecks);
   passedOutboxAssertions = outboxResults.flatMap(result => result.rows).find(row => 'passed_outbox_checks' in row)?.passed_outbox_checks;
   assert.equal(passedOutboxAssertions, 72);
+  const extractionResults = await db.exec(extractionChecks);
+  passedExtractionAssertions = extractionResults.flatMap(result => result.rows).find(row => 'passed_extraction_checks' in row)?.passed_extraction_checks;
+  assert.equal(passedExtractionAssertions, 66);
   assert.equal((await db.query('select count(*)::int as count from meeting_knowledge.source')).rows[0].count, 0);
 } finally { await db.close(); }
 
@@ -48,6 +63,8 @@ for (const type of ['uuid', 'integer']) {
     await database.exec(migration);
     await database.exec(outboxMigration);
     await database.exec(outboxMigration);
+    await database.exec(extractionMigration);
+    await database.exec(extractionMigration);
     await database.query('insert into public.project(id,user_id,shared_users) values ($1,$2,$3::text[])', [project, owner, [member]]);
     await database.query(`insert into public.note(id,user_id,transcription,projects) values ($1,$2,$3,$4::${type}[])`, ['synthetic-schema-variant', owner, text, [project]]);
     await database.exec('set role service_role');
@@ -62,4 +79,4 @@ for (const type of ['uuid', 'integer']) {
     assert.deepEqual(changed.projects[0].sharedWith, []);
   } finally { await database.close(); }
 }
-process.stdout.write(JSON.stringify({ engine, passedSqlAssertions, passedOutboxAssertions, repeatedMigration: true, rolledBackSyntheticChecks: true, projectArrayVariants: ['uuid', 'integer'] }) + '\n');
+process.stdout.write(JSON.stringify({ engine, passedSqlAssertions, passedOutboxAssertions, passedExtractionAssertions, repeatedMigration: true, rolledBackSyntheticChecks: true, projectArrayVariants: ['uuid', 'integer'] }) + '\n');

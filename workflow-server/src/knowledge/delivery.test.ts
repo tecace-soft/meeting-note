@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildMeetingOutboxEvent, createMeetingKnowledgeDelivery, MEETING_EVENT_MAX_BYTES, MEETING_RAW_SPAN_MAX_UTF16, MeetingDeliveryError, type MeetingDeliveryEnvironment } from './delivery.js';
-import { canonicalJson, hashPayload, sha256Text, type MeetingKnowledgeEvent } from './contract.js';
+import { canonicalJson, hashPayload, sha256Text, type MeetingKnowledgeEvent, type UnitsPayload } from './contract.js';
 import type { MeetingSourceAccessRecord } from './source-access.js';
 import type { MeetingOutboxClaim, MeetingOutboxStore, MeetingDeliveryErrorCode } from './outbox.js';
 
@@ -276,4 +276,30 @@ test('stop aborts current HTTP work and future polling without discarding lease'
   const worker=createMeetingKnowledgeDelivery(f.store,environment,{workerId,fetch});const pending=worker.runBatch();await waiting;worker.stop();
   assert.equal((await pending).delivered,0);assert.equal(f.failures.length,0);
   assert.deepEqual(await worker.runBatch(),{claimed:0,delivered:0,failed:0,lostLease:0});assert.equal(f.claimCalls,1);
+});
+function unitsItem():MeetingOutboxClaim{
+  const item=claim();const sourceEvent=buildMeetingOutboxEvent(item,'https://meeting.example.test','UTC');if(sourceEvent.eventType!=='source.upsert')assert.fail();
+  const payload:UnitsPayload={contentRevision:sourceEvent.payload.contentRevision,speakerRevision:sourceEvent.payload.speakerRevision,sourceHash:sourceEvent.payload.sourceHash,
+    extractorRun:{runId:'66666666-6666-4666-8666-666666666666',model:'synthetic-model-v1',promptVersion:'meeting-candidates-v1'},
+    units:[{unitId:'synthetic-candidate',text:'A pilot was proposed.',lifecycle:'candidate',epistemic:'reported',
+      evidence:[{...sourceEvent.payload.spans[0],sourceId:item.sourceId,contentRevision:sourceEvent.payload.contentRevision,sourceHash:sourceEvent.payload.sourceHash}]}]};
+  return{...item,eventId:'77777777-7777-4777-8777-777777777777',eventSeq:3,eventType:'units.upsert',snapshot:{
+    record:{tenantId:item.tenantId,sourceId:item.sourceId,integrationGeneration:item.integrationGeneration,contentRevision:payload.contentRevision,
+      speakerRevision:payload.speakerRevision,sourceHash:payload.sourceHash,accessRevision:4},sourceEvent,payload}};
+}
+test('units delivery builds only from persisted payload and exact source context with minimal binding',async()=>{
+  const item=unitsItem();const built=buildMeetingOutboxEvent(item,'https://changed.example.test','America/Los_Angeles');
+  assert.equal(built.eventType,'units.upsert');assert.deepEqual(built.payload,item.snapshot.payload);assert.equal(built.payloadHash,hashPayload(item.snapshot.payload));
+  const f=fixture([item]);assert.equal((await createMeetingKnowledgeDelivery(f.store,environment,{workerId,fetch:f.fetch}).runBatch()).delivered,1);
+  assert.deepEqual(f.bodies[0],built);assert.equal(f.acknowledged[0],built.payloadHash);
+});
+test('units delivery rejects absent source context or mismatched original evidence without POST',async()=>{
+  for(const mutate of [
+    (item:MeetingOutboxClaim)=>{delete item.snapshot.sourceEvent;},
+    (item:MeetingOutboxClaim)=>{(item.snapshot.payload as UnitsPayload).units[0].evidence[0].end--;},
+  ]){
+    const item=unitsItem();mutate(item);const f=fixture([item]);
+    assert.equal((await createMeetingKnowledgeDelivery(f.store,environment,{workerId,fetch:f.fetch}).runBatch()).failed,1);
+    assert.equal(f.bodies.length,0);assert.deepEqual(f.failures,['INVALID_SNAPSHOT']);
+  }
 });

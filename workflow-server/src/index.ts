@@ -21,6 +21,10 @@ import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
 import { startMeetingKnowledgeDelivery } from './knowledge/delivery.js';
+import { createMeetingModelPolicyClient } from './knowledge/model-policy-client.js';
+import { createGeminiMeetingGenerator } from './knowledge/extraction-provider.js';
+import { createMeetingExtractionStore } from './knowledge/extraction-store.js';
+import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -3542,6 +3546,36 @@ server.listen(env.port, () => {
     } catch {
       // Never print endpoint, secret, source data or upstream diagnostics.
       console.warn('Meeting knowledge delivery: CONFIG_UNAVAILABLE');
+    }
+  }
+  if (process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED === 'true') {
+    try {
+      if (!env.supabaseUrl || !env.serviceRoleKey || !env.geminiApiKey
+        || process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED !== 'true') throw new Error('CONFIG_UNAVAILABLE');
+      const model = process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL;
+      if (!model) throw new Error('CONFIG_UNAVAILABLE');
+      const stopExtraction = startMeetingExtractionWorker(createMeetingExtractionStore({
+        rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+      }), {
+        MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
+        MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+        MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
+        MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS: process.env.MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS,
+      }, {
+        generate: createGeminiMeetingGenerator({ apiKey: env.geminiApiKey, model }),
+        authorizeModel: createMeetingModelPolicyClient({
+          MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
+          MEETING_KNOWLEDGE_AXKH_URL: process.env.MEETING_KNOWLEDGE_AXKH_URL,
+          MEETING_KNOWLEDGE_MODEL_POLICY_KEY: process.env.MEETING_KNOWLEDGE_MODEL_POLICY_KEY,
+          MEETING_KNOWLEDGE_INGEST_KEY: process.env.MEETING_KNOWLEDGE_INGEST_KEY,
+          MEETING_KNOWLEDGE_ACCESS_KEY: process.env.MEETING_KNOWLEDGE_ACCESS_KEY,
+          MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+          MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
+        }),
+      });
+      server.once('close', stopExtraction);
+    } catch {
+      console.warn('Meeting knowledge extraction: CONFIG_UNAVAILABLE');
     }
   }
 });
