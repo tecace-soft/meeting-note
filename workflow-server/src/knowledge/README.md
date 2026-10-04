@@ -1,6 +1,6 @@
 # Meeting knowledge transfer — contract v1 (PR0)
 
-This directory defines an **inactive, server-only** transport contract. It does not export a meeting, authenticate a caller, grant access, call a model, or change existing document ingest. The matching AXKH directory is `lib/meeting-knowledge/`. `contract.ts`, `event.schema.json`, and `synthetic-fixtures.json` must remain byte-identical across the two repositories. Changes to either copy require validation on both sides before enabling an integration.
+This directory defines a server-only transport contract and internal access-policy foundations. No meeting export, search, model or HTTP/MCP integration uses these modules yet. The matching AXKH directory is `lib/meeting-knowledge/`. `contract.ts`, `event.schema.json`, `synthetic-fixtures.json`, and `access-contract.ts` must remain byte-identical across the two repositories. Changes to either copy require validation on both sides before enabling an integration.
 
 All committed examples are synthetic. Real meeting transcripts and evaluation answers belong in a restricted evaluation environment, never in the public Meeting Note repository.
 
@@ -46,6 +46,15 @@ Keep the full plaintext available under the source policy. Units add source-boun
 PPT, HTML, Word and other curated documents keep their existing AXKH ingest path. Later stages adapt document sections and meeting spans to common evidence references, resolve shared entity/topic candidates, then add shallow ABOUT/SUPPORTED_BY and evidence-backed correction/condition links. Business-person entities stay separate from Microsoft authentication identities. This increment does not replace the existing ontology or introduce a graph database.
 
 ## Next increments and release gate
+
+The first PR1 increment adds these internal boundaries:
+
+- Meeting Note `knowledge/identity.ts` verifies a signed upgraded Supabase JWT and resolves only server-verified tenant/object identities. The optional Edge Function ID-token upgrade and browser token pairing are documented in `supabase/functions/supabase-token/README.md` in that repository. The flag remains disabled until real SSO testing.
+- Meeting Note `knowledge/source-access.ts` evaluates confirmed attendance, direct shares and owner-matched project shares, with explicit deny precedence and no ownership-only retrieval. Its loader must supply trusted current persistent state; it is not a database implementation or an authenticated endpoint.
+- AXKH `meeting-knowledge/access.ts` combines its existing active/read-role/S-clearance principal policy with approved content classification, the meeting audience and a live exact source/identity/version check. It denies service principals and unavailable source checks, with a3-second deadline. Its current-principal helper must use the existing session/HR resolver.
+- Shared `access-contract.ts` pins the tenant/object/source/content/speaker/access/hash/generation binding. A source denial exposes no stored metadata. These types do not authenticate a server or grant access by themselves.
+
+This is **PR1 identity/policy foundation**, not the complete PR1 release gate. Still required: verified note-owner tenant mapping, confirmed-participant/deny persistence and owner-authorized writes, atomic current-source/revision lookup, scoped service-to-service authentication and HTTP/MCP adapters, RLS integration and real multi-user SSO verification. Do not wire a browser-provided resource, legacy unscoped MCP query or producer-provided approval flag into these modules as trusted state.
 
 - **PR1:** verified tenant/object identities, original participant/share/revocation access, AXKH principal/classification intersection, scoped access-check.
 - **PR2:** transactional outbox, durable importer/index jobs, content/access/lifecycle revisions, replay, ordering, restart and delete tests against a development database.
