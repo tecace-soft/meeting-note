@@ -17,6 +17,14 @@ import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryForContext, ren
 import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 import { handleMcpRequest } from './mcp/transports/http.js';
+import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
+import { createMeetingKnowledgeStore } from './knowledge/store.js';
+import { createMeetingOutboxStore } from './knowledge/outbox.js';
+import { startMeetingKnowledgeDelivery } from './knowledge/delivery.js';
+import { createMeetingModelPolicyClient } from './knowledge/model-policy-client.js';
+import { createGeminiMeetingGenerator } from './knowledge/extraction-provider.js';
+import { createMeetingExtractionStore } from './knowledge/extraction-store.js';
+import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadDotenv({ path: join(workflowDir, '.env') });
@@ -3348,13 +3356,20 @@ const VERSION_INFO = {
   deployedAt: new Date().toISOString(),
 } as const;
 
+const handleMeetingKnowledgeRequest = createMeetingKnowledgeHttpHandler(createMeetingKnowledgeStore({
+  // Bound each new integration RPC independently of existing long workflow jobs.
+  rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(2_000)),
+}), process.env);
+
 const server = createServer((req, res) => {
   void (async () => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    // New private routes own their CORS, credential checks and content-free errors.
+    if (await handleMeetingKnowledgeRequest(req, res, url)) return;
     if (req.method === 'OPTIONS') {
       sendNoContent(res);
       return;
     }
-    const url = new URL(req.url ?? '/', 'http://localhost');
     // MCP server, merged into this process (formerly its own Render web service).
     // Owns /mcp, /mcp-chatgpt, /.well-known/oauth-protected-resource*, and /admin/*
     // dashboard routes; returns false (falls through) for everything else,
@@ -3512,4 +3527,55 @@ server.listen(env.port, () => {
   console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
   void failOrphanedJobs();
   setInterval(() => void failOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
+  // Existing transcription and MCP startup remain independent of this opt-in.
+  if (process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED === 'true') {
+    try {
+      if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('CONFIG_UNAVAILABLE');
+      const stopDelivery = startMeetingKnowledgeDelivery(createMeetingOutboxStore({
+        rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+      }), {
+        MEETING_KNOWLEDGE_DELIVERY_ENABLED: process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED,
+        MEETING_KNOWLEDGE_AXKH_URL: process.env.MEETING_KNOWLEDGE_AXKH_URL,
+        MEETING_KNOWLEDGE_INGEST_KEY: process.env.MEETING_KNOWLEDGE_INGEST_KEY,
+        MEETING_KNOWLEDGE_ACCESS_KEY: process.env.MEETING_KNOWLEDGE_ACCESS_KEY,
+        MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+        MEETING_KNOWLEDGE_NOTE_BASE_URL: process.env.MEETING_KNOWLEDGE_NOTE_BASE_URL,
+        MEETING_KNOWLEDGE_TIMEZONE: process.env.MEETING_KNOWLEDGE_TIMEZONE,
+      });
+      server.once('close', stopDelivery);
+    } catch {
+      // Never print endpoint, secret, source data or upstream diagnostics.
+      console.warn('Meeting knowledge delivery: CONFIG_UNAVAILABLE');
+    }
+  }
+  if (process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED === 'true') {
+    try {
+      if (!env.supabaseUrl || !env.serviceRoleKey || !env.geminiApiKey
+        || process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED !== 'true') throw new Error('CONFIG_UNAVAILABLE');
+      const model = process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL;
+      if (!model) throw new Error('CONFIG_UNAVAILABLE');
+      const stopExtraction = startMeetingExtractionWorker(createMeetingExtractionStore({
+        rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+      }), {
+        MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
+        MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+        MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
+        MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS: process.env.MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS,
+      }, {
+        generate: createGeminiMeetingGenerator({ apiKey: env.geminiApiKey, model }),
+        authorizeModel: createMeetingModelPolicyClient({
+          MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
+          MEETING_KNOWLEDGE_AXKH_URL: process.env.MEETING_KNOWLEDGE_AXKH_URL,
+          MEETING_KNOWLEDGE_MODEL_POLICY_KEY: process.env.MEETING_KNOWLEDGE_MODEL_POLICY_KEY,
+          MEETING_KNOWLEDGE_INGEST_KEY: process.env.MEETING_KNOWLEDGE_INGEST_KEY,
+          MEETING_KNOWLEDGE_ACCESS_KEY: process.env.MEETING_KNOWLEDGE_ACCESS_KEY,
+          MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+          MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
+        }),
+      });
+      server.once('close', stopExtraction);
+    } catch {
+      console.warn('Meeting knowledge extraction: CONFIG_UNAVAILABLE');
+    }
+  }
 });

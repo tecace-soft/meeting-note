@@ -1,0 +1,167 @@
+{
+  "description": "Synthetic only. No real people, meetings, credentials, or model calls. Deny intentionally overlaps project-share; schema does not authorize access. Policy absent means consumer must quarantine until approved AXKH classification.",
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "44444444-4444-4444-8444-000000000001",
+      "eventSeq": 1,
+      "integrationGeneration": 1,
+      "sourceApp": "meeting-note",
+      "sourceId": "synthetic-note-001",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "payloadHash": "537947a9bc38173fad603f6daa4e50e61110bff255dc9dff1db05f13bb7799e3",
+      "eventType": "source.upsert",
+      "payload": {
+        "contentRevision": 1,
+        "speakerRevision": 1,
+        "sourceHash": "13e562c083d04055eb379a1479419e825849a7ac0c3b8bbe3bb51ea3e0a862bb",
+        "title": "합성 다주제 대화",
+        "sourceUrl": "https://meeting.example.test/notes/synthetic-note-001",
+        "meetingAt": null,
+        "timezone": "Asia/Seoul",
+        "plaintext": "가: 다음 주 파일럿을 제안해요. 아직 결정은 아니에요. 🙂\n나: 다른 주제로 넘어가죠. 점심 메뉴는 아직 모르겠어요.\n",
+        "spans": [
+          {
+            "spanId": "synthetic-span-1",
+            "start": 0,
+            "end": 35,
+            "textHash": "f284b52b4df96fa79e7c25d81db8c9bce6888a93e37c4c73fa1cac33bd2df6dd"
+          },
+          {
+            "spanId": "synthetic-span-2",
+            "start": 35,
+            "end": 68,
+            "textHash": "76d81180d2c7480606a7412392de93cbfa6aceae75916c026b1f204b923cafc1"
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "44444444-4444-4444-8444-000000000002",
+      "eventSeq": 2,
+      "integrationGeneration": 1,
+      "sourceApp": "meeting-note",
+      "sourceId": "synthetic-note-001",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "payloadHash": "c8dbe7b5fb2085df82eac3d7c2ee511dd250f6b1ccf8385a4480b639f3cf06ce",
+      "eventType": "access.changed",
+      "payload": {
+        "accessRevision": 1,
+        "grants": [
+          {
+            "identity": {
+              "tenantId": "11111111-1111-4111-8111-111111111111",
+              "objectId": "22222222-2222-4222-8222-000000000001"
+            },
+            "kind": "participant",
+            "verification": {
+              "authority": "meeting-note-server",
+              "evidenceRef": "synthetic-verification-1"
+            }
+          },
+          {
+            "identity": {
+              "tenantId": "11111111-1111-4111-8111-111111111111",
+              "objectId": "22222222-2222-4222-8222-000000000002"
+            },
+            "kind": "direct-share",
+            "verification": {
+              "authority": "meeting-note-server",
+              "evidenceRef": "synthetic-verification-2"
+            }
+          },
+          {
+            "identity": {
+              "tenantId": "11111111-1111-4111-8111-111111111111",
+              "objectId": "22222222-2222-4222-8222-000000000003"
+            },
+            "kind": "project-share",
+            "verification": {
+              "authority": "meeting-note-server",
+              "evidenceRef": "synthetic-verification-3"
+            }
+          }
+        ],
+        "denies": [
+          {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "objectId": "22222222-2222-4222-8222-000000000003"
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "44444444-4444-4444-8444-000000000003",
+      "eventSeq": 3,
+      "integrationGeneration": 1,
+      "sourceApp": "meeting-note",
+      "sourceId": "synthetic-note-001",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "payloadHash": "d0fae72858027c44189f527da35549940cf5bc47ed45e28d8ead89178ec66d27",
+      "eventType": "units.upsert",
+      "payload": {
+        "contentRevision": 1,
+        "speakerRevision": 1,
+        "sourceHash": "13e562c083d04055eb379a1479419e825849a7ac0c3b8bbe3bb51ea3e0a862bb",
+        "extractorRun": {
+          "runId": "33333333-3333-4333-8333-333333333333",
+          "model": "synthetic-no-model-invocation",
+          "promptVersion": "synthetic-v1"
+        },
+        "units": [
+          {
+            "unitId": "synthetic-unit-1",
+            "text": "다음 주 파일럿이 제안되었으며 확정되지 않았다.",
+            "factType": "proposal",
+            "speechAct": "proposal",
+            "epistemic": "reported",
+            "lifecycle": "candidate",
+            "evidence": [
+              {
+                "spanId": "synthetic-span-1",
+                "start": 0,
+                "end": 35,
+                "textHash": "f284b52b4df96fa79e7c25d81db8c9bce6888a93e37c4c73fa1cac33bd2df6dd",
+                "sourceId": "synthetic-note-001",
+                "contentRevision": 1,
+                "sourceHash": "13e562c083d04055eb379a1479419e825849a7ac0c3b8bbe3bb51ea3e0a862bb"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "44444444-4444-4444-8444-000000000004",
+      "eventSeq": 4,
+      "integrationGeneration": 1,
+      "sourceApp": "meeting-note",
+      "sourceId": "synthetic-note-001",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "payloadHash": "41dcc6dec0bc581a004d68b59d455508ff6f2bc0016301c3f9d8c2e8159bddd4",
+      "eventType": "source.deleted",
+      "payload": {
+        "lifecycleRevision": 1,
+        "reason": "source-deleted"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "44444444-4444-4444-8444-000000000005",
+      "eventSeq": 5,
+      "integrationGeneration": 1,
+      "sourceApp": "meeting-note",
+      "sourceId": "synthetic-note-001",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "payloadHash": "3192f5fdf2630278e2bc1446da2d1cadfac4acaaf01f479a790d52cbdbdaed3f",
+      "eventType": "integration.disabled",
+      "payload": {
+        "lifecycleRevision": 2,
+        "reason": "user-disabled"
+      }
+    }
+  ]
+}

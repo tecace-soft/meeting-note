@@ -57,6 +57,8 @@ import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration'
 import { getNoteImageCounts } from '../lib/noteImages';
 import { getOutlookCalendarEvents, type OutlookCalendarEvent } from '../services/graphService';
 import ShareNoteModal from '../components/ShareNoteModal';
+import MeetingKnowledgeModal from '../components/MeetingKnowledgeModal';
+import { meetingKnowledgeUiEnabled } from '../services/meetingKnowledge';
 import NoteImageAttachments from '../components/NoteImageAttachments';
 
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
@@ -87,6 +89,22 @@ interface Note {
   meeting_at?: string | null;
   duration_seconds?: number | null;
 }
+
+
+const getNoteSharedUserIds = (note: Note): string[] => {
+  const raw = note.shared_users;
+  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      return getNoteSharedUserIds({ ...note, shared_users: JSON.parse(trimmed) as unknown });
+    } catch {
+      return trimmed.split(',').map((id) => id.trim()).filter(Boolean);
+    }
+  }
+  return [];
+};
 
 interface ProjectOption {
   id: string;
@@ -455,6 +473,8 @@ const SummaryHistory: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const chatId = searchParams.get('chat_id');
+  const requestedNoteId = searchParams.get('note_id');
+  const noteLinkRef = useRef<{ request: string | null; userId: string | null; handled: boolean }>({ request: null, userId: null, handled: false });
   
   const { user, isAuthenticated, isLoading, getAccessToken } = useAuth();
   const { appLanguage, t } = useLanguage();
@@ -528,6 +548,7 @@ const SummaryHistory: React.FC = () => {
   const [noteTranscriptLanguage, setNoteTranscriptLanguage] = useState<Record<string, TranscriptLanguage>>({});
 
   const [shareModalNoteId, setShareModalNoteId] = useState<string | null>(null);
+  const [knowledgeModalNoteId, setKnowledgeModalNoteId] = useState<string | null>(null);
 
   // Regenerate summary state
   const [regeneratingNoteId, setRegeneratingNoteId] = useState<string | null>(null);
@@ -917,20 +938,7 @@ const SummaryHistory: React.FC = () => {
   return participants.join(', ');
   };
 
-  const getNoteSharedUserIds = (note: Note): string[] => {
-    const raw = note.shared_users;
-    if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
-    if (typeof raw === 'string') {
-      const trimmed = raw.trim();
-      if (!trimmed) return [];
-      try {
-        return getNoteSharedUserIds({ ...note, shared_users: JSON.parse(trimmed) as unknown });
-      } catch {
-        return trimmed.split(',').map((id) => id.trim()).filter(Boolean);
-      }
-    }
-    return [];
-  };
+
 
   const isSharedWithCurrentUser = (note: Note): boolean => {
     if (!user?.id) return false;
@@ -992,6 +1000,22 @@ const SummaryHistory: React.FC = () => {
   useEffect(() => {
     if (!selectedNote) setNoteDetailExpanded(false);
   }, [selectedNote]);
+
+  useEffect(() => {
+    const userId = user?.id ?? null;
+    if (noteLinkRef.current.request !== requestedNoteId || noteLinkRef.current.userId !== userId) {
+      noteLinkRef.current = { request: requestedNoteId, userId, handled: false };
+    }
+    if (!requestedNoteId || !userId || notesLoading || noteLinkRef.current.handled) return;
+    // Select only an already loaded, permission-filtered note. A missing note
+    // leaves the current view unchanged and never starts a separate lookup.
+    const linkedNote = notes.find(note => note.id === requestedNoteId
+      && (note.user_id === userId || getNoteSharedUserIds(note).includes(userId)));
+    if (!linkedNote) return;
+    noteLinkRef.current.handled = true;
+    setExpandedNoteId(linkedNote.id);
+    setNoteDetailExpanded(true);
+  }, [requestedNoteId, user?.id, notes, notesLoading]);
 
   const calendarNotesByDay = useMemo(() => {
     const grouped = new Map<string, Note[]>();
@@ -2688,6 +2712,14 @@ const SummaryHistory: React.FC = () => {
                             ) : null}
                           </div>
                           <div className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-3 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5" style={{ borderColor: 'var(--border)' }}>
+                            {meetingKnowledgeUiEnabled && note.user_id === user?.id ? (
+                              <button type="button" onClick={() => setKnowledgeModalNoteId(note.id)} className={RESULT_ACTION_BTN_CLASS}
+                                title={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}
+                                aria-label={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}>
+                                <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{appLanguage === 'ko' ? 'AXKH 연동' : 'AXKH integration'}</span>
+                              </button>
+                            ) : null}
                             <button type="button" onClick={() => handleOpenShareModal(note)} className={RESULT_ACTION_BTN_CLASS} title={t('share')} aria-label={t('share')}>
                               <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
                               <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{t('share')}</span>
@@ -3194,6 +3226,14 @@ const SummaryHistory: React.FC = () => {
                                           className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-3 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
                                           style={{ borderColor: 'var(--border)' }}
                                         >
+                                          {meetingKnowledgeUiEnabled && note.user_id === user?.id ? (
+                                            <button type="button" onClick={() => setKnowledgeModalNoteId(note.id)} className={RESULT_ACTION_BTN_CLASS}
+                                              title={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}
+                                              aria-label={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}>
+                                              <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{appLanguage === 'ko' ? 'AXKH 연동' : 'AXKH integration'}</span>
+                                            </button>
+                                          ) : null}
                                           <button
                                             type="button"
                                             onClick={() => handleOpenShareModal(note)}
@@ -3471,6 +3511,14 @@ const SummaryHistory: React.FC = () => {
                             className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-3 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5"
                             style={{ borderColor: 'var(--border)' }}
                           >
+                            {meetingKnowledgeUiEnabled && note.user_id === user?.id ? (
+                              <button type="button" onClick={() => setKnowledgeModalNoteId(note.id)} className={RESULT_ACTION_BTN_CLASS}
+                                title={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}
+                                aria-label={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}>
+                                <Users className="h-4 w-4 shrink-0" aria-hidden />
+                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{appLanguage === 'ko' ? 'AXKH 연동' : 'AXKH integration'}</span>
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               onClick={() => handleOpenShareModal(note)}
@@ -3638,6 +3686,10 @@ const SummaryHistory: React.FC = () => {
           </div>
         </div>
       )}
+      {meetingKnowledgeUiEnabled && knowledgeModalNoteId && (() => {
+        const note = notes.find(n => n.id === knowledgeModalNoteId && n.user_id === user?.id);
+        return note ? <MeetingKnowledgeModal key={note.id} noteId={note.id} noteTitle={note.name} onClose={() => setKnowledgeModalNoteId(null)} /> : null;
+      })()}
       {shareModalNoteId && (() => {
         const note = notes.find((n) => n.id === shareModalNoteId);
         return (
@@ -3975,6 +4027,13 @@ const SummaryHistory: React.FC = () => {
             }}
             onMouseDown={(e) => e.stopPropagation()}
           >
+            {meetingKnowledgeUiEnabled && menuNote.user_id === user?.id ? (
+              <button type="button" className="chat-menu-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm"
+                onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); setKnowledgeModalNoteId(menuNote.id); }}>
+                <Users className="h-4 w-4 shrink-0" aria-hidden />
+                {appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => { setOpenNoteMenuId(null); setNoteMenuPos(null); handleOpenShareModal(menuNote); }}

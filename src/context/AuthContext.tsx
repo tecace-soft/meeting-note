@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
-import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
+import { AccountInfo, AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
 import { loginRequest } from '../config/msalConfig';
 import { shouldUseRedirectInteraction } from '../lib/msalRedirect';
 import { ensureSelfSpeakerRowForUser } from '../lib/ensureSelfSpeakerRow';
@@ -89,38 +89,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [instance]);
 
-  const getAccessToken = useCallback(async (scopes?: string[]): Promise<string | null> => {
+  const acquireMicrosoftTokens = useCallback(async (
+    scopes?: string[],
+    forceRefresh = false,
+  ): Promise<AuthenticationResult | null> => {
     const all = instance.getAllAccounts();
     if (all.length === 0) return null;
     const account = all[0] as AccountInfo;
     const tokenRequest = scopes?.length
-      ? { scopes, account }
-      : { ...loginRequest, account };
+      ? { scopes, account, forceRefresh }
+      : { ...loginRequest, account, forceRefresh };
     try {
       const response = await instance.acquireTokenSilent(tokenRequest);
-      return response.accessToken;
-    } catch (error) {
-      console.error('Failed to acquire token silently:', error);
+      return response;
+    } catch {
+      console.error('Failed to acquire token silently.');
       if (shouldUseRedirectInteraction()) {
         try {
           await instance.acquireTokenRedirect(tokenRequest);
-        } catch (redirectError) {
-          console.error('acquireTokenRedirect failed:', redirectError);
+        } catch {
+          console.error('acquireTokenRedirect failed.');
         }
         return null;
       }
       try {
         const response = await instance.acquireTokenPopup(tokenRequest);
-        return response.accessToken;
-      } catch (popupError) {
-        console.error('Failed to acquire token via popup:', popupError);
+        return response;
+      } catch {
+        console.error('Failed to acquire token via popup.');
         return null;
       }
     }
   }, [instance]);
 
+  const getAccessToken = useCallback(async (scopes?: string[]): Promise<string | null> => {
+    const response = await acquireMicrosoftTokens(scopes);
+    return response?.accessToken ?? null;
+  }, [acquireMicrosoftTokens]);
+
   const exchangeSupabaseToken = useCallback(async (): Promise<string | null> => {
-    const microsoftToken = await getAccessToken();
+    // Refresh for exchange so an otherwise usable cached Graph token cannot carry an expired ID token.
+    const microsoftTokens = await acquireMicrosoftTokens(undefined, true);
+    const microsoftToken = microsoftTokens?.accessToken;
     if (!microsoftToken || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
 
     const MAX_ATTEMPTS = 3;
@@ -133,6 +143,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             apikey: SUPABASE_ANON_KEY,
             'Content-Type': 'application/json',
             'x-ms-access-token': microsoftToken,
+            // Same MSAL result as the Graph token; the edge verifies signature and Graph oid binding.
+            ...(microsoftTokens?.idToken ? { 'x-ms-id-token': microsoftTokens.idToken } : {}),
           },
           body: '{}',
         });
@@ -159,7 +171,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     console.error('supabase-token exchange failed after retries:', lastError);
     throw lastError instanceof Error ? lastError : new Error('Could not get Supabase access token.');
-  }, [getAccessToken]);
+  }, [acquireMicrosoftTokens]);
 
   const getSupabaseAccessToken = useCallback(async (): Promise<string | null> => {
     const cached = supabaseTokenRef.current;
