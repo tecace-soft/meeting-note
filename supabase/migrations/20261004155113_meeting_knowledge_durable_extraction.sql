@@ -76,7 +76,7 @@ create trigger meeting_knowledge_source_extraction_changed after update on meeti
 -- source: note/project updates already hold source before cancelling queue rows.
 create or replace function public.meeting_knowledge_outbox_ack(p_event_id uuid,p_worker_id uuid,p_lease_token uuid,p_payload_hash text)
 returns boolean language plpgsql security invoker set search_path='' as $$
-declare existing meeting_knowledge.outbox%rowtype; s meeting_knowledge.source%rowtype; sid text; units integer; should_enqueue boolean;
+declare existing meeting_knowledge.outbox%rowtype; s meeting_knowledge.source%rowtype; sid text; units integer; should_enqueue boolean; pt text; l1 text;
 begin
   if p_payload_hash is null or p_payload_hash !~ '^[0-9a-f]{64}$' then raise exception using errcode='P0001',message='INVALID_OUTBOX_COMMAND'; end if;
   select source_id into sid from meeting_knowledge.outbox where event_id=p_event_id;
@@ -88,9 +88,16 @@ begin
     or existing.prepared_event is null or existing.prepared_event->>'payloadHash' is distinct from p_payload_hash then return false; end if;
   should_enqueue:=existing.event_type='source.upsert' and meeting_knowledge.extraction_binding_current(s,existing.prepared_event);
   if should_enqueue then
-    -- JS evidence ranges use UTF-16 code units, not PostgreSQL code points.
-    select length(existing.prepared_event#>>'{payload,plaintext}')+count(*)::integer into units
-      from regexp_split_to_table(existing.prepared_event#>>'{payload,plaintext}','') ch where ascii(ch)>65535;
+    -- JS evidence offsets use UTF-16 code units, not PostgreSQL code points. The UTF-16
+    -- length is code points plus the astral count (code points > U+FFFF), which are exactly
+    -- the 4-byte UTF-8 sequences, whose lead bytes are 0xF0..0xF4. Count those with a scalar
+    -- translate over a byte-as-char (LATIN1) view, instead of a set-returning per-character
+    -- scan that materializes ~900k rows while this holds the source write lock. translate
+    -- matches exact characters, so this is collation-independent and bit-for-bit equal to the
+    -- previous per-character count on valid UTF-8 text.
+    pt:=existing.prepared_event#>>'{payload,plaintext}';
+    l1:=convert_from(convert_to(pt,'UTF8'),'LATIN1');
+    units:=length(pt)+(length(l1)-length(translate(l1,chr(240)||chr(241)||chr(242)||chr(243)||chr(244),'')));
   end if;
   update meeting_knowledge.outbox set status='delivered',snapshot=null,prepared_event=null,payload_hash=p_payload_hash,delivered_at=clock_timestamp(),
     last_error_code=null,worker_id=null,lease_token=null,lease_until=null where event_id=p_event_id and status='leased' and worker_id=p_worker_id and lease_token=p_lease_token
