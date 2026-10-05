@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { extractMeetingCandidates, planExtractionChunks, EXTRACTION_PROMPT_VERSION,
   type ExtractionDependencies, type ExtractionOptions, type ExtractionRequest, type ExtractionResponse } from './extraction.js';
-import { hashPayload, sha256Text, validateMeetingKnowledgeEvent, type SourceUpsertEvent } from './contract.js';
+import { canonicalJson, hashPayload, sha256Text, validateMeetingKnowledgeEvent, type SourceUpsertEvent } from './contract.js';
 
 const runId = '55555555-5555-4555-8555-555555555555';
 const model = 'synthetic-model-v1';
@@ -231,6 +231,21 @@ test('unit and response limits retain skipped/failed coverage rather than overfl
   assert.equal(oversized.coverage[0].errorCode, 'LIMIT_REACHED');
   const tooMany = await extractMeetingCandidates(source(), deps(async () => response([candidate(), candidate()])), { ...options, maxCandidatesPerChunk: 1 });
   assert.equal(tooMany.coverage[0].errorCode, 'LIMIT_REACHED');
+});
+
+test('cumulative payload byte budget emits an honest partial instead of overflowing the completion snapshot', async () => {
+  const current = source(['abcdefgh']);
+  const gen: ExtractionDependencies['generate'] = async request => response([candidate(request.chunk.sourceSpanIds)]);
+  // Unbounded: every processable chunk contributes one unit.
+  const full = await extractMeetingCandidates(current, deps(gen), { ...options, maxChunkCodeUnits: 2 });
+  assert.ok(full.payload.units.length >= 2);
+  // A budget admitting only the first unit must stop with a bounded partial, not overflow.
+  const oneUnitBytes = Buffer.byteLength(canonicalJson({ ...full.payload, units: full.payload.units.slice(0, 1) }), 'utf8');
+  const partial = await extractMeetingCandidates(current, deps(gen), { ...options, maxChunkCodeUnits: 2, maxPayloadBytes: oneUnitBytes + 3 });
+  assert.equal(partial.payload.units.length, 1);
+  assert.ok(partial.coverage.some(chunk => chunk.status === 'skipped' && chunk.errorCode === 'LIMIT_REACHED'));
+  assert.ok(Buffer.byteLength(canonicalJson(partial.payload), 'utf8') <= oneUnitBytes + 3);
+  fullCoverage(partial, current.payload.plaintext);
 });
 
 test('bad source hashes or coverage are rejected before provider', async () => {

@@ -34,8 +34,17 @@ export interface ExtractionOptions {
   runId: string; model: string; signal?: AbortSignal;
   maxChunkCodeUnits?: number; maxChunks?: number; maxSpansPerChunk?: number;
   maxUnits?: number; maxCandidatesPerChunk?: number; maxOutputCodeUnits?: number;
-  modelTimeoutMs?: number; gateTimeoutMs?: number;
+  maxPayloadBytes?: number; modelTimeoutMs?: number; gateTimeoutMs?: number;
 }
+// meeting_knowledge_extraction_complete stores the units packet in a snapshot that
+// RE-EMBEDS the full source event, and caps that snapshot at 1 MiB (octet_length).
+// So the binding limit is sourceEventBytes + payloadBytes, not the payload alone.
+// We bound cumulative units here so a large run emits an honest partial that fits and
+// completes, instead of a whole result rejected with EXTRACTION_PAYLOAD_TOO_LARGE and
+// the job permanently blocked (available_at='infinity').
+const COMPLETION_SNAPSHOT_CAP = 1_048_576;
+const SNAPSHOT_FIXED_RESERVE = 8_192; // record wrapper + source-event jsonb text spacing
+const PAYLOAD_TEXT_SAFETY = 0.8; // PostgreSQL jsonb ::text spacing expands this compact JSON
 export interface ExtractionUsage { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }
 export interface ExtractionResult {
   payload: UnitsPayload; coverage: ExtractionCoverage[];
@@ -160,6 +169,10 @@ function parseCandidates(text: string, chunk: ExtractionChunk, source: SourceUps
   }
   return { units, rejected };
 }
+function unitBytes(unit: KnowledgeUnit): number {
+  // +1 for the array comma separator; a conservative over-count is safe here.
+  return Buffer.byteLength(canonicalJson(unit), 'utf8') + 1;
+}
 function metadata(response: ExtractionResponse, expectedModel: string): ExtractionUsage {
   // Snapshot provider-owned objects so getters or later mutation cannot enter provenance.
   const copy = JSON.parse(canonicalJson(response)) as ExtractionResponse;
@@ -185,6 +198,17 @@ export async function extractMeetingCandidates(source: SourceUpsertEvent, depend
   const coverage: ExtractionCoverage[] = chunks.map(chunk => ({ ...chunk, status: 'skipped', rawFallback: true, acceptedCandidates: 0, rejectedCandidates: 0 }));
   const units: KnowledgeUnit[] = [];
   const usage: ExtractionUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  // Cumulative payload byte budget so the completion snapshot (source event + payload)
+  // stays under COMPLETION_SNAPSHOT_CAP. Measured against the SAME source event the worker
+  // stored, which this extraction re-embeds at completion.
+  const basePayloadBytes = Buffer.byteLength(canonicalJson({ contentRevision: currentSource.payload.contentRevision,
+    speakerRevision: currentSource.payload.speakerRevision, sourceHash: currentSource.payload.sourceHash,
+    extractorRun: { runId, model, promptVersion: EXTRACTION_PROMPT_VERSION }, units: [] }), 'utf8');
+  const sourceEventBytes = Buffer.byteLength(canonicalJson(currentSource), 'utf8');
+  const budgetCeiling = Math.max(basePayloadBytes,
+    Math.floor((COMPLETION_SNAPSHOT_CAP - sourceEventBytes - SNAPSHOT_FIXED_RESERVE) * PAYLOAD_TEXT_SAFETY));
+  const maxPayloadBytes = positive(options.maxPayloadBytes, Math.min(budgetCeiling, COMPLETION_SNAPSHOT_CAP), COMPLETION_SNAPSHOT_CAP);
+  let payloadBytes = basePayloadBytes; let budgetReached = false;
   let calls = 0; let terminal: ExtractionErrorCode | undefined;
   const check = async (kind: 'policy' | 'current'): Promise<ExtractionErrorCode | undefined> => {
     try {
@@ -199,7 +223,7 @@ export async function extractMeetingCandidates(source: SourceUpsertEvent, depend
   for (const chunk of chunks) {
     const state = coverage[chunk.index];
     if (terminal) { state.errorCode = terminal; state.status = terminal === 'CANCELLED' ? 'cancelled' : 'skipped'; continue; }
-    if (!chunk.processable || units.length >= maxUnits) { state.errorCode = 'LIMIT_REACHED'; continue; }
+    if (!chunk.processable || units.length >= maxUnits || budgetReached) { state.errorCode = 'LIMIT_REACHED'; continue; }
     terminal = await gate();
     if (terminal) { state.errorCode = terminal; state.status = terminal === 'CANCELLED' ? 'cancelled' : 'skipped'; continue; }
     const fragments = currentSource.payload.spans.filter(span => chunk.sourceSpanIds.includes(span.spanId)).map(span => {
@@ -237,9 +261,18 @@ export async function extractMeetingCandidates(source: SourceUpsertEvent, depend
       if (safeResponse.text.length > maxOutput) { state.status = 'failed'; state.errorCode = 'LIMIT_REACHED'; continue; }
       try {
         const parsed = parseCandidates(safeResponse.text, chunk, currentSource, runId, maxCandidates, maxUnits - units.length);
-        units.push(...parsed.units); state.acceptedCandidates = parsed.units.length; state.rejectedCandidates = parsed.rejected;
-        state.status = parsed.rejected ? 'failed' : 'success'; state.rawFallback = parsed.rejected > 0 || parsed.units.length === 0;
-        if (parsed.rejected) state.errorCode = 'INVALID_CANDIDATE';
+        const addedBytes = parsed.units.reduce((sum, unit) => sum + unitBytes(unit), 0);
+        if (parsed.units.length > 0 && payloadBytes + addedBytes > maxPayloadBytes) {
+          // Accepting this chunk would overflow the completion snapshot cap. Stop with an
+          // honest partial: leave these valid candidates out, record a bounded skip, and do
+          // not call the model for the remaining chunks.
+          budgetReached = true; state.status = 'skipped'; state.errorCode = 'LIMIT_REACHED'; state.rawFallback = true;
+        } else {
+          units.push(...parsed.units); payloadBytes += addedBytes;
+          state.acceptedCandidates = parsed.units.length; state.rejectedCandidates = parsed.rejected;
+          state.status = parsed.rejected ? 'failed' : 'success'; state.rawFallback = parsed.rejected > 0 || parsed.units.length === 0;
+          if (parsed.rejected) state.errorCode = 'INVALID_CANDIDATE';
+        }
       } catch (error) { state.status = 'failed'; state.errorCode = error instanceof Error && error.message === 'LIMIT_REACHED' ? 'LIMIT_REACHED' : 'INVALID_OUTPUT'; }
     } catch (error) {
       state.status = error instanceof CallFailure && error.code === 'CANCELLED' ? 'cancelled' : 'failed';
