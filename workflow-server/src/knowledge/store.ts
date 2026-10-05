@@ -73,6 +73,23 @@ export function createMeetingKnowledgeStore(client: MeetingKnowledgeRpcClient) {
     return { p_tenant_id: identity.tenantId, p_source_id: sourceId, p_owner_object_id: identity.objectId };
   }
   return {
+    async resync(identity: MicrosoftIdentity, command: { sourceId: string; expectedAccessRevision?: number;
+      contentRevision?: number; speakerRevision?: number; integrationGeneration?: number; sourceHash?: string }): Promise<MeetingManagementAcknowledgement> {
+      const args = manageArgs(identity, command.sourceId);
+      const binding = { tenantId: identity.tenantId, sourceId: command.sourceId, accessRevision: command.expectedAccessRevision,
+        contentRevision: command.contentRevision, speakerRevision: command.speakerRevision,
+        integrationGeneration: command.integrationGeneration, sourceHash: command.sourceHash };
+      if (!isMeetingSourceBinding(binding)) throw new MeetingKnowledgeStoreError('INVALID_MUTATION');
+      let result: { data: unknown; error: unknown };
+      try { result = await client.rpc('meeting_knowledge_owner_resync', { ...args,
+        p_content_revision: binding.contentRevision, p_speaker_revision: binding.speakerRevision,
+        p_access_revision: binding.accessRevision, p_integration_generation: binding.integrationGeneration, p_source_hash: binding.sourceHash }); }
+      catch { throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE'); }
+      if (!result || result.error) throw sqlError(result?.error);
+      if (!isManagementAcknowledgement(result.data, command.sourceId) || result.data.accessRevision !== binding.accessRevision
+        || result.data.integrationGeneration !== binding.integrationGeneration || !result.data.integrationEnabled) throw new MeetingKnowledgeStoreError('STORE_UNAVAILABLE');
+      return result.data;
+    },
     async loadCurrentEvidence(request: MeetingLiveAccessRequest): Promise<MeetingCurrentEvidence | null> {
       if (!isMeetingLiveAccessRequest(request)) throw new MeetingKnowledgeStoreError('INVALID_MUTATION');
       let result: { data: unknown; error: unknown };

@@ -24,11 +24,14 @@ const extractionMigration = await readFile(resolve(root, 'supabase/migrations/20
 const extractionChecks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_extraction.sql'), 'utf8');
 const evidenceMigration = await readFile(resolve(root, 'supabase/migrations/20261004194748_meeting_knowledge_evidence_fetch.sql'), 'utf8');
 const evidenceChecks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_evidence_fetch.sql'), 'utf8');
+const operabilityMigration = await readFile(resolve(root, 'supabase/migrations/20261005012840_meeting_knowledge_owner_operability.sql'), 'utf8');
+const operabilityChecks = await readFile(resolve(root, 'supabase/tests/meeting_knowledge_owner_operability.sql'), 'utf8');
 const db = new PGlite();
 let passedSqlAssertions;
 let passedOutboxAssertions;
 let passedExtractionAssertions;
 let passedEvidenceAssertions;
+let passedOperabilityAssertions;
 let engine;
 try {
   engine = (await db.query('select version() as engine')).rows[0].engine;
@@ -41,6 +44,8 @@ try {
   await db.exec(extractionMigration);
   await db.exec(evidenceMigration);
   await db.exec(evidenceMigration);
+  await db.exec(operabilityMigration);
+  await db.exec(operabilityMigration);
   const results = await db.exec(checks);
   passedSqlAssertions = results.flatMap(result => result.rows).find(row => 'passed_ledger_checks' in row)?.passed_ledger_checks;
   assert.equal(passedSqlAssertions, 35);
@@ -53,6 +58,9 @@ try {
   const evidenceResults = await db.exec(evidenceChecks);
   passedEvidenceAssertions = evidenceResults.flatMap(result => result.rows).find(row => 'passed_evidence_checks' in row)?.passed_evidence_checks;
   assert.equal(passedEvidenceAssertions, 33);
+  const operabilityResults = await db.exec(operabilityChecks);
+  passedOperabilityAssertions = operabilityResults.flatMap(result => result.rows).find(row => 'passed_operability_checks' in row)?.passed_operability_checks;
+  assert.equal(passedOperabilityAssertions, 49);
   assert.equal((await db.query('select count(*)::int as count from meeting_knowledge.source')).rows[0].count, 0);
 } finally { await db.close(); }
 
@@ -75,6 +83,8 @@ for (const type of ['uuid', 'integer']) {
     await database.exec(extractionMigration);
     await database.exec(evidenceMigration);
     await database.exec(evidenceMigration);
+    await database.exec(operabilityMigration);
+    await database.exec(operabilityMigration);
     await database.query('insert into public.project(id,user_id,shared_users) values ($1,$2,$3::text[])', [project, owner, [member]]);
     await database.query(`insert into public.note(id,user_id,transcription,projects) values ($1,$2,$3,$4::${type}[])`, ['synthetic-schema-variant', owner, text, [project]]);
     await database.exec('set role service_role');
@@ -102,4 +112,4 @@ for (const type of ['uuid', 'integer']) {
     assert.equal((await database.query(evidenceSql, args)).rows[0].evidence, null);
   } finally { await database.close(); }
 }
-process.stdout.write(JSON.stringify({ engine, passedSqlAssertions, passedOutboxAssertions, passedExtractionAssertions, passedEvidenceAssertions, repeatedMigration: true, rolledBackSyntheticChecks: true, projectArrayVariants: ['uuid', 'integer'] }) + '\n');
+process.stdout.write(JSON.stringify({ engine, passedSqlAssertions, passedOutboxAssertions, passedExtractionAssertions, passedEvidenceAssertions, passedOperabilityAssertions, repeatedMigration: true, rolledBackSyntheticChecks: true, projectArrayVariants: ['uuid', 'integer'] }) + '\n');

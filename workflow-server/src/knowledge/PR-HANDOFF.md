@@ -1,71 +1,50 @@
-# Meeting knowledge branch review handoff
+# Meeting Note private knowledge PR handoff
 
-Review branch: `codex/meeting-knowledge-Hans`, based on `main` (`b829ac3`).
-This branch is intended for a draft GitHub PR and Meeting Note maintainer review
-before integration. Hosted migrations, deployment and activation remain pending.
-Every new integration flag is default off.
+Review branch: `codex/meeting-knowledge-Hans`; base `main`.
+PR: https://github.com/tecace-soft/meeting-note/pull/24
+Pair with AXKH: https://github.com/bottomup32/ax-consulting-business/pull/2
+The maintainer separately reviews/merges this public producer repository.
+All committed fixtures are fictional; no actual private meetings or secrets.
 
-## Review scope
+Implemented: verified Microsoft tenant/OID preservation, owner-confirmed
+attendance/denial ledger and UI, uncached source authorization and original
+fetch, transactional versioned delivery/outbox, policy-gated durable Gemini
+candidate extraction, coverage/provenance and bounded provider-attempt accounting.
+Source edits/revoke/disable/delete invalidate old work. Candidate extraction
+never replaces originals or publishes shared facts. Personal memory is separate.
 
-The branch contains the shared event contract, opt-in verified Microsoft identity
-preservation, private owner/participant/denial ledger, authenticated management
-and source-access API, owner attendance UI, transactional delivery outbox and
-durable candidate extraction. Existing curated-document ingestion belongs to
-AXKH; existing personal-memory extraction remains separate.
+The owner now sees exact-binding delivery/extraction status, inactive workers,
+policy waits, partial coverage and actionable payload/model holds. Explicit
+resync recreates missing current source/access events without changing grants,
+resetting active leases, replaying completed models or clearing paid limits.
+Timeouts settle even noncooperative fetch/body/RPC transports.
 
-The new increment queues extraction only when AXKH ACKs the current raw source.
-The worker checks AXKH's explicit model-processing policy, uses the configured
-Gemini model with abort and response bounds, then atomically records coverage
-and queues candidate units. Edits and lifecycle events cancel stale work. Source
-reading permission never supplies model-processing permission. Candidates never
-become confirmed/verified facts automatically.
+Install the five ordered additive knowledge migrations only after comparing
+hosted schema and role grants. The final migration is
+`20261005012840_meeting_knowledge_owner_operability.sql`; its provider-budget RPC
+must precede the new worker. Token exchange/backend precede dependent frontend.
+Flags default off, machine keys remain distinct and server-only. See
+[BETA-OPERABILITY.md](BETA-OPERABILITY.md), [ROLLOUT.md](ROLLOUT.md),
+[EVIDENCE-FETCH.md](EVIDENCE-FETCH.md) and extraction rollout guides.
 
-Inspect the three ordered Supabase migrations under `supabase/migrations/` with
-names ending in `meeting_knowledge_access_ledger`,
-`meeting_knowledge_transactional_outbox`, and `meeting_knowledge_durable_extraction`.
-Do not replay unrelated historical migrations without comparing hosted schema
-and migration history. Review service-role grants/RLS and note/project trigger
-coverage using the deployed schema. Backend API changes precede dependent UI;
-the upgraded token exchange's CORS/header support precedes its frontend client.
+The wire packet stays 1 MiB with a conservative 900,000 JSON-byte source budget.
+Oversized originals remain saved and visibly held; split/edit into a new source
+revision. Multipart delivery is not implemented. Automatic paid/ambiguous
+provider runs are capped at 3 per immutable source binding, and per-run chunk
+bounds still apply. These are beta bounds, not exactly-once billing.
 
-## Validation and limits
+Verification includes full backend tests/build, frontend build, scoped lint,
+five migrations applied twice in PostgreSQL-compatible engines, native
+PostgreSQL17+PostgREST synthetic roles and separate-connection locking, and the
+compiled two-system extraction/import/read boundary. The earlier extraction
+runtime now has an independent release audit in addition to the new increment.
+Exact final counts are recorded in the PR/QA report.
 
-Latest backend suite: 512 passing tests. The PostgreSQL-WASM runner exercises
-35 ledger, 72 delivery, 66 extraction and 33 evidence assertions, repeated migrations and
-UUID/integer project-array variants. Cross-repository runtime verification
-uses two PostgreSQL engines, actual policy/provider/job/delivery code and
-in-process Request/Response adapters with synthetic provider replies; 162
-assertions pass. It does not call Google, hosted Supabase, or live SSO.
+Real Microsoft SSO/refresh, hosted grants and actual model quality/cost/deployed
+latency remain activation gates. There is no staging environment. Local/native
+synthetic checks do not establish production sessions. Read-only inspection
+found pre-existing public.chat/public.session RLS disabled; review suitable
+policies before enabling it, since blanket activation would change existing
+flows. No hosted migration, deployment, flags or default-branch merge was applied.
 
-Backend build and changed/new-file lint pass. Existing whole-repository lint
-failures are not fixed by this branch. Prior actual-modal functional browser
-verification passed 41 synthetic-auth assertions; no UI changed in the durable
-extraction increment. Final independent review of this increment was interrupted
-by agent usage limits; root completed tests and manual review, but independent
-release review remains pending. Earlier PR2/core QA does not approve these new
-runtime changes for release. PR4 original-evidence/search has a separate
-independent review and actual-localhost-HTTP verification; it does not replace
-that earlier runtime release review.
-
-No staging exists. Before activation, validate native PostgREST/RLS, real
-Microsoft users/tokens, simultaneous worker connections, edit/delete races,
-provider policy/quality/cost, rollback and actual application regression flows.
-
-## Maintainer activation dependencies
-
-See `ROLLOUT.md`, `EXTRACTION.md`, `EXTRACTION-PROVIDER.md` and
-`EXTRACTION-ROLLOUT.md`. AXKH's private receiver/policy schema and dedicated
-keys must be ready before producers are enabled. The first policy implementation
-uses explicit per-revision operator approval; project defaults and a human
-classification UI are future work. A partial run stores failed/skipped coverage
-and raw fallback; there is no automatic failed-chunk resume or multipart packet
-delivery. Document/entity search and role views are not implemented here.
-
-The next increment adds `/knowledge/v1/evidence-fetch`, using the same dedicated
-access key/tenant/default-off access flag and a service-only additive migration.
-It returns at most eight exact delivery spans only when all source versions and
-current participant/share access match; management ownership alone never grants
-retrieval. See `EVIDENCE-FETCH.md`. AXKH's `codex/meeting-knowledge-search-Hans`
-branch contains the companion
-private read classification, document/meeting search page and Web/MCP evidence
-reads. That search is an excerpt baseline; role views and synthesis are pending.
+Latest results and evaluation limits: [RELEASE-VALIDATION.md](RELEASE-VALIDATION.md).

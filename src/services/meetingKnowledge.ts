@@ -1,4 +1,6 @@
 import { getSupabaseAccessTokenForRequest } from '../config/supabaseConfig';
+// Pure DTO validation shared with the server; contains no transport or secrets.
+import { isMeetingProcessingStatus, type MeetingProcessingStatus } from '../../workflow-server/src/knowledge/management-status';
 
 const API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
 export const meetingKnowledgeUiEnabled = import.meta.env.VITE_MEETING_KNOWLEDGE_UI_ENABLED === 'true';
@@ -17,14 +19,17 @@ export interface MeetingKnowledgeStatus {
   directShares: string[];
   projectShares: string[];
   delivery: { pending: number; lastDeliveredAt: string | null; lastErrorCode: string | null };
+  processing?: MeetingProcessingStatus;
+  workers?: { delivery: boolean; extraction: boolean };
 }
-export type MeetingKnowledgeAction = 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable';
+export type MeetingKnowledgeAction = 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable' | 'resync';
 export interface MeetingKnowledgeCommand {
   sourceId: string;
   action: MeetingKnowledgeAction;
   expectedAccessRevision?: number;
   subjectObjectId?: string;
   verificationRef?: string;
+  contentRevision?: number; speakerRevision?: number; integrationGeneration?: number; sourceHash?: string;
 }
 export class MeetingKnowledgeApiError extends Error {
   constructor(public readonly status: number) { super('Meeting knowledge request failed'); }
@@ -52,7 +57,13 @@ function parseStatus(value: unknown, sourceId: string): MeetingKnowledgeStatus {
     || !status.delivery || !Number.isSafeInteger(status.delivery.pending) || status.delivery.pending < 0
     || (status.delivery.lastDeliveredAt !== null && (typeof status.delivery.lastDeliveredAt !== 'string' || !Number.isFinite(Date.parse(status.delivery.lastDeliveredAt))))
     || (status.delivery.lastErrorCode !== null && !SAFE_DELIVERY_ERROR_CODES.has(status.delivery.lastErrorCode))
-    || (status.enrolled && (status.accessRevision === null || status.integrationGeneration === null))) {
+    || (status.enrolled && (status.accessRevision === null || status.integrationGeneration === null))
+    || (status.processing !== undefined && (!isMeetingProcessingStatus(status.processing, sourceId)
+      || status.processing.canResync && (!status.enrolled || !status.integrationEnabled)
+      || status.processing.binding !== null && (!status.enrolled || status.processing.binding.accessRevision !== status.accessRevision
+        || status.processing.binding.integrationGeneration !== status.integrationGeneration)))
+    || (status.workers !== undefined && (!status.workers || Object.keys(status.workers).sort().join(',') !== 'delivery,extraction'
+      || typeof status.workers.delivery !== 'boolean' || typeof status.workers.extraction !== 'boolean'))) {
     throw new MeetingKnowledgeApiError(502);
   }
   return status;

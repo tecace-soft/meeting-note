@@ -151,3 +151,26 @@ test('removed transcript can still be disabled using a minimal fenced acknowledg
   await assert.rejects(storeFor({ ...ack, integrationEnabled: true }).mutate(owner, { sourceId, expectedAccessRevision: 1, action: 'disable' }), isError('STORE_UNAVAILABLE'));
   await assert.rejects(storeFor({ ...record(), integrationEnabled: true }).mutate(owner, { sourceId, expectedAccessRevision: 1, action: 'disable' }), isError('STORE_UNAVAILABLE'));
 });
+
+test('owner resync service RPC binds verified identity and unchanged acknowledgement', async () => {
+  const identity={tenantId:'11111111-1111-4111-8111-111111111111',objectId:'22222222-2222-4222-8222-000000000001'};
+  let called:unknown;
+  const store=createMeetingKnowledgeStore({async rpc(name,args){called={name,args};return {data:{sourceId:'synthetic-source',accessRevision:2,integrationGeneration:3,integrationEnabled:true},error:null};}});
+  await store.resync(identity,{sourceId:'synthetic-source',expectedAccessRevision:2,contentRevision:4,speakerRevision:5,integrationGeneration:3,sourceHash:'a'.repeat(64)});
+  assert.deepEqual(called,{name:'meeting_knowledge_owner_resync',args:{p_tenant_id:identity.tenantId,p_source_id:'synthetic-source',p_owner_object_id:identity.objectId,
+    p_content_revision:4,p_speaker_revision:5,p_access_revision:2,p_integration_generation:3,p_source_hash:'a'.repeat(64)}});
+});
+
+test('owner processing status rejects injected text and inconsistent recovery fences', async () => {
+  const processing={binding:{tenantId:owner.tenantId,sourceId,contentRevision:1,speakerRevision:1,accessRevision:2,integrationGeneration:3,sourceHash:'a'.repeat(64)},
+    sourceBytes:24,encodedSourceBytes:26,sourceLimitBytes:900000,sizing:'ready',deliveryState:'queued',extractionState:'not-started',extractionErrorCode:null,
+    successfulChunks:0,failedChunks:0,skippedChunks:0,canResync:true};
+  const status={...ownerStatus(),enrolled:true,integrationEnabled:true,accessRevision:2,integrationGeneration:3,processing};
+  const good=createMeetingKnowledgeStore({async rpc(){return {data:status,error:null};}});
+  assert.deepEqual(await good.getOwnedStatus(owner,sourceId),status);
+  for(const patch of [{...processing,title:'private'},{...processing,failedChunks:-1},{...processing,extractionErrorCode:'private details'},
+    {...processing,binding:{...processing.binding,accessRevision:3}},{...processing,binding:{...processing.binding,integrationGeneration:4}}]) {
+    const bad=createMeetingKnowledgeStore({async rpc(){return {data:{...status,processing:patch},error:null};}});
+    await assert.rejects(bad.getOwnedStatus(owner,sourceId),/STORE_UNAVAILABLE/);
+  }
+});

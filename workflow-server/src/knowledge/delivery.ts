@@ -25,6 +25,7 @@ export class MeetingDeliveryError extends Error {
   constructor(readonly code: MeetingDeliveryErrorCode) { super(code); }
 }
 export const MEETING_EVENT_MAX_BYTES = 1024 * 1024;
+export const MEETING_SOURCE_JSON_MAX_BYTES = 900_000;
 export const MEETING_RAW_SPAN_MAX_UTF16 = 8_000;
 const TIMEOUT_MS = 5_000;
 /** Pure positional evidence; no topic or speaker identity is inferred. */
@@ -167,9 +168,11 @@ export function createMeetingKnowledgeDelivery(store: MeetingOutboxStore, enviro
         for (const claim of claims) {
           if (stopped) break; // Remaining durable leases are reclaimed after expiry.
           let timer: ReturnType<typeof setTimeout> | undefined;
+          let cleanupDeadline = () => undefined;
           try {
             if (claim.tenantId !== config.tenantId) throw new MeetingDeliveryError('INVALID_SNAPSHOT');
             const candidate = buildMeetingOutboxEvent(claim,config.noteBase,config.timezone);
+            if (candidate.eventType === 'source.upsert' && Buffer.byteLength(JSON.stringify(candidate.payload.plaintext),'utf8') > MEETING_SOURCE_JSON_MAX_BYTES) throw new MeetingDeliveryError('PAYLOAD_TOO_LARGE');
             if (Buffer.byteLength(JSON.stringify(candidate),'utf8') > MEETING_EVENT_MAX_BYTES) throw new MeetingDeliveryError('PAYLOAD_TOO_LARGE');
             const sealed = await store.prepare(claim,workerId,candidate);
             if (sealed === null) {stats.lostLease++;continue;}
@@ -179,13 +182,20 @@ export function createMeetingKnowledgeDelivery(store: MeetingOutboxStore, enviro
             if (Buffer.byteLength(body,'utf8') > MEETING_EVENT_MAX_BYTES) throw new MeetingDeliveryError('PAYLOAD_TOO_LARGE');
             if (stopped) break;
             const controller = new AbortController(); activeController = controller;
+            let rejectDeadline: (error: MeetingDeliveryError) => void = () => undefined;
+            const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject; });
+            const onAbort = () => rejectDeadline(new MeetingDeliveryError('DELIVERY_FAILED'));
+            controller.signal.addEventListener('abort', onAbort, { once: true });
+            cleanupDeadline = () => { controller.signal.removeEventListener('abort', onAbort); };
             timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-            const response = await (options.fetch ?? fetch)(config.endpoint, {method:'POST',headers:{authorization:`Bearer ${config.key}`,'content-type':'application/json',accept:'application/json'},body,cache:'no-store',redirect:'error',credentials:'omit',signal:controller.signal});
+            const fetchPromise = Promise.resolve().then(() => (options.fetch ?? fetch)(config.endpoint, {method:'POST',headers:{authorization:`Bearer ${config.key}`,'content-type':'application/json',accept:'application/json'},body,cache:'no-store',redirect:'error',credentials:'omit',signal:controller.signal}));
+            void fetchPromise.then(late => { if (controller.signal.aborted) void late.body?.cancel().catch(() => undefined); }, () => undefined);
+            const response = await Promise.race([fetchPromise, deadline]);
             if (response.status !== 200 || response.redirected || !/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) {
-              await response.body?.cancel().catch(() => undefined);
+              void response.body?.cancel().catch(() => undefined);
               throw new MeetingDeliveryError('IMPORT_REJECTED');
             }
-            const ack = await readAck(response, controller.signal) as Record<string,unknown>;
+            const ack = await Promise.race([readAck(response, controller.signal), deadline]) as Record<string,unknown>;
             if (!ack || typeof ack !== 'object' || Object.keys(ack).sort().join(',') !== 'eventId,eventSeq,payloadHash,status'
               || ack.eventId !== event.eventId || ack.eventSeq !== event.eventSeq || ack.payloadHash !== event.payloadHash
               || !['applied','duplicate','ignored'].includes(ack.status as string)) throw new MeetingDeliveryError('DELIVERY_FAILED');
@@ -195,7 +205,7 @@ export function createMeetingKnowledgeDelivery(store: MeetingOutboxStore, enviro
             const code = error instanceof MeetingDeliveryError ? error.code : 'DELIVERY_FAILED';
             try { if (await store.fail(claim,workerId,code)) stats.failed++; else stats.lostLease++; }
             catch {stats.failed++;} // A durable expired lease is the fallback; never discard it.
-          } finally { if (timer) clearTimeout(timer);activeController = null; }
+          } finally { if (timer) clearTimeout(timer);cleanupDeadline();activeController = null; }
         }
         return stats;
       } finally { running = false; }

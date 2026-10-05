@@ -46,6 +46,7 @@ export function createMeetingExtractionWorker(store: MeetingExtractionStore, env
         if (!claims.length || stopped) return stats;
         const claim = JSON.parse(canonicalJson(claims[0])) as typeof claims[0];
         let fault: MeetingExtractionFailureCode | undefined;
+        let providerAttemptStarted = false;
         const controller = new AbortController(); active = controller;
         try {
           if (!isMeetingExtractionClaim(claim, tenantId!)) { fault = 'INVALID_SNAPSHOT'; throw new Error(); }
@@ -66,7 +67,15 @@ export function createMeetingExtractionWorker(store: MeetingExtractionStore, env
           }, 15_000);
           interval.unref();
           const result = await extractMeetingCandidates(claim.sourceEvent, {
-            generate: dependencies.generate,
+            async generate(request) {
+              if (!providerAttemptStarted) {
+                if (!store.beginProviderAttempt || !await store.beginProviderAttempt(claim, workerId)) {
+                  fault ??= 'EXTRACTION_FAILED'; controller.abort(); throw new Error('EXTRACTION_FAILED');
+                }
+                providerAttemptStarted = true;
+              }
+              return dependencies.generate(request);
+            },
             async authorizeModel(source) {
               try {
                 const allowed = await dependencies.authorizeModel(source);

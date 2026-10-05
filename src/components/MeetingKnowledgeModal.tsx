@@ -29,6 +29,7 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
   const closeRef = useRef<HTMLButtonElement>(null);
   const sessionRef = useRef<AbortController | null>(null);
   const pendingRef = useRef(false);
+  const statusEpochRef = useRef(0);
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
@@ -36,10 +37,11 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
     const controller = new AbortController();
     sessionRef.current = controller;
     pendingRef.current = false;
+    const epoch = ++statusEpochRef.current;
     setStatus(null); setContacts([]); setSelectedId(''); setSearch('');
     setLoading(true); setContactsLoading(true); setContactsFailed(false); setBusy(false); setErrorStatus(null);
     void getMeetingKnowledgeStatus(noteId, controller.signal).then(next => {
-      if (!controller.signal.aborted) setStatus(next);
+      if (!controller.signal.aborted && statusEpochRef.current === epoch) setStatus(next);
     }).catch(error => {
       if (!controller.signal.aborted) setErrorStatus(error instanceof MeetingKnowledgeApiError ? error.status : 503);
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -58,6 +60,23 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
     })();
     return () => { controller.abort(); if (sessionRef.current === controller) sessionRef.current = null; };
   }, [noteId, getAccessToken]);
+
+  useEffect(() => {
+    const controller = sessionRef.current;
+    if (!controller || !status?.integrationEnabled || busy) return;
+    const timer = window.setTimeout(() => {
+      if (controller.signal.aborted || pendingRef.current) return;
+      const epoch = ++statusEpochRef.current;
+      void getMeetingKnowledgeStatus(noteId, controller.signal).then(next => {
+        if (!controller.signal.aborted && statusEpochRef.current === epoch) setStatus(next);
+      }).catch(error => {
+        if (controller.signal.aborted || statusEpochRef.current !== epoch) return;
+        const code = error instanceof MeetingKnowledgeApiError ? error.status : 503;
+        if ([401,403,404].includes(code)) { setStatus(null); setSelectedId(''); setErrorStatus(code); }
+      });
+    }, 5_000);
+    return () => window.clearTimeout(timer);
+  }, [noteId, status, busy]);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -84,12 +103,17 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
   const mutate = async (action: MeetingKnowledgeAction, subjectObjectId?: string) => {
     const controller = sessionRef.current;
     if (!controller || controller.signal.aborted || pendingRef.current || (!status && action !== 'initialize')) return;
+    ++statusEpochRef.current; // Older polls cannot overwrite a mutation's refreshed snapshot.
     pendingRef.current = true; setBusy(true); setErrorStatus(null);
     try {
       await mutateMeetingKnowledge({ action, sourceId: noteId,
         ...(action !== 'initialize' ? { expectedAccessRevision: status!.accessRevision! } : {}),
         ...(subjectObjectId ? { subjectObjectId } : {}),
         ...(action === 'confirm_participant' ? { verificationRef: `owner-confirmed:${crypto.randomUUID()}` } : {}),
+        ...(action === 'resync' && status?.processing?.binding ? {
+          contentRevision: status.processing.binding.contentRevision, speakerRevision: status.processing.binding.speakerRevision,
+          integrationGeneration: status.processing.binding.integrationGeneration, sourceHash: status.processing.binding.sourceHash,
+        } : {}),
       }, controller.signal);
       const next = await getMeetingKnowledgeStatus(noteId, controller.signal);
       if (!controller.signal.aborted) { setStatus(next); setSelectedId(''); }
@@ -97,10 +121,11 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
       if (!controller.signal.aborted) {
         const code = error instanceof MeetingKnowledgeApiError ? error.status : 503;
         setErrorStatus(code);
+        if ([401,403,404].includes(code)) { setStatus(null); setSelectedId(''); }
         // Refresh the owner snapshot after a conflict; never replay a mutation.
         if (code === 409) {
           try { const next = await getMeetingKnowledgeStatus(noteId, controller.signal); if (!controller.signal.aborted) setStatus(next); }
-          catch { if (!controller.signal.aborted) setStatus(null); }
+          catch (refreshError) { if (!controller.signal.aborted) { setStatus(null); setErrorStatus(refreshError instanceof MeetingKnowledgeApiError ? refreshError.status : 503); } }
         }
       }
     } finally { if (!controller.signal.aborted) { pendingRef.current = false; setBusy(false); } }
@@ -131,9 +156,28 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
             <button type="button" className={buttonClass} disabled={busy || status.unsupportedTranscript} onClick={() => void mutate('initialize')}>{text('연동 설정 만들기', 'Create integration settings')}</button></div> : <>
             <div className="mt-4 rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--border)' }}>
               <div className="flex flex-wrap items-center justify-between gap-3"><span>{status.integrationEnabled ? text('전송 켜짐', 'Delivery enabled') : text('전송 꺼짐', 'Delivery disabled')}</span>
-                <button type="button" className={buttonClass} disabled={busy || (status.unsupportedTranscript && !status.integrationEnabled)} onClick={() => void mutate(status.integrationEnabled ? 'disable' : 'enable')}>{status.integrationEnabled ? text('전송 끄기', 'Disable delivery') : text('전송 켜기', 'Enable delivery')}</button></div>
+                <button type="button" className={buttonClass} disabled={busy || ((status.unsupportedTranscript || status.processing?.sizing === 'oversized') && !status.integrationEnabled)} onClick={() => void mutate(status.integrationEnabled ? 'disable' : 'enable')}>{status.integrationEnabled ? text('전송 끄기', 'Disable delivery') : text('전송 켜기', 'Enable delivery')}</button></div>
               <p className="mt-2" style={{ color: 'var(--text-secondary)' }}>{text('전송 후에도 AXKH의 분류·검증이 필요합니다. 이 화면은 검색 가능 여부를 보장하지 않습니다.', 'AXKH classification and validation are required after delivery. This screen does not confirm search availability.')}</p>
-              <p className="mt-2" role="status">{status.delivery.lastErrorCode ? text('전송을 완료하지 못했습니다. 재시도 대기 중입니다.', 'Delivery did not complete. Waiting for retry.') : status.delivery.pending > 0 ? text(`전송 대기 ${status.delivery.pending}건`, `${status.delivery.pending} deliveries pending`) : status.delivery.lastDeliveredAt ? text('최근 전송 완료', 'Latest delivery completed') : text('전송 기록 없음', 'No delivery recorded')}</p>
+              {status.integrationEnabled && status.workers?.delivery === false ? <p className="mt-2" role="status">{text('전송 서비스가 아직 활성화되지 않았습니다. 설정은 저장되어 있으며 관리자 활성화 후 전송됩니다.', 'The delivery service is not active yet. Settings are saved and delivery will begin after administrator activation.')}</p> : null}
+              {status.integrationEnabled && status.workers?.extraction === false ? <p className="mt-2 text-sm">{text('지식 후보 처리 서비스가 아직 활성화되지 않았습니다.', 'Candidate extraction is not active yet.')}</p> : null}
+              <p className="mt-2" role="status">{status.processing ? {
+                idle: text('전송 기록 없음', 'No delivery recorded'), queued: text('전송 대기 중', 'Delivery queued'),
+                running: text('전송 중', 'Delivery in progress'), retrying: text('전송 재시도 대기 중', 'Waiting to retry delivery'),
+                delivered: text('현재 원문 전송 완료', 'Current source delivered'), blocked: text('전송에 조치가 필요합니다.', 'Delivery needs attention'),
+              }[status.processing.deliveryState] : status.delivery.lastErrorCode ? text('전송을 완료하지 못했습니다. 재시도 대기 중입니다.', 'Delivery did not complete. Waiting for retry.') : status.delivery.pending > 0 ? text(`전송 대기 ${status.delivery.pending}건`, `${status.delivery.pending} deliveries pending`) : status.delivery.lastDeliveredAt ? text('최근 전송 완료', 'Latest delivery completed') : text('전송 기록 없음', 'No delivery recorded')}</p>
+              {status.processing ? <>
+                <p className="mt-2" role="status">{text('지식 후보 처리: ', 'Candidate processing: ')}{{
+                  'not-started': text('원문 전송·처리 승인 대기', 'Waiting for source delivery or processing approval'), queued: text('대기 중', 'Queued'),
+                  running: text('처리 중', 'In progress'), completed: text('완료', 'Completed'), partial: text('일부 처리 완료 · 나머지는 원문 검색 가능', 'Partially completed · remaining content can be searched as original text'),
+                  blocked: text('처리 중단 · 관리자 확인 필요', 'On hold · administrator review required'), cancelled: text('현재 원문 변경으로 취소됨', 'Cancelled after source change'),
+                }[status.processing.extractionState]}</p>
+                {status.processing.extractionState === 'partial' ? <p className="mt-1 text-sm">{text(`완료 ${status.processing.successfulChunks} · 실패 ${status.processing.failedChunks} · 미처리 ${status.processing.skippedChunks} 구간`, `${status.processing.successfulChunks} completed · ${status.processing.failedChunks} failed · ${status.processing.skippedChunks} skipped sections`)}</p> : null}
+                {status.processing.sizing === 'oversized' || status.delivery.lastErrorCode === 'PAYLOAD_TOO_LARGE' ? <p className="mt-2" role="alert">{text('원문이 전송 한도를 초과했습니다. 원문을 여러 회의록으로 나누거나 길이를 줄인 뒤 다시 저장해 주세요. 자동 재시도는 중단되며, 기존 회의록은 유지됩니다.', 'The original source exceeds the delivery limit. Split it into separate notes or shorten it and save again. Automatic retries are held; your existing note is retained.')}</p> : null}
+                {status.processing.extractionState === 'blocked' ? <p className="mt-2 text-sm">{text('재동기화는 모델 처리를 다시 실행하지 않습니다. 처리 승인이나 실패 원인은 관리자에게 확인해 주세요.', 'Resync does not rerun model extraction. Ask an administrator to review processing approval or the failure.')}</p> : null}
+                {status.processing.extractionErrorCode === 'POLICY_DENIED' ? <p className="mt-2 text-sm">{text('현재 원문에 대한 모델 처리 승인을 기다리고 있습니다. 승인은 열람 권한과 별도로 관리됩니다.', 'Waiting for model processing approval for this source version. Processing approval is managed separately from read access.')}</p> : null}
+                {status.processing.deliveryState === 'blocked' && status.delivery.lastErrorCode !== 'PAYLOAD_TOO_LARGE' ? <p className="mt-2 text-sm">{text('관리자가 전송 설정이나 원문 상태를 확인해야 합니다.', 'An administrator needs to review delivery configuration or the source state.')}</p> : null}
+                <button type="button" className={`${buttonClass} mt-2`} disabled={busy || !status.processing.canResync || status.processing.deliveryState === 'running'} onClick={() => void mutate('resync')}>{text('누락·실패한 전송 다시 동기화', 'Resync missing or failed delivery')}</button>
+              </> : null}
             </div>
             <h3 className="mt-5 text-sm font-semibold">{text('실제 참석자 확인', 'Confirm actual attendance')}</h3>
             <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>{text('참석 사실을 확인한 Microsoft 디렉터리 연락처를 선택하세요. 공유 설정은 기존 공유 메뉴에서 관리합니다.', 'Select a Microsoft directory contact whose attendance you have confirmed. Manage sharing in the existing Share menu.')}</p>

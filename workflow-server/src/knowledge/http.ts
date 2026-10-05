@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { isCanonicalMicrosoftId, isMeetingLiveAccessRequest } from './access-contract.js';
+import { isCanonicalMicrosoftId, isMeetingLiveAccessRequest, isMeetingSourceBinding } from './access-contract.js';
 import { verifyMeetingNoteIdentity, type MeetingIdentityVerification } from './identity.js';
 import { checkMeetingSourceAccess, type MeetingSourceAccessRecord } from './source-access.js';
 import type { MeetingManagementAcknowledgement, MeetingOwnerStatus } from './management-status.js';
@@ -8,18 +8,20 @@ import { fetchMeetingEvidence, type MeetingEvidenceStore } from './evidence.js';
 import { isMeetingEvidenceFetchRequest } from './evidence-contract.js';
 
 export interface MeetingManagementCommand {
-  action: 'status' | 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable';
+  action: 'status' | 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable' | 'resync';
   sourceId: string;
   expectedAccessRevision?: number;
   subjectObjectId?: string;
   verificationRef?: string;
+  contentRevision?: number; speakerRevision?: number; integrationGeneration?: number; sourceHash?: string;
 }
 type Identity = { tenantId: string; objectId: string };
 type MeetingManagementMutation = Omit<MeetingManagementCommand, 'action' | 'expectedAccessRevision'> & {
-  action: Exclude<MeetingManagementCommand['action'], 'initialize' | 'status'>;
+  action: Exclude<MeetingManagementCommand['action'], 'initialize' | 'status' | 'resync'>;
   expectedAccessRevision: number;
 };
 export interface MeetingKnowledgeHttpStore {
+  resync?: (identity: Identity, command: MeetingManagementCommand) => Promise<MeetingManagementAcknowledgement>;
   loadCurrentEvidence?: MeetingEvidenceStore['loadCurrentEvidence'];
   initialize(identity: Identity, sourceId: string): Promise<MeetingSourceAccessRecord>;
   mutate(identity: Identity, command: MeetingManagementMutation): Promise<MeetingSourceAccessRecord | MeetingManagementAcknowledgement>;
@@ -27,6 +29,8 @@ export interface MeetingKnowledgeHttpStore {
   loadCurrentSource(tenantId: string, sourceId: string): Promise<MeetingSourceAccessRecord | null>;
 }
 export interface MeetingKnowledgeHttpEnvironment {
+  MEETING_KNOWLEDGE_DELIVERY_ENABLED?: string;
+  MEETING_KNOWLEDGE_EXTRACTION_ENABLED?: string;
   MEETING_KNOWLEDGE_ACCESS_ENABLED?: string;
   MEETING_KNOWLEDGE_ACCESS_KEY?: string;
   MEETING_KNOWLEDGE_TENANT_ID?: string;
@@ -69,12 +73,12 @@ function identityOptions(environment: MeetingKnowledgeHttpEnvironment): MeetingI
   }
   return { allowedTenantIds, signingSecret };
 }
-function managementCommand(value: unknown): MeetingManagementCommand {
+function managementCommand(value: unknown, tenantId: string): MeetingManagementCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
   const command = value as MeetingManagementCommand;
-  if (Object.keys(command).some(key => !['action', 'sourceId', 'expectedAccessRevision', 'subjectObjectId', 'verificationRef'].includes(key))
+  if (Object.keys(command).some(key => !['action', 'sourceId', 'expectedAccessRevision', 'subjectObjectId', 'verificationRef', 'contentRevision', 'speakerRevision', 'integrationGeneration', 'sourceHash'].includes(key))
     || typeof command.sourceId !== 'string' || command.sourceId.length < 1 || command.sourceId.length > 256
-    || !['status', 'initialize', 'confirm_participant', 'revoke', 'restore', 'enable', 'disable'].includes(command.action)) {
+    || !['status', 'initialize', 'confirm_participant', 'revoke', 'restore', 'enable', 'disable', 'resync'].includes(command.action)) {
     throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
   }
   if (command.action === 'initialize' || command.action === 'status') {
@@ -82,6 +86,13 @@ function managementCommand(value: unknown): MeetingManagementCommand {
     return command;
   }
   if (!Number.isSafeInteger(command.expectedAccessRevision) || command.expectedAccessRevision! < 1) throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
+  if (command.action === 'resync') {
+    if (Object.keys(command).length !== 7 || !isMeetingSourceBinding({ tenantId,
+      sourceId: command.sourceId, accessRevision: command.expectedAccessRevision, contentRevision: command.contentRevision,
+      speakerRevision: command.speakerRevision, integrationGeneration: command.integrationGeneration, sourceHash: command.sourceHash })) throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
+    return command;
+  }
+  if (['contentRevision','speakerRevision','integrationGeneration','sourceHash'].some(key => key in command)) throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
   const subjectAction = ['confirm_participant', 'revoke', 'restore'].includes(command.action);
   if (subjectAction !== (command.subjectObjectId !== undefined)
     || (subjectAction && !isCanonicalMicrosoftId(command.subjectObjectId))
@@ -166,10 +177,17 @@ export function createMeetingKnowledgeHttpHandler(store: MeetingKnowledgeHttpSto
       } else {
         const identity = await verifyMeetingNoteIdentity(bearer(req), identityOptions(environment));
         if (!identity.authenticated) throw new HttpError(401, 'UNVERIFIED_IDENTITY');
-        const command = managementCommand(await readJson(req));
+        const command = managementCommand(await readJson(req), identity.identity.tenantId);
         if (command.action === 'status') {
-          respond(res, 200, await store.getOwnedStatus(identity.identity, command.sourceId));
+          respond(res, 200, { ...await store.getOwnedStatus(identity.identity, command.sourceId), workers: {
+            delivery: environment.MEETING_KNOWLEDGE_DELIVERY_ENABLED === 'true',
+            extraction: environment.MEETING_KNOWLEDGE_EXTRACTION_ENABLED === 'true',
+          } });
           return true;
+        }
+        if (command.action === 'resync') {
+          if (!store.resync) throw new HttpError(503, 'KNOWLEDGE_UNAVAILABLE');
+          respond(res, 200, await store.resync(identity.identity, command)); return true;
         }
         const source = command.action === 'initialize'
           ? await store.initialize(identity.identity, command.sourceId)

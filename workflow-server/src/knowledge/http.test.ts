@@ -36,6 +36,7 @@ async function fixture(run: (base: string, calls: unknown[], record: MeetingSour
   const calls: unknown[] = [];
   const record = current();
   const store: MeetingKnowledgeHttpStore = {
+    async resync(actor, command) { calls.push(['resync', actor, command]); if (failure) throw { code: failure }; return { sourceId: record.sourceId, accessRevision: record.accessRevision, integrationGeneration: record.integrationGeneration, integrationEnabled: record.integrationEnabled }; },
     async getOwnedStatus(actor, source) { calls.push(['status', actor, source]); if (failure) throw { code: failure };
       return { sourceId: source, enrolled: false, unsupportedTranscript: false, integrationEnabled: false,
         accessRevision: null, integrationGeneration: null, participants: [], denies: [], directShares: [], projectShares: [],
@@ -177,4 +178,20 @@ test('management uses explicit frontend CORS and rejects foreign origins before 
 });
 test('enabled owner management with incomplete signing configuration returns503 before database writes', async () => {
   await fixture(async (base, calls) => { assert.equal((await post(base, management, {}, `Bearer ${await token()}`)).status, 503); assert.deepEqual(calls, []); }, { ...environment(), SUPABASE_JWT_SECRET: '' });
+});
+
+
+test('owner resync requires complete revision fences and rejects identity injection', async () => {
+  await fixture(async (base, calls) => {
+    const command = { action: 'resync', sourceId: binding.sourceId, expectedAccessRevision: 1,
+      contentRevision: 1, speakerRevision: 1, integrationGeneration: 1, sourceHash: binding.sourceHash };
+    assert.equal((await post(base, management, command, `Bearer ${await token()}`)).status, 200);
+    assert.deepEqual(calls[0], ['resync', owner, command]);
+    for (const body of [{ ...command, objectId }, { ...command, subjectObjectId: objectId }, { ...command, sourceHash: 'bad' },
+      { ...command, contentRevision: 0 }, { ...command, speakerRevision: undefined }]) {
+      assert.equal((await post(base, management, body, `Bearer ${await token()}`)).status, 400);
+    }
+    assert.equal(calls.length, 1);
+    assert.equal((await post(base, management, command, `Bearer ${key}`)).status, 401); assert.equal(calls.length, 1);
+  });
 });

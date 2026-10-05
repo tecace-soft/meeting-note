@@ -65,11 +65,15 @@ export function validateMeetingOutboxSeal(claim: MeetingOutboxClaim, event: unkn
 }
 export function createMeetingOutboxStore(client: MeetingKnowledgeRpcClient): MeetingOutboxStore {
   async function call(name: string, args: Record<string, unknown>) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await client.rpc(name, args);
+      const result = await Promise.race([Promise.resolve().then(() => client.rpc(name, args)), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new MeetingOutboxError()), 5_000);
+      })]);
       if (!result || result.error) throw new MeetingOutboxError();
       return JSON.parse(canonicalJson(result.data)) as unknown;
     } catch { throw new MeetingOutboxError(); }
+    finally { if (timer) clearTimeout(timer); }
   }
   function leaseArgs(claim: MeetingOutboxClaim, workerId: string) {
     if (!validClaim(claim, claim.tenantId) || !isCanonicalMicrosoftId(claim.tenantId) || !isCanonicalMicrosoftId(workerId)) throw new MeetingOutboxError();

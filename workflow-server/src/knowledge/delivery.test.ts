@@ -303,3 +303,30 @@ test('units delivery rejects absent source context or mismatched original eviden
     assert.equal(f.bodies.length,0);assert.deepEqual(f.failures,['INVALID_SNAPSHOT']);
   }
 });
+
+test('noncooperative fetch times out without acknowledging a late response', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const state = fixture(); let resolveFetch!: (response: Response) => void; let cancelled = false;
+  const worker = createMeetingKnowledgeDelivery(state.store, environment, { workerId,
+    fetch: () => new Promise<Response>(resolve => { resolveFetch = resolve; }),
+  });
+  const pending = worker.runBatch(); await new Promise<void>(resolve => setImmediate(resolve)); context.mock.timers.tick(5_000);
+  assert.deepEqual(await pending, { claimed: 1, delivered: 0, failed: 1, lostLease: 0 });
+  assert.deepEqual(state.failures, ['DELIVERY_FAILED']); assert.deepEqual(state.acknowledged, []);
+  resolveFetch(new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { 'content-type': 'application/json' } }));
+  await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(cancelled, true); assert.deepEqual(state.acknowledged, []);
+});
+test('noncooperative acknowledgement reader/cancel cannot retain the delivery worker', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] }); const state = fixture();
+  const worker = createMeetingKnowledgeDelivery(state.store, environment, { workerId,
+    fetch: async () => new Response(new ReadableStream({ pull() { return new Promise(() => undefined); }, cancel() { return new Promise(() => undefined); } }), { headers: { 'content-type': 'application/json' } }),
+  });
+  const pending = worker.runBatch(); await new Promise<void>(resolve => setImmediate(resolve)); context.mock.timers.tick(5_000);
+  assert.equal((await pending).failed, 1); assert.deepEqual(state.acknowledged, []);
+});
+test('JSON escaped source budget rejects large input without transport or truncation', async () => {
+  const item = claim(); const text = '\n'.repeat(460_000); item.snapshot.plaintext = text;
+  (item.snapshot.record as MeetingSourceAccessRecord).sourceHash = sha256Text(text); const state = fixture([item]);
+  assert.equal((await createMeetingKnowledgeDelivery(state.store, environment, { workerId, fetch: state.fetch }).runBatch()).failed, 1);
+  assert.deepEqual(state.failures, ['PAYLOAD_TOO_LARGE']); assert.deepEqual(state.bodies, []); assert.equal(item.snapshot.plaintext, text);
+});

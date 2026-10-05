@@ -11,6 +11,7 @@ export const MEETING_EXTRACTION_FAILURE_CODES = ['POLICY_DENIED', 'POLICY_UNAVAI
   'CURRENT_UNAVAILABLE', 'CANCELLED', 'EXTRACTION_FAILED', 'INVALID_SNAPSHOT', 'PAYLOAD_TOO_LARGE'] as const;
 export type MeetingExtractionFailureCode = typeof MEETING_EXTRACTION_FAILURE_CODES[number];
 export interface MeetingExtractionStore {
+  beginProviderAttempt?(claim: MeetingExtractionClaim, workerId: string): Promise<boolean>;
   claim(tenantId: string, workerId: string): Promise<MeetingExtractionClaim[]>;
   current(claim: MeetingExtractionClaim, workerId: string): Promise<boolean>;
   complete(claim: MeetingExtractionClaim, workerId: string, result: ExtractionResult): Promise<boolean>;
@@ -93,6 +94,9 @@ export function createMeetingExtractionStore(client: MeetingKnowledgeRpcClient):
     const value = await call(name, args); if (typeof value !== 'boolean') throw new MeetingExtractionStoreError(); return value;
   }
   return {
+    async beginProviderAttempt(claim, workerId) {
+      return bool('meeting_knowledge_extraction_begin_provider', lease(claim, workerId));
+    },
     async claim(tenantId, workerId) {
       if (!isCanonicalMicrosoftId(tenantId) || !isCanonicalMicrosoftId(workerId)) throw new MeetingExtractionStoreError();
       const data = await call('meeting_knowledge_extraction_claim', { p_tenant_id: tenantId, p_worker_id: workerId });

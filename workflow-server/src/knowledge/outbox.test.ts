@@ -145,3 +145,10 @@ test('units seal refuses another source context or mismatched snapshot revision'
     await assert.rejects(createMeetingOutboxStore({rpc:()=>assert.fail('invalid snapshot reached SQL')}).prepare(item,workerId,unitEvent),failure);
   }
 });
+
+test('noncooperative service RPC is bounded without inventing successful delivery', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = createMeetingOutboxStore({ rpc: () => new Promise(() => undefined) }).claim(tenantId, workerId);
+  const rejection = assert.rejects(pending, /OUTBOX_UNAVAILABLE/);
+  await new Promise<void>(resolve => setImmediate(resolve)); context.mock.timers.tick(5_000); await rejection;
+});

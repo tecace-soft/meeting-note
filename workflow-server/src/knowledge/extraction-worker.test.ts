@@ -17,6 +17,7 @@ function fixture(currentSource=source()){
   const claim:MeetingExtractionClaim={jobId,tenantId,sourceId:currentSource.sourceId,integrationGeneration:1,sourceEvent:currentSource,leaseToken:'44444444-4444-4444-8444-444444444444',attempts:1};
   const completed:ExtractionResult[]=[];const failures:MeetingExtractionFailureCode[]=[];let claims=0;let renewals=0;let models=0;let policies=0;
   const store:MeetingExtractionStore={
+    async beginProviderAttempt(){return true;},
     async claim(tenant,worker){claims++;assert.equal(tenant,tenantId);assert.equal(worker,workerId);return[claim];},
     async current(item,worker){renewals++;assert.equal(item.jobId,jobId);assert.equal(worker,workerId);return true;},
     async complete(_item,_worker,result){completed.push(result);return true;},async fail(_item,_worker,code){failures.push(code);return true;},
@@ -129,4 +130,25 @@ test('stop aborts the provider and leaves its durable lease for expiry',async()=
   const worker=createMeetingExtractionWorker(f.store,environment,{...f,workerId,generate});const pending=worker.processOnce();await waiting;worker.stop();
   assert.equal((await pending).completed,0);assert.equal(aborted,true);assert.equal(f.completed.length,0);assert.equal(f.failures.length,0);
   assert.equal((await worker.processOnce()).claimed,0);
+});
+
+test('policy waiting does not consume provider budget and later approval resumes', async () => {
+  const f=fixture(); let marks=0; let approved=false;
+  f.store.beginProviderAttempt=async()=>{marks++;return true;};
+  const worker=createMeetingExtractionWorker(f.store,environment,{...f,workerId,authorizeModel:async()=>approved});
+  assert.equal((await worker.processOnce()).failed,1);assert.equal(marks,0);assert.equal(f.models,0);
+  approved=true;assert.equal((await worker.processOnce()).completed,1);assert.equal(marks,1);assert.equal(f.models,1);
+});
+test('provider budget is charged once per leased run across multiple chunks', async () => {
+  const f=fixture(source(['A '.repeat(4000),'B '.repeat(4000)]));let marks=0;
+  f.store.beginProviderAttempt=async()=>{marks++;return true;};
+  assert.equal((await createMeetingExtractionWorker(f.store,environment,{...f,workerId}).processOnce()).completed,1);
+  assert.ok(f.models>=2);assert.equal(marks,1);
+});
+test('missing or exhausted durable provider budget prevents every paid model call', async () => {
+  for(const missing of [true,false]) {
+    const f=fixture();f.store.beginProviderAttempt=missing?undefined:async()=>false;
+    assert.equal((await createMeetingExtractionWorker(f.store,environment,{...f,workerId}).processOnce()).failed,1);
+    assert.equal(f.models,0);assert.equal(f.completed.length,0);assert.deepEqual(f.failures,['EXTRACTION_FAILED']);
+  }
 });
