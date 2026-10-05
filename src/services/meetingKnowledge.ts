@@ -1,6 +1,7 @@
 import { getSupabaseAccessTokenForRequest } from '../config/supabaseConfig';
-// Pure DTO validation shared with the server; contains no transport or secrets.
-import { isMeetingProcessingStatus, type MeetingProcessingStatus } from '../../workflow-server/src/knowledge/management-status';
+// Pure DTO validation; a frontend-local copy (see meetingKnowledgeStatus.ts) so the
+// web bundle does not import across the project boundary into the server source tree.
+import { isMeetingProcessingStatus, type MeetingProcessingStatus } from './meetingKnowledgeStatus';
 
 const API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
 export const meetingKnowledgeUiEnabled = import.meta.env.VITE_MEETING_KNOWLEDGE_UI_ENABLED === 'true';
