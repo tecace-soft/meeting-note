@@ -25,6 +25,7 @@ Audio transcription + summarization app (record/upload → transcribe → summar
 - `docs/ai-native/`: AI-native entry doc (start at `intro.md`). Structure auto-syncs via a pre-commit hook; after a meaningful change run `/update-docs`. One-time per clone: `git config core.hooksPath .githooks`.
 - `DEV_NOTES.md` — feature history and schema.
 - `RELIABILITY_AUDIT_KO.md` / `_EN.md` — known reliability/error-handling issues and roadmap.
+- `docs/API_LESSONS.md`: hard-won Gemini/API lessons; model ids are pinned in `workflow-server/src/gemini-models.ts` and guarded by a drift test (`npm test`). Read this before adding or changing a Gemini call.
 
 ## Symlink note (Windows)
 `CLAUDE.md` is committed as a git symlink → `AGENTS.md` so both Claude Code and other agents read one source. Git here has `core.symlinks=false`, so on Windows `CLAUDE.md` may check out as a text file containing `AGENTS.md`. To get a real link, enable Developer Mode and run once: `git config core.symlinks true && git checkout -- CLAUDE.md`. Mac/Linux work out of the box.

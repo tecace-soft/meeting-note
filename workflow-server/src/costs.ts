@@ -1,4 +1,5 @@
 import type { GeminiUsageMetadata } from './gemini.js';
+import { GEMINI_2_5_FLASH_LITE, GEMINI_2_5_FLASH, GEMINI_3_1_FLASH_LITE } from './gemini-models.js';
 
 interface Pricing {
   textInputPerMillion: number;
@@ -16,17 +17,17 @@ export interface UsageCost {
 }
 
 const DEFAULT_GEMINI_PRICING: Record<string, Pricing> = {
-  'gemini-3.1-flash-lite': {
+  [GEMINI_3_1_FLASH_LITE]: {
     textInputPerMillion: 0.25,
     audioInputPerMillion: 0.5,
     outputPerMillion: 1.5,
   },
-  'gemini-2.5-flash': {
+  [GEMINI_2_5_FLASH]: {
     textInputPerMillion: 0.3,
     audioInputPerMillion: 1.0,
     outputPerMillion: 2.5,
   },
-  'gemini-2.5-flash-lite': {
+  [GEMINI_2_5_FLASH_LITE]: {
     textInputPerMillion: 0.1,
     audioInputPerMillion: 0.3,
     outputPerMillion: 0.4,
@@ -40,8 +41,8 @@ function numberFromMetadata(value: unknown): number {
 function pricingForModel(model: string): Pricing | null {
   const normalized = model.trim().toLowerCase();
   if (DEFAULT_GEMINI_PRICING[normalized]) return DEFAULT_GEMINI_PRICING[normalized];
-  if (normalized.includes('flash-lite')) return DEFAULT_GEMINI_PRICING['gemini-3.1-flash-lite'];
-  if (normalized.includes('flash')) return DEFAULT_GEMINI_PRICING['gemini-2.5-flash'];
+  if (normalized.includes('flash-lite')) return DEFAULT_GEMINI_PRICING[GEMINI_3_1_FLASH_LITE];
+  if (normalized.includes('flash')) return DEFAULT_GEMINI_PRICING[GEMINI_2_5_FLASH];
   return null;
 }
 

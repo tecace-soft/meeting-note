@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { callGemini, GeminiApiError } from './gemini.js';
+import { MEMORY_MODEL, MEMORY_FALLBACK_CHAIN } from './gemini-models.js';
 
 // Bounds to keep prompt/cost sane and the base from growing without limit.
 const MAX_TRANSCRIPT_CHARS = 24000;
@@ -39,9 +40,10 @@ const MAX_INSIGHT_ITEMS = 30;
 const MAX_INSIGHT_TEXT = 400;
 const MAX_INSIGHT_FIELD = 120;
 
-const DEFAULT_MEMORY_MODEL = 'gemini-2.5-flash-lite';
-// Fallbacks after the primary. Both gemini-2.0-* were retired (404) — kept only live models.
-const DEFAULT_MEMORY_FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+// Model ids come from the central registry (gemini-models.ts). Both gemini-2.0-*
+// were retired (404); the registry and its drift test keep dead ids out.
+const DEFAULT_MEMORY_MODEL = MEMORY_MODEL;
+const DEFAULT_MEMORY_FALLBACK_MODELS = MEMORY_FALLBACK_CHAIN;
 // F1'' consolidation pass runs after each fold in prod (one extra flash-lite call,
 // gated to memories with >= CONSOLIDATION_MIN_ITEMS active items). Off-switch for cost.
 const CONSOLIDATION_ENABLED = (process.env.MEMORY_CONSOLIDATION_ENABLED ?? 'true').toLowerCase() !== 'false';
