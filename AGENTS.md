@@ -22,6 +22,7 @@ Audio transcription + summarization app (record/upload → transcribe → summar
 - Follow the requirements-clarification skill before non-trivial features.
 
 ## Docs
+- `docs/ai-native/`: AI-native entry doc (start at `intro.md`). Structure auto-syncs via a pre-commit hook; after a meaningful change run `/update-docs`. One-time per clone: `git config core.hooksPath .githooks`.
 - `DEV_NOTES.md` — feature history and schema.
 - `RELIABILITY_AUDIT_KO.md` / `_EN.md` — known reliability/error-handling issues and roadmap.
 

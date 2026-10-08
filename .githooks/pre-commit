@@ -1,0 +1,22 @@
+#!/bin/sh
+# AI-native docs: regenerate the structural regions and stage them so they
+# ride along with this commit. POSIX sh so it works under Git for Windows too.
+#
+# This must never block a commit: if node is missing or generation fails, we
+# warn and let the commit proceed. It runs no LLM and needs no API key.
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found, skipping AI-native docs regeneration" >&2
+  exit 0
+fi
+
+# Resolve the repo root so the hook works regardless of the current directory.
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+node "$ROOT/scripts/ai-native-docs/generate.mjs" || {
+  echo "pre-commit: AI-native docs generation failed, continuing without it" >&2
+  exit 0
+}
+
+git add "$ROOT/docs/ai-native" >/dev/null 2>&1 || true
+exit 0
