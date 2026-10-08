@@ -94,9 +94,10 @@ External APIs: **AssemblyAI** (transcription, `universal-2`), **Gemini** (summar
   - Gemini summarization + attachment handling fits Supabase Edge Function execution-time limits (summary is ~1 call, usually < 1 min → likely fits; attachments/large transcripts need a check).
   - Where the current Android multipart upload path (buffers to temp disk in workflow-server) moves — likely client → Supabase Storage direct, same as web.
 
-### P1.2 Consolidate or idle the MCP server — ❌ DROPPED 2026-08-14 (user call)
-> Not worth doing: the MCP server is the boss's primary way to query meetings (needs to stay responsive), and the free-hour cap is better addressed by the P1.3 hosting decision / P1.1 webhook-ization than by idling the service the boss actively uses. Skipped.
-- What: `meeting-note-mcp` runs always-on and shares the free-hour budget. Decide: is it needed in prod 24/7? If low-traffic, make it on-demand, fold it in, or drop it.
+### P1.2 Consolidate or idle the MCP server: ✅ RESOLVED 2026-09-01 by consolidation (reverses the 08-14 drop)
+> **2026-09-01:** the opposite of the 08-14 call happened, and it was the right move. The MCP was MERGED into `workflow-server` (one process, deploys from `main`) and the standalone `meeting-note-mcp` was **suspended** (kept as a rollback, not deleted; Andrew opted to leave it suspended rather than delete it, and a suspended free service burns no hours). Connectors re-pointed to the backend URL. See [[render-mcp-merge-into-workflow]] and RENDER_CONSOLIDATION_DESIGN.md. This leaves ONE always-on free Node service; the 750h fix is proven once it holds through a month-end.
+> **08-14 (historical):** Not worth doing: the MCP server is the boss's primary way to query meetings (needs to stay responsive), and the free-hour cap is better addressed by the P1.3 hosting decision / P1.1 webhook-ization than by idling the service the boss actively uses. Skipped. (Superseded by the 09-01 consolidation above.)
+- What: `meeting-note-mcp` ran always-on and shared the free-hour budget. Decided: folded into workflow-server (see above).
 - Why: A second always-on free service is half the reason the 750h cap blew. Removing/idling it eases the cap even before P1.1 lands.
 - Effort: small–medium.
 - Cost: $0.
@@ -149,8 +150,9 @@ These are findings against the `meeting-note-mcp` server (exposes notes to Claud
 IMPORTANT: findings are AI-generated and not yet independently verified against the current code. Re-confirm each against the live source (line refs are from the review, may have drifted) before fixing.
 Priority: M1 and M2 are size-independent — fix now, ahead of the memory rework. M3/M4 are usage-value. The search/normalization findings are folded into F4 (do not duplicate).
 
-> **MCP deploy facts (learned 2026-08-07, the hard way):**
-> - The Render `meeting-note-mcp` service builds from the **`mcp-server` branch, NOT `main`** (Root Directory = `mcp-server/`). Pushing to `main` does NOT redeploy it. To ship: fast-forward the branch (`git push origin main:mcp-server`); auto-deploy IS on for `mcp-server` (fires within ~40s). A "Manual Deploy → latest commit" before updating the branch just redeploys the branch's stale tip.
+> **MCP deploy facts:**
+> - **⚠️ SUPERSEDED 2026-09-01: the MCP is now merged into `workflow-server` and deploys from `main` with the backend.** Do NOT `git push origin main:mcp-server` (the `mcp-server` branch is now only the rollback for the suspended standalone, and pushing `main` there would clobber it). Verify the merged MCP with `GET /mcp` (expect 401 without a token) on the workflow-server host. See [[render-mcp-merge-into-workflow]].
+> - **(historical, pre-merge)** The Render `meeting-note-mcp` service built from the **`mcp-server` branch, NOT `main`** (Root Directory = `mcp-server/`). Pushing to `main` did NOT redeploy it. To ship you fast-forwarded the branch (`git push origin main:mcp-server`); auto-deploy was on for `mcp-server` (fired within ~40s). A "Manual Deploy → latest commit" before updating the branch just redeployed the branch's stale tip. This path is dead now (see above).
 > - **Prod DB migration drift**: repo migrations are not necessarily applied to prod. `20260611120000` (mcp_token expiry/scopes) was in the repo but never applied, which broke the deploy until applied via the Management API. Before deploying code that depends on a schema change, verify the columns exist in prod (`information_schema.columns`). Consider auditing which repo migrations are actually applied.
 
 ### M1 MCP auth is fail-open [CRITICAL] — SHIPPED + VERIFIED IN PROD 2026-08-07

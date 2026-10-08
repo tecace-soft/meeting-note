@@ -26,6 +26,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(gemini): pin model ids in one registry with an offline drift test
 - feat(knowledge): finish owner recovery and bounded beta processing
 - feat(knowledge): fetch exact current meeting evidence spans
 - feat(knowledge): run durable policy-gated meeting extraction
@@ -58,7 +59,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(memory): briefing always starts collapsed
 - fix(memory): cap expanded briefing height with internal scroll
 - fix(memory): default the records-tab briefing to collapsed
-- fix(speaker-id): each person at most once per meeting (kill "3 speakers all = one colleague")
 
 **Performance**
 
