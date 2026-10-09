@@ -57,7 +57,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(knowledge): bound extraction units to the completion snapshot cap
 - fix(mcp): log real tracking errors and use UUID ids for mcp_session/mcp_tool_call (#23)
 - fix(mcp): keep the OAuth proxy resource on /mcp-chatgpt and log why it is off (#20)
-- fix(mcp): allow /mcp protected-resource metadata through the owned-path gate
 
 **Performance**
 
@@ -69,6 +68,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(review): mark Group C, sibling edge-fn vulns, and R01 as done
 - docs(review): record Group B verification verdicts (#2/#3/#4/#10)
 - docs(review): 2026-10-09 full-project review and strangler plan
 - docs(ops): mark MCP consolidation resolved, retire the dead deploy path
