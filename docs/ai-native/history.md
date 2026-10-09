@@ -43,10 +43,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(memory): Step 1b/1c, insight-injection measured (no ship) + retire legacy write stack
 - feat(memory): Step 1a, inject personal memory into regenerate-summary
 - feat(memory): Step 0 gate for personal-memory injection + fix intermittent drift leak
-- feat(speaker-id): H7 cold-start anchor bootstrap (lib, default-off) + backtest A/B
 
 **Fixes**
 
+- fix(security): owner-scope the meeting-recordings storage bucket RLS
 - fix(security): enable RLS on public.chat and public.session
 - fix(web): stop importing server source into the web bundle
 - fix(knowledge): bound extraction units to the completion snapshot cap

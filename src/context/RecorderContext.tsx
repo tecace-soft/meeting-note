@@ -239,6 +239,21 @@ async function getChunks(sessionId: string): Promise<Blob[]> {
   return rows.map((row) => row.blob);
 }
 
+function totalChunkBytes(chunks: Blob[]): number {
+  return chunks.reduce((sum, chunk) => sum + chunk.size, 0);
+}
+
+// Pick the chunk source holding the most audio. The in-memory chunks hold every
+// ondataavailable blob captured in this tab; the IndexedDB copy exists for
+// multi-tab/crash resilience but its final chunk is saved fire-and-forget, so
+// it can lag by the last timeslice. Choosing the larger source (by total bytes)
+// is correct regardless of that save race and never truncates a cleanly-stopped
+// recording, while still falling back to the persisted copy if the in-memory
+// chunks were lost.
+function pickMoreCompleteChunks(persisted: Blob[], inMemory: Blob[]): Blob[] {
+  return totalChunkBytes(persisted) > totalChunkBytes(inMemory) ? persisted : inMemory;
+}
+
 async function clearPersistedRecording(): Promise<void> {
   const db = await openRecorderDb().catch(() => null);
   if (!db) return;
@@ -572,7 +587,10 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const finalizeRecording = useCallback(async (fallbackMimeType?: string) => {
     const session = recordingSessionRef.current;
     const persistedChunks = session ? await getChunks(session.id).catch(() => []) : [];
-    const chunks = persistedChunks.length > 0 ? persistedChunks : audioChunksRef.current;
+    // Prefer whichever source is more complete rather than always preferring the
+    // persisted copy: a cleanly-stopped recording's full audio lives in memory,
+    // while the persisted copy can be missing the last fire-and-forget chunk.
+    const chunks = pickMoreCompleteChunks(persistedChunks, audioChunksRef.current);
     const mimeType = fallbackMimeType || session?.mimeType || recordedMimeType;
     if (chunks.length > 0) {
       const audioBlob = new Blob(chunks, { type: mimeType });
@@ -589,6 +607,11 @@ export const RecorderProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (duration != null) setRecordingTime(duration);
       });
       setRecoverableSession(null);
+    } else if (session && (session.chunkCount ?? 0) > 0) {
+      // Audio was captured (chunkCount > 0) but both sources came back empty:
+      // the IndexedDB read failed and nothing was held in memory. Do NOT clear
+      // and report success silently — surface the loss so the user can retry.
+      setRecorderError('Recording could not be saved and may have been lost. Please try recording again.');
     }
     recordingSessionRef.current = null;
     audioChunksRef.current = [];
