@@ -41,6 +41,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(mobile): stop silently deleting an interrupted m4a recording
 - fix(db): reconcile the two conflicting mcp_tracking migrations
 - fix(security): verify storage ownership before signing note audio (R01)
 - fix(security): enforce the org allowlist on the remaining edge-fn Graph auth
@@ -57,7 +58,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(mcp): log real tracking errors and use UUID ids for mcp_session/mcp_tool_call (#23)
 - fix(mcp): keep the OAuth proxy resource on /mcp-chatgpt and log why it is off (#20)
 - fix(mcp): allow /mcp protected-resource metadata through the owned-path gate
-- fix(mcp): serve path-based protected-resource metadata for /mcp
 
 **Performance**
 
