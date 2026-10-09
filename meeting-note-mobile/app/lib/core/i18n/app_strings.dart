@@ -222,7 +222,11 @@ const Map<String, Map<String, String>> _appStrings = {
     'en': 'Reached the 2-hour limit. Recording stopped and saved. Start a new recording to continue.',
     'ko': '2시간 제한에 도달했습니다. 녹음이 중지되고 저장되었습니다. 계속하려면 새로 녹음하세요.',
   },
-  'record.recoverFailed': {'en': 'This interrupted recording could not be finalized. Please record again.', 'ko': '중단된 녹음을 완료할 수 없습니다. 다시 녹음해 주세요.'},
+  'record.recoverFailed': {'en': 'No audio was found for this interrupted recording.', 'ko': '중단된 녹음에서 오디오를 찾을 수 없습니다.'},
+  'record.recoveredPartial': {
+    'en': 'This recording was interrupted and may be incomplete. The captured audio was kept, so review it before generating a summary.',
+    'ko': '이 녹음은 중단되어 일부만 저장되었을 수 있습니다. 캡처된 오디오는 보존했으니 요약을 생성하기 전에 확인하세요.',
+  },
   'record.recoveredDiscarded': {'en': 'Recovered recording discarded.', 'ko': '복구된 녹음을 삭제했습니다.'},
   'record.micPermission': {'en': 'Microphone permission is required. Enable it in Settings.', 'ko': '마이크 권한이 필요합니다. 설정에서 허용하세요.'},
   'record.startFailed': {

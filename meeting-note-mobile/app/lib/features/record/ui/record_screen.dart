@@ -133,6 +133,17 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
                       );
                       return;
                     }
+                    // An interrupted recording is salvaged, not finalized, so
+                    // tell the user it may be incomplete rather than letting it
+                    // look like a clean recording.
+                    if (ref.read(recordingProvider).recoveredPartial) {
+                      notifier.clearRecoveredPartialFlag();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(t('record.recoveredPartial')),
+                        ),
+                      );
+                    }
                     context.push('/record/new-note', extra: path);
                   },
                   onDiscard: () async {

@@ -58,7 +58,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(mcp): keep the OAuth proxy resource on /mcp-chatgpt and log why it is off (#20)
 - fix(mcp): allow /mcp protected-resource metadata through the owned-path gate
 - fix(mcp): serve path-based protected-resource metadata for /mcp
-- fix(mcp): advertise the request host as the OAuth resource base, not the stale env
 
 **Performance**
 
@@ -80,6 +79,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(ci): stand up a frontend test runner and a CI gate
 - refactor(gemini): extract shared retryable + dedup helpers for the call wrappers
 
 ### Recent merges

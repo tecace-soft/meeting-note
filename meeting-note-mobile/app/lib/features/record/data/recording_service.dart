@@ -21,6 +21,7 @@ class RecordingState {
     this.limitWarning = false,
     this.autoStoppedFilePath,
     this.captureFailed = false,
+    this.recoveredPartial = false,
   });
 
   final RecordState state;
@@ -45,6 +46,13 @@ class RecordingState {
   /// user. Cleared after handling.
   final bool captureFailed;
 
+  /// True when the file handed back by [RecordingNotifier.recoverRecording] came
+  /// from an interrupted recording (app killed mid-capture) that was never
+  /// finalized, so it may be incomplete. The partial audio is preserved and
+  /// handed forward regardless; this only lets the UI warn the user instead of
+  /// presenting it as a clean recording. Cleared after handling.
+  final bool recoveredPartial;
+
   RecordingState copyWith({
     RecordState? state,
     Duration? elapsed,
@@ -57,6 +65,7 @@ class RecordingState {
     String? autoStoppedFilePath,
     bool clearAutoStopped = false,
     bool? captureFailed,
+    bool? recoveredPartial,
   }) =>
       RecordingState(
         state: state ?? this.state,
@@ -72,6 +81,7 @@ class RecordingState {
             ? null
             : autoStoppedFilePath ?? this.autoStoppedFilePath,
         captureFailed: captureFailed ?? this.captureFailed,
+        recoveredPartial: recoveredPartial ?? this.recoveredPartial,
       );
 }
 
@@ -386,14 +396,32 @@ class RecordingNotifier extends Notifier<RecordingState> {
       await clearRecoverableSession(deleteFile: false);
       return null;
     }
-    if (_isMpeg4Recording(session.filePath, session.mimeType) &&
-        !await _hasFinalizedMp4Metadata(file)) {
-      await clearRecoverableSession(deleteFile: true);
-      return null;
-    }
 
+    // An app-kill mid-recording (backgrounded, memory pressure, crash) leaves
+    // an m4a whose audio is already written to the `mdat` box but whose `moov`
+    // index was never flushed (that only happens on a clean stop), so it fails
+    // the finalized-metadata check. The captured audio is still on disk, so the
+    // file must NEVER be deleted here: discarding it is silent, unrecoverable
+    // data loss (the real mechanism behind reported "recording data loss").
+    // Preserve it, hand it forward for a best-effort upload, and flag it partial
+    // so the UI warns the user it was interrupted and may be incomplete instead
+    // of presenting it as a clean recording.
+    final finalized = !_isMpeg4Recording(session.filePath, session.mimeType) ||
+        await _hasFinalizedMp4Metadata(file);
+
+    // deleteFile: false, so only the recovery bookkeeping is cleared; the audio
+    // file is kept whether or not it was finalized.
     await clearRecoverableSession(deleteFile: false);
+    if (!finalized) {
+      state = state.copyWith(recoveredPartial: true);
+    }
     return session.filePath;
+  }
+
+  /// Clears the partial-recovery marker once the UI has shown its notice, so it
+  /// is not handled twice.
+  void clearRecoveredPartialFlag() {
+    state = state.copyWith(recoveredPartial: false);
   }
 
   Future<void> discardRecoverableRecording() async {
