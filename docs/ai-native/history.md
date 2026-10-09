@@ -38,7 +38,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(mcp): let ChatGPT connect with only the MCP URL + OAuth (#19)
 - feat(memory): Step 4 phase 2b, prevent run-ons at the fold (update=rewrite, not append)
 - feat(memory): Step 4 phase 2a, surgical atomizeRunOns (inert) + eval proof
-- feat(memory): Step 3, search_personal_context MCP tool (entity/topic query)
 
 **Fixes**
 
@@ -78,6 +77,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(knowledge): prepare Hans branch review handoff
 - docs(app): restyle the MCP setup guide as numbered steps plus a tools table (#22)
 - docs(app): flesh out the ChatGPT connection guide now that OAuth works (#21)
+
+**Other**
+
+- refactor(gemini): extract shared retryable + dedup helpers for the call wrappers
 
 ### Recent merges
 
