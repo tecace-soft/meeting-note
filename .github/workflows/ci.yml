@@ -1,0 +1,66 @@
+# Blocking CI gate for the meeting-note monorepo.
+#
+# Two independent, blocking jobs run on every PR and every push to main:
+#   - backend:  the workflow-server suite (529 tests + the gemini drift test)
+#   - frontend: the root web build + the Vitest suite
+#
+# Node 22 matches the local dev environment. Lint is intentionally NOT a gate
+# yet: the repo currently has eslint errors under `--max-warnings 0`, so a
+# strict lint job would make CI red on arrival. Turning lint into a blocking
+# gate is a tracked FOLLOW-UP, not part of this "gate first, lint later" setup.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    name: backend (workflow-server tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workflow-server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: workflow-server
+        run: npm ci
+
+      - name: Build
+        working-directory: workflow-server
+        run: npm run build
+
+      - name: Test
+        working-directory: workflow-server
+        run: npm test
+
+  frontend:
+    name: frontend (web build + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test:run

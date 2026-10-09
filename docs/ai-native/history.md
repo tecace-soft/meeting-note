@@ -41,6 +41,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(db): reconcile the two conflicting mcp_tracking migrations
 - fix(security): verify storage ownership before signing note audio (R01)
 - fix(security): enforce the org allowlist on the remaining edge-fn Graph auth
 - fix(security): close Group B cross-user memory/index/chat leaks
@@ -58,7 +59,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(mcp): allow /mcp protected-resource metadata through the owned-path gate
 - fix(mcp): serve path-based protected-resource metadata for /mcp
 - fix(mcp): advertise the request host as the OAuth resource base, not the stale env
-- fix(mcp): add WWW-Authenticate challenge to the /mcp 401
 
 **Performance**
 
