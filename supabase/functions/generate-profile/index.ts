@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { authorizeMicrosoftGraphToken } from '../_shared/msGraphAllowlist.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -69,25 +70,6 @@ async function verifyAppJwt(token: string, secret: string): Promise<{ userId: st
   }
   const sub = typeof payload.sub === 'string' ? payload.sub.trim() : '';
   return sub ? { userId: sub } : { userId: null, error: 'JWT did not include a user id.' };
-}
-
-/** Fallback: validate a Microsoft Graph access token by calling /me. Mirrors note-audio-url. */
-async function getMicrosoftUserId(accessToken: string): Promise<{ userId: string | null; error?: string }> {
-  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    return {
-      userId: null,
-      error: `Microsoft Graph /me rejected the token (${response.status}). ${detail.slice(0, 300)}`,
-    };
-  }
-  const data = (await response.json()) as { id?: unknown };
-  return {
-    userId: typeof data.id === 'string' && data.id.trim() ? data.id.trim() : null,
-    error: 'Microsoft Graph /me did not return a user id.',
-  };
 }
 
 interface RequestBody {
@@ -709,22 +691,23 @@ serve(async (req) => {
 
   // Auth gate: require an authenticated user. Primary signal is the app JWT minted by
   // supabase-token (already tenant-gated); fall back to a Microsoft Graph access token.
-  // Without this, anyone could burn the org's Gemini quota. Mirrors note-audio-url.
+  // The fallback enforces the SAME tenant/domain allowlist as supabase-token (shared helper),
+  // so a bare Graph token from any tenant can no longer burn the org's paid Gemini key.
   const jwtSecret = Deno.env.get('SUPABASE_JWT_SECRET') ?? Deno.env.get('JWT_SECRET') ?? '';
   const authHeader = req.headers.get('authorization')?.trim() ?? '';
   const appToken = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice('Bearer '.length).trim() : '';
   const microsoftToken = req.headers.get('x-ms-access-token')?.trim() ?? '';
-  let authResult = appToken && jwtSecret
+  let authResult: { userId: string | null; error?: string; status?: number } = appToken && jwtSecret
     ? await verifyAppJwt(appToken, jwtSecret)
-    : { userId: null as string | null, error: 'Missing app bearer token.' };
+    : { userId: null, error: 'Missing app bearer token.' };
   if (!authResult.userId && microsoftToken) {
-    authResult = await getMicrosoftUserId(microsoftToken);
+    authResult = await authorizeMicrosoftGraphToken(microsoftToken);
   }
   if (!authResult.userId && !appToken && !microsoftToken) {
     authResult = { userId: null, error: 'Missing bearer token.' };
   }
   if (!authResult.userId) {
-    return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, 401);
+    return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, authResult.status ?? 401);
   }
 
   try {

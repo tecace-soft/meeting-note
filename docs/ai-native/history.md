@@ -40,7 +40,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(memory): Step 4 phase 2a, surgical atomizeRunOns (inert) + eval proof
 - feat(memory): Step 3, search_personal_context MCP tool (entity/topic query)
 - feat(memory): Step 2, deterministic meeting briefing on the records tab
-- feat(memory): Step 1b/1c, insight-injection measured (no ship) + retire legacy write stack
 
 **Fixes**
 
@@ -72,6 +71,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(review): record Group B verification verdicts (#2/#3/#4/#10)
 - docs(review): 2026-10-09 full-project review and strangler plan
 - docs(ops): mark MCP consolidation resolved, retire the dead deploy path
 - docs(ai-native): add agent entry docs with auto-synced structure
