@@ -101,14 +101,23 @@ const MAX_SHARED_PROJECTS_IN_SCOPE = 200;
 // `await` it WITHOUT touching the query builder — awaiting the builder itself would execute the
 // query (it is a thenable) and drop the chain.
 export async function noteAccessFilter(userId: string | undefined): Promise<string | null> {
-  if (!userId || !SAFE_FILTER_TOKEN.test(userId)) return null;
-  return noteAccessOrExpression(userId);
+  return noteAccessFilterFor(getDataContext().supabase, userId);
 }
 
-async function noteAccessOrExpression(userId: string): Promise<string> {
+// Same filter, but against a caller-supplied client. Lets the non-MCP workflow
+// routes (e.g. project chat) reproduce the exact note-visibility rule without
+// pulling in the MCP data context. Single source of truth for the OR expression.
+export async function noteAccessFilterFor(
+  supabase: SupabaseClient,
+  userId: string | undefined,
+): Promise<string | null> {
+  if (!userId || !SAFE_FILTER_TOKEN.test(userId)) return null;
+  return noteAccessOrExpression(supabase, userId);
+}
+
+async function noteAccessOrExpression(supabase: SupabaseClient, userId: string): Promise<string> {
   const terms = [`user_id.eq.${userId}`, `shared_users.cs.{${userId}}`];
   try {
-    const { supabase } = getDataContext();
     const { data, error } = await supabase
       .from('project')
       .select('id, user_id')

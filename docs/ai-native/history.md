@@ -39,10 +39,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(memory): Step 4 phase 2b, prevent run-ons at the fold (update=rewrite, not append)
 - feat(memory): Step 4 phase 2a, surgical atomizeRunOns (inert) + eval proof
 - feat(memory): Step 3, search_personal_context MCP tool (entity/topic query)
-- feat(memory): Step 2, deterministic meeting briefing on the records tab
 
 **Fixes**
 
+- fix(security): enforce the org allowlist on the edge-fn Graph fallback
 - fix(recorder): reuse note id across summary retries to stop duplicate notes
 - fix(security): scope meeting-recordings RLS by owner_id, not a file join
 - fix(pipeline): idempotent note writes, orphan convergence, transcript checkpoint

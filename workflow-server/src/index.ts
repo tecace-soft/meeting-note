@@ -27,6 +27,7 @@ import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryForContext, ren
 import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 import { handleMcpRequest } from './mcp/transports/http.js';
+import { noteAccessFilterFor } from './mcp/lib/supabase.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
@@ -2558,10 +2559,19 @@ async function projectChatPromptFromRequest(req: IncomingMessage): Promise<strin
     throw new HttpError(403, 'You do not have access to this project.');
   }
 
-  const { data: noteRows, error: noteError } = await supabase
+  // Project access alone is NOT note access. Project chat runs as service_role
+  // (RLS bypassed), so restrict the fed notes to ones this caller may actually
+  // see, reusing the exact per-note visibility rule the MCP path enforces (own,
+  // directly shared, or owned by a project owner who shared the project with the
+  // caller). Without this, a third party's note merely attached to the project
+  // would leak its transcript/summary into the answer.
+  const accessFilter = await noteAccessFilterFor(supabase, tokenUserId);
+  let noteQuery = supabase
     .from('note')
     .select('transcription,summary')
     .contains('projects', [input.projectIdFilterValue]);
+  if (accessFilter) noteQuery = noteQuery.or(accessFilter);
+  const { data: noteRows, error: noteError } = await noteQuery;
   if (noteError) throw noteError;
   const notes = (noteRows ?? []) as Array<Record<string, unknown>>;
   if (notes.length === 0) {
@@ -2765,7 +2775,12 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
     await foldNoteIntoMemory({
       supabase,
       apiKey: env.geminiApiKey,
-      userId: tokenUserId,
+      // Attribute the fold + note_insight write to the NOTE OWNER, never the
+      // requester. A share recipient may regenerate (access check above allows
+      // shared_users), but the memory/index must stay the owner's: writing under
+      // the requester would fold the owner's content into the recipient's memory
+      // and flip note_insight.user_id, costing the owner their own index under RLS.
+      userId: typeof note.user_id === 'string' ? note.user_id : '',
       noteId: input.noteId,
       transcript: formatTranscriptText(input.segments, 'original'),
       selfName: null,

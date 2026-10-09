@@ -539,7 +539,17 @@ export async function callJsonModel<T>(input: {
   return { error: lastError };
 }
 
-/** Upsert one note's structured index (one row per note). Returns whether it wrote. */
+/**
+ * Write one note's structured index (one row per note). Returns whether it wrote.
+ *
+ * Ownership is immutable: the row's user_id must always equal the note owner. We
+ * therefore update in place only when the row already belongs to `userId`, and
+ * otherwise insert a fresh row. If a row already exists under a DIFFERENT owner,
+ * the note_id primary key rejects the insert and we skip rather than hijack it,
+ * so no caller can flip note_insight.user_id (which, under RLS, would cost the
+ * original owner visibility of their own index). This replaces a prior
+ * `upsert(onConflict: 'note_id')` that overwrote user_id on conflict.
+ */
 async function writeNoteInsight(
   supabase: SupabaseClient,
   userId: string,
@@ -547,22 +557,30 @@ async function writeNoteInsight(
   insight: NoteInsight,
   now: string,
 ): Promise<boolean> {
-  const { error } = await supabase.from('note_insight').upsert(
-    {
-      note_id: noteId,
-      user_id: userId,
-      actions: insight.actions,
-      decisions: insight.decisions,
-      events: insight.events,
-      topics: insight.topics,
-      people: insight.people,
-      companies: insight.companies,
-      source_model: insight.sourceModel,
-      updated_at: now,
-    },
-    { onConflict: 'note_id' },
-  );
-  return !error;
+  const content = {
+    actions: insight.actions,
+    decisions: insight.decisions,
+    events: insight.events,
+    topics: insight.topics,
+    people: insight.people,
+    companies: insight.companies,
+    source_model: insight.sourceModel,
+    updated_at: now,
+  };
+  const { data: updated, error: updateError } = await supabase
+    .from('note_insight')
+    .update(content)
+    .eq('note_id', noteId)
+    .eq('user_id', userId)
+    .select('note_id');
+  if (updateError) return false;
+  if (Array.isArray(updated) && updated.length > 0) return true;
+  // No row for this (note, owner) yet: insert one. A unique_violation here means a
+  // row already exists under another owner, so we leave it untouched.
+  const { error: insertError } = await supabase
+    .from('note_insight')
+    .insert({ note_id: noteId, user_id: userId, ...content });
+  return !insertError;
 }
 
 function resolveModels(model: string | undefined, fallbackModels: string[] | undefined): string[] {
@@ -1186,13 +1204,7 @@ export interface FoldNoteResult {
   skipped: boolean;
 }
 
-/**
- * Fold ONE note into the owner's personal memory and write its note_insight index.
- * Best-effort and idempotent: a note already in processed_note_ids is skipped, so a
- * regenerate or resumed job never double-folds. Uses the service-role client, so it
- * works for any note regardless of which client created it (web or mobile).
- */
-export async function foldNoteIntoMemory(input: {
+interface FoldNoteInput {
   supabase: SupabaseClient;
   apiKey: string;
   model?: string;
@@ -1202,16 +1214,60 @@ export async function foldNoteIntoMemory(input: {
   transcript: string;
   selfName: string | null;
   speakerContext?: string | null;
-}): Promise<FoldNoteResult> {
-  const { supabase, apiKey, userId, noteId } = input;
+}
+
+// Per-user in-process serialization of the memory fold. foldNoteIntoMemory is a
+// read-modify-write on the single user_memory row, so two concurrent folds for
+// one user (e.g. two meetings finishing together, or a regenerate overlapping a
+// fresh summarize) would both read the same baseline and the second write would
+// clobber the first (lost update). Chaining per userId makes them run one after
+// another. The backend runs as a single instance, so an in-process lock is
+// sufficient; a multi-instance deployment would need a DB-level CAS or advisory
+// lock instead.
+const userFoldLocks = new Map<string, Promise<unknown>>();
+function withUserFoldLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = userFoldLocks.get(userId) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  userFoldLocks.set(userId, next);
+  // Drop the entry once this call is the tail of the chain, so the map does not
+  // grow unbounded across users.
+  void next.catch(() => {}).finally(() => {
+    if (userFoldLocks.get(userId) === next) userFoldLocks.delete(userId);
+  });
+  return next;
+}
+
+/**
+ * Fold ONE note into the owner's personal memory and write its note_insight index.
+ * Best-effort and idempotent: a note already in processed_note_ids is skipped, so a
+ * regenerate or resumed job never double-folds. Uses the service-role client, so it
+ * works for any note regardless of which client created it (web or mobile).
+ * Folds for the same user are serialized (see withUserFoldLock).
+ */
+export async function foldNoteIntoMemory(input: FoldNoteInput): Promise<FoldNoteResult> {
+  const { userId, noteId } = input;
   const transcript = input.transcript.trim();
   if (!userId || !noteId || !transcript) return { memoryItemCount: 0, insightWritten: false, skipped: true };
+  return withUserFoldLock(userId, () => foldNoteIntoMemoryLocked(input));
+}
 
-  const { data: row } = await supabase
+async function foldNoteIntoMemoryLocked(input: FoldNoteInput): Promise<FoldNoteResult> {
+  const { supabase, apiKey, userId, noteId } = input;
+  const transcript = input.transcript.trim();
+
+  const { data: row, error: readError } = await supabase
     .from('user_memory')
     .select('memory, processed_note_ids')
     .eq('user_id', userId)
     .maybeSingle();
+  // A genuine read failure (not "no row yet", which returns data:null/error:null)
+  // must abort the fold. Proceeding would treat the user as having empty memory
+  // and the write below would overwrite their real accumulated memory and
+  // processed history. Skipping leaves the note unprocessed so a later run retries.
+  if (readError) {
+    console.warn(`[memory] fold aborted for note ${noteId}: user_memory read failed: ${readError.message}`);
+    return { memoryItemCount: 0, insightWritten: false, skipped: true };
+  }
   const processedNoteIds: string[] = Array.isArray((row as { processed_note_ids?: unknown } | null)?.processed_note_ids)
     ? ((row as { processed_note_ids: string[] }).processed_note_ids)
     : [];
