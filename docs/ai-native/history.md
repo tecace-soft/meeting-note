@@ -41,10 +41,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(memory): Step 3, search_personal_context MCP tool (entity/topic query)
 - feat(memory): Step 2, deterministic meeting briefing on the records tab
 - feat(memory): Step 1b/1c, insight-injection measured (no ship) + retire legacy write stack
-- feat(memory): Step 1a, inject personal memory into regenerate-summary
 
 **Fixes**
 
+- fix(recorder): reuse note id across summary retries to stop duplicate notes
 - fix(security): scope meeting-recordings RLS by owner_id, not a file join
 - fix(pipeline): idempotent note writes, orphan convergence, transcript checkpoint
 - fix(recorder): stop truncating or silently dropping a finished recording
