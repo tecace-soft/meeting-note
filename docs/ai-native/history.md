@@ -42,6 +42,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(security): enforce the org allowlist on the remaining edge-fn Graph auth
 - fix(security): close Group B cross-user memory/index/chat leaks
 - fix(security): enforce the org allowlist on the edge-fn Graph fallback
 - fix(recorder): reuse note id across summary retries to stop duplicate notes
@@ -59,7 +60,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(mcp): advertise the request host as the OAuth resource base, not the stale env
 - fix(mcp): add WWW-Authenticate challenge to the /mcp 401
 - fix(memory): briefing always starts collapsed
-- fix(memory): cap expanded briefing height with internal scroll
 
 **Performance**
 
