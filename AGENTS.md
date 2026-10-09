@@ -17,6 +17,7 @@ Audio transcription + summarization app (record/upload → transcribe → summar
 ## Conventions & gotchas
 - **Secrets**: never commit `.env` (gitignored). Copy `.env.example` → `.env` in root and `workflow-server/`. Real values live in Render/Supabase/Azure dashboards. `SUPABASE_SERVICE_ROLE_KEY` is server-only — never in `VITE_*`/frontend.
 - **Auth**: frontend acquires an MSAL token, exchanges it via the `supabase-token` edge function for a Supabase JWT (see `AuthContext.tsx` / `supabaseConfig.ts`). Data access is gated by RLS, so a missing token silently yields empty results — never treat that as "no data".
+- **Storage RLS on upload-then-record buckets** (e.g. `meeting-recordings`): scope policies by `storage.objects.owner_id = auth.jwt()->>'sub'`, NOT by a join to `public.file`. The client uploads, polls storage to confirm visibility, THEN writes the file row, so a file-join SELECT policy blocks that confirm poll and breaks uploads. `owner_id` is set by Supabase at insert time (equals `file.user_id`).
 - **Deploys restart the backend**, which historically stranded in-flight jobs. A boot/periodic orphan sweep now fails stale jobs; still prefer deploy windows when testers are idle, and deploy backend changes before frontend ones that depend on them.
 - **Prefer existing patterns.** Match the surrounding code; don't introduce new libraries/state patterns casually. Verify changes E2E in the real app, not just types.
 - Follow the requirements-clarification skill before non-trivial features.

@@ -72,12 +72,12 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(review): 2026-10-09 full-project review and strangler plan
 - docs(ops): mark MCP consolidation resolved, retire the dead deploy path
 - docs(ai-native): add agent entry docs with auto-synced structure
 - docs(knowledge): prepare Hans branch review handoff
 - docs(app): restyle the MCP setup guide as numbered steps plus a tools table (#22)
 - docs(app): flesh out the ChatGPT connection guide now that OAuth works (#21)
-- docs(memory): phase-2 design for memory-in-the-loop
 
 ### Recent merges
 

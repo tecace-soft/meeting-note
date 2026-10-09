@@ -80,7 +80,7 @@ Updated as work proceeds.
 
 | # | Item | Status |
 | --- | --- | --- |
-| 1 | audio bucket RLS fix | IMPLEMENTED (local) 2026-10-09: new migration `20261009120000_scope_meeting_recordings_rls.sql`, owner-scoped via `file` join. NOT committed, NOT applied. Needs DB apply + second-user E2E. INSERT policy left bucket-only (documented residual). |
+| 1 | audio bucket RLS fix | DONE 2026-10-09: migration `20261009120000_scope_meeting_recordings_rls.sql`, owner-scoped via `storage.objects.owner_id = auth.jwt()->>'sub'`. APPLIED to prod + verified (owner_sees=94, stranger_sees=0, real app upload OK). INSERT policy left bucket-only (owner_id assigned at insert, documented residual). NOTE: the first-shipped `file`-join SELECT policy BROKE uploads (confirm-before-record poll has no file row yet); replaced with owner_id. |
 | A | recorder truncation / silent-drop fix | IMPLEMENTED (local) 2026-10-09: `src/context/RecorderContext.tsx`, picks the more-complete chunk source + surfaces an error on genuine empty-both. tsc clean. NOT committed. |
 | A | idempotency / duplicate-note + transcript checkpoint | IMPLEMENTED (local) 2026-10-09: `workflow-server/src/index.ts` (upsert on note.id, orphan-sweep convergence, transcript checkpoint) + new migration `20261009120100_reliability_transcript_checkpoint_and_active_job_uniq.sql`. Build + 529 tests green. NOT committed, migration NOT applied. Client follow-up pending (web reuses noteId on retry, `src/pages/TranscriptionSummary.tsx:1234`). |
 | 5 | index.ts strangle + frontend data layer | PLANNED 2026-10-09: see [2026-10-09-strangler-plan.md](./2026-10-09-strangler-plan.md). Start batch T2-1 + T1-1 + T1-2 (after T2-0/T1-0). Jobs/pipeline extractions wait for the two reliability fixes to merge. |
