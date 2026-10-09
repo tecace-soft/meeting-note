@@ -45,6 +45,7 @@ Directories only, to depth 2; generated / vendor directories (node_modules, dist
 ├── scripts/
 │   └── ai-native-docs/
 ├── src/
+│   ├── __tests__/
 │   ├── assets/
 │   ├── components/
 │   ├── config/
@@ -56,6 +57,7 @@ Directories only, to depth 2; generated / vendor directories (node_modules, dist
 │   ├── pages/
 │   ├── services/
 │   ├── styles/
+│   ├── test/
 │   ├── theme/
 │   └── ui/
 ├── supabase/

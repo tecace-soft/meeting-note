@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.87.1';
+import { authorizeMicrosoftGraphToken } from '../_shared/msGraphAllowlist.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -32,24 +33,6 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { ...CORS, 'Content-Type': 'application/json' },
   });
-}
-
-async function getMicrosoftUserId(accessToken: string): Promise<{ userId: string | null; error?: string }> {
-  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    return {
-      userId: null,
-      error: `Microsoft Graph /me rejected the token (${response.status}). ${detail.slice(0, 300)}`,
-    };
-  }
-  const data = (await response.json()) as { id?: unknown };
-  return {
-    userId: typeof data.id === 'string' && data.id.trim() ? data.id.trim() : null,
-    error: 'Microsoft Graph /me did not return a user id.',
-  };
 }
 
 function normalizeKeyterms(value: unknown): string[] {
@@ -100,11 +83,12 @@ serve(async (req) => {
   }
 
   const bearerToken = req.headers.get('x-ms-access-token')?.trim() ?? '';
+  // Enforce the org tenant/domain allowlist before the admin-id check (shared helper).
   const authResult = bearerToken
-    ? await getMicrosoftUserId(bearerToken)
-    : { userId: null, error: 'Missing Microsoft bearer token.' };
+    ? await authorizeMicrosoftGraphToken(bearerToken)
+    : { userId: null as string | null, error: 'Missing Microsoft bearer token.', status: 401 as number | undefined };
   if (!authResult.userId) {
-    return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, 401);
+    return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, authResult.status ?? 401);
   }
   if (!ADMIN_MICROSOFT_USER_IDS.has(authResult.userId)) {
     return jsonResponse({ error: 'Forbidden' }, 403);

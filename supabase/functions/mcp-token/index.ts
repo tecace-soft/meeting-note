@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.87.1';
+import { authorizeMicrosoftGraphToken } from '../_shared/msGraphAllowlist.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -22,24 +23,6 @@ interface TokenRow {
   last_used_at: string | null;
   revoked_at: string | null;
   created_at: string;
-}
-
-async function getMicrosoftUserId(accessToken: string): Promise<{ userId: string | null; error?: string }> {
-  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    return {
-      userId: null,
-      error: `Microsoft Graph /me rejected the token (${response.status}). ${detail.slice(0, 300)}`,
-    };
-  }
-  const data = (await response.json()) as { id?: unknown };
-  return {
-    userId: typeof data.id === 'string' && data.id.trim() ? data.id.trim() : null,
-    error: 'Microsoft Graph /me did not return a user id.',
-  };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -101,12 +84,14 @@ serve(async (req) => {
   });
 
   try {
+    // Graph auth now enforces the org tenant/domain allowlist (shared helper), so an
+    // out-of-org Microsoft account can no longer mint or list MCP tokens here.
     const authResult = bearerToken
-      ? await getMicrosoftUserId(bearerToken)
-      : { userId: null, error: 'Missing Microsoft bearer token.' };
+      ? await authorizeMicrosoftGraphToken(bearerToken)
+      : { userId: null as string | null, error: 'Missing Microsoft bearer token.', status: 401 as number | undefined };
     const userId = authResult.userId;
     if (!userId) {
-      return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, 401);
+      return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, authResult.status ?? 401);
     }
 
     const body = (await req.json().catch(() => ({}))) as RequestBody;
