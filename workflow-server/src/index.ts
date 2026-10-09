@@ -1207,7 +1207,13 @@ async function insertNote(input: {
     audio_file_id: input.fileId,
     duration_seconds: input.audioDurationSeconds,
   };
-  const { error } = await supabase.from('note').insert(notePayload);
+  // FIX 1: idempotent on the note primary key. A terminal-status write can fail
+  // (DB outage) AFTER this insert succeeds, which later strands the job and
+  // triggers a retry. If that retry reuses the same noteId, a bare .insert()
+  // would create a DUPLICATE note (and double the Assembly/Gemini spend). Upsert
+  // with ON CONFLICT (id) DO NOTHING makes a same-id retry a no-op: the first
+  // successful write wins and is never silently overwritten.
+  const { error } = await supabase.from('note').upsert(notePayload, { onConflict: 'id', ignoreDuplicates: true });
   if (
     error?.code === 'PGRST204' &&
     (
@@ -1222,14 +1228,14 @@ async function insertNote(input: {
       diarization_translations: _diarizationTranslations,
       ...payloadWithoutTranslations
     } = notePayload;
-    const { error: retryError } = await supabase.from('note').insert(payloadWithoutTranslations);
+    const { error: retryError } = await supabase.from('note').upsert(payloadWithoutTranslations, { onConflict: 'id', ignoreDuplicates: true });
     if (retryError) throw retryError;
     console.warn('Inserted note without transcript translation columns because the PostgREST schema cache is missing them.');
     return;
   }
   if (error?.code === 'PGRST204' && error.message.includes("'duration_seconds'")) {
     const { duration_seconds: _durationSeconds, ...payloadWithoutDuration } = notePayload;
-    const { error: retryError } = await supabase.from('note').insert(payloadWithoutDuration);
+    const { error: retryError } = await supabase.from('note').upsert(payloadWithoutDuration, { onConflict: 'id', ignoreDuplicates: true });
     if (retryError) throw retryError;
     console.warn('Inserted note without duration_seconds because the column is missing from the PostgREST schema cache.');
     return;
@@ -1807,6 +1813,76 @@ async function updateWorkflowJob(jobId: string | null, patch: {
   return false;
 }
 
+// FIX 2: transcribe -> summarize checkpoint. AssemblyAI transcription is the
+// slowest and most expensive step, and until the final note insert its output
+// lived only in a local variable. A summary failure or a process restart between
+// transcription and insert therefore discarded the already-paid transcript and
+// forced a full re-transcription on the next retry. The checkpoint persists the
+// diarized segments keyed by noteId AFTER transcription succeeds and BEFORE the
+// Gemini summary call, so a retry carrying the same noteId reuses them instead
+// of paying AssemblyAI again. Keyed by noteId (not jobId) so it survives across
+// job retries -- the mobile client reuses noteId when it retries. This is a
+// durable checkpoint on the existing job model, not a redesign of it.
+interface TranscriptCheckpoint {
+  segments: TranscriptSegment[];
+  audioDurationSeconds: number | null;
+  detectedLanguage: 'en' | 'ko' | null;
+}
+
+async function loadTranscriptCheckpoint(noteId: string, userId: string): Promise<TranscriptCheckpoint | null> {
+  const { data, error } = await supabase
+    .from('workflow_transcript_checkpoint')
+    .select('segments, audio_duration_seconds, detected_language')
+    .eq('note_id', noteId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) {
+    // Fail-soft: a missing table (migration not applied) or any read error must
+    // not break the pipeline. Fall back to a fresh transcription.
+    console.warn(`Could not load transcript checkpoint for note ${noteId}: ${error.message}`);
+    return null;
+  }
+  if (!data) return null;
+  const row = data as { segments: unknown; audio_duration_seconds: unknown; detected_language: unknown };
+  if (!Array.isArray(row.segments) || row.segments.length === 0) return null;
+  const detected = row.detected_language;
+  return {
+    segments: row.segments as TranscriptSegment[],
+    audioDurationSeconds: typeof row.audio_duration_seconds === 'number' ? row.audio_duration_seconds : null,
+    detectedLanguage: detected === 'en' || detected === 'ko' ? detected : null,
+  };
+}
+
+async function saveTranscriptCheckpoint(input: { noteId: string; userId: string } & TranscriptCheckpoint): Promise<void> {
+  const { error } = await supabase
+    .from('workflow_transcript_checkpoint')
+    .upsert({
+      note_id: input.noteId,
+      user_id: input.userId,
+      segments: input.segments,
+      audio_duration_seconds: input.audioDurationSeconds,
+      detected_language: input.detectedLanguage,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'note_id' });
+  if (error) {
+    // Best-effort: a checkpoint write failure must not fail an otherwise-healthy
+    // transcription. Worst case we re-transcribe on a retry (the pre-fix behavior).
+    console.warn(`Could not persist transcript checkpoint for note ${input.noteId}: ${error.message}`);
+  }
+}
+
+async function deleteTranscriptCheckpoint(noteId: string): Promise<void> {
+  const { error } = await supabase
+    .from('workflow_transcript_checkpoint')
+    .delete()
+    .eq('note_id', noteId);
+  if (error) {
+    // Best-effort cleanup; a leftover checkpoint is harmless (it is only read on a
+    // retry for the same noteId, which the persisted note already short-circuits).
+    console.warn(`Could not delete transcript checkpoint for note ${noteId}: ${error.message}`);
+  }
+}
+
 async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | null = null): Promise<SummarizeAudioResult> {
   if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('Supabase service configuration is missing.');
   if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
@@ -1818,13 +1894,40 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   console.log(`Processing audio ${input.fileName} with AssemblyAI ${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL} and no explicit language settings. Selected summary language: ${input.language}`);
 
   await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
-  const { segments, audioDurationSeconds, detectedLanguage } = await transcribeWithAssembly({
-    downloadUrl: input.downloadUrl,
-    noteId: input.noteId,
-    userId: input.userId,
-    settings: transcriptionSettings,
-  });
-  if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
+  // FIX 2: reuse a persisted transcript if a prior attempt for this noteId already
+  // paid AssemblyAI (summary failed, or the process restarted mid-job). Any miss
+  // falls through to a fresh transcription, so this is safe with or without the
+  // checkpoint table present.
+  const checkpoint = await loadTranscriptCheckpoint(input.noteId, input.userId);
+  let segments: TranscriptSegment[];
+  let audioDurationSeconds: number | null;
+  let detectedLanguage: 'en' | 'ko' | null;
+  if (checkpoint) {
+    console.log(`Reusing persisted transcript checkpoint for note ${input.noteId} (${checkpoint.segments.length} segments); skipping re-transcription.`);
+    segments = checkpoint.segments;
+    audioDurationSeconds = checkpoint.audioDurationSeconds;
+    detectedLanguage = checkpoint.detectedLanguage;
+  } else {
+    const transcription = await transcribeWithAssembly({
+      downloadUrl: input.downloadUrl,
+      noteId: input.noteId,
+      userId: input.userId,
+      settings: transcriptionSettings,
+    });
+    segments = transcription.segments;
+    audioDurationSeconds = transcription.audioDurationSeconds;
+    detectedLanguage = transcription.detectedLanguage;
+    if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
+    // Persist the paid transcript BEFORE the Gemini summary so a summary failure
+    // or a restart from here on no longer discards it.
+    await saveTranscriptCheckpoint({
+      noteId: input.noteId,
+      userId: input.userId,
+      segments,
+      audioDurationSeconds,
+      detectedLanguage,
+    });
+  }
   const transcriptText = formatTranscriptText(segments, 'original');
   const translationLanguage = getOppositeTranscriptLanguage(detectedLanguage);
   const diarizationTranslations: Partial<Record<'en' | 'ko', TranscriptSegment[]>> = {};
@@ -2003,6 +2106,11 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     audioDurationSeconds,
   });
 
+  // FIX 2: the note (which embeds the transcript) is now durably persisted, so
+  // the transcript checkpoint is no longer needed. Best-effort cleanup keeps the
+  // checkpoint table small.
+  await deleteTranscriptCheckpoint(input.noteId);
+
   // Memory fold (F1') + auto speaker-ID (F5.1) used to run here, blocking job
   // completion behind 2-3 more Gemini calls the user never waits to see. They no
   // longer affect the returned summary, so the caller now runs finalizeNoteMemory()
@@ -2140,7 +2248,37 @@ async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Pr
     request: input,
     updated_at: new Date().toISOString(),
   }).select('id').single();
-  if (error) throw error;
+  if (error) {
+    // FIX 1 (race): two concurrent requests for the same (user_id, note_id) can
+    // both pass the idempotency SELECT above and both reach this INSERT. The new
+    // partial unique index (NOT applied yet -- see the migration) makes the loser
+    // fail with unique_violation instead of starting a duplicate pipeline. Treat
+    // that as a dedup hit and return the job the winner created. Harmless when the
+    // index is absent (this branch simply never triggers).
+    if (error.code === '23505') {
+      const raced = await supabase
+        .from('workflow_job')
+        .select('id, status, stage, progress')
+        .eq('user_id', input.userId)
+        .eq('note_id', input.noteId)
+        .in('status', ['queued', 'processing', 'completed'])
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!raced.error && raced.data) {
+        const row = raced.data as { id: string; status: WorkflowJobRow['status']; stage: string | null; progress: number | null };
+        sendJson(res, 202, {
+          jobId: row.id,
+          status: row.status,
+          stage: row.stage ?? row.status,
+          progress: row.progress ?? 0,
+          deduplicated: true,
+        });
+        return;
+      }
+    }
+    throw error;
+  }
   const jobId = (data as { id?: unknown }).id;
   if (typeof jobId !== 'string' || !jobId.trim()) throw new Error('Could not create workflow job.');
 
@@ -2259,13 +2397,21 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
     const result = await runSummarizeAudio(input, jobId);
     // Terminal writes retry: a transient DB blip here would otherwise strand the
     // job at 'processing' forever and the client would poll until it times out.
-    await updateWorkflowJob(jobId, {
+    const marked = await updateWorkflowJob(jobId, {
       status: 'completed',
       stage: 'completed',
       progress: 100,
       result,
       error: null,
     }, { retries: 4 });
+    if (!marked) {
+      // FIX 1: the note is already persisted (runSummarizeAudio inserted it), but
+      // the terminal 'completed' write failed after all retries, leaving the job
+      // at 'processing'. Do not re-run anything: the periodic orphan sweep
+      // reconciles this job to 'completed' from the existing note once it goes
+      // stale. Surface it so the divergence is observable.
+      console.warn(`Workflow job ${jobId} completed but its terminal status write failed; the note is persisted and the orphan sweep will reconcile it.`);
+    }
     completedJobResults.set(jobId, result);
     // Post-completion enrichment (memory fold + speaker-ID). Runs after the job is
     // marked completed so the client sees the summary immediately; awaited here so the
@@ -3504,20 +3650,105 @@ process.on('uncaughtException', (error) => {
 // threshold) so clients get a prompt, retryable error. The staleness guard
 // (backed by the per-job heartbeat) prevents sweeping a live job owned by an
 // overlapping instance during a zero-downtime deploy.
+// Cap how many stale jobs one sweep reconciles so a pathological backlog cannot
+// unbound the per-note existence query or the per-job recovery updates.
+const MAX_ORPHAN_RECONCILE = 200;
+
+// FIX 1 (convergence): rebuild a job result from a note that was already
+// persisted. Lets a stranded job be recovered to 'completed' instead of 'failed',
+// so the client never retries (and never spawns a duplicate pipeline) for work
+// that already finished. Selected with '*' and read defensively so historical
+// schema drift (missing translation / duration columns) cannot break recovery.
+function reconstructResultFromNote(noteRow: Record<string, unknown>): SummarizeAudioResult {
+  const summaryTranslations = (noteRow.summary_translations ?? {}) as Record<'en' | 'ko', string>;
+  const transcriptionTranslations = (noteRow.transcription_translations ?? {}) as Partial<Record<'en' | 'ko', string>>;
+  const diarizationTranslations = (noteRow.diarization_translations ?? {}) as Partial<Record<'en' | 'ko', TranscriptSegment[]>>;
+  const detected = noteRow.transcription_language;
+  return {
+    transcript: Array.isArray(noteRow.diarization) ? (noteRow.diarization as TranscriptSegment[]) : [],
+    summary: typeof noteRow.summary === 'string' ? noteRow.summary : '',
+    summaryTranslations,
+    transcriptionLanguage: detected === 'en' || detected === 'ko' ? detected : null,
+    transcriptionTranslations,
+    diarizationTranslations,
+    title: typeof noteRow.name === 'string' ? noteRow.name : '',
+    tags: Array.isArray(noteRow.tags) ? (noteRow.tags as string[]) : [],
+    audioDurationSeconds: typeof noteRow.duration_seconds === 'number' ? noteRow.duration_seconds : null,
+    meetingStartAt: typeof noteRow.meeting_at === 'string' ? noteRow.meeting_at : null,
+  };
+}
+
 async function failOrphanedJobs(): Promise<void> {
   if (!env.supabaseUrl || !env.serviceRoleKey) return;
   const cutoff = new Date(Date.now() - ORPHANED_JOB_THRESHOLD_MS).toISOString();
   const { data, error } = await supabase
     .from('workflow_job')
-    .select('id')
+    .select('id, user_id, note_id')
     .in('status', ['queued', 'processing'])
-    .lt('updated_at', cutoff);
+    .lt('updated_at', cutoff)
+    .order('updated_at', { ascending: true })
+    .limit(MAX_ORPHAN_RECONCILE);
   if (error) {
     console.warn(`Could not scan for orphaned workflow jobs: ${error.message}`);
     return;
   }
-  const ids = ((data ?? []) as Array<{ id: string }>).map((row) => row.id);
-  if (ids.length === 0) return;
+  const rows = (data ?? []) as Array<{ id: string; user_id: string | null; note_id: string | null }>;
+  if (rows.length === 0) return;
+
+  // FIX 1 (convergence): a stranded job whose note was already persisted (the
+  // 'completed' status write failed after the note insert succeeded) must NOT be
+  // marked 'failed' -- that prompts the client to retry and spawn a second full
+  // transcribe+summary run, duplicating the note and double-billing. Recover such
+  // jobs to 'completed' from the existing note; fail only the rest.
+  const noteIds = Array.from(new Set(rows.map((row) => row.note_id).filter((id): id is string => Boolean(id))));
+  const notesById = new Map<string, Record<string, unknown>>();
+  if (noteIds.length > 0) {
+    const { data: noteData, error: noteError } = await supabase
+      .from('note')
+      .select('*')
+      .in('id', noteIds);
+    if (noteError) {
+      // If the note lookup fails we cannot safely recover; fall back to the
+      // original fail-all behavior rather than leaving jobs stranded.
+      console.warn(`Could not look up notes while reconciling orphaned jobs: ${noteError.message}`);
+    } else {
+      for (const note of (noteData ?? []) as Array<Record<string, unknown>>) {
+        if (typeof note.id === 'string') notesById.set(note.id, note);
+      }
+    }
+  }
+
+  const recoverable: Array<{ jobId: string; note: Record<string, unknown> }> = [];
+  const failedIds: string[] = [];
+  for (const row of rows) {
+    const note = row.note_id ? notesById.get(row.note_id) : undefined;
+    // Only recover when the note belongs to the same user as the job.
+    if (note && (typeof note.user_id !== 'string' || note.user_id === row.user_id)) {
+      recoverable.push({ jobId: row.id, note });
+    } else {
+      failedIds.push(row.id);
+    }
+  }
+
+  for (const { jobId, note } of recoverable) {
+    const recovered = await updateWorkflowJob(jobId, {
+      status: 'completed',
+      stage: 'completed',
+      progress: 100,
+      result: reconstructResultFromNote(note),
+      error: null,
+    }, { retries: 2 });
+    if (!recovered) {
+      // Could not converge to 'completed'; fail it so the client is not left
+      // polling forever. The persisted note remains intact either way.
+      failedIds.push(jobId);
+    }
+  }
+  if (recoverable.length > 0) {
+    console.log(`Recovered ${recoverable.length} orphaned workflow job(s) to completed from an existing note.`);
+  }
+
+  if (failedIds.length === 0) return;
   const { error: updateError } = await supabase
     .from('workflow_job')
     .update({
@@ -3526,12 +3757,12 @@ async function failOrphanedJobs(): Promise<void> {
       error: 'Server restarted while this job was running. Please try again.',
       updated_at: new Date().toISOString(),
     })
-    .in('id', ids);
+    .in('id', failedIds);
   if (updateError) {
-    console.warn(`Could not fail ${ids.length} orphaned workflow job(s): ${updateError.message}`);
+    console.warn(`Could not fail ${failedIds.length} orphaned workflow job(s): ${updateError.message}`);
     return;
   }
-  console.log(`Marked ${ids.length} orphaned workflow job(s) as failed on boot.`);
+  console.log(`Marked ${failedIds.length} orphaned workflow job(s) as failed.`);
 }
 
 server.listen(env.port, () => {

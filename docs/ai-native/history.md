@@ -46,6 +46,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(recorder): stop truncating or silently dropping a finished recording
 - fix(security): owner-scope the meeting-recordings storage bucket RLS
 - fix(security): enable RLS on public.chat and public.session
 - fix(web): stop importing server source into the web bundle
@@ -68,7 +69,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 - eval(memory): Step 4 phase 1, run-on/atomicity metric + split experiment
 - eval(speaker-id): pairwise cosine separation in the H1 embedding probe
-- eval(speaker-id): H7 real-data preview, trigger is noisy, value path never fires
 
 **Docs**
 
