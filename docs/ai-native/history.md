@@ -62,12 +62,9 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 - perf(knowledge): compute ACK UTF-16 length without a per-character scan
 
-**Evaluation**
-
-- eval(memory): Step 4 phase 1, run-on/atomicity metric + split experiment
-
 **Docs**
 
+- docs(review): add the 2026-10-09 manual deploy checklist
 - docs(review): mark Group C, sibling edge-fn vulns, and R01 as done
 - docs(review): record Group B verification verdicts (#2/#3/#4/#10)
 - docs(review): 2026-10-09 full-project review and strangler plan

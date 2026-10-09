@@ -171,9 +171,9 @@ async function main(): Promise<void> {
     const rosterKeys = new Set(roster.map((r) => norm(r.name)));
     const selfName = pinned[userId] ?? inferSelf(cases);
 
-    let correct = 0, abstain = 0, confusion = 0, wrongSelf = 0, falseName = 0, totalTruth = 0, totalLabels = 0;
+    let correct = 0, abstain = 0, confusion = 0, wrongSelf = 0, falseName = 0, totalTruth = 0;
     let confusionInRoster = 0;
-    let overSegNotes = 0, cleanNotes = 0;
+    let overSegNotes = 0;
     let overSegTruth = 0, overSegCorrect = 0, cleanTruth = 0, cleanCorrect = 0;
     const rows: string[] = [];
 
@@ -183,10 +183,9 @@ async function main(): Promise<void> {
       const res = await identifySpeakers({ apiKey, transcript: c.transcript, labels: c.labels, roster, selfName, ...(MODEL ? { model: MODEL, fallbackModels: [] } : {}) });
       const byLabel = new Map(('suggestions' in res ? res.suggestions : []).map((s) => [s.label, s]));
       const noteOverSeg = c.overSegPersons > 0;
-      if (noteOverSeg) overSegNotes += 1; else cleanNotes += 1;
+      if (noteOverSeg) overSegNotes += 1;
 
       for (const label of c.labels) {
-        totalLabels += 1;
         const truth = c.expected.get(label) ?? null;
         const s = byLabel.get(label);
         const pred = s ? (s.isSelf && selfName ? selfName : s.name) : null;

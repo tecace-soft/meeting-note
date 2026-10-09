@@ -79,7 +79,7 @@ export const tokenize = (s: string): string[] => [
 ];
 // Canonical person key: strip a parenthetical script variant, lowercase, collapse spaces.
 export const canonName = (s: string): string =>
-  s.replace(/\s*[(（【\[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
+  s.replace(/\s*[(（【[].*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 // A non-person name that must never become a signature candidate: an echoed diarization label
 // ("Speaker C", "Speaker 4") or the product name ("meeting note"), left in old data by a bad

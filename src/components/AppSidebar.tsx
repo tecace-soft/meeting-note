@@ -222,36 +222,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     return db - da;
   });
 
-  const toProjectIdValue = (id: string): string | number => {
-    const asNumber = Number(id);
-    return Number.isNaN(asNumber) ? id : asNumber;
-  };
-
-  const removeProjectIdFromNotes = async (projectId: string) => {
-    if (!user?.id) return;
-    const projectIdValue = toProjectIdValue(projectId);
-    const projectIdText = String(projectIdValue);
-    const { data, error } = await supabase
-      .from('note')
-      .select('id, projects')
-      .eq('user_id', user.id)
-      .contains('projects', [projectIdValue]);
-
-    if (error) throw error;
-
-    const updates = ((data as SidebarNote[]) || []).map((note) => {
-      const current = Array.isArray(note.projects) ? note.projects : [];
-      const next = current.filter((p) => String(p) !== projectIdText);
-      return supabase.from('note').update({ projects: next }).eq('id', note.id).eq('user_id', user.id);
-    });
-
-    if (updates.length > 0) {
-      const results = await Promise.all(updates);
-      const failed = results.find((r) => r.error);
-      if (failed?.error) throw failed.error;
-    }
-  };
-
   useEffect(() => {
     const path = location.pathname;
     const prev = prevPathRef.current;

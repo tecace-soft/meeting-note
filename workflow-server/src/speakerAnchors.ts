@@ -39,9 +39,9 @@ export type Anchor =
 
 const hasHangul = (s: string): boolean => /[가-힣]/.test(s);
 const hangulCore = (s: string): string => (s.toLowerCase().match(/[가-힣]+/g) ?? []).join('');
-const stripParen = (s: string): string => s.toLowerCase().replace(/\s*[(（【\[].*$/, '').trim();
+const stripParen = (s: string): string => s.toLowerCase().replace(/\s*[(（【[].*$/, '').trim();
 const latinParts = (s: string): string[] =>
-  stripParen(s).replace(/[()（）【】\[\]·,]/g, ' ').split(/\s+/).filter((p) => p.length >= 2 && /[a-z]/.test(p));
+  stripParen(s).replace(/[()（）【】[\]·,]/g, ' ').split(/\s+/).filter((p) => p.length >= 2 && /[a-z]/.test(p));
 
 /** Resolve an extracted candidate token to a known full name, or null. */
 export function matchToken(token: string, knownNames: string[]): string | null {

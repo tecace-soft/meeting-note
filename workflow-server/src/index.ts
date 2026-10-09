@@ -652,13 +652,6 @@ async function getMicrosoftUserId(accessToken: string): Promise<string> {
   return data.id.trim();
 }
 
-function fetchErrorMessage(stage: string, error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const cause = error instanceof Error && 'cause' in error ? (error as Error & { cause?: unknown }).cause : null;
-  const causeMessage = cause instanceof Error ? ` Cause: ${cause.message}` : cause ? ` Cause: ${String(cause)}` : '';
-  return `${stage} failed: ${message}.${causeMessage}`;
-}
-
 function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase().replace('_', '-');

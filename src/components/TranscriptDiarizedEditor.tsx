@@ -308,6 +308,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       pendingSegmentCaretOffsetRef.current = null;
     });
     return () => window.cancelAnimationFrame(frameId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the edited segment index changes
   }, [editingSegment?.index]);
 
   useEffect(() => {
@@ -482,6 +483,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     } finally {
       setSuggesting(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- noteId is stable for this editor instance
   }, [suggesting, loadSpeakersForMenu, getAccessToken, segments, user?.displayName]);
 
   const handleAcceptSuggestion = useCallback(async (suggestion: SpeakerSuggestion) => {
@@ -511,6 +513,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     } finally {
       setApplyingSuggestions(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- user id is stable for this editor instance
   }, [applyingSuggestions, segments, noteId, onPersistSegments, onSegmentsChange, accumulateProfileInBackground, getAccessToken]);
 
   const loadMicrosoftContactsForMenu = useCallback(async () => {

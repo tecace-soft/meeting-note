@@ -114,7 +114,6 @@ const TranscriptionModelTest: React.FC = () => {
   const runAll = async () => {
     for (const option of MODEL_OPTIONS) {
       // Sequential calls keep provider logs readable and avoid rate-limit collisions while testing.
-      // eslint-disable-next-line no-await-in-loop
       await runModel(option.id);
     }
   };

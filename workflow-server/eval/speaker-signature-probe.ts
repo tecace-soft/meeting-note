@@ -48,91 +48,11 @@ interface NoteRow { id: string; user_id: string; created_at: string; diarization
 const isAnonName = (s: string): boolean => /^speaker\s/i.test(s.trim()) || s.trim() === '' || /^unknown/i.test(s.trim());
 // Canonical person key: strip a parenthetical script variant so "Andrew Yoo (유영준)" and
 // "Andrew Yoo" are the same person across notes.
-const canonName = (s: string): string => norm(s.replace(/\s*[(（【\[].*$/, ''));
-// Content tokens: Korean runs (>=2 chars) + Latin words (>=2). Drops 1-char noise + digits.
-const tokenizeBase = (s: string): string[] => (s.toLowerCase().match(/[가-힣]{2,}|[a-z]{2,}/g) ?? []);
-
-// H9 (IDF tuning) — remove high-frequency FILLER that is not discriminative of a speaker: Korean
-// discourse fillers / connectives / backchannels + English stopwords. Everyone says these, so
-// they add cosine noise. Precision-first: only very common non-content tokens.
-const STOPWORDS = new Set<string>([
-  // Korean fillers / connectives / backchannels / generic verbs
-  '그래서', '그러니까', '그러면', '그런데', '근데', '그리고', '그거', '그게', '이제', '이거', '저기',
-  '약간', '그냥', '진짜', '너무', '조금', '좀', '이렇게', '그렇게', '어떻게', '뭐지', '뭐야', '뭔가',
-  '아니', '아니요', '아니에요', '맞아요', '그렇죠', '그쵸', '그럼', '네네', '알겠습니다', '있어요',
-  '없어요', '해야', '하는', '하고', '해서', '해가지고', '있는', '있고', '거예요', '거죠', '건데',
-  '같아요', '같은', '같이', '우리', '저희', '제가', '지금', '오늘', '내일', '어제', '한번', '일단',
-  // English stopwords
-  'the', 'and', 'that', 'this', 'with', 'for', 'you', 'yeah', 'okay', 'right', 'like', 'just',
-  'have', 'are', 'was', 'but', 'not', 'they', 'them', 'there', 'here', 'what', 'about', 'kind',
-  'gonna', 'wanna', 'really', 'actually', 'basically', 'something', 'because',
-]);
-const tokenizeH9 = (s: string): string[] => tokenizeBase(s).filter((t) => !STOPWORDS.has(t));
-
-// H3 (bigrams) TESTED 2026-08-28 → NEGATIVE (identical to base): word pairs are too sparse at this
-// data size (few notes per person), so a leave-one-out signature rarely shares an exact bigram.
-// Kept the tokenizer for reference; not used in the shipped arm.
-const tokenizeH3 = (s: string): string[] => {
-  const uni = tokenizeH9(s);
-  const out = [...uni];
-  for (let i = 0; i + 1 < uni.length; i += 1) out.push(`2:${uni[i]}_${uni[i + 1]}`);
-  return out;
-};
-
-// H4 — ROLE / INTERACTION-STANCE features, added on top of H9 content words. Content signatures
-// need HISTORY (cold speakers have none); a person's conversational STANCE (who ASKS/DIRECTS vs who
-// REPORTS/DEFERS) is a different axis that can separate same-team members and works even with thin
-// history. Encode each utterance's stance as special tokens (prefixed "r:") from cheap surface
-// cues, so a person who consistently directs accumulates "r:direct" mass vs a reporter's "r:report".
-const R_DIRECT = [/어때요|어떻게 생각|해주세요|해달라|하면 좋겠|합시다|해야 (?:돼|되|할)|정리해|확인해|검토|보내주|주세요/];
-const R_REPORT = [/했습니다|완료|끝냈|진행했|해봤|확인했|만들었|적용했|배포했|테스트해/];
-const R_ASK = [/\?|나요|까요|인가요|건가요|맞나요|무엇|언제|어디|누가|왜/];
-const R_DEFER = [/알겠습니다|알겠어요|네네|그렇게 하겠|그러겠|맞아요|동의/];
-function roleTokens(text: string): string[] {
-  const out: string[] = [];
-  const hit = (res: RegExp[]) => res.some((re) => re.test(text));
-  if (hit(R_DIRECT)) out.push('r:direct');
-  if (hit(R_REPORT)) out.push('r:report');
-  if (hit(R_ASK)) out.push('r:ask');
-  if (hit(R_DEFER)) out.push('r:defer');
-  return out;
-}
-// Per-utterance role tokens are emitted at the SEGMENT level in real data; here the label text is
-// already the person's concatenated utterances, so we scan the whole blob and weight role tokens so
-// they are comparable to content mass without swamping it.
-const ROLE_WEIGHT = 6;
-const tokenizeH4 = (s: string): string[] => {
-  const content = tokenizeH9(s);
-  const roles = roleTokens(s);
-  const weighted: string[] = [];
-  for (const r of roles) for (let i = 0; i < ROLE_WEIGHT; i += 1) weighted.push(r);
-  return [...content, ...weighted];
-};
-
-// H5 — META features: a speaker's utterance-length HABITS (short backchannels vs long explanations)
-// are a stable style axis independent of content. On the label's concatenated blob we can only see
-// aggregate style, so we bucket the average token-run length + the share of very short vs long
-// utterances into coarse tokens (prefixed "m:") so a terse speaker vs a verbose one separate.
-function metaTokens(s: string): string[] {
-  // Split into utterances on sentence-ish boundaries; measure content-token counts per utterance.
-  const utts = s.split(/[.?!。？！\n]+/).map((u) => tokenizeH9(u).length).filter((n) => n > 0);
-  if (utts.length === 0) return [];
-  const avg = utts.reduce((a, b) => a + b, 0) / utts.length;
-  const shortShare = utts.filter((n) => n <= 2).length / utts.length;
-  const longShare = utts.filter((n) => n >= 12).length / utts.length;
-  const avgBucket = avg <= 3 ? 'lo' : avg <= 8 ? 'mid' : 'hi';
-  const shortBucket = shortShare >= 0.4 ? 'terse' : shortShare >= 0.2 ? 'some' : 'few';
-  const longBucket = longShare >= 0.2 ? 'verbose' : 'notlong';
-  return [`m:avg_${avgBucket}`, `m:short_${shortBucket}`, `m:long_${longBucket}`];
-}
-const META_WEIGHT = 5;
-const tokenizeH5 = (s: string): string[] => {
-  const out = prodTokenize(s); // shipped features (H9 + H4)
-  for (const m of metaTokens(s)) for (let i = 0; i < META_WEIGHT; i += 1) out.push(m);
-  return out;
-};
-// H5 (meta/style) TESTED 2026-08-28 → slightly NEGATIVE (open-WARM 82.0% → 80.9%): coarse
-// utterance-length buckets add noise, not signal, on top of the already-strong H4 base. Not shipped.
+const canonName = (s: string): string => norm(s.replace(/\s*[(（【[].*$/, ''));
+// The experimental tokenizers H3 (bigrams), H4 (role/stance), H5 (meta/style) and their H9
+// stopword base were all TESTED 2026-08-28 → NEGATIVE vs the shipped base (prodTokenize = H9 + H4),
+// so the unused tokenizers and their helpers (STOPWORDS, role/meta features) were removed. The
+// shipped arms below rely on prodTokenize only.
 
 // base = SHIPPED tokenizer (prodTokenize = H9 + H4). h6 = base tokenizer + an ATTENDANCE PRIOR in
 // SCORING: a candidate who appears in MORE of the user's notes is a-priori more likely present, so

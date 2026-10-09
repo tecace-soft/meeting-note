@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import {
   ChartBarVertical01,
   Check,
-  Download,
   FileDocument,
   Loading,
   User01,
@@ -171,16 +170,6 @@ function formatChartDate(value: string): string {
     return new Date(`${value}T00:00:00`).toLocaleDateString([], {
       month: 'short',
       day: 'numeric',
-    });
-  } catch {
-    return value;
-  }
-}
-
-function formatChartDay(value: string): string {
-  try {
-    return new Date(`${value}T00:00:00`).toLocaleDateString([], {
-      weekday: 'short',
     });
   } catch {
     return value;

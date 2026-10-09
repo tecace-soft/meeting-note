@@ -1035,6 +1035,7 @@ const SummaryHistory: React.FC = () => {
   const focusedCalendarDayKey = calendarDisplayMode === 'daily'
     ? selectedCalendarDayKey ?? calendarExpandedDayKey ?? todayKey
     : selectedCalendarDayKey ?? calendarExpandedDayKey;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cheap to recompute; wrapping in useMemo is unnecessary
   const focusedCalendarDate = focusedCalendarDayKey ? new Date(`${focusedCalendarDayKey}T00:00:00`) : calendarMonth;
   const calendarWeekDays = useMemo(() => getCalendarWeek(focusedCalendarDate), [focusedCalendarDate]);
   const visibleCalendarDays = calendarDisplayMode === 'weekly' ? calendarWeekDays : calendarWindow.days;
@@ -1117,9 +1118,6 @@ const SummaryHistory: React.FC = () => {
       endMinutes: Math.max(startMinutes + 15, endMinutes),
     };
   };
-  const rangesOverlap = (first: { startMinutes: number; endMinutes: number }, second: { startMinutes: number; endMinutes: number }): boolean => (
-    first.startMinutes < second.endMinutes && second.startMinutes < first.endMinutes
-  );
   const visibleStartMinutes = CALENDAR_VISIBLE_START_HOUR * 60;
   const visibleEndMinutes = CALENDAR_VISIBLE_END_HOUR * 60;
   const clampCalendarRangeToVisibleHours = (range: { startMinutes: number; endMinutes: number }): { startMinutes: number; endMinutes: number } | null => {
@@ -1458,9 +1456,9 @@ const SummaryHistory: React.FC = () => {
     note: Note,
     activeTab: string,
     hasTranscription: boolean,
-    showDiarized: boolean,
-    diarRaw: unknown,
-    plainTx: string | undefined
+    _showDiarized: boolean,
+    _diarRaw: unknown,
+    _plainTx: string | undefined
   ) => (
     <div
       className="results-header relative flex flex-col gap-5 border-b px-4 pt-4 md:px-5"
@@ -1679,6 +1677,7 @@ const SummaryHistory: React.FC = () => {
     void getNoteAudioUrl(selectedNote).catch((error) => {
       console.warn('Could not preload note audio URL:', error);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- preload only when the selected note id changes
   }, [selectedNote?.id]);
 
   const stopSegmentPlayback = () => {
@@ -1738,6 +1737,7 @@ const SummaryHistory: React.FC = () => {
   useEffect(() => {
     if (!selectedNote || segmentPlayback?.noteId === selectedNote.id) return;
     stopSegmentPlayback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the selected note id or playback note changes
   }, [selectedNote?.id, segmentPlayback?.noteId]);
 
   const handlePlayTranscriptSegment = async (note: Note, segment: TranscriptSegment, segmentIndex: number) => {

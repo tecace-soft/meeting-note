@@ -35,6 +35,7 @@ export function setSupabaseAccessTokenProvider(provider: (() => Promise<string |
   supabaseAccessTokenProvider = provider;
   if (provider) authResolvedWithoutUser = false;
   if (debugSupabaseAuth) {
+    // eslint-disable-next-line no-console
     console.info(`Supabase access token provider ${provider ? 'registered' : 'cleared'}.`);
   }
   resolveProviderWaiters();
@@ -54,6 +55,7 @@ async function waitForSupabaseAccessTokenProvider(): Promise<(() => Promise<stri
   // Auth already settled logged-out: anon is legitimate, don't stall.
   if (authResolvedWithoutUser) return null;
   if (debugSupabaseAuth) {
+    // eslint-disable-next-line no-console
     console.info('Waiting for Supabase auth to settle...');
   }
   // Wait for the provider to register or for auth to settle logged-out. A long
@@ -85,6 +87,7 @@ export const supabase = createClient(
     accessToken: async () => {
       const token = await getSupabaseAccessTokenForRequest();
       if (debugSupabaseAuth) {
+        // eslint-disable-next-line no-console
         console.info(`Supabase access token ${token ? 'resolved' : 'missing'} for request.`);
       }
       return token;

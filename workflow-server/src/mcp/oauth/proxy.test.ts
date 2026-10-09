@@ -21,6 +21,7 @@ function fakeEntra(overrides: Partial<EntraClient> = {}): EntraClient {
 }
 
 async function startServer(makeConfig: (base: string) => OAuthProxyConfig | undefined): Promise<{ base: string; server: Server; config: () => OAuthProxyConfig | undefined }> {
+  // eslint-disable-next-line prefer-const -- the server closure below captures config before it is assigned (needs base, resolved after listen), so const is not viable.
   let config: OAuthProxyConfig | undefined;
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');

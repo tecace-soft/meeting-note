@@ -29,7 +29,6 @@ import TranscriptDiarizedEditor, {
 } from '../components/TranscriptDiarizedEditor';
 import {
   getNoteDiarizationRaw,
-  hasUsableDiarization,
   normalizeTranscript,
   persistNoteDiarization,
   type TranscriptLanguage,
@@ -257,6 +256,8 @@ function buildChatMessages(rows: ChatRow[]): ChatMessage[] {
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? 'https://meeting-note-backend-njfb.onrender.com').replace(/\/$/, '');
 
 const Project: React.FC = () => {
+  // The note-duration chip is intentionally hidden for now, kept for easy re-enablement.
+  const SHOW_NOTE_DURATION = false;
   const { user, getAccessToken } = useAuth();
   const { appLanguage, t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -503,20 +504,6 @@ const Project: React.FC = () => {
     const fromTag = normalizeTagList(note.tag);
     if (fromTag.length) return fromTag;
     return normalizeTagList(note.tags);
-  };
-
-  const getNoteParticipantsLabel = (note: NoteRow): string => {
-    const diarRaw = getNoteDiarizationRaw(note);
-    if (!hasUsableDiarization(diarRaw)) return 'None';
-    const participants = Array.from(
-      new Set(
-        normalizeTranscript(diarRaw)
-          .map((seg) => seg.speaker.trim())
-          .filter((name) => Boolean(name))
-      )
-    );
-    if (participants.length === 0) return 'None';
-    return participants.join(', ');
   };
 
   const handleNoteImagesChange = (noteId: string, imageCount: number) => {
@@ -1330,7 +1317,7 @@ const Project: React.FC = () => {
                                   <Calendar className="h-3 w-3 shrink-0" aria-hidden />
                                   <span className="min-w-0 truncate">{formatDate(note.created_at)}</span>
                                 </div>
-                                {false ? (
+                                {SHOW_NOTE_DURATION ? (
                                   <div
                                     className="mt-1 flex min-w-0 items-center gap-1 text-sm"
                                     style={{ color: 'var(--text-secondary)' }}
