@@ -37,7 +37,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): define inactive meeting transfer v1 contract
 - feat(mcp): let ChatGPT connect with only the MCP URL + OAuth (#19)
 - feat(memory): Step 4 phase 2b, prevent run-ons at the fold (update=rewrite, not append)
-- feat(memory): Step 4 phase 2a, surgical atomizeRunOns (inert) + eval proof
 
 **Fixes**
 
@@ -76,6 +75,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- chore(lint): fix all eslint errors and make the lint gate blocking
 - test(ci): stand up a frontend test runner and a CI gate
 - refactor(gemini): extract shared retryable + dedup helpers for the call wrappers
 

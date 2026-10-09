@@ -95,15 +95,36 @@ async function verifyAppJwt(token: string, secret: string): Promise<{ userId: st
   return sub ? { userId: sub } : { userId: null, error: 'JWT did not include a user id.' };
 }
 
+/** Sign a private audio object once ownership is established. */
+async function signObject(
+  adminClient: SupabaseClient,
+  bucket: string,
+  storagePath: string,
+): Promise<string> {
+  const { data: signedData, error: signedError } = await adminClient.storage
+    .from(bucket)
+    .createSignedUrl(storagePath, SIGNED_URL_SECONDS);
+  if (signedError || !signedData?.signedUrl) {
+    throw signedError ?? new Error('Could not create signed audio URL.');
+  }
+  return signedData.signedUrl;
+}
+
 /**
- * Sign a private audio object ONLY when storage itself confirms the note owner
- * owns it (R01). storage.objects.owner_id is set by Supabase to the uploader's
- * JWT sub at upload time and is not client-writable, unlike note.audio_file_id /
- * note.audio_file / the public.file row, all of which the client can point at an
- * arbitrary object. Returns the signed URL, or null when the object is not owned
- * by `ownerId` (caller then falls through to the next candidate). Throws if the
- * ownership RPC is unavailable, so the function fails CLOSED (never signs an
- * unverified object); the backing migration must be applied before deploy.
+ * Sign a private audio object ONLY when the note owner owns it (R01). Hybrid
+ * ownership check, because this bucket predates owner tracking:
+ *   - When storage.objects.owner_id is present, it is authoritative and NOT
+ *     client-forgeable (Supabase sets it to the uploader's JWT sub at upload),
+ *     so modern objects use the strict check.
+ *   - When owner_id is null (legacy objects uploaded before owner tracking; a
+ *     majority of this bucket today), fall back to a public.file row owned by the
+ *     note owner that points at this exact object. The file row is client-writable
+ *     so this is weaker, but it is strictly better than the previous no-check
+ *     behavior and the fallback set shrinks as new uploads carry owner_id and the
+ *     legacy rows are backfilled.
+ * Returns the signed URL, or null when ownership cannot be established (caller
+ * falls through to the next candidate). Throws if the ownership RPC is
+ * unavailable, so the function fails CLOSED; apply the backing migration first.
  */
 async function signIfOwned(
   adminClient: SupabaseClient,
@@ -116,14 +137,21 @@ async function signIfOwned(
     p_name: storagePath,
   });
   if (ownerError) throw ownerError;
-  if (typeof owner !== 'string' || owner !== ownerId) return null;
-  const { data: signedData, error: signedError } = await adminClient.storage
-    .from(bucket)
-    .createSignedUrl(storagePath, SIGNED_URL_SECONDS);
-  if (signedError || !signedData?.signedUrl) {
-    throw signedError ?? new Error('Could not create signed audio URL.');
+  if (typeof owner === 'string' && owner) {
+    // Modern object: storage owner_id is authoritative.
+    return owner === ownerId ? await signObject(adminClient, bucket, storagePath) : null;
   }
-  return signedData.signedUrl;
+  // Legacy object with no recorded owner_id: require a file row owned by the note owner.
+  const { data: ownedFile, error: fileError } = await adminClient
+    .from('file')
+    .select('id')
+    .eq('user_id', ownerId)
+    .eq('bucket', bucket)
+    .eq('storage_path', storagePath)
+    .limit(1)
+    .maybeSingle();
+  if (fileError) throw fileError;
+  return ownedFile ? await signObject(adminClient, bucket, storagePath) : null;
 }
 
 function normalizeSharedUsers(raw: unknown): string[] {
