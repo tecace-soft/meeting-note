@@ -20,7 +20,7 @@ import {
   STANDARD_FALLBACK_CHAIN,
   FLASH_FIRST_FALLBACK_CHAIN,
 } from './gemini-models.js';
-import { callGemini, GeminiApiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
+import { callGemini, dedupeModels, isRetryableGeminiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
 import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryForContext, renderMemoryItemsForBriefing, type BriefingMemoryItem } from './memory.js';
@@ -743,7 +743,7 @@ async function callGeminiWithFallback(input: {
   // nothing from thinking, so we pass 0 to cut a fixed per-call latency floor.
   thinkingBudget?: number;
 }): Promise<GeminiWorkflowCallResult> {
-  const models = [input.model, ...input.fallbackModels].filter((model, index, all) => model && all.indexOf(model) === index);
+  const models = dedupeModels([input.model, ...input.fallbackModels]);
   let lastError: unknown = null;
   for (const model of models) {
     for (let attempt = 0; ; attempt += 1) {
@@ -773,7 +773,7 @@ async function callGeminiWithFallback(input: {
           console.warn(`${input.stage}: Gemini model ${model} unavailable, trying fallback if configured. ${message}`);
           break; // move on to the next fallback model
         }
-        const retryable = error instanceof GeminiApiError && error.retryable;
+        const retryable = isRetryableGeminiError(error);
         if (retryable && attempt < MAX_GEMINI_TRANSIENT_RETRIES) {
           const backoffMs = Math.min(1000 * 2 ** attempt, 8000) + Math.floor(Math.random() * 500);
           console.warn(`${input.stage}: Gemini model ${model} transient error (attempt ${attempt + 1}/${MAX_GEMINI_TRANSIENT_RETRIES + 1}), retrying in ${backoffMs}ms. ${message}`);

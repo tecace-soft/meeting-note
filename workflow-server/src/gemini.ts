@@ -45,6 +45,27 @@ export class GeminiApiError extends Error {
   }
 }
 
+/**
+ * The single authoritative "is it worth retrying the SAME model" predicate shared
+ * by every call wrapper. True only for a Gemini failure callGemini marked
+ * `retryable` (429, 5xx, or a network-level error); any non-GeminiApiError (and any
+ * permanent 4xx/blocked-prompt) is terminal. Extracted so the retryable policy has
+ * one home instead of a copy in each wrapper that could silently drift.
+ */
+export function isRetryableGeminiError(error: unknown): boolean {
+  return error instanceof GeminiApiError && error.retryable;
+}
+
+/**
+ * Order-preserving dedup for a model failover chain: drops empty entries and keeps
+ * the first occurrence of each model id, so the chain's load-bearing failover order
+ * is preserved. Shared by every wrapper that walks a [primary, ...fallbacks] chain
+ * (the predicate is byte-identical to the copies it replaces).
+ */
+export function dedupeModels(models: readonly string[]): string[] {
+  return models.filter((model, index, all) => model && all.indexOf(model) === index);
+}
+
 interface GeminiGenerateContentResponse {
   candidates?: {
     content?: { parts?: { text?: string }[] };

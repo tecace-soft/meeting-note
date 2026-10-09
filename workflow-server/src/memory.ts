@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { callGemini, GeminiApiError } from './gemini.js';
+import { callGemini, dedupeModels, isRetryableGeminiError } from './gemini.js';
 import { MEMORY_MODEL, MEMORY_FALLBACK_CHAIN } from './gemini-models.js';
 
 // Bounds to keep prompt/cost sane and the base from growing without limit.
@@ -530,7 +530,7 @@ export async function callJsonModel<T>(input: {
         if (attempt === MAX_ATTEMPTS_PER_MODEL) break; // exhausted this model → next model
       } catch (error) {
         lastError = `${model}: ${(error as Error).message}`;
-        const retryable = error instanceof GeminiApiError && error.retryable;
+        const retryable = isRetryableGeminiError(error);
         if (!retryable || attempt === MAX_ATTEMPTS_PER_MODEL) break; // non-retryable or exhausted → next model
         await sleep(600 * attempt + Math.floor(Math.random() * 300));
       }
@@ -585,7 +585,7 @@ async function writeNoteInsight(
 
 function resolveModels(model: string | undefined, fallbackModels: string[] | undefined): string[] {
   const primary = (model ?? DEFAULT_MEMORY_MODEL).trim() || DEFAULT_MEMORY_MODEL;
-  return [primary, ...(fallbackModels ?? DEFAULT_MEMORY_FALLBACK_MODELS)].filter((m, i, all) => m && all.indexOf(m) === i);
+  return dedupeModels([primary, ...(fallbackModels ?? DEFAULT_MEMORY_FALLBACK_MODELS)]);
 }
 
 /**
