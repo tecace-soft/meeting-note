@@ -69,10 +69,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - eval(memory): Step 4 phase 1, run-on/atomicity metric + split experiment
 - eval(speaker-id): pairwise cosine separation in the H1 embedding probe
 - eval(speaker-id): H7 real-data preview, trigger is noisy, value path never fires
-- eval(speaker-id): H1 embedding-signature probe, NEGATIVE, do not build the store
 
 **Docs**
 
+- docs(ops): mark MCP consolidation resolved, retire the dead deploy path
 - docs(ai-native): add agent entry docs with auto-synced structure
 - docs(knowledge): prepare Hans branch review handoff
 - docs(app): restyle the MCP setup guide as numbered steps plus a tools table (#22)

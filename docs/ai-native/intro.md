@@ -34,7 +34,8 @@ Directories only, to depth 2; generated / vendor directories (node_modules, dist
 ```text
 .
 ├── docs/
-│   └── ai-native/
+│   ├── ai-native/
+│   └── reviews/
 ├── meeting-note-mobile/
 │   ├── app/
 │   └── docs/
