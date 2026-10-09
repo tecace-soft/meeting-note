@@ -4,6 +4,17 @@
 백엔드(workflow-server)는 main에서 자동 배포되지만, 아래는 자동화되지 않는 수동 작업이다.
 순서가 중요한 곳은 명시했다.
 
+## STATUS (2026-10-09 기준)
+
+- [x] 단계 1: 마이그레이션 3개 적용 + 검증 (MCP로 적용, checkpoint RLS / active-uniq 인덱스 / mcp 702 컬럼 / storage_object_owner 함수 전부 확인)
+- [x] 단계 2: R01 blast-radius 확인 → null-owner가 892개 중 508개로 과다 판정
+- [x] owner_id 백필: file 기준 113개 + note 기준 266개 = null-owner 508 -> 129 (나머지는 노트가 참조하지 않는 고아 객체). 재생 깨지는 레거시 노트 319 -> 1개(고아/손상 참조)
+- [x] 단계 3: Edge function 7개 전부 배포 완료 (note-audio-url은 하이브리드 소유권 게이트 + 백필 이후 배포)
+- [ ] 단계 4: 모바일 APK 빌드 + on-device E2E (아래, 아직 남음 — 실기기 필요)
+- [ ] 단계 5(선택): Group B 2-user 프로덕션 E2E
+
+아래 원문 절차는 참고용으로 남겨둔다 (이미 수행된 1~3 포함).
+
 ## 0. 준비 (edge 배포에만 필요, DB 작업엔 불필요)
 
 Supabase CLI는 설치돼 있지 않으므로 npx로 실행한다 (첫 실행 시 바이너리 자동 다운로드).

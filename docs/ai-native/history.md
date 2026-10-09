@@ -36,10 +36,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): add verified identity and source access foundation
 - feat(knowledge): define inactive meeting transfer v1 contract
 - feat(mcp): let ChatGPT connect with only the MCP URL + OAuth (#19)
-- feat(memory): Step 4 phase 2b, prevent run-ons at the fold (update=rewrite, not append)
 
 **Fixes**
 
+- fix(security): hybrid ownership check for note audio signing (R01)
 - fix(mobile): stop silently deleting an interrupted m4a recording
 - fix(db): reconcile the two conflicting mcp_tracking migrations
 - fix(security): verify storage ownership before signing note audio (R01)
