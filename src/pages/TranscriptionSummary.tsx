@@ -342,6 +342,13 @@ const TranscriptionSummary: React.FC = () => {
   const [isEditingSummary, setIsEditingSummary] = useState(false);
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
+  // Keep the generated note id stable across retries of the SAME source file.
+  // The backend write is idempotent on note.id (upsert, ignoreDuplicates), so a
+  // retried summary of the same audio must carry the same id or it creates a
+  // duplicate note and bills the transcription twice. A different source file
+  // (new recording or upload) yields a different key and a fresh id; a
+  // successful run clears the slot so the next summary starts clean.
+  const summaryNoteIdRef = useRef<{ fileKey: string; noteId: string } | null>(null);
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const generatedTitleInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingGeneratedTitle, setIsEditingGeneratedTitle] = useState(false);
@@ -385,6 +392,24 @@ const TranscriptionSummary: React.FC = () => {
 
   /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
   const generateNoteId = (): string => crypto.randomUUID();
+
+  /** Stable identity for one source file, so retries reuse the same note id. */
+  const summaryFileKey = (file: UploadedFile): string =>
+    file.audioFileId || file.storagePath || file.id;
+
+  /**
+   * Note id for summarizing `file`: the same id while retrying the same source
+   * file (idempotent dedup on the backend), a fresh id once the file changes.
+   */
+  const noteIdForFile = (file: UploadedFile): string => {
+    const fileKey = summaryFileKey(file);
+    if (summaryNoteIdRef.current?.fileKey === fileKey) {
+      return summaryNoteIdRef.current.noteId;
+    }
+    const noteId = generateNoteId();
+    summaryNoteIdRef.current = { fileKey, noteId };
+    return noteId;
+  };
 
   const formatRecordingTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -1184,6 +1209,8 @@ const TranscriptionSummary: React.FC = () => {
       const completedJob = await waitForWorkflowJob(jobId, token, getAccessToken, controller.signal);
       await applySummaryResult(completedJob, noteId);
       clearActiveSummaryJob();
+      // Succeeded: release the reuse slot so a later summary starts with a fresh id.
+      if (summaryNoteIdRef.current?.noteId === noteId) summaryNoteIdRef.current = null;
     } catch (error: any) {
       if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         // Unmount/navigation: keep the persisted job so a later mount resumes it.
@@ -1231,7 +1258,7 @@ const TranscriptionSummary: React.FC = () => {
     let token: string;
     try {
       const file = completedFiles[0];
-      noteId = generateNoteId();
+      noteId = noteIdForFile(file);
       setCurrentNoteId(noteId);
 
       if (!WORKFLOW_API_URL) {
