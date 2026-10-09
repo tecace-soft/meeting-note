@@ -46,6 +46,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(pipeline): idempotent note writes, orphan convergence, transcript checkpoint
 - fix(recorder): stop truncating or silently dropping a finished recording
 - fix(security): owner-scope the meeting-recordings storage bucket RLS
 - fix(security): enable RLS on public.chat and public.session
@@ -68,7 +69,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 **Evaluation**
 
 - eval(memory): Step 4 phase 1, run-on/atomicity metric + split experiment
-- eval(speaker-id): pairwise cosine separation in the H1 embedding probe
 
 **Docs**
 
