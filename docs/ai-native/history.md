@@ -38,6 +38,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(summarize): show a clear no-speech message instead of a raw transcription error
 - fix(security): stop inlining the whole import.meta.env into the client bundle
 - fix(security): hybrid ownership check for note audio signing (R01)
 - fix(mobile): stop silently deleting an interrupted m4a recording
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(ai-native): add agent entry docs with auto-synced structure
 - docs(knowledge): prepare Hans branch review handoff
 - docs(app): restyle the MCP setup guide as numbered steps plus a tools table (#22)
-- docs(app): flesh out the ChatGPT connection guide now that OAuth works (#21)
 
 **Other**
 
