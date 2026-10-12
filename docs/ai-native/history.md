@@ -38,6 +38,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(security): stop inlining the whole import.meta.env into the client bundle
 - fix(security): hybrid ownership check for note audio signing (R01)
 - fix(mobile): stop silently deleting an interrupted m4a recording
 - fix(db): reconcile the two conflicting mcp_tracking migrations
@@ -54,7 +55,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(web): stop importing server source into the web bundle
 - fix(knowledge): bound extraction units to the completion snapshot cap
 - fix(mcp): log real tracking errors and use UUID ids for mcp_session/mcp_tool_call (#23)
-- fix(mcp): keep the OAuth proxy resource on /mcp-chatgpt and log why it is off (#20)
 
 **Performance**
 

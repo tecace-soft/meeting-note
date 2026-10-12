@@ -112,6 +112,28 @@ class HttpError extends Error {
   }
 }
 
+// Thrown when transcription succeeds but the audio held no detectable speech
+// (a recording left running in a silent room, or an interrupted capture whose
+// recovered audio is only ambient noise). This is a normal user outcome, not a
+// system failure: it must surface a clear, localized message and must NOT raise
+// an ops incident. 422 = the request was well-formed but the audio is
+// unprocessable, for the direct (non-job) summarize endpoint.
+class NoSpeechDetectedError extends HttpError {
+  constructor(message: string) {
+    super(422, message);
+    this.name = 'NoSpeechDetectedError';
+  }
+}
+
+// User-facing message for a no-speech recording, in the selected summary
+// language. Shown verbatim to the user (mobile processing screen, web job
+// poll), so it must read as guidance, never as an internal error string.
+function noSpeechMessage(language: 'en' | 'ko'): string {
+  return language === 'ko'
+    ? '녹음에서 음성을 찾지 못했어요. 말소리가 담긴 녹음으로 다시 시도해 주세요.'
+    : 'No speech was found in this recording. Please try again with audio that contains speech.';
+}
+
 const AUDIO_BUCKET = 'meeting-recordings';
 const ANDROID_AUDIO_MAX_BYTES = 100 * 1024 * 1024;
 const DEFAULT_SUMMARY_PROMPT_NAME = 'Default';
@@ -1911,7 +1933,10 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     segments = transcription.segments;
     audioDurationSeconds = transcription.audioDurationSeconds;
     detectedLanguage = transcription.detectedLanguage;
-    if (segments.length === 0) throw new Error('AssemblyAI returned no diarized transcript segments.');
+    // A completed transcription with zero segments means the audio contained no
+    // detectable speech, not that the pipeline broke. Surface it as a clear,
+    // localized user message (and skip the ops incident in the job handler).
+    if (segments.length === 0) throw new NoSpeechDetectedError(noSpeechMessage(input.language));
     // Persist the paid transcript BEFORE the Gemini summary so a summary failure
     // or a restart from here on no longer discards it.
     await saveTranscriptCheckpoint({
@@ -2413,19 +2438,26 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
     await finalizeNoteMemory(input, result.transcript);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Workflow job ${jobId} failed:`, error);
-    void raiseIncident({
-      title: 'Summarize audio job failed',
-      error,
-      context: {
-        jobId,
-        noteId: input.noteId,
-        userId: input.userId,
-        fileName: input.fileName,
-        promptId: input.promptId,
-        meetingAt: input.meetingAt,
-      },
-    });
+    // A no-speech recording is a normal user outcome, not a system failure: mark
+    // the job failed so the user sees the guidance message, but do not log it as
+    // an error or raise an ops incident (that would be pure noise).
+    if (error instanceof NoSpeechDetectedError) {
+      console.log(`Workflow job ${jobId} ended with no detectable speech in the audio; surfacing to the user without an incident.`);
+    } else {
+      console.error(`Workflow job ${jobId} failed:`, error);
+      void raiseIncident({
+        title: 'Summarize audio job failed',
+        error,
+        context: {
+          jobId,
+          noteId: input.noteId,
+          userId: input.userId,
+          fileName: input.fileName,
+          promptId: input.promptId,
+          meetingAt: input.meetingAt,
+        },
+      });
+    }
     await updateWorkflowJob(jobId, {
       status: 'failed',
       stage: 'failed',
