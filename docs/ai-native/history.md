@@ -35,7 +35,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): persist meeting access ledger and add authenticated HTTP checks
 - feat(knowledge): add verified identity and source access foundation
 - feat(knowledge): define inactive meeting transfer v1 contract
-- feat(mcp): let ChatGPT connect with only the MCP URL + OAuth (#19)
 
 **Fixes**
 
@@ -63,6 +62,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(review): mark the 2026-10-09 deploy steps 1-3 done
 - docs(review): add the 2026-10-09 manual deploy checklist
 - docs(review): mark Group C, sibling edge-fn vulns, and R01 as done
 - docs(review): record Group B verification verdicts (#2/#3/#4/#10)

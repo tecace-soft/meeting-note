@@ -4,6 +4,9 @@ interface ImportMetaEnv {
   readonly VITE_MSAL_CLIENT_ID: string
   readonly VITE_MSAL_AUTHORITY: string
   readonly VITE_MSAL_REDIRECT_URI: string
+  readonly VITE_SUPABASE_URL: string | undefined
+  readonly VITE_SUPABASE_ANON_KEY: string | undefined
+  readonly VITE_DEBUG_SUPABASE_AUTH: string | undefined
 }
 
 interface ImportMeta {

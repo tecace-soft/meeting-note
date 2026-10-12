@@ -1,16 +1,21 @@
 import { createClient } from '@supabase/supabase-js';
 
-const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
-const hasViteEnv = Boolean((import.meta as unknown as { env?: Record<string, string | undefined> }).env);
+// Read each VITE_ variable by its literal name. Vite statically replaces
+// `import.meta.env.VITE_FOO` with just that value, so only the vars named here
+// land in the client bundle. Aliasing or spreading the whole `import.meta.env`
+// object makes Vite inline the ENTIRE env object, which leaks every secret
+// VITE_-prefixed var set on the build service (this is how OpenAI/Gemini keys
+// ended up in the public bundle). Never reference import.meta.env as a whole.
 const nodeEnv =
   typeof process !== 'undefined'
     ? (process.env as Record<string, string | undefined>)
     : {};
-const supabaseUrl = viteEnv.VITE_SUPABASE_URL ?? nodeEnv.VITE_SUPABASE_URL;
-const supabaseAnonKey = viteEnv.VITE_SUPABASE_ANON_KEY ?? nodeEnv.VITE_SUPABASE_ANON_KEY;
-const debugSupabaseAuth = viteEnv.VITE_DEBUG_SUPABASE_AUTH === 'true';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? nodeEnv.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? nodeEnv.VITE_SUPABASE_ANON_KEY;
+const debugSupabaseAuth =
+  (import.meta.env.VITE_DEBUG_SUPABASE_AUTH ?? nodeEnv.VITE_DEBUG_SUPABASE_AUTH) === 'true';
 
-if (hasViteEnv && (!supabaseUrl || !supabaseAnonKey)) {
+if (!supabaseUrl || !supabaseAnonKey) {
   console.warn('Supabase credentials not configured');
 }
 

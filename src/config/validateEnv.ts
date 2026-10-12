@@ -20,10 +20,18 @@ const PLACEHOLDER_VALUES = new Set(['YOUR_CLIENT_ID_HERE']);
 
 /** Returns the names of required env vars that are missing or still placeholders. */
 export function getMissingEnvVars(): string[] {
-  const env =
-    (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  // Read each var by its literal name so Vite inlines ONLY these values. A
+  // dynamic `env[key]` over the whole import.meta.env object would make Vite
+  // bake the entire env object (every secret VITE_-prefixed var) into the
+  // client bundle. The Record type forces a literal entry for each required
+  // var, so adding one here without a literal access fails to compile.
+  const values: Record<(typeof REQUIRED_ENV_VARS)[number], string | undefined> = {
+    VITE_MSAL_CLIENT_ID: import.meta.env.VITE_MSAL_CLIENT_ID,
+    VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+    VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY,
+  };
   return REQUIRED_ENV_VARS.filter((key) => {
-    const value = env[key];
+    const value = values[key];
     return !value || !value.trim() || PLACEHOLDER_VALUES.has(value.trim());
   });
 }
