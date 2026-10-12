@@ -63,6 +63,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(design): C1 iOS m4a recovery via segment-splitting prevention
 - docs(review): mark the 2026-10-09 deploy steps 1-3 done
 - docs(review): add the 2026-10-09 manual deploy checklist
 - docs(review): mark Group C, sibling edge-fn vulns, and R01 as done
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(ops): mark MCP consolidation resolved, retire the dead deploy path
 - docs(ai-native): add agent entry docs with auto-synced structure
 - docs(knowledge): prepare Hans branch review handoff
-- docs(app): restyle the MCP setup guide as numbered steps plus a tools table (#22)
 
 **Other**
 
