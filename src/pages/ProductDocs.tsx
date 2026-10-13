@@ -36,6 +36,19 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 function formatVerifiedDate(value: string): string {
   if (!value) return '';
+  // Date-only values (YYYY-MM-DD) render as a LOCAL date with no time. `new Date('2026-10-13')`
+  // parses as UTC midnight, which shifts back a day (and shows a spurious 00:00 / PM) in western
+  // timezones, so build the date from its parts and format date-only instead.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (dateOnly) {
+    const [, y, m, d] = dateOnly;
+    const local = new Date(Number(y), Number(m) - 1, Number(d));
+    try {
+      return local.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    } catch {
+      return value;
+    }
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   try {
