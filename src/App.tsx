@@ -12,6 +12,7 @@ import SummaryHistory from './pages/SummaryHistory';
 import Project from './pages/Project';
 import AccountSettings from './pages/AccountSettings';
 import Issues from './pages/Issues';
+import ProductDocs from './pages/ProductDocs';
 import AdminAnalytics from './pages/AdminAnalytics';
 import AdminControls from './pages/AdminControls';
 import TranscriptionModelTest from './pages/TranscriptionModelTest';
@@ -109,6 +110,7 @@ const App: React.FC = () => {
                     <Route path="/project" element={<Project />} />
                     <Route path="/account-settings" element={<AccountSettings />} />
                     <Route path="/issues" element={<Issues />} />
+                    <Route path="/docs" element={<ProductDocs />} />
                     <Route path="/admin-analytics" element={<AdminAnalytics />} />
                     <Route path="/admin-controls" element={<AdminControls />} />
                     <Route path="/transcription-model-test" element={<ModelTestRoute />} />

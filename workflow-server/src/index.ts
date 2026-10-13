@@ -3,7 +3,7 @@ import { createWriteStream } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
@@ -28,6 +28,7 @@ import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAle
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 import { handleMcpRequest } from './mcp/transports/http.js';
 import { noteAccessFilterFor } from './mcp/lib/supabase.js';
+import { loadProductDoc, loadProductDocsIndex } from './productDocs.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
@@ -660,18 +661,83 @@ function getBearerToken(req: IncomingMessage): string {
   return header.slice('Bearer '.length).trim();
 }
 
+// Delegates to getMicrosoftProfile (single Graph /me implementation) and returns just the id.
+// Keeps all authed routes on one validated, timeout-bounded Graph call.
 async function getMicrosoftUserId(accessToken: string): Promise<string> {
-  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
+  const profile = await getMicrosoftProfile(accessToken);
+  return profile.id;
+}
+
+// TecAce org gate for product docs. These are internal specs served identically to every
+// caller, so a valid Microsoft token is not enough: the resolved account must belong to an
+// allowed TecAce domain. Overridable via PRODUCT_DOCS_ALLOWED_DOMAINS (comma-separated).
+const PRODUCT_DOCS_ALLOWED_DOMAINS = (process.env.PRODUCT_DOCS_ALLOWED_DOMAINS ?? 'tecace.com')
+  .split(',')
+  .map((domain) => domain.trim().toLowerCase())
+  .filter(Boolean);
+
+// Short-lived identity cache for the click-heavy docs path, so browsing N docs does not make
+// N+1 Graph /me calls (and risk 429). Keyed by a hash of the token (never the raw token); small
+// TTL so a revoked token stops resolving quickly. Only successful MEMBER lookups are cached;
+// non-members are re-checked every time. Bounded size (Power of Ten rule 8).
+const PRODUCT_DOCS_IDENTITY_TTL_MS = 60_000;
+const PRODUCT_DOCS_IDENTITY_CACHE_MAX = 256;
+const productDocsIdentityCache = new Map<string, { id: string; expiresAt: number }>();
+
+// Resolve the caller's Microsoft identity AND the domain(s) on their account, so the docs gate
+// can assert org membership. Fails closed (throws) on a bad/expired token.
+async function getMicrosoftProfile(accessToken: string): Promise<{ id: string; domains: string[] }> {
+  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName', {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(8000),
   });
   if (!response.ok) {
     throw new Error(`Microsoft Graph /me rejected the token (${response.status}).`);
   }
-  const data = (await response.json()) as { id?: unknown };
+  const data = (await response.json()) as { id?: unknown; mail?: unknown; userPrincipalName?: unknown };
   if (typeof data.id !== 'string' || !data.id.trim()) {
     throw new Error('Microsoft Graph /me did not return a user id.');
   }
-  return data.id.trim();
+  const domains = [data.mail, data.userPrincipalName]
+    .filter((value): value is string => typeof value === 'string' && value.includes('@'))
+    .map((value) => value.slice(value.lastIndexOf('@') + 1).toLowerCase());
+  return { id: data.id.trim(), domains };
+}
+
+// Authenticate the caller and assert TecAce membership for the product-docs web routes.
+// Throws 401 (bad token) via getHttpStatus mapping, or 403 for a non-member account.
+async function assertProductDocsMember(req: IncomingMessage): Promise<string> {
+  const token = getBearerToken(req);
+  const key = createHash('sha256').update(token).digest('hex');
+  const now = Date.now();
+  const cached = productDocsIdentityCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.id;
+
+  const profile = await getMicrosoftProfile(token);
+  const isMember = profile.domains.some((domain) => PRODUCT_DOCS_ALLOWED_DOMAINS.includes(domain));
+  if (!isMember) {
+    throw new HttpError(403, 'Product docs are limited to TecAce members.');
+  }
+  // Simple bound: clear when full rather than tracking LRU (the set is tiny and TTL-bounded).
+  if (productDocsIdentityCache.size >= PRODUCT_DOCS_IDENTITY_CACHE_MAX) productDocsIdentityCache.clear();
+  productDocsIdentityCache.set(key, { id: profile.id, expiresAt: now + PRODUCT_DOCS_IDENTITY_TTL_MS });
+  return profile.id;
+}
+
+async function getProductDocsIndexRoute(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  await assertProductDocsMember(req);
+  const index = await loadProductDocsIndex();
+  sendJson(res, 200, index);
+}
+
+async function getProductDocRoute(req: IncomingMessage, res: ServerResponse, slug: string): Promise<void> {
+  await assertProductDocsMember(req);
+  const doc = await loadProductDoc(slug);
+  if (!doc) {
+    sendJson(res, 404, { error: 'Unknown product doc.' });
+    return;
+  }
+  sendJson(res, 200, doc);
 }
 
 function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
@@ -3615,6 +3681,15 @@ const server = createServer((req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/meeting-briefing') {
       await meetingBriefing(req, res);
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/product-docs') {
+      await getProductDocsIndexRoute(req, res);
+      return;
+    }
+    const productDocMatch = url.pathname.match(/^\/product-docs\/([a-z0-9-]+)$/);
+    if (req.method === 'GET' && productDocMatch?.[1]) {
+      await getProductDocRoute(req, res, productDocMatch[1]);
       return;
     }
     if (req.method === 'POST' && req.url === '/issue-resolution') {

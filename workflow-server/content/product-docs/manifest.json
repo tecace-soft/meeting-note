@@ -1,0 +1,194 @@
+{
+  "sections": [
+    "Getting started",
+    "Features",
+    "Integrations",
+    "History"
+  ],
+  "docs": [
+    {
+      "slug": "product-overview",
+      "title": "제품 개요",
+      "section": "Getting started",
+      "order": 1,
+      "revision": "2026-10-13.1",
+      "summary": "Meeting Note가 무엇이고 어떻게 동작하는지: 녹음->전사->화자->요약->저장 파이프라인과 인증·데이터 보관의 개요.",
+      "verified_body_hash": "3fa9697ef31d075dc8595f200ced0b8f229ba568c8949b2e593d814a6699cb11",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "guide-for-ai-agents",
+      "title": "AI 에이전트 작업 가이드",
+      "section": "Getting started",
+      "order": 2,
+      "revision": "2026-10-13.1",
+      "summary": "AI 에이전트가 Meeting Note와 작업하는 법: 문서를 먼저 읽고 명세에 맞춰 구현, MCP 툴 사용, 문서 발견 방법.",
+      "verified_body_hash": "0614390950452906bdd355673345b86a5e1b164c3077476e110fc652e1568553",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "architecture",
+      "title": "시스템 아키텍처",
+      "section": "Getting started",
+      "order": 3,
+      "revision": "2026-10-13.1",
+      "summary": "프론트엔드·workflow-server(+합친 MCP)·Supabase·배포를 잇는 전체 시스템 지도. 녹음->전사->화자->요약->저장 파이프라인과 MSAL->Supabase 토큰->RLS 인증 흐름의 진입점.",
+      "depends_on": [
+        "workflow-server/src/index.ts",
+        "workflow-server/src/mcp/server.ts",
+        "src/App.tsx"
+      ],
+      "verified_body_hash": "0c3fbffd8b14fc3f7feb5105f02cfc3be39e12a73c10b3856ed5022185af5ad2",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "data-model-and-security",
+      "title": "데이터 모델과 보안",
+      "section": "Getting started",
+      "order": 4,
+      "revision": "2026-10-13.1",
+      "summary": "노트·메모리·화자·이슈 테이블과 RLS, 스토리지 버킷 소유자 스코프, MSAL->Supabase 토큰 교환을 저장소 명세로 정리. 저장소 명세와 운영 적용 상태를 명확히 분리한다.",
+      "depends_on": [
+        "supabase/migrations/",
+        "supabase/functions/supabase-token/",
+        "supabase/functions/_shared/msGraphAllowlist.ts"
+      ],
+      "verified_body_hash": "2431b0145e13c51fb136c8a558c671487fad2e2c6966372ffe4941b2c7e65a70",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "f2-feedback",
+      "title": "피드백/이슈 트래커 (F2)",
+      "section": "Features",
+      "order": 1,
+      "revision": "2026-10-13.1",
+      "summary": "사내 피드백/이슈 트래커(F2)의 데이터 모델·상태 흐름·자동 분류·AI 해결안·엔드포인트 명세.",
+      "depends_on": [
+        "src/lib/feedbackIssues.ts",
+        "src/pages/Issues.tsx"
+      ],
+      "verified_body_hash": "e6b9485e527e84eff158f6f425a7995d48d5ad76e86ed0f7cdb553c9d0837016",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "transcription-diarization",
+      "title": "전사와 화자 분리 (Transcription + Diarization)",
+      "section": "Features",
+      "order": 2,
+      "revision": "2026-10-13.1",
+      "summary": "녹음/업로드한 오디오를 AssemblyAI로 전사하고 화자별 세그먼트로 분리하는 파이프라인. 불변 speakerKey, 무음 처리(422), 과분할 주의점 포함.",
+      "depends_on": [
+        "workflow-server/src/index.ts",
+        "workflow-server/src/parsers.ts"
+      ],
+      "verified_body_hash": "021fb1dda010726c0d73a9c98ed3b421c2d2a94ea1deb20791de221392a912c1",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "speaker-id",
+      "title": "화자 식별 (Speaker Identification)",
+      "section": "Features",
+      "order": 3,
+      "revision": "2026-10-13.1",
+      "summary": "익명 라벨(Speaker A/B)을 아는 사람으로 추정하는 프로덕션 경로. TF-IDF 시그니처 1차 + LLM fallback + 결정적 앵커 게이트, '한 사람당 최대 한 번' 규칙, 단일 화자만 자동 적용.",
+      "depends_on": [
+        "workflow-server/src/speakerSignature.ts",
+        "workflow-server/src/speakerAnchors.ts",
+        "supabase/functions/identify-speakers/index.ts"
+      ],
+      "verified_body_hash": "83c607ceb65c5f83e76aa983ad204aa9d1f00b3d25a4b22a6e30d13fe7ad417c",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "memory",
+      "title": "개인 메모리 (F1')",
+      "section": "Features",
+      "order": 4,
+      "revision": "2026-10-13.1",
+      "summary": "회의마다 사용자별 서사형 개인 메모리를 접고(fold), 그 메모리를 다음 요약 생성에 배경 컨텍스트로 주입한다.",
+      "depends_on": [
+        "workflow-server/src/memory.ts",
+        "supabase/migrations/20260805130000_create_user_memory.sql",
+        "src/components/UserMemoryView.tsx"
+      ],
+      "verified_body_hash": "198110647b64c988f8974fbe02ef9423aa587c40a9fafe6926d56ad981ca3a77",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "mcp-connection",
+      "title": "MCP 연결 가이드",
+      "section": "Integrations",
+      "order": 1,
+      "revision": "2026-10-13.1",
+      "summary": "Meeting Note MCP 서버 연결 방법: 엔드포인트(/mcp, /mcp-chatgpt), Bearer 토큰 인증 모델, 디스커버리 경로.",
+      "depends_on": [
+        "workflow-server/src/mcp/transports/http.ts"
+      ],
+      "verified_body_hash": "b118f8f417e4978a775fcf7e6d820ce627a290e733fbd30019eaa734ee17fcd5",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "mcp-tools-reference",
+      "title": "MCP 툴 레퍼런스",
+      "section": "Integrations",
+      "order": 2,
+      "revision": "2026-10-13.1",
+      "summary": "Meeting Note MCP 서버에 등록된 툴의 이름·입력·설명(자동 생성). 출력 형태와 접근 권한은 핸들러 코드에서 결정됨.",
+      "depends_on": [
+        "workflow-server/src/mcp/tools/",
+        "workflow-server/src/mcp/server.ts"
+      ],
+      "generated": true,
+      "verified_body_hash": "8ee598654e67638eabf6bc60111d2f903a804c79c5e1d4fefa78f7cd3dd13217",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "docs:generate (generated)"
+    },
+    {
+      "slug": "knowledge-axkh-integration",
+      "title": "지식 인덱스 + AXKH 연동 (프로듀서)",
+      "section": "Integrations",
+      "order": 3,
+      "revision": "2026-10-13.1",
+      "summary": "노트를 검색 가능한 지식으로 만들고, 정책·접근 게이팅된 회의 지식을 AXKH 지식허브로 내구성 있게 전달하는 Meeting Note 쪽(프로듀서) 연동이다.",
+      "depends_on": [
+        "workflow-server/src/knowledge/",
+        "supabase/migrations/20260810180000_search_notes_rpc.sql"
+      ],
+      "verified_body_hash": "972ce7fc3ae2dbc149daac191a3e00c41ed823938cc29672a742cd1450af8a8f",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    },
+    {
+      "slug": "release-history",
+      "title": "변경 이력",
+      "section": "History",
+      "order": 1,
+      "revision": "2026-10-13.1",
+      "summary": "main 커밋 히스토리 다이제스트와 서비스별 버전 추적 방식.",
+      "verified_body_hash": "e99e462f931f5a8ab99a019868afb516fbc26cab882e156b1721546ac40264a8",
+      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
+      "verified_at": "2026-10-13",
+      "verified_by": "Andrew Yoo"
+    }
+  ]
+}

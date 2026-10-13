@@ -65,6 +65,7 @@ Directories only, to depth 2; generated / vendor directories (node_modules, dist
 │   ├── migrations/
 │   └── tests/
 └── workflow-server/
+    ├── content/
     ├── eval/
     ├── scripts/
     └── src/

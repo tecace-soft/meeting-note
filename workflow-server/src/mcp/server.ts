@@ -6,6 +6,7 @@ import { registerEvaluationTools } from './tools/evaluation.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMemoryTools } from './tools/memory.js';
 import { registerNoteTools } from './tools/notes.js';
+import { registerProductDocsTools } from './tools/productDocs.js';
 import { registerProjectTools } from './tools/projects.js';
 import { registerSpeakerTools } from './tools/speakers.js';
 import { addToolExecutionLogging } from './lib/toolLogging.js';
@@ -25,6 +26,7 @@ export function createMeetingNoteMcpServer(): McpServer {
   registerMemoryTools(server);
   registerEvaluationTools(server);
   registerKnowledgeTools(server);
+  registerProductDocsTools(server);
   registerNoteResources(server);
   registerSpeakerResources(server);
 

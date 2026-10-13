@@ -1,0 +1,26 @@
+name: product-docs-check
+
+# Verifies the generated MCP tool reference is in sync with the server's registered tools,
+# and runs the advisory depends_on drift report. fetch-depth: 0 is required so the advisory
+# `git diff <verified_revision>..HEAD` can resolve each doc's verified commit.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install workflow-server deps
+        working-directory: workflow-server
+        run: npm ci
+      - name: Check product docs
+        working-directory: workflow-server
+        run: npm run docs:check

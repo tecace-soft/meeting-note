@@ -51,6 +51,11 @@ export const NOTE_SPEAKER_SCAN_SELECT = 'id, user_id, name, user_name, created_a
 
 let context: DataContext | null = null;
 const requestUserIdStorage = new AsyncLocalStorage<string | undefined>();
+// Whether the current caller's identity was verified as an org member (static key, personal
+// token, or a tenant-checked token). Tools that return SHARED, non-user-scoped content (e.g.
+// product docs, which are the same bytes for everyone) must require this; per-user note tools
+// do not consult it because row-level user scoping already protects them.
+const requestOrgVerifiedStorage = new AsyncLocalStorage<boolean>();
 
 export function getDataContext(): DataContext {
   if (context) return context;
@@ -68,8 +73,18 @@ export function getScopedUserId(): string | undefined {
   return requestUserIdStorage.getStore() ?? getDataContext().userId;
 }
 
-export async function runWithScopedUserId<T>(userId: string | undefined, callback: () => Promise<T>): Promise<T> {
-  return requestUserIdStorage.run(userId, callback);
+// True only when the transport marked this request's caller as an org-verified member.
+// Defaults to false (fail closed) outside a scoped run.
+export function isScopedCallerOrgVerified(): boolean {
+  return requestOrgVerifiedStorage.getStore() ?? false;
+}
+
+export async function runWithScopedUserId<T>(
+  userId: string | undefined,
+  orgVerified: boolean,
+  callback: () => Promise<T>,
+): Promise<T> {
+  return requestUserIdStorage.run(userId, () => requestOrgVerifiedStorage.run(orgVerified, callback));
 }
 
 function applyUserScope<T>(query: T, userId: string | undefined): T {

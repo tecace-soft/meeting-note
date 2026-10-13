@@ -202,24 +202,34 @@ export function getProtectedResourceMetadata(baseUrl: string, resource?: string,
   };
 }
 
-async function resolveChatGptUserId(bearerToken: string | undefined, env: ReturnType<typeof getEnv>, oauthProxy?: OAuthProxyConfig): Promise<string | undefined> {
+// Returns the resolved user id AND whether that resolution proves org membership.
+// orgVerified is true only for admin-provisioned or tenant-checked paths (OAuth proxy,
+// MCP_USER_TOKENS, Azure JWT with issuer pinned to the tenant); it is false for the
+// Graph /me fallback (any Microsoft account resolves) and the anon fallback. Callers gate
+// SHARED, non-user-scoped content (product docs) on orgVerified; per-user tools do not.
+interface ChatGptAuthResult {
+  userId: string | undefined;
+  orgVerified: boolean;
+}
+
+async function resolveChatGptUserId(bearerToken: string | undefined, env: ReturnType<typeof getEnv>, oauthProxy?: OAuthProxyConfig): Promise<ChatGptAuthResult> {
   if (!bearerToken) {
     // No credential presented. Only fall back to the single-user default when
     // explicitly opted in (MCP_ALLOW_ANON_CHATGPT_FALLBACK). Default is closed
     // so a public /mcp-chatgpt does not serve the default user's meetings.
-    return env.mcpAllowAnonChatgptFallback ? env.meetingNoteUserId : undefined;
+    return { userId: env.mcpAllowAnonChatgptFallback ? env.meetingNoteUserId : undefined, orgVerified: false };
   }
 
   const proxyUserId = await resolveUserIdFromProxyAccessToken(oauthProxy, bearerToken);
   if (proxyUserId) {
     process.stderr.write('MCP ChatGPT auth resolved through OAuth proxy access token\n');
-    return proxyUserId;
+    return { userId: proxyUserId, orgVerified: true };
   }
 
   const mappedUserId = env.mcpUserTokens.get(bearerToken);
   if (mappedUserId) {
     process.stderr.write('MCP ChatGPT auth resolved through MCP_USER_TOKENS\n');
-    return mappedUserId;
+    return { userId: mappedUserId, orgVerified: true };
   }
 
   if (env.mcpOAuthResource && env.mcpAzureTenantId) {
@@ -232,7 +242,7 @@ async function resolveChatGptUserId(bearerToken: string | undefined, env: Return
       });
       if (azureUserId) {
         process.stderr.write('MCP ChatGPT auth resolved through Azure JWT oid\n');
-        return azureUserId;
+        return { userId: azureUserId, orgVerified: true };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -243,13 +253,15 @@ async function resolveChatGptUserId(bearerToken: string | undefined, env: Return
   const graphUserId = await getMicrosoftUserIdFromGraph(bearerToken);
   if (graphUserId) {
     process.stderr.write('MCP ChatGPT auth resolved through Microsoft Graph /me fallback\n');
-    return graphUserId;
+    // Resolved, but NOT tenant-checked: good enough to see one's own notes, not to read
+    // shared org docs. Leave orgVerified false so the docs gate refuses this path.
+    return { userId: graphUserId, orgVerified: false };
   }
 
   // A token was presented but resolved to no user (invalid/expired/unknown).
   // Fail closed rather than silently serving the default user's meetings.
   process.stderr.write('MCP ChatGPT auth rejected: bearer token did not resolve to a user\n');
-  return undefined;
+  return { userId: undefined, orgVerified: false };
 }
 
 // Paths this handler owns. Everything else falls through to the host
@@ -411,9 +423,20 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
       return true;
     }
 
-    const userId = isChatGptEndpoint
-      ? personalTokenUserId ?? (await resolveChatGptUserId(bearerToken, env, oauthProxy))
-      : personalTokenUserId ?? getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
+    let userId: string | undefined;
+    let chatGptOrgVerified = false;
+    if (isChatGptEndpoint) {
+      if (personalTokenUserId) {
+        userId = personalTokenUserId;
+        chatGptOrgVerified = true;
+      } else {
+        const chatGptAuth = await resolveChatGptUserId(bearerToken, env, oauthProxy);
+        userId = chatGptAuth.userId;
+        chatGptOrgVerified = chatGptAuth.orgVerified;
+      }
+    } else {
+      userId = personalTokenUserId ?? getHeaderValue(req, 'x-meeting-note-user-id') ?? env.meetingNoteUserId;
+    }
 
     if (!userId) {
       logEvent('warn', 'mcp_missing_user_scope', {
@@ -438,7 +461,14 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
       return true;
     }
 
-    await runWithScopedUserId(userId, async () => {
+    // Org-membership signal for tools that serve SHARED, non-user-scoped content (product
+    // docs). Trusted: static key, personal token (both admin-provisioned), and the tenant-
+    // checked ChatGPT paths (OAuth proxy / MCP_USER_TOKENS / Azure JWT) surfaced via
+    // chatGptOrgVerified. NOT trusted: the Graph /me fallback and anon fallback (any Microsoft
+    // account resolves) stay false, so the docs gate refuses them. Per-user note tools are
+    // unaffected by this flag.
+    const orgVerified = staticKeyAuthorized || Boolean(personalTokenUserId) || chatGptOrgVerified;
+    await runWithScopedUserId(userId, orgVerified, async () => {
       const authMode = personalTokenUserId ? 'personal-token' : staticKeyAuthorized ? 'static-key' : isChatGptEndpoint ? 'chatgpt-oauth' : 'fallback';
       logEvent('info', 'mcp_request_user_resolved', {
         ...getRequestMetadata(req, requestId, url),

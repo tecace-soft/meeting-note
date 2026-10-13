@@ -55,7 +55,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): enable RLS on public.chat and public.session
 - fix(web): stop importing server source into the web bundle
 - fix(knowledge): bound extraction units to the completion snapshot cap
-- fix(mcp): log real tracking errors and use UUID ids for mcp_session/mcp_tool_call (#23)
 
 **Performance**
 
@@ -75,6 +74,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
 - chore(lint): fix all eslint errors and make the lint gate blocking
 - test(ci): stand up a frontend test runner and a CI gate
 - refactor(gemini): extract shared retryable + dedup helpers for the call wrappers

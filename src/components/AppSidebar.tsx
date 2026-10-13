@@ -142,6 +142,7 @@ const navItems = [
   { to: '/transcription-summary', labelKey: 'meetingNote' as TranslationKey, icon: FileDocument, end: true as const },
   { to: '/history', labelKey: 'history' as TranslationKey, icon: ListOrdered, end: false as const, projects: true as const },
   { to: '/issues', labelKey: 'issuesNav' as TranslationKey, icon: Chat, end: false as const },
+  { to: '/docs', labelKey: 'docsNav' as TranslationKey, icon: FileDocument, end: false as const },
 ] as const;
 
 interface AppSidebarProps {
