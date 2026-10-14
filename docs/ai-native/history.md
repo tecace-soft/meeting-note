@@ -34,10 +34,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): add policy-gated candidate extraction core
 - feat(knowledge): add owner attendance and durable private delivery
 - feat(knowledge): persist meeting access ledger and add authenticated HTTP checks
-- feat(knowledge): add verified identity and source access foundation
 
 **Fixes**
 
+- fix(docs): render date-only verified_at as a local date without time
 - fix(summarize): show a clear no-speech message instead of a raw transcription error
 - fix(security): stop inlining the whole import.meta.env into the client bundle
 - fix(security): hybrid ownership check for note audio signing (R01)

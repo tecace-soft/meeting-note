@@ -67,6 +67,13 @@ import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constant
 import ShareNoteModal from '../components/ShareNoteModal';
 import { useRecorder } from '../context/RecorderContext';
 import { useLanguage } from '../context/LanguageContext';
+import {
+  AudioInUseError,
+  ReferenceCheckError,
+  fetchReferencingNotes,
+  formatNoteTitles,
+  type NoteAudioRef,
+} from '../lib/audioFileReferences';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
@@ -695,6 +702,9 @@ const TranscriptionSummary: React.FC = () => {
 
     setRecentAudioError(null);
     try {
+      // Guard: never delete audio that a note still references (fail-closed).
+      await assertAudioNotReferenced(user.id, file);
+
       const { error: storageError } = await supabase.storage
         .from(file.bucket || AUDIO_BUCKET)
         .remove([file.storage_path]);
@@ -716,7 +726,28 @@ const TranscriptionSummary: React.FC = () => {
       setRecentAudioFiles((prev) => prev.filter((item) => item.id !== file.id));
     } catch (error) {
       console.error('Failed to delete recent audio file:', error);
+      if (error instanceof AudioInUseError) {
+        setRecentAudioError(`${t('recordingInUseDelete')} ${error.noteTitles.join(', ')}`);
+        return;
+      }
+      if (error instanceof ReferenceCheckError) {
+        setRecentAudioError(t('recordingDeleteCheckFailed'));
+        return;
+      }
       setRecentAudioError(error instanceof Error ? error.message : 'Failed to delete recent recording');
+    }
+  };
+
+  const assertAudioNotReferenced = async (userId: string, file: RecentAudioFile) => {
+    const identity = { id: file.id, bucket: file.bucket || AUDIO_BUCKET, storage_path: file.storage_path };
+    let referencing: NoteAudioRef[];
+    try {
+      referencing = await fetchReferencingNotes(supabase, userId, identity);
+    } catch (cause) {
+      throw new ReferenceCheckError(cause);
+    }
+    if (referencing.length > 0) {
+      throw new AudioInUseError(formatNoteTitles(referencing, t('untitledNote')));
     }
   };
 
