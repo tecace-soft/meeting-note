@@ -32,7 +32,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): fetch exact current meeting evidence spans
 - feat(knowledge): run durable policy-gated meeting extraction
 - feat(knowledge): add policy-gated candidate extraction core
-- feat(knowledge): add owner attendance and durable private delivery
 
 **Fixes**
 
@@ -62,6 +61,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(reviews): record legacy orphan note resolution (319 -> 0)
 - docs(design): C1 iOS m4a recovery via segment-splitting prevention
 - docs(review): mark the 2026-10-09 deploy steps 1-3 done
 - docs(review): add the 2026-10-09 manual deploy checklist

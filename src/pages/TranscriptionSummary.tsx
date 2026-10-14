@@ -15,6 +15,7 @@ import {
   uploadWithTus,
 } from '../services/supabaseResumableUpload';
 import { ensureStorageObjectReady } from '../lib/storagePublicReady';
+import { saveFileRecordWithRetry, type FileRecordOutcome } from '../lib/saveFileRecord';
 import {
   ArrowsReload01,
   Check,
@@ -383,6 +384,7 @@ const TranscriptionSummary: React.FC = () => {
   const [recentAudioLoading, setRecentAudioLoading] = useState(false);
   const [recentAudioError, setRecentAudioError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [fileRecordWarning, setFileRecordWarning] = useState<string | null>(null);
   /** Tailwind `md` is 768px — used to mirror “mobile” layout behavior. */
   const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
@@ -639,22 +641,40 @@ const TranscriptionSummary: React.FC = () => {
       file: File,
       storagePath: string,
       source: 'upload' | 'recording'
-    ): Promise<string | null> => {
-      if (!user?.id) return null;
-      const { data, error } = await supabase.from('file').insert({
-        user_id: user.id,
-        name: file.name,
-        bucket: AUDIO_BUCKET,
-        storage_path: storagePath,
-        public_url: '',
-        mime_type: file.type || 'application/octet-stream',
-        size_bytes: file.size,
-        source,
-        recorded_at: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
-      }).select('id').single();
-      if (error) throw error;
-      await loadRecentAudioFiles();
-      return typeof data?.id === 'string' ? data.id : null;
+    ): Promise<FileRecordOutcome> => {
+      const userId = user?.id;
+      if (!userId) return { status: 'failed', error: new Error('Not signed in.'), attempts: 0 };
+      const outcome = await saveFileRecordWithRetry({
+        findExisting: async () => {
+          const { data, error } = await supabase
+            .from('file')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('bucket', AUDIO_BUCKET)
+            .eq('storage_path', storagePath)
+            .limit(1)
+            .maybeSingle();
+          if (error) throw error;
+          return typeof data?.id === 'string' ? data.id : null;
+        },
+        insert: async () => {
+          const { data, error } = await supabase.from('file').insert({
+            user_id: userId,
+            name: file.name,
+            bucket: AUDIO_BUCKET,
+            storage_path: storagePath,
+            public_url: '',
+            mime_type: file.type || 'application/octet-stream',
+            size_bytes: file.size,
+            source,
+            recorded_at: file.lastModified > 0 ? new Date(file.lastModified).toISOString() : null,
+          }).select('id').single();
+          if (error) throw error;
+          return typeof data?.id === 'string' ? data.id : null;
+        },
+      });
+      if (outcome.status !== 'failed') await loadRecentAudioFiles();
+      return outcome;
     },
     [loadRecentAudioFiles, user?.id]
   );
@@ -778,6 +798,7 @@ const TranscriptionSummary: React.FC = () => {
 
   const handleFiles = (files: File[]) => {
     setUploadError(null);
+    setFileRecordWarning(null);
     const audioFiles = files.filter(file =>
       file.type.startsWith('audio/') ||
       ASSEMBLYAI_AUDIO_EXTENSION_RE.test(file.name)
@@ -880,12 +901,20 @@ const TranscriptionSummary: React.FC = () => {
       await ensureStorageObjectReady(AUDIO_BUCKET, filePath);
       const signedUrl = await createAudioSignedUrl(filePath, AUDIO_BUCKET);
 
+      const record = await saveAudioFileRecord(file, filePath, source);
       let audioFileId: string | null = null;
-      try {
-        audioFileId = await saveAudioFileRecord(file, filePath, source);
-      } catch (recordError) {
-        console.error('Failed to save audio file metadata:', recordError);
-        if (source === 'recording') throw recordError;
+      if (record.status === 'failed') {
+        console.error('Failed to save audio file metadata after retries:', record.error);
+        // Recordings keep the previous behavior (hard error). Uploads keep the
+        // user's transcript/summary flow alive but warn visibly (non-blocking).
+        if (source === 'recording') throw record.error;
+        setFileRecordWarning(
+          appLanguage === 'ko'
+            ? '오디오 파일 정보를 저장하지 못했습니다. 요약은 계속할 수 있지만 "최근 녹음" 목록에 나타나지 않을 수 있습니다.'
+            : 'Could not save the audio file record. You can still summarize, but this file may not appear in Recent recordings.'
+        );
+      } else {
+        audioFileId = record.id;
       }
 
       setUploadedFiles((prev) =>
@@ -2034,6 +2063,11 @@ const TranscriptionSummary: React.FC = () => {
             {uploadError ? (
               <p className="mb-4 text-sm" style={{ color: 'var(--error)' }}>
                 {uploadError}
+              </p>
+            ) : null}
+            {fileRecordWarning ? (
+              <p className="mb-4 text-sm" role="alert" style={{ color: 'var(--warning, #b45309)' }}>
+                {fileRecordWarning}
               </p>
             ) : null}
 
