@@ -33,10 +33,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): run durable policy-gated meeting extraction
 - feat(knowledge): add policy-gated candidate extraction core
 - feat(knowledge): add owner attendance and durable private delivery
-- feat(knowledge): persist meeting access ledger and add authenticated HTTP checks
 
 **Fixes**
 
+- fix(recordings): block deleting recent audio that a note still references
 - fix(docs): render date-only verified_at as a local date without time
 - fix(summarize): show a clear no-speech message instead of a raw transcription error
 - fix(security): stop inlining the whole import.meta.env into the client bundle

@@ -8,7 +8,16 @@
 
 - [x] 단계 1: 마이그레이션 3개 적용 + 검증 (MCP로 적용, checkpoint RLS / active-uniq 인덱스 / mcp 702 컬럼 / storage_object_owner 함수 전부 확인)
 - [x] 단계 2: R01 blast-radius 확인 → null-owner가 892개 중 508개로 과다 판정
-- [x] owner_id 백필: file 기준 113개 + note 기준 266개 = null-owner 508 -> 129 (나머지는 노트가 참조하지 않는 고아 객체). 재생 깨지는 레거시 노트 319 -> 1개(고아/손상 참조)
+- [x] owner_id 백필: file 기준 113개 + note 기준 266개 = null-owner 508 -> 129 (나머지는 노트가 참조하지 않는 고아 객체). 재생 깨지는 레거시 노트 319 -> 1개(고아/손상 참조) -> **2026-10-13 해결, 319 -> 0**
+  - 남은 1건은 note `f2fe2fee-4826-4855-bffd-c42e60f1bdc7` ("260831_Tecace_Ai_Ops_Strategy_Meeting")였다.
+  - meeting-recordings 버킷의 storage 객체가 물리적으로 없는 진짜 고아였다.
+  - 전사(13506자)와 요약(2858자)은 온전해 비파괴적으로 처리했다.
+  - Supabase SQL Editor에서 `update public.note set audio_file=null, audio_file_id=null where id='f2fe2fee-4826-4855-bffd-c42e60f1bdc7';` 실행 후 검증했다(audio_file/audio_file_id null, 전사/요약 유지).
+  - 원인(추정 약 75%): 웹 "최근 녹음" 삭제 `deleteRecentAudioFile`(src/pages/TranscriptionSummary.tsx)가 노트 참조 확인 없이 storage 객체와 `public.file` 행을 삭제했다.
+  - FK `on delete set null` 때문에 `note.audio_file_id`가 NULL이 되었다.
+  - 재발 방지: 웹 삭제 가드 구현(2026-10-14, 미커밋, E2E 대기).
+  - 노트가 참조 중인 녹음은 삭제를 차단하고, 조회 실패 시 fail-closed로 동작한다.
+  - 진단 주의: `note.audio_file`은 서명 URL이라 `/meeting-recordings/` 접두부와 `?token=...` 쿼리를 모두 제거해야 `storage.objects.name`과 맞출 수 있다.
 - [x] 단계 3: Edge function 7개 전부 배포 완료 (note-audio-url은 하이브리드 소유권 게이트 + 백필 이후 배포)
 - [ ] 단계 4: 모바일 APK 빌드 + on-device E2E (아래, 아직 남음 — 실기기 필요)
 - [ ] 단계 5(선택): Group B 2-user 프로덕션 E2E
