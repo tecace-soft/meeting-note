@@ -34,6 +34,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(auth): do not release queued Supabase requests as anon when the token provider is cleared
 - fix(upload): retry file-row insert and surface failure instead of swallowing it
 - fix(recordings): block deleting recent audio that a note still references
 - fix(docs): render date-only verified_at as a local date without time
@@ -70,7 +71,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(review): 2026-10-09 full-project review and strangler plan
 - docs(ops): mark MCP consolidation resolved, retire the dead deploy path
 - docs(ai-native): add agent entry docs with auto-synced structure
-- docs(knowledge): prepare Hans branch review handoff
 
 **Other**
 
