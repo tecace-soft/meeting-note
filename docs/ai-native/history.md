@@ -32,6 +32,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(docs): make the product docs page scrollable inside the app shell
 - fix(auth): do not release queued Supabase requests as anon when the token provider is cleared
 - fix(upload): retry file-row insert and surface failure instead of swallowing it
 - fix(recordings): block deleting recent audio that a note still references
@@ -52,7 +53,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): owner-scope the meeting-recordings storage bucket RLS
 - fix(security): enable RLS on public.chat and public.session
 - fix(web): stop importing server source into the web bundle
-- fix(knowledge): bound extraction units to the completion snapshot cap
 
 **Performance**
 

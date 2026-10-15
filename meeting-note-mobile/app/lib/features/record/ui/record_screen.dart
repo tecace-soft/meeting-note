@@ -1310,7 +1310,7 @@ class _RecentRecordingTile extends ConsumerWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '${DateFormat('MMM d, h:mm a').format(recording.displayDate)} - ${recording.detailLabel}',
+                      '${DateFormat('MMM d, h:mm a').format(recording.displayDate)} - ${recording.detailLabel(t('record.meetingDate'))}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 12, color: palette.textMuted),

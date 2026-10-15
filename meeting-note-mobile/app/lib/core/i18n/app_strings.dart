@@ -252,6 +252,7 @@ const Map<String, Map<String, String>> _appStrings = {
   'record.loadRecentListError': {'en': 'Failed to load recent recordings', 'ko': '최근 녹음을 불러오지 못했습니다'},
   'record.deleteRecentError': {'en': 'Failed to delete recent recording', 'ko': '최근 녹음을 삭제하지 못했습니다'},
   'record.noRecent': {'en': 'No recent recordings yet.', 'ko': '아직 최근 녹음이 없습니다.'},
+  'record.meetingDate': {'en': 'Meeting date', 'ko': '회의 날짜'},
   'record.remove': {'en': 'Remove', 'ko': '제거'},
 
   // ---- New note screen ----

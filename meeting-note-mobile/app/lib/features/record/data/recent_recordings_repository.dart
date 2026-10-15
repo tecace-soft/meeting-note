@@ -6,6 +6,10 @@ import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/supabase_config.dart';
 import '../../auth/data/mobile_supabase_session.dart';
 
+/// Upload order, so a just-uploaded old file stays on top. recorded_at is
+/// File.lastModified and is display-only.
+const recentRecordingsOrder = 'created_at.desc';
+
 class RecentRecording {
   const RecentRecording({
     required this.id,
@@ -33,13 +37,16 @@ class RecentRecording {
   final DateTime? recordedAt;
   final bool local;
 
-  DateTime get displayDate => recordedAt ?? createdAt;
+  /// Primary date: upload time, matching the list ordering.
+  DateTime get displayDate => createdAt;
 
-  String get detailLabel {
+  /// Size and, when known, the meeting date (secondary info).
+  /// [meetingDatePrefix] is the localized "Meeting date" label.
+  String detailLabel(String meetingDatePrefix) {
     final parts = <String>[
       if (sizeBytes != null) _formatBytes(sizeBytes!),
-      if (createdAt.millisecondsSinceEpoch > 0) 'Uploaded ${_formatDate(createdAt)}',
-      if (recordedAt != null) 'Meeting date: ${_formatExactDate(recordedAt!)}',
+      if (recordedAt != null)
+        '$meetingDatePrefix: ${_formatExactDate(recordedAt!)}',
     ];
     return parts.join(' - ');
   }
@@ -51,9 +58,6 @@ class RecentRecording {
     final mb = kb / 1024;
     return '${mb.toStringAsFixed(mb < 10 ? 1 : 0)} MB';
   }
-
-  static String _formatDate(DateTime value) =>
-      '${value.month}/${value.day}/${value.year}';
 
   static String _formatExactDate(DateTime value) {
     final hour = value.hour % 12 == 0 ? 12 : value.hour % 12;
@@ -164,7 +168,7 @@ class RecentRecordingsRepository {
           'select':
               'id,name,bucket,storage_path,public_url,mime_type,size_bytes,source,recorded_at,created_at',
           'user_id': 'eq.${auth.userId}',
-          'order': 'recorded_at.desc.nullslast,created_at.desc',
+          'order': recentRecordingsOrder,
           'limit': 10,
         },
         options: Options(headers: _headers(auth.token)),

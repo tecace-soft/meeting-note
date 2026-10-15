@@ -15,6 +15,7 @@ import {
   uploadWithTus,
 } from '../services/supabaseResumableUpload';
 import { ensureStorageObjectReady } from '../lib/storagePublicReady';
+import { fetchRecentAudioFiles, type RecentAudioClient } from '../lib/recentAudioFilesQuery';
 import { saveFileRecordWithRetry, type FileRecordOutcome } from '../lib/saveFileRecord';
 import {
   ArrowsReload01,
@@ -606,25 +607,7 @@ const TranscriptionSummary: React.FC = () => {
     setRecentAudioLoading(true);
     setRecentAudioError(null);
     try {
-      const query = supabase
-        .from('file')
-        .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, recorded_at, created_at')
-        .eq('user_id', user.id)
-        .order('recorded_at', { ascending: false, nullsFirst: false })
-        .order('created_at', { ascending: false })
-        .limit(10);
-      let { data, error }: { data: unknown[] | null; error: { message: string } | null } = await query;
-
-      if (error && /recorded_at/i.test(error.message)) {
-        const fallback = await supabase
-          .from('file')
-          .select('id, name, bucket, storage_path, public_url, mime_type, size_bytes, source, created_at')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10);
-        data = fallback.data;
-        error = fallback.error;
-      }
+      const { data, error } = await fetchRecentAudioFiles(supabase as unknown as RecentAudioClient, user.id);
 
       if (error) throw error;
       setRecentAudioFiles((data ?? []) as RecentAudioFile[]);
