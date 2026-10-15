@@ -183,7 +183,13 @@ export default function ProductDocs() {
   }
 
   return (
-    <div style={{ padding: '20px clamp(14px,3vw,28px)', color: 'var(--text)' }}>
+    // AppShell clips its outlet (html/body/#root/outlet are overflow:hidden), so the page root must
+    // be its own bounded scroll container or long docs are cut off with no way to scroll.
+    <div
+      className="h-full overflow-y-auto"
+      data-testid="product-docs-scroll"
+      style={{ padding: '20px clamp(14px,3vw,28px)', color: 'var(--text)' }}
+    >
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 14px' }}>{t('docsNav')}</h1>
 
       <div

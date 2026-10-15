@@ -29,7 +29,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
 - feat(docs): agent-readable product docs via web /docs + MCP get_product_docs
 - feat(gemini): pin model ids in one registry with an offline drift test
-- feat(knowledge): finish owner recovery and bounded beta processing
 
 **Fixes**
 
@@ -61,6 +60,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(reviews): add 2026-09-29 ops stability technical review
 - docs(reviews): record legacy orphan note resolution (319 -> 0)
 - docs(design): C1 iOS m4a recovery via segment-splitting prevention
 - docs(review): mark the 2026-10-09 deploy steps 1-3 done
