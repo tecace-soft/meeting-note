@@ -43,7 +43,12 @@ export function setSupabaseAccessTokenProvider(provider: (() => Promise<string |
     // eslint-disable-next-line no-console
     console.info(`Supabase access token provider ${provider ? 'registered' : 'cleared'}.`);
   }
-  resolveProviderWaiters();
+  // Only a registered provider releases queued requests. Clearing it (the AuthProvider's
+  // first effect run before `user` is set, or an effect re-run) must NOT release them, or
+  // they go out as anon and RLS silently returns nothing / 401 (prod bug 2026-10-15 on
+  // /issues). A legitimately logged-out state releases them via
+  // setSupabaseAuthResolvedWithoutUser(true), and the 15s cap still applies.
+  if (provider) resolveProviderWaiters();
 }
 
 /**

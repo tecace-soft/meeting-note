@@ -26,11 +26,11 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
 - feat(docs): agent-readable product docs via web /docs + MCP get_product_docs
 - feat(gemini): pin model ids in one registry with an offline drift test
 - feat(knowledge): finish owner recovery and bounded beta processing
 - feat(knowledge): fetch exact current meeting evidence spans
-- feat(knowledge): run durable policy-gated meeting extraction
 
 **Fixes**
 

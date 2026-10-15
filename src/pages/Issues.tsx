@@ -30,7 +30,7 @@ import type { DirectoryUser, Issue } from '../lib/issues/types';
 type Pane = 'new' | 'list';
 
 export default function Issues() {
-  const { user, getAccessToken, verifiedEmail } = useAuth();
+  const { user, isAuthenticated, getAccessToken, verifiedEmail } = useAuth();
   const { appLanguage: lang } = useLanguage();
   const s = ISSUE_STRINGS[lang];
   const location = useLocation();
@@ -78,11 +78,16 @@ export default function Issues() {
     }
   }, []);
 
+  // Same pattern as the other screens (AppSidebar, SummaryHistory): read only once auth has
+  // settled with a user, and again if the user changes. Reading on mount raced the token
+  // provider and went out as anon (prod bug 2026-10-15: empty list, 401 on the directory).
+  const authReady = isAuthenticated && !!user?.id;
   useEffect(() => {
+    if (!authReady) return;
     void reload();
     void fetchDirectory().then(setDirectory);
     void fetchRecipients().then(setRecipients);
-  }, [reload]);
+  }, [authReady, user?.id, reload]);
 
   // Deep link from the notification mail: /issues?issue=<issueKey> selects and opens it.
   const wantKey = useRef<string | null>(new URLSearchParams(location.search).get('issue'));

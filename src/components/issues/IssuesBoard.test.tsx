@@ -6,12 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Issue } from '../../lib/issues/types';
 
 const ADMIN_ID = '31d79bfe-2488-47c2-aa45-949375e93bde';
-const auth = { id: 'user-1', email: 'me@tecace.com', name: 'Me' };
+const auth = { id: 'user-1', email: 'me@tecace.com', name: 'Me', ready: true };
 
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({
-    user: { id: auth.id, displayName: auth.name, email: auth.email, microsoftAccountName: auth.name },
-    verifiedEmail: auth.email,
+    user: auth.ready ? { id: auth.id, displayName: auth.name, email: auth.email, microsoftAccountName: auth.name } : null,
+    isAuthenticated: auth.ready,
+    isLoading: !auth.ready,
+    verifiedEmail: auth.ready ? auth.email : null,
     getAccessToken: async () => 'token',
   }),
 }));
@@ -69,11 +71,28 @@ beforeEach(() => {
   setViewport(1600);
   auth.id = 'user-1';
   auth.email = 'me@tecace.com';
+  auth.ready = true;
   service.listIssues.mockResolvedValue([issue()]);
 });
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe('auth timing (prod bug 2026-10-15)', () => {
+  it('does not read before auth is ready, then loads once the user is signed in', async () => {
+    auth.ready = false;
+    const view = renderBoard();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(service.listIssues).not.toHaveBeenCalled();
+    expect(service.fetchDirectory).not.toHaveBeenCalled();
+    expect(service.fetchRecipients).not.toHaveBeenCalled();
+    auth.ready = true;
+    view.rerender(<MemoryRouter initialEntries={['/issues']}><Issues /></MemoryRouter>);
+    expect(await screen.findByText('저장 버튼 오류')).toBeInTheDocument();
+    expect(service.fetchDirectory).toHaveBeenCalledTimes(1);
+    expect(service.fetchRecipients).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('create form', () => {
