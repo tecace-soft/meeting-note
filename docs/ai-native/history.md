@@ -30,7 +30,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(docs): agent-readable product docs via web /docs + MCP get_product_docs
 - feat(gemini): pin model ids in one registry with an offline drift test
 - feat(knowledge): finish owner recovery and bounded beta processing
-- feat(knowledge): fetch exact current meeting evidence spans
 
 **Fixes**
 
@@ -74,6 +73,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
 - chore(lint): fix all eslint errors and make the lint gate blocking
 - test(ci): stand up a frontend test runner and a CI gate
