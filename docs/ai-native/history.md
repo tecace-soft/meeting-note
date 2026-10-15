@@ -31,10 +31,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): finish owner recovery and bounded beta processing
 - feat(knowledge): fetch exact current meeting evidence spans
 - feat(knowledge): run durable policy-gated meeting extraction
-- feat(knowledge): add policy-gated candidate extraction core
 
 **Fixes**
 
+- fix(upload): retry file-row insert and surface failure instead of swallowing it
 - fix(recordings): block deleting recent audio that a note still references
 - fix(docs): render date-only verified_at as a local date without time
 - fix(summarize): show a clear no-speech message instead of a raw transcription error

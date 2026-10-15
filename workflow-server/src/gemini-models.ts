@@ -72,6 +72,13 @@ export const FLASH_FIRST_FALLBACK_CHAIN = [
   GEMINI_3_1_FLASH_LITE,
 ] as const;
 
+// F2 issue resolution (workflow-server/src/issues.ts). Lite-only per the cost policy in
+// docs/API_LESSONS.md; the model name lives here, in one place (spec section 7.4).
+export const ISSUE_RESOLUTION_MODEL = GEMINI_2_5_FLASH_LITE;
+export const ISSUE_RESOLUTION_FALLBACK_CHAIN = [
+  GEMINI_3_1_FLASH_LITE,
+] as const;
+
 export const MEMORY_FALLBACK_CHAIN = [
   GEMINI_2_5_FLASH,
   GEMINI_3_1_FLASH_LITE,

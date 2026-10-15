@@ -3,176 +3,174 @@ title: "피드백/이슈 트래커 (F2)"
 slug: f2-feedback
 section: "Features"
 order: 1
-revision: "2026-10-13.1"
-last_verified_commit: "56781a4be253a4edc98f56aaf3a53d14536ac96f"
-last_verified_at: "2026-10-13"
-source_of_truth: "repo code; manual verification 2026-10-13"
+revision: "2026-10-15.1"
+source_of_truth: "repo code (AX-KH feedback-porting spec port, 2026-10-14); prod not yet verified"
 ---
 
 # 피드백/이슈 트래커 (F2)
 
-사내 팀 전체가 쓰는 이슈 보드("미니 Jira")다.
-인증된 사용자 누구나 피드백을 등록·분류(triage)·해결할 수 있다.
-내부용이며 공유 보드다. 이슈에는 사용자별 프라이버시가 없고 팀 전체가 하나의 보드를 본다.
-접근 제어는 DB의 행별 규칙이 아니라 앱 레이어(Azure MSAL SSO + `supabase-token` 엣지 함수의 테넌트/도메인 허용목록)에 있다.
+로그인한 사용자가 앱 안에서 버그 · 개선 요청 · 질문을 등록하고, 관리자가 분류 · 배정하고, 처리 결과가 등록자에게 메일로 돌아가는 미니 이슈 트래커다.
+2026-10-14에 AX-KH 의 이식 명세(`docs/feedback-issues-porting-prompt.md`, TecAce Revenue Strategy v0.32.0 기준)대로 다시 만들었다.
+명세와 달라진 점은 이 문서 끝의 "기준 명세와 다른 점"에 모았다.
 
-## 목적
+## 권한 (3단계, 역할은 2개)
 
-- 실행 중인 앱 안에서 버그 리포트·기능 요청·질문을 스크린샷과 함께 수집한다.
-- 각 제출을 자동 분류(purpose, area, priority, severity)해서 사전 분류된 상태로 들어오게 한다.
-- 분류자가 담당자를 지정하고, AI 해결안(근본원인 가설, 확인 항목, 수정 계획, 검증)을 뽑고, 이메일로 알린다.
-- F9 자율 운영 에이전트가 운영 인시던트를 올리는 공유 티켓 보드 역할을 한다.
+| 기능 키 | 누가 | 할 수 있는 일 |
+| --- | --- | --- |
+| `issues` | 로그인한 사용자 전원 | 목록 · 상세 읽기, 등록, 첨부 업로드, 본인 이슈 삭제 |
+| `issues.triage` | 관리자 | 분류 저장(종류 · 화면 · 긴급도 · 상태 · 담당자 · 처리 메모), AI 해결책 생성과 저장 |
+| `issues.notify` | 관리자 | 신규 이슈 알림 수신자 추가 · 제외 |
+
+관리자는 Microsoft object id 3개(Hansoo Lee, Gene Kim, Andrew Yoo)다.
+같은 규칙이 세 곳에 있고 서로를 주석으로 가리킨다.
+DB 는 `public.feedback_issues_can(key)`, 서버는 `workflow-server/src/issues.ts` 의 `canIssue`, 화면은 `src/lib/issues/permissions.ts` 의 `canIssue` 다.
+id 목록 원본은 `src/lib/adminAccess.ts` 이다.
+화면에서 숨기는 것은 편의일 뿐이고, 실제 판정은 DB(RLS, 트리거, RPC)와 workflow-server 가 한다.
+2026-10-14 이전에는 로그인한 누구나 분류 · 배정할 수 있었다.
 
 ## 데이터 모델
 
-테이블 하나 `public.feedback_issues`와 비공개 스토리지 버킷 하나 `feedback-attachments`.
-마이그레이션이 테이블·버킷·RLS 정책을 하나의 단위로 배포해, 반쯤 적용된 상태가 생기지 않는다.
+마이그레이션 `20260812230000_create_feedback_issues.sql`(테이블, 버킷) 위에 `20261014120000_feedback_issues_parity.sql`(권한, 트리거, RPC, 수신자 테이블, 저장소 정책)을 얹는다.
+두 번째 파일은 사람이 Supabase SQL Editor 에서 한 번에 실행한다.
+머리 주석에 선행 조건, 사전 확인 쿼리, 되돌리기 블록, 배포 순서가 있다.
 
 ### 테이블 `public.feedback_issues`
 
-| 컬럼 | 타입 | 비고 |
-| --- | --- | --- |
-| `id` | uuid PK | `gen_random_uuid()` 기본값. |
-| `issue_key` | text, unique | `FB-YYYYMMDD-<8 hex>`, 클라이언트 생성(아래 Issue key). |
-| `title` | text, not null | |
-| `description` | text, not null | |
-| `purpose` | text, 기본 `other` | `bug` \| `feature` \| `question` \| `other`. |
-| `area` | text, 기본 `general` | 앱 화면/영역(아래 Areas). |
-| `status` | text, 기본 `OPEN` | `OPEN` \| `TRIAGE` \| `IN_PROGRESS` \| `DONE` \| `CLOSED`. |
-| `priority` | text, 기본 `P3` | `P1` .. `P4`. |
-| `severity` | text, 기본 `Medium` | `Low` \| `Medium` \| `High` \| `Critical`. |
-| `assignee_email` / `assignee_name` | text, nullable | |
-| `triage_note` | text, nullable | |
-| `ai_suggestion` | jsonb, nullable | 생성 시점에 캡처한 규칙 기반 자동 분류 결과(표시용). |
-| `attachments` | jsonb, 기본 `[]` | `{ name, path, type }` 배열. |
-| `resolution` | jsonb, nullable | LLM 해결안 객체(아래 Resolution). |
-| `resolution_generated_at` | timestamptz, nullable | |
-| `resolution_model` | text, nullable | 해결안을 만든 모델 id. |
-| `author_email` | text, not null | |
-| `author_name` | text, nullable | |
-| `triaged_at` | timestamptz, nullable | null이면 "분류 필요". |
-| `triaged_by` | text, nullable | |
-| `created_at` | timestamptz, not null | `now()` 기본값. |
-| `updated_at` | timestamptz, not null | `trg_feedback_issues_updated_at` 트리거가 유지. |
-| `deleted_at` | timestamptz, nullable | 소프트 삭제. null이면 활성. |
+| 컬럼 | 비고 |
+| --- | --- |
+| `id` | uuid PK |
+| `issue_key` | unique. 사람이 만든 이슈는 `FB-YYYYMMDD-<8 대문자 hex>`(클라이언트 생성, 충돌하면 3회까지 다시 만듦). F9 운영 티켓은 `OPS-` 접두어 |
+| `title`, `description` | 필수. 등록 뒤에는 바꿀 수 없다 |
+| `purpose` | `bug` \| `feature` \| `question` \| `other` |
+| `area` | 화면. 아래 "화면(영역)" |
+| `status` | `OPEN`(접수) \| `IN_PROGRESS`(진행 중) \| `DONE`(완료) \| `CLOSED`(닫힘). 예전 값 `TRIAGE` 는 읽을 때와 다음 쓰기 때 `OPEN` 이 된다 |
+| `priority` | `P1`(긴급) .. `P4`(낮음). 사람이 고르는 유일한 중요도 |
+| `severity` | 트리거가 priority 에서 계산해 저장(P1 Critical, P2 High, P3 Medium, P4 Low). 화면에 보이지 않는다 |
+| `assignee_email`, `assignee_name` | 담당자와 배정 시점 이름 |
+| `triage_note` | 처리 메모. 완료 · 닫힘 메일에 들어간다 |
+| `ai_suggestion` | 등록 시점의 규칙 기반 자동 분류 결과(표시 전용). F9 행에는 운영 메타데이터가 들어 있어 화면이 제안 카드를 그리지 않는다 |
+| `attachments` | `{ name, path, type }` 배열. `path` 가 기준이고 공개 URL 은 저장하지 않는다 |
+| `resolution`, `resolution_generated_at`, `resolution_model` | AI 해결책 |
+| `author_email`, `author_name` | 트리거가 요청 JWT 의 `email`, `user_metadata.name` 으로 덮어쓴다 |
+| `triaged_at`, `triaged_by` | null 이면 "분류 필요". 트리거가 저장 시각과 요청자 이메일을 찍는다 |
+| `created_at`, `updated_at`, `deleted_at` | `deleted_at` 이 있으면 소프트 삭제 |
 
-인덱스: 활성(`deleted_at is null`), `created_at desc`, `status`, `assignee_email`.
+### 서버가 채우거나 막는 값
 
-### 스토리지 버킷 `feedback-attachments`
+- INSERT 정책: `status = 'OPEN'`, 담당자 · 처리 메모 · 분류 · 해결책 · 삭제 값 없음, `FB-` 키 형식일 때만 받는다.
+- 사용자 행은 F9 운영 티켓처럼 보일 수 없다(`area = 'ops'` 나 `ai_suggestion.source = 'f9-ops-agent'` 거부). F9 쿼리도 `OPS-` 키만 센다.
+- 첨부는 호출한 사람이 직접 올린 객체(`storage.objects.owner_id = sub`)이면서 경로 규칙(`screenshots/` 또는 `<uuid>/` 아래 `[A-Za-z0-9._-]` 파일명)을 지킬 때만 붙일 수 있다. 남의 파일을 "사용 중"으로 묶어 삭제를 막는 것을 막는다.
+- INSERT 트리거(사용자 요청일 때): JWT 에 이메일이 없으면 거부한다. 작성자 이메일과 이름은 JWT 값(이름은 없으면 null), `created_at` · `updated_at` 은 `now()` 다.
+- UPDATE 정책: 관리자만, 삭제 안 된 행만, `deleted_at` 설정 불가.
+- UPDATE 트리거(사용자 요청일 때): `issue_key`, `title`, `description`, 작성자, `ai_suggestion`, `attachments`, `created_at` 은 이전 값으로 고정한다. 분류 저장은 JWT 이메일이 없으면 거부한다. 해결책을 바꾸면 `resolution_generated_at = now()` 이고, 해결책 저장은 `triaged_at` 을 건드리지 않는다.
+- 삭제: `soft_delete_feedback_issue(id)` RPC(SECURITY DEFINER). 작성자 본인(대소문자 무시)만, `deleted_at` 만 설정한다.
+- 읽기 정책은 삭제된 행을 숨기지 않는다. 목록 조회가 `deleted_at is null` 로 거른다.
+- service role(workflow-server, F9)은 RLS 를 우회한다.
 
-비공개(서명 URL만, 스크린샷에 민감한 UI가 담길 수 있음), 파일당 10MB.
-허용 타입: `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `application/pdf`.
-오브젝트 경로는 `<userId>/<uuid>.<ext>`.
+### `public.issue_notify_recipients`
 
-### RLS
+신규 이슈 알림 수신자 목록이다(`email` PK, 소문자 강제, `added_by`, `added_at`).
+읽기는 로그인 사용자, 추가 · 제외는 관리자만 한다.
+`added_by` 는 트리거가 요청자로 채운다.
+비어 있을 때만 첫 수신자 `andrewyoo@tecace.com` 을 시드한다.
+테이블을 읽지 못하면 같은 주소 1명에게 보내고(폴백), 읽었는데 비어 있으면 아무에게도 보내지 않는다.
 
-테이블에 RLS가 켜져 있고, 공유 보드라서 `authenticated` 역할에 select / insert / update가 의도적으로 열려 있다.
-service role은 전체 접근(workflow-server의 이메일·해결안 헬퍼가 RLS를 우회).
-삭제는 소프트 삭제(`deleted_at` 업데이트)이며 작성자 본인만 가능. 앱 레이어에서 강제한다.
-첨부 읽기는 인증 사용자 누구나, 쓰기/삭제는 본인 id 접두 폴더로 제한(`(storage.foldername(name))[1] = auth.jwt() ->> 'sub'`).
+### 사용자 디렉터리 `list_issue_directory()`
 
-## Issue key
+담당자 필터 · 담당자 선택 · 수신자 검색에 쓰는 RPC 다.
+`app_user` 중 이메일이 있는 사람의 이메일(소문자), 표시 이름, 관리자 여부를 로그인 사용자에게 돌려준다.
+`app_user` 자체의 RLS 는 그대로(본인 행만) 둔다.
+사용자 요청으로 `app_user` 를 쓰면 트리거가 `email` · `display_name` 을 JWT 값으로, `last_seen_at` 을 `now()` 로 덮는다. 그래서 디렉터리에 가짜 이름이나 남의 주소를 심을 수 없다. service role 쓰기는 그대로다.
+담당자 선택 목록은 이름 옆에 이메일을 함께 보여 준다.
 
-클라이언트 생성, 형식 `FB-YYYYMMDD-<8 대문자 hex>`, 예: `FB-20260812-9DC24392`.
-랜덤 접미는 `crypto.getRandomValues`에서 뽑은 4바이트.
-F9 운영 티켓도 같은 형태에 운영 마커를 붙여 쓴다.
+### 저장소 `feedback-attachments`
 
-## 상태와 흐름
+비공개, 파일당 10MB, PNG · JPEG · WebP · GIF · BMP · HEIC · HEIF 와 PDF(SVG 는 받지 않는다).
+새 업로드 경로는 `screenshots/{Date.now()}-{UUID}.{ext}` 이고, 예전 `<sub>/...` 경로도 계속 읽힌다.
+읽기 · 업로드는 로그인 사용자, 삭제는 본인이 올린 파일(`owner_id = sub`)이면서 어느 이슈(삭제된 이슈 포함)에도 붙지 않은 파일만 된다.
+화면은 1시간, 메일은 24시간 서명 URL 을 쓴다. 메일에서 이슈로 돌아가는 기본 수단은 딥링크 버튼이다.
+AI 해결책은 서버가 `issueKey` 로 이슈 행을 읽고 그 첨부(경로 규칙 통과분, 최대 3장)만 버킷에서 직접 읽어 넘긴다. 요청 본문의 경로는 쓰지 않는다.
 
-```
-OPEN -> TRIAGE -> IN_PROGRESS -> DONE -> CLOSED
-```
+## 화면 (`/issues`)
 
-- 새 이슈는 `OPEN`, `triaged_at = null`(분류 필요)로 생성된다.
-- 분류자가 담당자/우선순위/심각도/상태/분류 노트를 설정한다. `triagedBy`를 넣으면 `triaged_at = now()`가 찍힌다.
-- 상태 이동은 자유롭다. 위 순서는 의도된 라이프사이클이지 엄격한 상태 머신은 아니다.
-- "Open" KPI는 `DONE`/`CLOSED`가 아닌 것, "Triage" KPI는 `triaged_at`이 없는 것, "Mine" KPI는 현재 사용자에게 배정된 것을 센다.
+진입은 사이드바 "피드백 / 이슈"와 메일의 딥링크 `/issues?issue=<issueKey>` 두 가지다.
+문구는 한국어일 때 명세 §8.4 를 글자 그대로 쓰고, 영어 설정이면 같은 뜻의 영어로 보인다.
+자동 분류 근거 문장은 언어 설정과 관계없이 한국어로 저장된다.
 
-## 자동 분류 (결정적, LLM 없음)
+- 폭 1536px 이상: 등록 · 목록 · 분류 3단. 분류 패널은 오른쪽에 고정된다.
+- 1280 ~ 1535px: 등록 · 목록 2단, 분류는 오른쪽 슬라이드오버(최대 448px).
+- 1280px 미만: 상단 전환 탭 `[새 이슈 | 목록 · N]`(N = 미종결 수), 분류는 전체 폭 슬라이드오버.
 
-`src/lib/feedbackIssues.ts`의 `suggestTriage(title, description)`가 제출 시점에 돈다.
-순수 규칙 기반이다(한/영 텍스트에 대한 키워드 정규식, 네트워크 호출 없음).
+### 등록
 
-- 첫 매칭 규칙으로 purpose/priority/severity 결정:
-  - bug (P2 / High): 에러, 오류, 크래시, crash, 실패, fail, 버그, bug, 깨짐, 튕김, 먹통, 작동, 안 됨 등.
-  - feature (P3 / Medium): 추가, 개선, 요청, 기능, feature, 지원 등.
-  - question (P4 / Low): `?`, 문의, 어떻게, 질문, how, 왜 등.
-  - 그 외 `other` (P4 / Low).
-- area는 영역별 동의어 목록으로 탐지. 기본 `general`.
-- 에스컬레이션: 긴급어(긴급, 급함, urgent, critical, 심각, 중요 등)에 매칭되면 priority와 severity가 각각 한 단계씩 올라간다.
-- 결과는 제출자에게 제안으로 보여주고 `ai_suggestion`에 저장. 사람이 저장 전에 아무 필드나 덮어쓸 수 있다.
+- 제목 · 설명 필수, 종류 버튼 4개, 화면 선택, 첨부(Ctrl+V 는 폼이 보이는 동안 문서 전체에서, 끌어 놓기, [파일 선택]).
+- 입력이 500ms 멈추면 `localStorage` 의 `issue_draft_<email>` 에 사용자가 고른 값만 자동 저장한다. 다시 들어오면 "쓰던 내용을 불러왔습니다. [새로 작성]" 배너와 함께 복원한다.
+- 종류 · 화면 · 긴급도는 `suggestTriage(title, description, purposeOverride)` 가 그릴 때마다 계산한다. 제목 · 설명이 비면 종류 버튼을 강조하지 않는다.
+- 등록에 성공하면 폼 자리에 완료 화면(이슈 번호, 알림 받은 사람, [목록에서 보기] [새 이슈 쓰기])이 뜨고, 새 이슈는 목록에서 초록으로 강조된다. 알림 요청이 실패하면 "알림 메일을 보내지 못했습니다. 처리되면 이 목록에서 확인할 수 있어요." 라고 표시한다.
 
-## Areas
+### 목록
 
-`meeting-note`(회의 노트) · `history`(히스토리) · `projects`(프로젝트) · `onedrive`(OneDrive) · `settings`(설정) · `speaker`(화자) · `general`(일반).
-각 영역은 자동 분류 영역 탐지기가 쓰는 동의어를 갖는다.
+- 보기 탭 4개(미종결 · 분류 필요 · 내 담당 · 전체)와 각 개수. 개수는 검색 · 담당자 필터와 무관하게 전체 기준이다. "분류 필요"가 1 이상이면 그 배지만 호박색이다.
+- 검색(제목 · 번호 · 등록자 · 설명), 담당자 필터(모든 담당자 / 미배정 / 디렉터리의 사람).
+- 종류별 그룹(버그 → 개선 요청 → 질문 → 기타), 접기 가능, 빈 그룹은 그리지 않는다. 등록 시각 내림차순.
 
-## AI 해결안
+### 분류 패널
 
-workflow-server의 `POST /issue-resolution`이 분류자를 위한 실행 가능한 한국어 해결안 초안을 만든다.
-호출자를 인증한 뒤(조직 사용자 누구나 분류 가능), 고정 JSON 스키마(`ISSUE_RESOLUTION_SCHEMA`)와 설정된 요약 모델(flash 우선 fallback 체인)로 Gemini를 호출한다.
-비공개 버킷에서 이미지 첨부 최대 3개를 service role로 받아 인라인으로 넘겨 모델이 스크린샷을 읽게 한다(이미지가 아니거나 8MB 초과 파트는 건너뜀).
+- 머리(번호 · 상태 / 제목 / 등록자 · 시각 · 분류한 사람) → 설명 → 첨부 → (권한 없음 안내) → 자동 분류 제안 카드 → 입력 → AI 해결책 → 하단 고정 저장 줄.
+- 편집 상태(draft)는 보드에 하나만 있다. 다른 이슈를 고르면 초기화되고, 같은 이슈가 갱신되면 손대지 않았을 때만 새 서버 값으로 바뀐다.
+- 저장은 [저장] 또는 Ctrl/Cmd+Enter. 결과는 "저장됨 HH:mm · {담당자}에게 배정 메일 · 등록자에게 처리 알림".
+- 관리자가 아니면 입력이 모두 비활성이고 안내 문장이 보인다. 작성자에게만 [삭제]가 보인다.
 
-해결안 객체(`IssueResolution`):
+## 서버 (workflow-server)
 
-```json
-{
-  "summary": "한 줄 판정",
-  "rootCauses": ["순위 매긴 가설들, 미검증"],
-  "checks": ["담당자가 클릭/쿼리해 확인할 것"],
-  "fixPlan": ["어디를 어떤 순서로 건드릴지"],
-  "verification": ["'고쳐졌다'가 어떤 모습이어야 하는지"],
-  "confidence": "low | medium | high"
-}
-```
-
-모델 출력이 파싱되지 않으면 엔드포인트는 재시도 메시지와 함께 502를 반환한다(깨진 해결안을 절대 저장하지 않는다).
-
-## 이메일 알림
-
-`POST /issue-notify`가 best-effort HTML 이메일을 보낸다.
-`kind: "created"`는 알림 수신자에게, `kind: "assigned"`는 담당자에게 간다.
-이메일은 이슈 헤더, 본문, 스크린샷 최대 3장(7일 서명 URL), 있으면 AI 해결안 블록, 그리고 보드로 돌아가는 딥링크 `<frontend>/issues?issue=<issueKey>`를 렌더한다.
-클라이언트에서는 fire-and-forget이라 이메일 실패가 이슈 저장을 막지 않는다. 반환은 `{ ok, sent }`.
-
-## UI
-
-라우트 `/issues`(`src/pages/Issues.tsx`), 앱 셸 네비에서 진입. 나머지 앱처럼 MSAL 인증 뒤에 있다.
-900px 미만에서 한 컬럼으로 reflow되는 3-pane 보드:
-
-1. 등록 pane: 제목, 설명, 스크린샷 업로드, 실시간 자동 분류 제안, 제출.
-2. 목록 pane: 활성 이슈 전부, 최신순, 상태/우선순위 배지, 선택 가능.
-3. 분류 pane: 담당자/상태/우선순위/심각도/노트 편집, AI 해결안 생성, 알림 발송, 소프트 삭제(작성자만).
-
-상단 KPI: Open, Needs-triage, Assigned-to-me.
-딥링크 `?issue=<issueKey>`(이메일에서 옴)는 목록 로드 후 해당 티켓을 자동 선택한다.
-분류 패널은 이슈 id로 키잉된 하나만 마운트돼, 편집 중 초안이 브레이크포인트 간에 중복되지 않는다.
-
-## 클라이언트 API 서피스
-
-전부 `src/lib/feedbackIssues.ts`에 있고, Supabase(RLS) + workflow-server 호출 둘로 동작한다:
-
-- `listIssues()` - 활성 이슈, 최신순.
-- `createIssue(input)` - `OPEN`으로 삽입, 행 반환.
-- `updateIssue(id, patch)` - 분류 패치(status/priority/severity/assignee/note/resolution). `triagedBy`가 `triaged_at`을 찍는다.
-- `softDeleteIssue(issue, currentEmail)` - 작성자 전용, `deleted_at` 설정.
-- `uploadIssueAttachment / deleteIssueAttachment / signAttachmentUrls` - 비공개 버킷 + 온디맨드 1시간 서명 URL.
-- `generateIssueResolution(issue, getAccessToken)` - `/issue-resolution` 호출.
-- `notifyIssue(kind, issue, getAccessToken)` - `/issue-notify` 호출, 절대 throw하지 않음.
-- `suggestTriage(title, description)` - 위의 결정적 분류기.
-
-## 엔드포인트
-
-| 메서드 | 경로 | 서버 | 목적 |
+| 메서드 | 경로 | 권한 | 하는 일 |
 | --- | --- | --- | --- |
-| POST | `/issue-resolution` | workflow-server | 이슈 + 스크린샷 최대 3장으로 AI 해결안 초안. |
-| POST | `/issue-notify` | workflow-server | created/assigned 이메일(딥링크 포함) 발송. |
+| POST | `/issue-resolution` | 관리자 | 제목 · 설명 · 이미지 최대 3장으로 해결책(원인 가설 · 확인 절차 · 수정 방향 · 검증 방법 · 신뢰도)을 만든다. DB 에 쓰지 않는다. POST 외 405, 권한 없음 403, 제목이나 설명이 없으면 400 |
+| POST | `/issue-notify` | 아래 | 본문은 `{ kind, issueKey }` 만 본다. 받는 사람과 내용은 서버가 DB 행에서 만든다 |
 
-이슈 CRUD 자체는 workflow-server가 아니라 클라이언트에서 RLS 아래 Supabase(`feedback_issues`)에 직접 한다.
+`/issue-notify` 의 세 가지 kind:
+
+- `created`(N1): 등록자 본인이 등록 후 15분 안에만 부를 수 있다. 수신자 테이블의 사람들에게 보내고, 확정한 수신자를 먼저 응답한 뒤 백그라운드로 보낸다. 같은 이슈는 한 번만 보낸다(서버 메모리 기준이라 재배포하면 초기화된다). 같은 작성자가 최근 1시간에 10건을 넘게 등록했으면 429 를 돌려주고 메일을 보내지 않는다.
+- `assigned`(N2): 관리자만. 현재 담당자가 있고 호출한 사람이 아니면 담당자에게 보낸다.
+- `resolved`(N3): 관리자만. 상태가 완료 · 닫힘이고 등록자가 호출한 사람이 아니면 등록자에게 보낸다. F9 시스템 작성자에게는 보내지 않는다.
+
+2026-10-14 이전의 `/issue-notify` 는 클라이언트가 보낸 제목 · 본문 · 담당자 주소로 메일을 보냈다(아무 주소로나 보낼 수 있는 릴레이 위험).
+지금은 그 필드를 무시한다.
+모바일 앱이 보내는 예전 형식(`kind: 'created'` + 여러 필드)은 그대로 받는다.
+
+메일은 Resend(`sendEmail`)로 서버에서 보낸다.
+실패해도 저장은 성공이고 로그만 남는다.
+템플릿은 명세 §9 그대로(제목 접두어 `[Issue]` · `[Issue Assigned]` · `[Issue Done]` · `[Issue Closed]`, 공통 5행, 스크린샷 인라인, 딥링크 버튼)이고, 하단 서명은 "Meeting Note 자동 알림"이다.
+
+AI 해결책 모델은 `workflow-server/src/gemini-models.ts` 의 `ISSUE_RESOLUTION_MODEL`(lite, 비용 정책)과 lite 전용 폴백 체인이다.
+Gemini 의 JSON 스키마 응답(`responseSchema`)을 쓰고 출력은 엄격히 검사한다(재시도 · 문자열 보정 없음).
+
+## 코드 위치
+
+- 순수 로직: `src/lib/issues/`(`constants`, `triageRules`, `listFilter`, `keys`, `triageDraft`, `mailDecision`, `permissions`, `strings`).
+- 데이터 · 서버 호출: `src/lib/issues/service.ts`, `src/lib/issues/serverApi.ts`.
+- 화면: `src/pages/Issues.tsx`, `src/components/issues/`.
+- 서버 규칙: `workflow-server/src/issues.ts`. 핸들러는 `workflow-server/src/index.ts`.
+- 테스트: `src/lib/issues/logic.test.ts`(명세 §12.1 L1~L18), `src/components/issues/IssuesBoard.test.tsx`(화면 동작), `workflow-server/src/issues.test.ts`(권한 · 수신자 · 메일), `supabase/tests/feedback_issues_rls.sql`(RLS 직접 호출, `node workflow-server/scripts/verify-feedback-issues-sql.mjs <pglite 경로>`).
 
 ## F9(운영 에이전트)와의 관계
 
-F9 자율 운영 에이전트가 이 보드를 재사용한다.
-워크플로 알림을 근본원인 초안(같은 `ISSUE_RESOLUTION_SCHEMA` 경로)으로 바꿔, 실패 지문으로 디듀프된 운영 태그 티켓을 `feedback_issues`에 올리고 on-call에 이메일한다.
-F9은 프로덕션 코드를 절대 쓰지 않는다. 수정은 사람의 몫이다.
-F9이 어디에 위치하는지는 [product-overview](./product-overview) 참고.
+F9 은 service role 로 `OPS-` 키, `area = 'ops'`, RCA 해결책이 채워진 티켓을 올린다.
+같은 장애가 반복되면 `ai_suggestion` 의 발생 횟수만 올린다.
+화면은 `ops` 를 "운영"으로 보여 주지만 선택 목록에는 넣지 않는다.
+작성자가 시스템이라 아무도 삭제할 수 없고, 관리자가 닫는다.
+
+## 기준 명세와 다른 점
+
+- LLM 은 Anthropic 대신 Gemini(lite) 이고, 추론은 끈다(`thinkingBudget: 0`, `docs/API_LESSONS.md`).
+- AI 요청은 `imageUrls` 를 받지 않는다. 서버가 `issueKey` 로 이슈 행을 읽어 그 첨부를 비공개 버킷에서 직접 읽는다.
+- 메일 스크린샷 서명 URL 은 명세의 30일 대신 24시간이다(보안 리뷰 2026-10-15).
+- 첨부 경로의 무작위 부분은 명세의 7자 대신 UUID 다.
+- 알림 요청이 실패했을 때의 완료 문구는 명세 §8.4 에 없어 새로 넣었다(명세 C6 문구 재사용).
+- 담당자 선택 목록에 이메일을 함께 보인다.
+- 버킷 이름은 운영 데이터가 있는 `feedback-attachments` 를 유지한다. 삭제 정책에 `owner_id` 조건을 더했다.
+- 딥링크는 `?tab=issues` 대신 `/issues?issue=<key>` 다.
+- 역할이 둘뿐이라 '처리 권한' · '알림 수신자 설정 권한'은 '관리자 권한'으로, '로그인 허용 사용자/목록'은 '이 앱의 사용자'로 표기한다.
+- 아이콘은 coolicons 에 벌레 · 마법봉이 없어 CircleWarning · Star 로 대신한다.
+- 활동 로그와 되돌리기가 없어 LIST-9 와 AI-9 는 빠졌다. 시뮬레이션 모드가 없어 CREATE-14 도 해당 없다.
+- 모바일 앱은 이번 범위가 아니다. 모바일은 예전 키워드 규칙으로 분류해서 같은 글이라도 웹과 결과가 다를 수 있다. 등록 · 목록은 새 정책 아래서 그대로 동작한다.

@@ -1,3 +1,6 @@
+// SEC-10 (F2 issues): the same ids gate issue triage / notify settings in the DB
+// (public.feedback_issues_is_admin_id in supabase/migrations/20261014120000_feedback_issues_parity.sql)
+// and the workflow-server (ISSUE_ADMIN_MICROSOFT_IDS in workflow-server/src/issues.ts). Change all together.
 export const ADMIN_MICROSOFT_USER_IDS = [
   'd84c9149-2261-4ced-b14c-01b1a377ba6b', // Hansoo Lee (hansoo@tecace.com)
   'd9eb0f3d-819e-4b45-8df6-e9f229de2447', // Gene Kim (genekim@tecace.com)

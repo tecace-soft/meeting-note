@@ -28,6 +28,24 @@ interface AuthContextType {
   login: () => Promise<void>;
   logout: () => void;
   getAccessToken: (scopes?: string[]) => Promise<string | null>;
+  /**
+   * Lower-cased `email` claim of the current Supabase JWT (Graph mail, else UPN). This is the
+   * identity the DB and workflow-server use for "self" checks, which can differ from the MSAL
+   * `account.username` in `user.email` (F2 issues SEC-11). Null until the first token exchange.
+   */
+  verifiedEmail: string | null;
+}
+
+/** Reads the `email` claim from a JWT payload without verifying it (display/self-compare only). */
+function readJwtEmail(token: string): string | null {
+  try {
+    const payload = token.split('.')[1] ?? '';
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    const claims = JSON.parse(json) as { email?: unknown };
+    return typeof claims.email === 'string' && claims.email.includes('@') ? claims.email.trim().toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -41,6 +59,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isAuthenticated = useIsAuthenticated();
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [verifiedEmail, setVerifiedEmail] = useState<string | null>(null);
   const supabaseTokenRef = React.useRef<{ token: string; expiresAt: number } | null>(null);
   const supabaseExchangeInFlightRef = React.useRef<Promise<string | null> | null>(null);
 
@@ -161,6 +180,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const expiresAt =
           typeof data.expires_at === 'number' ? data.expires_at * 1000 : Date.now() + 55 * 60 * 1000;
         supabaseTokenRef.current = { token: data.access_token, expiresAt };
+        setVerifiedEmail(readJwtEmail(data.access_token));
         return data.access_token;
       } catch (error) {
         lastError = error;
@@ -197,6 +217,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!isAuthenticated || !user?.id) {
       supabaseTokenRef.current = null;
+      setVerifiedEmail(null);
       setSupabaseAccessTokenProvider(null);
       return;
     }
@@ -259,6 +280,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     login,
     logout,
     getAccessToken,
+    verifiedEmail,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

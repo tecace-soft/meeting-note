@@ -88,8 +88,9 @@ RLS 정책은 거의 전부 `auth.jwt() ->> 'sub'`를 그 사용자 id와 비교
 
 ### 피드백/이슈 (`public.feedback_issues`)
 
-공유 보드라서 소유자 스코프가 아니다.
-RLS가 켜져 있되 `authenticated` 역할에 select/insert/update가 의도적으로 열려 있고, 삭제는 소프트 삭제(작성자 본인, 앱 레이어 강제)다.
+공유 보드라서 읽기는 로그인 사용자 전원이다.
+`20261014120000_feedback_issues_parity.sql` 부터 등록은 초기 상태(`OPEN`, 담당자 · 분류 · 해결책 없음)만, 분류 저장은 관리자만, 삭제는 작성자 본인만(`soft_delete_feedback_issue` RPC) 된다.
+작성자 · severity · 분류 시각은 트리거가 채운다.
 전체 스키마·상태·첨부 정책은 [f2-feedback](./f2-feedback)에 있다.
 
 ## 스토리지 버킷 (A, 저장소 명세)
@@ -106,7 +107,7 @@ RLS가 켜져 있되 `authenticated` 역할에 select/insert/update가 의도적
 
 ### 기타 버킷
 
-- `feedback-attachments`(F2): 비공개, 서명 URL, 쓰기/삭제는 본인 id 접두 폴더로 제한. 자세히는 [f2-feedback](./f2-feedback).
+- `feedback-attachments`(F2): 비공개, 서명 URL, 업로드는 `screenshots/` 또는 본인 id 접두 폴더, 삭제는 본인이 올렸고(`owner_id`) 어느 이슈에도 붙지 않은 파일만. 자세히는 [f2-feedback](./f2-feedback).
 - 노트 이미지 첨부 버킷: `20260616*` 마이그레이션에 정책이 있다(소유+공유 분기 포함).
 
 ## 확인된 노출과 수정 (혼합: A 정의 + B 확인)

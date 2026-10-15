@@ -69,11 +69,14 @@
       "title": "피드백/이슈 트래커 (F2)",
       "section": "Features",
       "order": 1,
-      "revision": "2026-10-13.1",
-      "summary": "사내 피드백/이슈 트래커(F2)의 데이터 모델·상태 흐름·자동 분류·AI 해결안·엔드포인트 명세.",
+      "revision": "2026-10-15.1",
+      "summary": "사내 피드백/이슈 트래커(F2)의 권한 3단계·데이터 모델·자동 분류·화면·AI 해결책·알림 메일 명세(AX-KH 이식 명세 기준).",
       "depends_on": [
-        "src/lib/feedbackIssues.ts",
-        "src/pages/Issues.tsx"
+        "src/lib/issues/**",
+        "src/components/issues/**",
+        "src/pages/Issues.tsx",
+        "workflow-server/src/issues.ts",
+        "supabase/migrations/20261014120000_feedback_issues_parity.sql"
       ],
       "verified_body_hash": "e6b9485e527e84eff158f6f425a7995d48d5ad76e86ed0f7cdb553c9d0837016",
       "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",

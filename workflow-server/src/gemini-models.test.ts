@@ -25,6 +25,8 @@ import {
   STANDARD_FALLBACK_CHAIN,
   FLASH_FIRST_FALLBACK_CHAIN,
   MEMORY_FALLBACK_CHAIN,
+  ISSUE_RESOLUTION_FALLBACK_CHAIN,
+  ISSUE_RESOLUTION_MODEL,
 } from './gemini-models.js';
 
 // This file lives at <repo>/workflow-server/src/gemini-models.test.ts.
@@ -148,6 +150,8 @@ test('every fallback chain entry is live and not retired', () => {
     ['STANDARD_FALLBACK_CHAIN', STANDARD_FALLBACK_CHAIN],
     ['FLASH_FIRST_FALLBACK_CHAIN', FLASH_FIRST_FALLBACK_CHAIN],
     ['MEMORY_FALLBACK_CHAIN', MEMORY_FALLBACK_CHAIN],
+    ['ISSUE_RESOLUTION_FALLBACK_CHAIN', ISSUE_RESOLUTION_FALLBACK_CHAIN],
+    ['ISSUE_RESOLUTION_MODEL', [ISSUE_RESOLUTION_MODEL]],
   ];
   for (const [name, chain] of chains) {
     assert.ok(chain.length > 0, `${name} is empty`);
