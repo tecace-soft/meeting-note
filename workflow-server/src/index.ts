@@ -50,6 +50,7 @@ import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, o
 import { handleMcpRequest } from './mcp/transports/http.js';
 import { noteAccessFilterFor } from './mcp/lib/supabase.js';
 import { loadProductDoc, loadProductDocsIndex } from './productDocs.js';
+import { MicrosoftIdentityError, clientGateMode, resolveMicrosoftCaller, tenantGateMode, type MicrosoftCaller } from './microsoftIdentity.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
@@ -375,6 +376,7 @@ function readBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<unknown> 
 
 function getHttpStatus(error: unknown): number {
   if (error instanceof HttpError) return error.status;
+  if (error instanceof MicrosoftIdentityError) return error.status;
   const message = errorMessage(error);
   if (message.includes('Missing bearer token') || message.includes('Microsoft Graph /me rejected')) return 401;
   if (message.includes('too large') || message.includes('exceeds')) return 413;
@@ -683,19 +685,19 @@ function getBearerToken(req: IncomingMessage): string {
 }
 
 // Delegates to getMicrosoftProfile (single Graph /me implementation) and returns just the id.
-// Keeps all authed routes on one validated, timeout-bounded Graph call.
+// Keeps all authed routes on one validated, timeout-bounded, tenant-gated Graph call.
 async function getMicrosoftUserId(accessToken: string): Promise<string> {
   const profile = await getMicrosoftProfile(accessToken);
   return profile.id;
 }
 
-// TecAce org gate for product docs. These are internal specs served identically to every
-// caller, so a valid Microsoft token is not enough: the resolved account must belong to an
-// allowed TecAce domain. Overridable via PRODUCT_DOCS_ALLOWED_DOMAINS (comma-separated).
-const PRODUCT_DOCS_ALLOWED_DOMAINS = (process.env.PRODUCT_DOCS_ALLOWED_DOMAINS ?? 'tecace.com')
-  .split(',')
-  .map((domain) => domain.trim().toLowerCase())
-  .filter(Boolean);
+// Resolve the caller's Microsoft identity through the shared tenant gate (microsoftIdentity.ts):
+// Graph /me validates the token, and the `tid` of that same token must be in
+// ALLOWED_MS_TENANT_IDS. `email` is display data only (Graph mail, else UPN), matching the
+// Supabase JWT email claim; ownership checks use `id` (the Microsoft object id).
+async function getMicrosoftProfile(accessToken: string): Promise<MicrosoftCaller> {
+  return resolveMicrosoftCaller(accessToken);
+}
 
 // Short-lived identity cache for the click-heavy docs path, so browsing N docs does not make
 // N+1 Graph /me calls (and risk 429). Keyed by a hash of the token (never the raw token); small
@@ -705,34 +707,11 @@ const PRODUCT_DOCS_IDENTITY_TTL_MS = 60_000;
 const PRODUCT_DOCS_IDENTITY_CACHE_MAX = 256;
 const productDocsIdentityCache = new Map<string, { id: string; expiresAt: number }>();
 
-// Resolve the caller's Microsoft identity AND the domain(s) on their account, so the docs gate
-// can assert org membership. Fails closed (throws) on a bad/expired token.
-// `email` follows the supabase-token edge function exactly (mail, else UPN), so server-side
-// "self" checks match the Supabase JWT email claim the DB uses (F2 issues SEC-11).
-async function getMicrosoftProfile(accessToken: string): Promise<{ id: string; domains: string[]; email: string; name: string | null }> {
-  const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!response.ok) {
-    throw new Error(`Microsoft Graph /me rejected the token (${response.status}).`);
-  }
-  const data = (await response.json()) as { id?: unknown; displayName?: unknown; mail?: unknown; userPrincipalName?: unknown };
-  if (typeof data.id !== 'string' || !data.id.trim()) {
-    throw new Error('Microsoft Graph /me did not return a user id.');
-  }
-  const domains = [data.mail, data.userPrincipalName]
-    .filter((value): value is string => typeof value === 'string' && value.includes('@'))
-    .map((value) => value.slice(value.lastIndexOf('@') + 1).toLowerCase());
-  const email = typeof data.mail === 'string' && data.mail.trim()
-    ? data.mail.trim()
-    : typeof data.userPrincipalName === 'string' ? data.userPrincipalName.trim() : '';
-  const name = typeof data.displayName === 'string' && data.displayName.trim() ? data.displayName.trim() : null;
-  return { id: data.id.trim(), domains, email: email.toLowerCase(), name };
-}
-
-// Authenticate the caller and assert TecAce membership for the product-docs web routes.
-// Throws 401 (bad token) via getHttpStatus mapping, or 403 for a non-member account.
+// TecAce org gate for product docs. These are internal specs served identically to every
+// caller, so a valid Microsoft token is not enough: the token's tenant must be allowlisted.
+// The mail / UPN domain is NOT used (an outside tenant admin can set mail to x@tecace.com).
+// requireOrg: an unconfigured tenant allowlist refuses docs instead of serving everyone.
+// Throws 401 (bad token) or 403 (outside tenant / gate unconfigured).
 async function assertProductDocsMember(req: IncomingMessage): Promise<string> {
   const token = getBearerToken(req);
   const key = createHash('sha256').update(token).digest('hex');
@@ -740,15 +719,11 @@ async function assertProductDocsMember(req: IncomingMessage): Promise<string> {
   const cached = productDocsIdentityCache.get(key);
   if (cached && cached.expiresAt > now) return cached.id;
 
-  const profile = await getMicrosoftProfile(token);
-  const isMember = profile.domains.some((domain) => PRODUCT_DOCS_ALLOWED_DOMAINS.includes(domain));
-  if (!isMember) {
-    throw new HttpError(403, 'Product docs are limited to TecAce members.');
-  }
+  const caller = await resolveMicrosoftCaller(token, { requireOrg: true, surface: 'product-docs' });
   // Simple bound: clear when full rather than tracking LRU (the set is tiny and TTL-bounded).
   if (productDocsIdentityCache.size >= PRODUCT_DOCS_IDENTITY_CACHE_MAX) productDocsIdentityCache.clear();
-  productDocsIdentityCache.set(key, { id: profile.id, expiresAt: now + PRODUCT_DOCS_IDENTITY_TTL_MS });
-  return profile.id;
+  productDocsIdentityCache.set(key, { id: caller.id, expiresAt: now + PRODUCT_DOCS_IDENTITY_TTL_MS });
+  return caller.id;
 }
 
 async function getProductDocsIndexRoute(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -3309,14 +3284,19 @@ async function readNotifyRecipients(): Promise<RecipientsRead> {
 }
 
 /** Issues the author filed in the last hour (soft-deleted ones count too). */
-async function countAuthorIssuesLastHour(authorEmail: string): Promise<number> {
+// Counted by author_id (the object id; an email can be shared by several accounts). Rows
+// without author_id (filed before 20261015120000) fall back to the email count.
+async function countAuthorIssuesLastHour(row: Pick<IssueRow, 'author_id' | 'author_email'>): Promise<number> {
   const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const pattern = authorEmail.replace(/[\\%_]/g, (c) => `\\${c}`); // exact, case-insensitive match
-  const { count, error } = await supabase
+  const authorId = row.author_id?.trim().toLowerCase();
+  const query = supabase
     .from('feedback_issues')
     .select('id', { count: 'exact', head: true })
-    .ilike('author_email', pattern)
     .gte('created_at', hourAgo);
+  const pattern = row.author_email.replace(/[\\%_]/g, (c) => `\\${c}`); // exact, case-insensitive match
+  const { count, error } = authorId
+    ? await query.eq('author_id', authorId)
+    : await query.ilike('author_email', pattern);
   if (error) throw error;
   return count ?? 0;
 }
@@ -3352,7 +3332,7 @@ async function issueNotify(req: IncomingMessage, res: ServerResponse): Promise<v
   }
   const { data, error } = await supabase
     .from('feedback_issues')
-    .select('issue_key, title, description, purpose, area, status, priority, assignee_email, assignee_name, triage_note, resolution, attachments, author_email, author_name, created_at, deleted_at')
+    .select('issue_key, title, description, purpose, area, status, priority, assignee_email, assignee_name, triage_note, resolution, attachments, author_email, author_name, author_id, created_at, deleted_at')
     .eq('issue_key', issueKey)
     .maybeSingle();
   if (error) throw error;
@@ -3368,7 +3348,7 @@ async function issueNotify(req: IncomingMessage, res: ServerResponse): Promise<v
     return;
   }
   if (kind === 'created') {
-    const recent = await countAuthorIssuesLastHour(row.author_email);
+    const recent = await countAuthorIssuesLastHour(row);
     if (recent > CREATED_MAIL_LIMIT_PER_HOUR) {
       console.warn(`Issue mail (created) for ${row.issue_key} skipped: ${recent} issues by this author in the last hour (limit ${CREATED_MAIL_LIMIT_PER_HOUR}).`);
       sendJson(res, 429, { error: '최근 1시간 동안 등록이 많아 알림 메일을 보내지 않았습니다.' });
@@ -3725,6 +3705,10 @@ const server = createServer((req, res) => {
         summaryModel: env.summaryModel,
         regenerateSummaryModel: env.regenerateSummaryModel,
         projectChatModel: PROJECT_CHAT_MODEL,
+        // 'enforced' = ALLOWED_MS_TENANT_IDS is set (no value is exposed). Post-deploy check.
+        msTenantGate: tenantGateMode(),
+        // 'log-only' until MS_TOKEN_REQUIRE_KNOWN_CLIENT=true (appid / azp check).
+        msClientGate: clientGateMode(),
       });
       return;
     }

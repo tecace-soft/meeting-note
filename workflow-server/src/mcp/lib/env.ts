@@ -24,7 +24,7 @@ export interface MeetingNoteEnv {
   mcpTokenPepper?: string;
   mcpAdminClientId?: string;
   mcpAdminTenantId?: string;
-  mcpAdminEmails: Set<string>;
+  /** Admin = these Microsoft object ids only (MCP_ADMIN_EMAILS was removed 2026-10-15). */
   mcpAdminMicrosoftIds: Set<string>;
   mcpHealthCheckIntervalMs: number;
   mcpHeartbeatLogIntervalMs: number;
@@ -140,7 +140,6 @@ export function getEnv(): MeetingNoteEnv {
     mcpTokenPepper: process.env.MCP_TOKEN_PEPPER?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,
     mcpAdminClientId: process.env.MCP_ADMIN_CLIENT_ID?.trim() || process.env.VITE_MSAL_CLIENT_ID?.trim() || undefined,
     mcpAdminTenantId: process.env.MCP_ADMIN_TENANT_ID?.trim() || process.env.MCP_AZURE_TENANT_ID?.trim() || 'common',
-    mcpAdminEmails: parseSet(process.env.MCP_ADMIN_EMAILS),
     mcpAdminMicrosoftIds: parseSet(process.env.MCP_ADMIN_MICROSOFT_IDS),
     mcpHealthCheckIntervalMs,
     mcpHeartbeatLogIntervalMs,

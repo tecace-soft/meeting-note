@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.87.1';
-import { authorizeMicrosoftGraphToken } from '../_shared/msGraphAllowlist.ts';
+import { authorizeMicrosoftGraphToken, clientKindOf } from '../_shared/msGraphAllowlist.ts';
 
 // Suggests, for each anonymous diarization label ("Speaker A/B/C") in a transcript,
 // which known person it most likely is — using text/context only (name mentions,
@@ -669,7 +669,7 @@ serve(async (req) => {
   }
 
   // Auth gate: require an authenticated user (app JWT, or Microsoft Graph token fallback).
-  // The fallback enforces the SAME tenant/domain allowlist as supabase-token (shared helper),
+  // The fallback enforces the SAME tenant allowlist (ALLOWED_MS_TENANT_IDS) as supabase-token (shared helper),
   // so a bare Graph token from any tenant can no longer burn the org's paid Gemini key.
   const jwtSecret = Deno.env.get('SUPABASE_JWT_SECRET') ?? Deno.env.get('JWT_SECRET') ?? '';
   const authHeader = req.headers.get('authorization')?.trim() ?? '';
@@ -679,7 +679,7 @@ serve(async (req) => {
     ? await verifyAppJwt(appToken, jwtSecret)
     : { userId: null, error: 'Missing app bearer token.' };
   if (!authResult.userId && microsoftToken) {
-    authResult = await authorizeMicrosoftGraphToken(microsoftToken);
+    authResult = await authorizeMicrosoftGraphToken(microsoftToken, undefined, { client: clientKindOf(req.headers.get('user-agent')) });
   }
   if (!authResult.userId && !appToken && !microsoftToken) {
     authResult = { userId: null, error: 'Missing bearer token.' };

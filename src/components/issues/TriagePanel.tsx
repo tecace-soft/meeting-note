@@ -33,7 +33,7 @@ export function TriageEmpty({ s }: { s: IssueStrings }) {
 }
 
 export function TriagePanel({
-  s, lang, issue, draft, setDraft, canTriage, isAuthor, directory, urls, actions, headingId,
+  s, lang, issue, draft, setDraft, canTriage, canDelete, directory, urls, actions, headingId,
 }: {
   s: IssueStrings;
   lang: AppLanguage;
@@ -41,7 +41,8 @@ export function TriagePanel({
   draft: TriagePatch | null;
   setDraft: (d: TriagePatch) => void;
   canTriage: boolean;
-  isAuthor: boolean;
+  /** Author by object id, or an admin on a row without author_id (soft_delete RPC rule). */
+  canDelete: boolean;
   directory: DirectoryUser[];
   urls: Record<string, string>;
   actions: TriageActions;
@@ -60,7 +61,7 @@ export function TriagePanel({
   if (draft?.assigneeEmail && !assigneeOptions.some((d) => d.email === draft.assigneeEmail?.toLowerCase())) {
     assigneeOptions.push({ email: draft.assigneeEmail.toLowerCase(), displayName: draft.assigneeName, isAdmin: false });
   }
-  const showSaveBar = canTriage || isAuthor || !!actions.saveResult;
+  const showSaveBar = canTriage || canDelete || !!actions.saveResult;
   const areaValue = draft?.area ?? issue.area;
 
   return (
@@ -196,7 +197,7 @@ export function TriagePanel({
               </>
             ) : canTriage ? s.saveHint : ''}
           </span>
-          {isAuthor ? (
+          {canDelete ? (
             <button type="button" className="iss-btn iss-btn-danger ml-auto" onClick={actions.onDelete}>{s.delete}</button>
           ) : null}
         </div>

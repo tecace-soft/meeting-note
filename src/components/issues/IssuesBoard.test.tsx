@@ -53,7 +53,7 @@ const issue = (over: Partial<Issue> = {}): Issue => ({
   assigneeEmail: null, assigneeName: null, triageNote: null,
   aiSuggestion: { purpose: 'bug', area: 'meeting-note', priority: 'P2', severity: 'High', reason: '오류를 뜻하는 표현이 있어 버그로 분류했습니다.' },
   attachments: [], resolution: null, resolutionGeneratedAt: null, resolutionModel: null,
-  authorEmail: 'someone@tecace.com', authorName: 'Someone', triagedAt: null, triagedBy: null,
+  authorEmail: 'someone@tecace.com', authorName: 'Someone', authorId: 'someone-oid', triagedAt: null, triagedBy: null,
   createdAt: '2026-10-14T01:00:00Z', updatedAt: '2026-10-14T01:00:00Z', ...over,
 });
 
@@ -253,7 +253,7 @@ describe('triage panel', () => {
   });
 
   it('author deletes after the spec confirmation', async () => {
-    service.listIssues.mockResolvedValue([issue({ authorEmail: 'Me@tecace.com' })]);
+    service.listIssues.mockResolvedValue([issue({ authorEmail: 'Me@tecace.com', authorId: 'user-1' })]);
     renderBoard();
     fireEvent.click(await screen.findByText('저장 버튼 오류'));
     fireEvent.click(screen.getByRole('button', { name: '삭제' }));
@@ -262,6 +262,26 @@ describe('triage panel', () => {
     expect(dialog).not.toHaveTextContent('되돌릴');
     fireEvent.click(within(dialog).getByRole('button', { name: '삭제' }));
     await waitFor(() => expect(service.softDeleteIssue).toHaveBeenCalled());
+  });
+
+  it('a matching email without the object id is not the author (no delete button)', async () => {
+    service.listIssues.mockResolvedValue([issue({ authorEmail: 'me@tecace.com', authorId: 'other-oid' })]);
+    renderBoard();
+    fireEvent.click(await screen.findByText('저장 버튼 오류'));
+    expect(screen.queryByRole('button', { name: '삭제' })).toBeNull();
+  });
+
+  it('legacy row without author id: only an admin gets the delete button', async () => {
+    service.listIssues.mockResolvedValue([issue({ authorEmail: 'me@tecace.com', authorId: null })]);
+    renderBoard();
+    fireEvent.click(await screen.findByText('저장 버튼 오류'));
+    expect(screen.queryByRole('button', { name: '삭제' })).toBeNull();
+    cleanup();
+    auth.id = ADMIN_ID;
+    auth.email = 'andrewyoo@tecace.com';
+    renderBoard();
+    fireEvent.click(await screen.findByText('저장 버튼 오류'));
+    expect(screen.getByRole('button', { name: '삭제' })).toBeInTheDocument();
   });
 
   it('below 1536px the panel is a modal slide-over that closes on Escape', async () => {

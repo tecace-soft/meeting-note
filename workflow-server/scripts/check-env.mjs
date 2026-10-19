@@ -14,8 +14,11 @@ const CORE = [
   { name: 'SUPABASE_SERVICE_ROLE_KEY', placeholder: (v) => v.includes('your-') || v.length < 40 },
   { name: 'GEMINI_API_KEY', placeholder: (v) => v.includes('your-') || v.length < 20 },
 ];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PIPELINE = [
   { name: 'ASSEMBLYAI_API_KEY', placeholder: (v) => v.includes('your-') || v.length < 20 },
+  // Org gate for Microsoft-token routes (microsoftIdentity.ts). Missing = any tenant accepted.
+  { name: 'ALLOWED_MS_TENANT_IDS', placeholder: (v) => !v.split(',').map((s) => s.trim()).filter(Boolean).every((s) => UUID.test(s)) },
 ];
 
 function classify(list) {

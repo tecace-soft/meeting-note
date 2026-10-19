@@ -51,8 +51,9 @@ id 목록 원본은 `src/lib/adminAccess.ts` 이다.
 | `ai_suggestion` | 등록 시점의 규칙 기반 자동 분류 결과(표시 전용). F9 행에는 운영 메타데이터가 들어 있어 화면이 제안 카드를 그리지 않는다 |
 | `attachments` | `{ name, path, type }` 배열. `path` 가 기준이고 공개 URL 은 저장하지 않는다 |
 | `resolution`, `resolution_generated_at`, `resolution_model` | AI 해결책 |
-| `author_email`, `author_name` | 트리거가 요청 JWT 의 `email`, `user_metadata.name` 으로 덮어쓴다 |
-| `triaged_at`, `triaged_by` | null 이면 "분류 필요". 트리거가 저장 시각과 요청자 이메일을 찍는다 |
+| `author_email`, `author_name` | 트리거가 요청 JWT 의 `email`, `user_metadata.name` 으로 덮어쓴다. 표시용이다 |
+| `author_id` | 작성자의 Microsoft 객체 id. 트리거가 JWT `sub`(소문자)로 찍는다. 본인 판정(삭제, 등록 알림)의 기준이다(`20261015120000`). 그 전에 등록돼 백필되지 않은 행과 F9 행은 null |
+| `triaged_at`, `triaged_by`, `triaged_by_id` | null 이면 "분류 필요". 트리거가 저장 시각, 요청자 이메일(표시용), 요청자 객체 id 를 찍는다 |
 | `created_at`, `updated_at`, `deleted_at` | `deleted_at` 이 있으면 소프트 삭제 |
 
 ### 서버가 채우거나 막는 값
@@ -63,7 +64,7 @@ id 목록 원본은 `src/lib/adminAccess.ts` 이다.
 - INSERT 트리거(사용자 요청일 때): JWT 에 이메일이 없으면 거부한다. 작성자 이메일과 이름은 JWT 값(이름은 없으면 null), `created_at` · `updated_at` 은 `now()` 다.
 - UPDATE 정책: 관리자만, 삭제 안 된 행만, `deleted_at` 설정 불가.
 - UPDATE 트리거(사용자 요청일 때): `issue_key`, `title`, `description`, 작성자, `ai_suggestion`, `attachments`, `created_at` 은 이전 값으로 고정한다. 분류 저장은 JWT 이메일이 없으면 거부한다. 해결책을 바꾸면 `resolution_generated_at = now()` 이고, 해결책 저장은 `triaged_at` 을 건드리지 않는다.
-- 삭제: `soft_delete_feedback_issue(id)` RPC(SECURITY DEFINER). 작성자 본인(대소문자 무시)만, `deleted_at` 만 설정한다.
+- 삭제: `soft_delete_feedback_issue(id)` RPC(SECURITY DEFINER). `author_id` 가 요청자 `sub` 와 같을 때만, `deleted_at` 만 설정한다. `author_id` 가 없는 행은 관리자만 지울 수 있다. 여기에는 F9 운영 티켓(작성자 `ops-agent@tecace.com`, `author_id` 항상 null)과 백필되지 않은 예전 행이 포함된다. 그래서 관리자는 F9 티켓을 삭제할 수 있다(2026-10-15 리뷰에서 수용한 변경, 그전에는 아무도 RPC 로 지울 수 없었다). 이메일은 본인 판정에 쓰지 않는다(Graph `mail` 은 그 계정의 테넌트 관리자가 바꿀 수 있다, 2026-10-15 보안 리뷰).
 - 읽기 정책은 삭제된 행을 숨기지 않는다. 목록 조회가 `deleted_at is null` 로 거른다.
 - service role(workflow-server, F9)은 RLS 를 우회한다.
 
@@ -78,7 +79,8 @@ id 목록 원본은 `src/lib/adminAccess.ts` 이다.
 ### 사용자 디렉터리 `list_issue_directory()`
 
 담당자 필터 · 담당자 선택 · 수신자 검색에 쓰는 RPC 다.
-`app_user` 중 이메일이 있는 사람의 이메일(소문자), 표시 이름, 관리자 여부를 로그인 사용자에게 돌려준다.
+`app_user` 중 이메일이 있는 사람의 이메일(소문자), 표시 이름, 관리자 여부를 Microsoft 객체 id 별로 로그인 사용자에게 돌려준다.
+같은 이메일을 두 개 이상의 객체 id 가 쓰면, 관리자 id 가 아닌 항목은 숨긴다. 다른 계정이 남의 주소로 이름이나 관리자 표시를 바꾸지 못하게 하기 위해서다.
 `app_user` 자체의 RLS 는 그대로(본인 행만) 둔다.
 사용자 요청으로 `app_user` 를 쓰면 트리거가 `email` · `display_name` 을 JWT 값으로, `last_seen_at` 을 `now()` 로 덮는다. 그래서 디렉터리에 가짜 이름이나 남의 주소를 심을 수 없다. service role 쓰기는 그대로다.
 담당자 선택 목록은 이름 옆에 이메일을 함께 보여 준다.
@@ -130,7 +132,7 @@ AI 해결책은 서버가 `issueKey` 로 이슈 행을 읽고 그 첨부(경로 
 
 `/issue-notify` 의 세 가지 kind:
 
-- `created`(N1): 등록자 본인이 등록 후 15분 안에만 부를 수 있다. 수신자 테이블의 사람들에게 보내고, 확정한 수신자를 먼저 응답한 뒤 백그라운드로 보낸다. 같은 이슈는 한 번만 보낸다(서버 메모리 기준이라 재배포하면 초기화된다). 같은 작성자가 최근 1시간에 10건을 넘게 등록했으면 429 를 돌려주고 메일을 보내지 않는다.
+- `created`(N1): 등록자 본인(호출자 객체 id = `author_id`)이 등록 후 15분 안에만 부를 수 있다. 수신자 테이블의 사람들에게 보내고, 확정한 수신자를 먼저 응답한 뒤 백그라운드로 보낸다. 같은 이슈는 한 번만 보낸다(서버 메모리 기준이라 재배포하면 초기화된다). 같은 작성자가 최근 1시간에 10건을 넘게 등록했으면 429 를 돌려주고 메일을 보내지 않는다.
 - `assigned`(N2): 관리자만. 현재 담당자가 있고 호출한 사람이 아니면 담당자에게 보낸다.
 - `resolved`(N3): 관리자만. 상태가 완료 · 닫힘이고 등록자가 호출한 사람이 아니면 등록자에게 보낸다. F9 시스템 작성자에게는 보내지 않는다.
 

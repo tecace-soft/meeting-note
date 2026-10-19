@@ -18,11 +18,15 @@ export interface MailDecision {
   authorMailed: boolean;
 }
 
-export function mailAfterSave(before: Issue, updated: Issue, actor: { email: string }): MailDecision {
+export function mailAfterSave(before: Issue, updated: Issue, actor: { email: string; id?: string | null }): MailDecision {
   const reassigned = !sameEmail(before.assigneeEmail, updated.assigneeEmail)
     && !!updated.assigneeEmail && !sameEmail(updated.assigneeEmail, actor.email);
+  // Self-mail suppression (not a permission): by object id when the row has one, like the server.
+  const actorIsAuthor = updated.authorId
+    ? !!actor.id && updated.authorId === actor.id.trim().toLowerCase()
+    : sameEmail(updated.authorEmail, actor.email);
   const resolved = isOpenStatus(before.status) && !isOpenStatus(updated.status)
-    && !sameEmail(updated.authorEmail, actor.email)
+    && !actorIsAuthor
     && !SYSTEM_AUTHOR_EMAILS.includes(updated.authorEmail.toLowerCase());
   return { assigneeMailed: reassigned ? updated.assigneeEmail : null, authorMailed: resolved };
 }

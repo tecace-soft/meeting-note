@@ -5,7 +5,7 @@ import { handleAdminRequest } from '../admin/dashboard.js';
 import { getMeetingNoteUserIdFromAzureToken } from '../lib/azureToken.js';
 import { sendMcpAlert } from '../lib/alerts.js';
 import { getEnv } from '../lib/env.js';
-import { getMicrosoftUserIdFromGraph } from '../lib/microsoftGraph.js';
+import { resolveGraphCaller } from '../lib/microsoftGraph.js';
 import { logError, logEvent } from '../lib/logger.js';
 import { finishMcpSession, inferPlatform, runWithMcpTrackingContext, startMcpSession, type McpTrackingContext } from '../lib/mcpTracking.js';
 import { getDataContext, runWithScopedUserId } from '../lib/supabase.js';
@@ -204,9 +204,10 @@ export function getProtectedResourceMetadata(baseUrl: string, resource?: string,
 
 // Returns the resolved user id AND whether that resolution proves org membership.
 // orgVerified is true only for admin-provisioned or tenant-checked paths (OAuth proxy,
-// MCP_USER_TOKENS, Azure JWT with issuer pinned to the tenant); it is false for the
-// Graph /me fallback (any Microsoft account resolves) and the anon fallback. Callers gate
-// SHARED, non-user-scoped content (product docs) on orgVerified; per-user tools do not.
+// MCP_USER_TOKENS, Azure JWT with issuer pinned to the tenant, Graph /me fallback whose token
+// tenant is in ALLOWED_MS_TENANT_IDS); it is false for the anon fallback and for the Graph
+// fallback while that allowlist is unconfigured. Callers gate SHARED, non-user-scoped content
+// (product docs) on orgVerified; per-user tools do not.
 interface ChatGptAuthResult {
   userId: string | undefined;
   orgVerified: boolean;
@@ -250,12 +251,13 @@ async function resolveChatGptUserId(bearerToken: string | undefined, env: Return
     }
   }
 
-  const graphUserId = await getMicrosoftUserIdFromGraph(bearerToken);
-  if (graphUserId) {
+  const graphCaller = await resolveGraphCaller(bearerToken);
+  if (graphCaller) {
     process.stderr.write('MCP ChatGPT auth resolved through Microsoft Graph /me fallback\n');
-    // Resolved, but NOT tenant-checked: good enough to see one's own notes, not to read
-    // shared org docs. Leave orgVerified false so the docs gate refuses this path.
-    return { userId: graphUserId, orgVerified: false };
+    // Tenant-gated (ALLOWED_MS_TENANT_IDS): an outside tenant never resolves. orgVerified is
+    // true only when that allowlist is configured and matched; while it is unconfigured the
+    // caller still sees only their own notes and the docs gate refuses them.
+    return { userId: graphCaller.userId, orgVerified: graphCaller.orgVerified };
   }
 
   // A token was presented but resolved to no user (invalid/expired/unknown).
@@ -463,9 +465,9 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
 
     // Org-membership signal for tools that serve SHARED, non-user-scoped content (product
     // docs). Trusted: static key, personal token (both admin-provisioned), and the tenant-
-    // checked ChatGPT paths (OAuth proxy / MCP_USER_TOKENS / Azure JWT) surfaced via
-    // chatGptOrgVerified. NOT trusted: the Graph /me fallback and anon fallback (any Microsoft
-    // account resolves) stay false, so the docs gate refuses them. Per-user note tools are
+    // checked ChatGPT paths (OAuth proxy / MCP_USER_TOKENS / Azure JWT / tenant-gated Graph
+    // fallback) surfaced via chatGptOrgVerified. NOT trusted: the anon fallback and the Graph
+    // fallback while ALLOWED_MS_TENANT_IDS is unconfigured. Per-user note tools are
     // unaffected by this flag.
     const orgVerified = staticKeyAuthorized || Boolean(personalTokenUserId) || chatGptOrgVerified;
     await runWithScopedUserId(userId, orgVerified, async () => {

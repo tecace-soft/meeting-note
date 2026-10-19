@@ -196,19 +196,26 @@ class MobileSupabaseSession {
         expiresOn: microsoft.expiresOn,
         userId: microsoft.user.id,
       );
-      return _exchange(microsoft.accessToken);
+      return _exchange(microsoft.accessToken, microsoft.idToken);
     } catch (_) {
       final cached = await _storage.read(key: AuthTokenStore.accessTokenKey);
       if (cached == null || cached.isEmpty) {
         throw StateError('Microsoft session expired. Sign in again.');
       }
-      return _exchange(cached);
+      final cachedIdToken =
+          await _storage.read(key: AuthTokenStore.idTokenKey);
+      return _exchange(cached, cachedIdToken);
     }
   }
 
-  Future<SupabaseTokenResult> _exchange(String microsoftAccessToken) async {
-    final result = await _supabaseTokenService
-        .exchangeMicrosoftToken(microsoftAccessToken);
+  Future<SupabaseTokenResult> _exchange(
+    String microsoftAccessToken,
+    String? microsoftIdToken,
+  ) async {
+    final result = await _supabaseTokenService.exchangeMicrosoftToken(
+      microsoftAccessToken,
+      microsoftIdToken: microsoftIdToken,
+    );
     await _store.saveSupabaseToken(
       accessToken: result.accessToken,
       expiresOn: result.expiresOn,

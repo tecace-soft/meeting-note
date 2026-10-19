@@ -1,21 +1,24 @@
-export async function getMicrosoftUserIdFromGraph(accessToken: string): Promise<string | undefined> {
-  let response: Response;
+import { MicrosoftIdentityError, resolveMicrosoftCaller } from '../../microsoftIdentity.js';
+
+export interface GraphCaller {
+  userId: string;
+  /** True only when ALLOWED_MS_TENANT_IDS is set and the token's tenant is in it. */
+  orgVerified: boolean;
+}
+
+// Graph /me + the shared tenant gate (microsoftIdentity.ts). An outside-tenant token, an
+// invalid token or a Graph timeout all resolve to undefined, so callers fail closed.
+export async function resolveGraphCaller(accessToken: string, surface = 'mcp-graph'): Promise<GraphCaller | undefined> {
   try {
-    response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id', {
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-      },
-      // Bound the auth hot path: without a timeout a stalled Graph call hangs the whole
-      // request (and leaks an "active" tracking session) indefinitely. Fail closed instead.
-      signal: AbortSignal.timeout(8000),
-    });
+    const caller = await resolveMicrosoftCaller(accessToken, { surface });
+    return { userId: caller.id, orgVerified: caller.orgVerified };
   } catch (error) {
-    console.warn(`[auth] Graph /me lookup failed or timed out: ${error instanceof Error ? error.message : String(error)}`);
+    const reason = error instanceof MicrosoftIdentityError ? `status ${error.status}` : error instanceof Error ? error.message : String(error);
+    console.warn(`[auth] Graph caller rejected (${reason}).`);
     return undefined;
   }
+}
 
-  if (!response.ok) return undefined;
-
-  const data = (await response.json()) as { id?: unknown };
-  return typeof data.id === 'string' && data.id.trim() ? data.id.trim() : undefined;
+export async function getMicrosoftUserIdFromGraph(accessToken: string): Promise<string | undefined> {
+  return (await resolveGraphCaller(accessToken))?.userId;
 }

@@ -50,6 +50,12 @@ export interface Issue {
   resolutionModel: string | null;
   authorEmail: string;
   authorName: string | null;
+  /**
+   * Microsoft object id of the author, stamped by the DB from the JWT `sub`. The ownership key
+   * (delete, "is this mine"); authorEmail is display only. Null on rows filed before the
+   * 2026-10-15 migration and not backfilled, and on F9 ops rows.
+   */
+  authorId: string | null;
   triagedAt: string | null;
   triagedBy: string | null;
   createdAt: string;

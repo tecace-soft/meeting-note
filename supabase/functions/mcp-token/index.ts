@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.87.1';
-import { authorizeMicrosoftGraphToken } from '../_shared/msGraphAllowlist.ts';
+import { authorizeMicrosoftGraphToken, clientKindOf } from '../_shared/msGraphAllowlist.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -84,10 +84,10 @@ serve(async (req) => {
   });
 
   try {
-    // Graph auth now enforces the org tenant/domain allowlist (shared helper), so an
+    // Graph auth now enforces the org tenant allowlist (ALLOWED_MS_TENANT_IDS) (shared helper), so an
     // out-of-org Microsoft account can no longer mint or list MCP tokens here.
     const authResult = bearerToken
-      ? await authorizeMicrosoftGraphToken(bearerToken)
+      ? await authorizeMicrosoftGraphToken(bearerToken, undefined, { client: clientKindOf(req.headers.get('user-agent')) })
       : { userId: null as string | null, error: 'Missing Microsoft bearer token.', status: 401 as number | undefined };
     const userId = authResult.userId;
     if (!userId) {

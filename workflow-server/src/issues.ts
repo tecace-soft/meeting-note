@@ -40,6 +40,9 @@ export const CREATED_NOTIFY_WINDOW_MS = 15 * 60 * 1000;
 const isOpenStatus = (s: string): boolean => s !== 'DONE' && s !== 'CLOSED';
 const sameEmail = (a: string | null | undefined, b: string | null | undefined): boolean =>
   (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+/** Microsoft object ids; both must be present (null never matches null). */
+const sameId = (a: string | null | undefined, b: string | null | undefined): boolean =>
+  !!a?.trim() && !!b?.trim() && a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /** The subset of a feedback_issues row the mail and decision code reads. */
 export interface IssueRow {
@@ -57,6 +60,8 @@ export interface IssueRow {
   attachments: unknown;
   author_email: string;
   author_name: string | null;
+  /** Microsoft object id stamped by the DB from the JWT `sub` (null on rows filed before it). */
+  author_id?: string | null;
   created_at: string;
   deleted_at?: string | null;
 }
@@ -90,7 +95,8 @@ export function decideNotify(input: {
   const { kind, row, caller } = input;
   if (row.deleted_at) return { ok: false, status: 409, error: '삭제된 이슈입니다.' };
   if (kind === 'created') {
-    if (!sameEmail(row.author_email, caller.email)) {
+    // Ownership is the object id, never the email (a Graph mail can be set by any tenant admin).
+    if (!sameId(row.author_id, caller.id)) {
       return { ok: false, status: 403, error: '본인이 등록한 이슈만 알릴 수 있습니다.' };
     }
     const age = input.now - Date.parse(row.created_at);
@@ -104,8 +110,10 @@ export function decideNotify(input: {
     const to = row.assignee_email && !sameEmail(row.assignee_email, caller.email) ? [row.assignee_email] : [];
     return { ok: true, to: dedupeEmails(to) };
   }
+  // Self-mail suppression only (not a permission): by id when the row has one.
+  const callerIsAuthor = row.author_id ? sameId(row.author_id, caller.id) : sameEmail(row.author_email, caller.email);
   const resolved = !isOpenStatus(row.status)
-    && !sameEmail(row.author_email, caller.email)
+    && !callerIsAuthor
     && !SYSTEM_AUTHOR_EMAILS.has(row.author_email.trim().toLowerCase());
   return { ok: true, to: resolved ? dedupeEmails([row.author_email]) : [] };
 }

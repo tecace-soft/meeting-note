@@ -66,7 +66,7 @@ class AuthController extends Notifier<AuthState> {
         expiresOn: result.expiresOn,
         userId: result.user.id,
       );
-      final canonicalUserId = await _saveSupabaseToken(result.accessToken);
+      final canonicalUserId = await _saveSupabaseToken(result);
       ref.invalidate(promptsProvider);
       state = AuthState(user: result.user);
       unawaited(_ensureSelfSpeaker(result.user, microsoftId: canonicalUserId));
@@ -85,7 +85,7 @@ class AuthController extends Notifier<AuthState> {
         expiresOn: result.expiresOn,
         userId: result.user.id,
       );
-      final canonicalUserId = await _saveSupabaseToken(result.accessToken);
+      final canonicalUserId = await _saveSupabaseToken(result);
       ref.invalidate(promptsProvider);
       state = AuthState(user: result.user);
       unawaited(_ensureSelfSpeaker(result.user, microsoftId: canonicalUserId));
@@ -104,10 +104,12 @@ class AuthController extends Notifier<AuthState> {
     }
   }
 
-  Future<String?> _saveSupabaseToken(String microsoftAccessToken) async {
-    final result = await ref
-        .read(supabaseTokenServiceProvider)
-        .exchangeMicrosoftToken(microsoftAccessToken);
+  Future<String?> _saveSupabaseToken(MicrosoftAuthResult microsoft) async {
+    final result =
+        await ref.read(supabaseTokenServiceProvider).exchangeMicrosoftToken(
+              microsoft.accessToken,
+              microsoftIdToken: microsoft.idToken,
+            );
     await _tokens.saveSupabaseToken(
       accessToken: result.accessToken,
       expiresOn: result.expiresOn,

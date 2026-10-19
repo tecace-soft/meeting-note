@@ -77,10 +77,12 @@ where bucket_id='meeting-recordings' and owner_id is null;
 npx supabase@latest secrets list
 ```
 
-`ALLOWED_MS_TENANT_IDS` 또는 `ALLOWED_EMAIL_DOMAINS` 중 하나는 반드시 있어야 함. 없으면:
+> 2026-10-15 변경: 로그인 게이트는 `ALLOWED_MS_TENANT_IDS`(테넌트)만 본다. `ALLOWED_EMAIL_DOMAINS`는 폐기됐고(외부 테넌트가 Graph `mail`을 `@tecace.com`으로 바꿔 통과할 수 있었음) 설정돼 있으면 무시되며 경고 로그만 남는다. 아래 원래 안내 대신 `ALLOWED_MS_TENANT_IDS`만 설정하고 `ALLOWED_EMAIL_DOMAINS`는 `secrets unset`으로 지운다.
+
+(원래 안내, 2026-10-09) `ALLOWED_MS_TENANT_IDS` 또는 `ALLOWED_EMAIL_DOMAINS` 중 하나는 반드시 있어야 함. 없으면:
 
 ```
-npx supabase@latest secrets set ALLOWED_MS_TENANT_IDS=<tenant-id> ALLOWED_EMAIL_DOMAINS=tecace.com
+npx supabase@latest secrets set ALLOWED_MS_TENANT_IDS=<tenant-id>
 ```
 
 배포 (`_shared/msGraphAllowlist.ts`는 각 함수 번들에 자동 포함됨):

@@ -56,7 +56,7 @@ Suggest UI가 이 함수를 호출한다.
 ## 엣지 함수 흐름 (identify-speakers)
 
 `identify-speakers`는 요청으로 `transcriptText`, `labels`, `roster`, `selfName`, 선택적 `noteId`를 받는다.
-인증 게이트를 통과해야 한다(앱 JWT, 또는 같은 테넌트/도메인 허용목록을 거친 Microsoft Graph 토큰 fallback).
+인증 게이트를 통과해야 한다(앱 JWT, 또는 같은 테넌트 허용목록을 거친 Microsoft Graph 토큰 fallback).
 순서는 이렇다.
 
 1. 시그니처 코퍼스 구축: service role로 사용자의 최근 labeled 노트(`note.diarization`, 최대 60개)를 읽어 사람별 시그니처를 만든다. `noteId`가 있으면 해당 노트는 제외한다(leave-one-out). 이 단계는 best-effort라, 실패하면 코퍼스를 비우고 순수 LLM 동작으로 간다(제안이 실패로 끝나지 않는다).

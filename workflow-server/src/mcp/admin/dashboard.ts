@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { MicrosoftIdentityError, resolveMicrosoftCaller } from '../../microsoftIdentity.js';
 import { getEnv } from '../lib/env.js';
 import { getMcpDashboardData } from '../lib/mcpTracking.js';
 import { getDataContext } from '../lib/supabase.js';
@@ -42,51 +43,41 @@ function getBearerToken(req: IncomingMessage): string | undefined {
   return header?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
 }
 
+// Graph /me + the shared tenant gate (microsoftIdentity.ts); null on any failure (fail closed).
 async function getMicrosoftUser(accessToken: string): Promise<AdminUser | null> {
-  let response: Response;
   try {
-    response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', {
-      headers: { authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(8000), // never hang admin auth on a stalled Graph call
-    });
+    const caller = await resolveMicrosoftCaller(accessToken, { surface: 'mcp-admin' });
+    return { id: caller.id, displayName: caller.name ?? 'User', email: caller.email };
   } catch (error) {
-    console.warn(`[admin] Graph /me lookup failed or timed out: ${error instanceof Error ? error.message : String(error)}`);
+    const reason = error instanceof MicrosoftIdentityError ? `status ${error.status}` : error instanceof Error ? error.message : String(error);
+    console.warn(`[admin] Microsoft caller rejected (${reason}).`);
     return null;
   }
-  if (!response.ok) return null;
-  const data = (await response.json()) as JsonRecord;
-  const id = typeof data.id === 'string' ? data.id.trim() : '';
-  const displayName = typeof data.displayName === 'string' ? data.displayName.trim() : 'User';
-  const email =
-    typeof data.mail === 'string' && data.mail.trim()
-      ? data.mail.trim()
-      : typeof data.userPrincipalName === 'string'
-        ? data.userPrincipalName.trim()
-        : '';
-  if (!id) return null;
-  return { id, displayName, email };
 }
 
+let warnedIgnoredAdminEmails = false;
+
+// Admin = Microsoft object id in MCP_ADMIN_MICROSOFT_IDS, nothing else. The email path
+// (MCP_ADMIN_EMAILS) was removed in the 2026-10-15 security review: Graph `mail` is set by the
+// account's own tenant admin, so an outside tenant could claim an admin's address and read every
+// user's MCP tool inputs/outputs here. Object ids are issued by Entra and cannot be chosen.
 async function requireAdmin(req: IncomingMessage): Promise<AdminUser | null> {
   const token = getBearerToken(req);
   if (!token) return null;
-  const user = await getMicrosoftUser(token);
-  if (!user) return null;
   const env = getEnv();
-  const allowedIds = env.mcpAdminMicrosoftIds;
-  const allowedEmails = env.mcpAdminEmails;
-  // Fail CLOSED when no admin allowlist is configured. Previously this returned the
-  // user as an admin, so with both MCP_ADMIN_EMAILS and MCP_ADMIN_MICROSOFT_IDS unset
-  // (and mcpAdminTenantId defaulting to 'common'), any Microsoft account in any tenant
-  // could sign in and read every user's meeting content via /admin. An unconfigured
-  // allowlist must deny, not grant.
-  if (allowedIds.size === 0 && allowedEmails.size === 0) {
-    console.warn('[admin] denied: no MCP_ADMIN_EMAILS / MCP_ADMIN_MICROSOFT_IDS configured (admin is fail-closed).');
+  if (process.env.MCP_ADMIN_EMAILS?.trim() && !warnedIgnoredAdminEmails) {
+    warnedIgnoredAdminEmails = true;
+    console.warn('[admin] MCP_ADMIN_EMAILS is set but ignored: admin access is MCP_ADMIN_MICROSOFT_IDS only. Remove it.');
+  }
+  // Fail CLOSED when no admin allowlist is configured: an unconfigured allowlist must deny,
+  // not grant (S1 of the 2026-08-18 MCP audit).
+  if (env.mcpAdminMicrosoftIds.size === 0) {
+    console.warn('[admin] denied: no MCP_ADMIN_MICROSOFT_IDS configured (admin is fail-closed).');
     return null;
   }
-  if (allowedIds.has(user.id.toLowerCase())) return user;
-  if (user.email && allowedEmails.has(user.email.toLowerCase())) return user;
-  return null;
+  const user = await getMicrosoftUser(token);
+  if (!user) return null;
+  return env.mcpAdminMicrosoftIds.has(user.id.toLowerCase()) ? user : null;
 }
 
 async function fetchLocalHealth(req: IncomingMessage): Promise<JsonRecord> {
@@ -272,7 +263,7 @@ function dashboardHtml(): string {
   const env = getEnv();
   const clientId = env.mcpAdminClientId ?? '';
   const tenantId = env.mcpAdminTenantId ?? 'common';
-  const adminConfigured = env.mcpAdminEmails.size > 0 || env.mcpAdminMicrosoftIds.size > 0;
+  const adminConfigured = env.mcpAdminMicrosoftIds.size > 0;
 
   return `<!doctype html>
 <html lang="en">

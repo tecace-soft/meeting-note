@@ -14,7 +14,7 @@ const issue = (over: Partial<Issue> = {}): Issue => ({
   purpose: 'bug', area: 'general', status: 'OPEN', priority: 'P3', severity: 'Medium',
   assigneeEmail: null, assigneeName: null, triageNote: null, aiSuggestion: null, attachments: [],
   resolution: null, resolutionGeneratedAt: null, resolutionModel: null,
-  authorEmail: 'author@tecace.com', authorName: 'Author', triagedAt: null, triagedBy: null,
+  authorEmail: 'author@tecace.com', authorName: 'Author', authorId: 'author-oid', triagedAt: null, triagedBy: null,
   createdAt: '2026-10-14T00:00:00Z', updatedAt: '2026-10-14T00:00:00Z', ...over,
 });
 
@@ -132,7 +132,11 @@ describe('mail decision and wording (L15-L18)', () => {
   });
   it('L17: OPEN -> DONE mails the author unless the author saved', () => {
     expect(mailAfterSave(issue(), issue({ status: 'DONE' }), { email: 'b@tecace.com' }).authorMailed).toBe(true);
-    expect(mailAfterSave(issue(), issue({ status: 'DONE' }), { email: 'AUTHOR@tecace.com' }).authorMailed).toBe(false);
+    expect(mailAfterSave(issue(), issue({ status: 'DONE' }), { email: 'x@tecace.com', id: 'AUTHOR-OID' }).authorMailed).toBe(false);
+    // The author is the object id; a matching email with another id still gets mailed.
+    expect(mailAfterSave(issue(), issue({ status: 'DONE' }), { email: 'AUTHOR@tecace.com', id: 'other-oid' }).authorMailed).toBe(true);
+    // Legacy rows without author id fall back to the email (self-mail suppression only).
+    expect(mailAfterSave(issue({ authorId: null }), issue({ status: 'DONE', authorId: null }), { email: 'AUTHOR@tecace.com' }).authorMailed).toBe(false);
     expect(mailAfterSave(issue({ authorEmail: 'ops-agent@tecace.com' }), issue({ status: 'CLOSED', authorEmail: 'ops-agent@tecace.com' }), { email: 'b@tecace.com' }).authorMailed).toBe(false);
   });
   it('L18: describeRecipients', () => {

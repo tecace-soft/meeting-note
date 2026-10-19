@@ -26,6 +26,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(recordings): sort Recent recordings by upload time on web and mobile
 - feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
 - feat(docs): agent-readable product docs via web /docs + MCP get_product_docs
 - feat(gemini): pin model ids in one registry with an offline drift test
@@ -52,7 +53,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(recorder): stop truncating or silently dropping a finished recording
 - fix(security): owner-scope the meeting-recordings storage bucket RLS
 - fix(security): enable RLS on public.chat and public.session
-- fix(web): stop importing server source into the web bundle
 
 **Performance**
 

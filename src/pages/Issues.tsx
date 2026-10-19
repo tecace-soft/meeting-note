@@ -16,7 +16,7 @@ import '../components/issues/issues.css';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { isOpenStatus } from '../lib/issues/constants';
-import { same, type ListFilter } from '../lib/issues/listFilter';
+import type { ListFilter } from '../lib/issues/listFilter';
 import { mailAfterSave, savedText } from '../lib/issues/mailDecision';
 import { canIssue } from '../lib/issues/permissions';
 import {
@@ -34,8 +34,11 @@ export default function Issues() {
   const { appLanguage: lang } = useLanguage();
   const s = ISSUE_STRINGS[lang];
   const location = useLocation();
-  // SEC-11: "self" = the JWT email the DB checks, falling back to the MSAL username.
+  // Display / assignee matching only: the JWT email, falling back to the MSAL username.
   const me = (verifiedEmail ?? user?.email ?? '').toLowerCase() || null;
+  // Ownership is the Microsoft object id (DB author_id = JWT sub), never the email: a Graph
+  // `mail` can be set by any tenant admin (security review 2026-10-15).
+  const myId = user?.id?.trim().toLowerCase() || null;
   const canTriage = canIssue(user?.id, 'issues.triage');
   const canNotify = canIssue(user?.id, 'issues.notify');
   const wide = useMediaQuery('(min-width: 1536px)');
@@ -104,7 +107,9 @@ export default function Issues() {
 
   const selected = issues.find((i) => i.id === selectedId) ?? null;
   const [draft, setDraft, resetDraft] = useTriageDraft(selected);
-  const isAuthor = !!selected && same(selected.authorEmail, me);
+  const isAuthor = !!selected && !!myId && selected.authorId === myId;
+  // Same rule as soft_delete_feedback_issue(): the author, or an admin for rows without author_id.
+  const canDelete = isAuthor || (!!selected && selected.authorId === null && canTriage);
 
   const select = useCallback((id: string) => {
     if (id !== selectedId) {
@@ -123,7 +128,7 @@ export default function Issues() {
     setSaving(true);
     try {
       const updated = await saveTriage(selected.id, draft, me ?? '');
-      const decision = mailAfterSave(selected, updated, { email: me ?? '' });
+      const decision = mailAfterSave(selected, updated, { email: me ?? '', id: myId });
       if (decision.assigneeMailed) notifyAfterTriage('assigned', updated.issueKey, getAccessToken);
       if (decision.authorMailed) notifyAfterTriage('resolved', updated.issueKey, getAccessToken);
       setSaveResult({ id: updated.id, text: savedText(new Date(), decision, updated.assigneeName, lang) });
@@ -170,9 +175,9 @@ export default function Issues() {
 
   const confirmDelete = async () => {
     setConfirmOpen(false);
-    if (!selected || !me) return;
+    if (!selected || !canDelete) return;
     try {
-      await softDeleteIssue(selected, me);
+      await softDeleteIssue(selected);
       setSelectedId(null);
       setPanelOpen(false);
       setSaveResult(null);
@@ -210,7 +215,7 @@ export default function Issues() {
       draft={draft}
       setDraft={setDraft}
       canTriage={canTriage}
-      isAuthor={isAuthor}
+      canDelete={canDelete}
       directory={directory}
       urls={urls}
       actions={actions}

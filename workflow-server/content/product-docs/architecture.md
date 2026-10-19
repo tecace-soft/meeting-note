@@ -79,7 +79,7 @@ record / upload  ->  transcribe (AssemblyAI)  ->  diarize + speaker-ID  ->  summ
 ## 인증 흐름 (MSAL -> Supabase 토큰 -> RLS)
 
 1. 프론트엔드가 MSAL(Azure AD)로 Microsoft 로그인을 하고 액세스/ID 토큰을 얻는다.
-2. `supabase-token` 엣지 함수가 그 토큰을 받아(테넌트/도메인 허용목록 통과 시) Supabase용 HS256 JWT를 발급한다. JWT의 `sub`는 Microsoft 사용자 식별자(oid)다.
+2. `supabase-token` 엣지 함수가 그 토큰을 받아(테넌트 허용목록 통과 시. 이메일 도메인은 판정에 쓰지 않음) Supabase용 HS256 JWT를 발급한다. JWT의 `sub`는 Microsoft 사용자 식별자(oid)다.
 3. 프론트엔드는 이 JWT로 Supabase를 조회하고, RLS가 각 행을 소유자/공유 범위로 건다.
 
 토큰이 없으면 RLS 때문에 빈 결과가 나온다.

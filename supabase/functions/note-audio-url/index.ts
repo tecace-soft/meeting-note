@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.87.1';
-import { authorizeMicrosoftGraphToken } from '../_shared/msGraphAllowlist.ts';
+import { authorizeMicrosoftGraphToken, clientKindOf } from '../_shared/msGraphAllowlist.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -225,10 +225,10 @@ serve(async (req) => {
   let authResult: { userId: string | null; error?: string; status?: number } = appToken && jwtSecret
     ? await verifyAppJwt(appToken, jwtSecret)
     : { userId: null, error: 'Missing app bearer token.' };
-  // Graph fallback now enforces the org tenant/domain allowlist (shared helper),
+  // Graph fallback now enforces the org tenant allowlist (ALLOWED_MS_TENANT_IDS) (shared helper),
   // so a bare Graph token from any tenant can no longer reach the signer.
   if (!authResult.userId && microsoftToken) {
-    authResult = await authorizeMicrosoftGraphToken(microsoftToken);
+    authResult = await authorizeMicrosoftGraphToken(microsoftToken, undefined, { client: clientKindOf(req.headers.get('user-agent')) });
   }
   if (!authResult.userId && !appToken && !microsoftToken) {
     authResult = { userId: null, error: 'Missing bearer token.' };

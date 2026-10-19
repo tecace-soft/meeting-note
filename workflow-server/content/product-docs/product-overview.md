@@ -20,7 +20,7 @@ Meeting Note는 회의를 쓸 수 있는 지식으로 바꾼다.
 ## 누구를 위한 것인가
 
 TecAce 내부 제품이다.
-사용자는 Microsoft 계정으로 로그인하고, 접근은 Azure MSAL SSO와 `supabase-token` 엣지 함수에서 강제하는 테넌트/도메인 허용목록으로 게이팅된다.
+사용자는 Microsoft 계정으로 로그인하고, 접근은 Azure MSAL SSO와 `supabase-token` 엣지 함수에서 강제하는 테넌트 허용목록(`ALLOWED_MS_TENANT_IDS`)으로 게이팅된다.
 
 ## 핵심 파이프라인
 

@@ -19,6 +19,7 @@ import {
 } from './issues.js';
 
 const ADMIN = '31d79bfe-2488-47c2-aa45-949375e93bde';
+const AUTHOR_ID = 'aaaaaaaa-0000-4000-8000-000000000001';
 const NOW = Date.parse('2026-10-14T12:00:00Z');
 
 const row = (over: Partial<IssueRow> = {}): IssueRow => ({
@@ -36,6 +37,7 @@ const row = (over: Partial<IssueRow> = {}): IssueRow => ({
   attachments: [],
   author_email: 'author@tecace.com',
   author_name: 'Author',
+  author_id: AUTHOR_ID,
   created_at: '2026-10-14T11:59:00Z',
   deleted_at: null,
   ...over,
@@ -62,8 +64,8 @@ test('resolveNotifyEmails: unreadable -> fallback, empty -> [] (RCPT-2)', () => 
   assert.deepEqual(resolveNotifyEmails({ status: 'ok', emails: [] }), []);
 });
 
-test('created: only the author, only right after creation, recipients from the table', () => {
-  const caller = { id: 'u', email: 'AUTHOR@tecace.com' };
+test('created: only the author (by object id), only right after creation, recipients from the table', () => {
+  const caller = { id: AUTHOR_ID.toUpperCase(), email: 'AUTHOR@tecace.com' };
   const ok = decideNotify({ kind: 'created', row: row(), caller, createdRecipients: ['A@tecace.com', 'a@tecace.com'], now: NOW });
   assert.deepEqual(ok, { ok: true, to: ['a@tecace.com'] });
   const stranger = decideNotify({ kind: 'created', row: row(), caller: { id: 'x', email: 'x@tecace.com' }, createdRecipients: ['a@tecace.com'], now: NOW });
@@ -72,6 +74,22 @@ test('created: only the author, only right after creation, recipients from the t
   assert.equal(late.ok, false);
   const deleted = decideNotify({ kind: 'created', row: row({ deleted_at: '2026-10-14T12:00:00Z' }), caller, createdRecipients: [], now: NOW });
   assert.equal(deleted.ok, false);
+});
+
+test('created: a matching email without the object id is not the author (nOAuth spoof)', () => {
+  const spoofer = { id: 'ffffffff-0000-4000-8000-00000000000f', email: 'author@tecace.com' };
+  const spoof = decideNotify({ kind: 'created', row: row(), caller: spoofer, createdRecipients: ['a@tecace.com'], now: NOW });
+  assert.deepEqual(spoof, { ok: false, status: 403, error: '본인이 등록한 이슈만 알릴 수 있습니다.' });
+  const legacy = decideNotify({ kind: 'created', row: row({ author_id: null }), caller: { id: AUTHOR_ID, email: 'author@tecace.com' }, createdRecipients: [], now: NOW });
+  assert.equal(legacy.ok, false);
+});
+
+test('resolved: self-mail suppression uses the object id when the row has one', () => {
+  const adminAuthor = { id: ADMIN, email: 'other@tecace.com' };
+  const own = decideNotify({ kind: 'resolved', row: row({ status: 'DONE', author_id: ADMIN }), caller: adminAuthor, createdRecipients: [], now: NOW });
+  assert.deepEqual(own, { ok: true, to: [] });
+  const sameMailOtherId = decideNotify({ kind: 'resolved', row: row({ status: 'DONE', author_email: 'andrewyoo@tecace.com' }), caller: { id: ADMIN, email: 'andrewyoo@tecace.com' }, createdRecipients: [], now: NOW });
+  assert.deepEqual(sameMailOtherId, { ok: true, to: ['andrewyoo@tecace.com'] });
 });
 
 test('assigned / resolved: admin only, recipient from the row, never the caller', () => {

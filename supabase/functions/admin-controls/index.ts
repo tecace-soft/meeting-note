@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.87.1';
-import { authorizeMicrosoftGraphToken } from '../_shared/msGraphAllowlist.ts';
+import { authorizeMicrosoftGraphToken, clientKindOf } from '../_shared/msGraphAllowlist.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -83,9 +83,9 @@ serve(async (req) => {
   }
 
   const bearerToken = req.headers.get('x-ms-access-token')?.trim() ?? '';
-  // Enforce the org tenant/domain allowlist before the admin-id check (shared helper).
+  // Enforce the org tenant allowlist (ALLOWED_MS_TENANT_IDS) before the admin-id check (shared helper).
   const authResult = bearerToken
-    ? await authorizeMicrosoftGraphToken(bearerToken)
+    ? await authorizeMicrosoftGraphToken(bearerToken, undefined, { client: clientKindOf(req.headers.get('user-agent')) })
     : { userId: null as string | null, error: 'Missing Microsoft bearer token.', status: 401 as number | undefined };
   if (!authResult.userId) {
     return jsonResponse({ error: authResult.error ?? 'Unauthorized' }, authResult.status ?? 401);

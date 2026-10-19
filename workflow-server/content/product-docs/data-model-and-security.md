@@ -46,9 +46,13 @@ RLS 정책은 거의 전부 `auth.jwt() ->> 'sub'`를 그 사용자 id와 비교
 
 - 입력: `x-ms-access-token`(Graph 액세스 토큰)과 `x-ms-id-token`(검증용 ID 토큰).
 - Graph `/me`로 사용자 id/email/name을 얻고, ID 토큰으로 Microsoft 신원을 검증한다.
-- 테넌트/도메인 허용목록을 강제한다(`supabase/functions/_shared/msGraphAllowlist.ts`의 `enforceMsAllowlist`). 두 허용목록 env(`ALLOWED_MS_TENANT_IDS`, `ALLOWED_EMAIL_DOMAINS`)가 모두 비면 fail-closed로 거부한다.
+- 테넌트 허용목록을 강제한다(`supabase/functions/_shared/msGraphAllowlist.ts`의 `enforceMsAllowlist`). 조직 판정 근거는 테넌트 ID 하나뿐이다. ID 토큰이 검증되면 그 토큰의 `tid`, ID 토큰이 없는 legacy 교환이면 Graph `/me`가 방금 받아들인 액세스 토큰의 `tid`를 쓴다. `ALLOWED_MS_TENANT_IDS`가 비면 fail-closed(500)로 거부한다.
+- 이메일(Graph `mail`) 도메인은 판정에 쓰지 않는다. 외부 테넌트 관리자가 `mail`을 `x@tecace.com`처럼 바꿀 수 있기 때문이다(2026-10-15 보안 리뷰). `ALLOWED_EMAIL_DOMAINS`는 무시되고 경고 로그만 남는다. JWT의 `email` 클레임은 표시용이며 권한 판단에 쓰지 않는다.
+- Graph `/me`의 id는 UUID여야 하고 토큰의 `oid`와 같아야 한다(아니면 401). Graph 응답이 8초 안에 없으면 503이다.
+- 토큰의 `appid`/`azp`가 알려진 앱 등록(`MS_ID_TOKEN_CLIENT_IDS`, `MSAL_CLIENT_ID`, `MS_KNOWN_CLIENT_IDS`)이 아니면 `ms_token_client_check` 로그만 남기고 허용한다. `MS_TOKEN_REQUIRE_KNOWN_CLIENT=true`이면 403으로 막는다(confused deputy 방지).
+- `SUPABASE_TOKEN_REQUIRE_ID_TOKEN=true`이면 ID 토큰 없는 legacy 교환을 거부한다(기본 꺼짐). legacy 교환은 `supabase_token_legacy_exchange` 로그로 셀 수 있다.
 - 발급 JWT: `aud: authenticated`, `role: authenticated`, `iss: meeting-note`, `sub` = 검증된 `objectId`(없으면 Graph `id`). 만료는 `min(지금+1시간, ID 토큰 만료)`.
-- 같은 허용목록 헬퍼를 `generate-profile`·`identify-speakers`의 Graph fallback 경로도 재사용해, Gemini 비용을 쓰는 모든 게이트가 어긋나지 않게 한다.
+- 같은 허용목록 헬퍼를 `mcp-token`·`admin-analytics`·`admin-controls`·`generate-profile`·`identify-speakers`·`note-audio-url`의 Graph 경로도 재사용해 게이트가 어긋나지 않게 한다. workflow-server와 MCP의 Graph 토큰 경로는 `workflow-server/src/microsoftIdentity.ts`가 같은 규칙(같은 env 이름)을 적용한다.
 
 ## 테이블 (A, 저장소 명세)
 
@@ -90,6 +94,7 @@ RLS 정책은 거의 전부 `auth.jwt() ->> 'sub'`를 그 사용자 id와 비교
 
 공유 보드라서 읽기는 로그인 사용자 전원이다.
 `20261014120000_feedback_issues_parity.sql` 부터 등록은 초기 상태(`OPEN`, 담당자 · 분류 · 해결책 없음)만, 분류 저장은 관리자만, 삭제는 작성자 본인만(`soft_delete_feedback_issue` RPC) 된다.
+`20261015120000_feedback_issues_author_id.sql` 부터 본인 판정은 이메일이 아니라 `author_id`(JWT `sub`)다.
 작성자 · severity · 분류 시각은 트리거가 채운다.
 전체 스키마·상태·첨부 정책은 [f2-feedback](./f2-feedback)에 있다.
 

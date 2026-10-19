@@ -90,6 +90,7 @@ export function mapRow(row: Row): Issue {
     resolutionModel: strOrNull(row.resolution_model),
     authorEmail: str(row.author_email),
     authorName: strOrNull(row.author_name),
+    authorId: strOrNull(row.author_id)?.trim().toLowerCase() ?? null,
     triagedAt: strOrNull(row.triaged_at),
     triagedBy: strOrNull(row.triaged_by),
     createdAt: str(row.created_at),
@@ -199,19 +200,13 @@ export async function saveResolution(id: string, resolution: IssueResolution, mo
   return mapRow(data as Row);
 }
 
-/** SEC-5 soft delete through the author-only RPC. Legacy fallback before the migration. */
-export async function softDeleteIssue(issue: Issue, selfEmail: string): Promise<void> {
+/**
+ * SEC-5 soft delete through the author-only RPC. The DB decides who the author is (JWT `sub`
+ * = author_id, legacy rows without author_id: admins only); there is no client-side fallback.
+ */
+export async function softDeleteIssue(issue: Issue): Promise<void> {
   const { error } = await supabase.rpc('soft_delete_feedback_issue', { p_id: issue.id });
-  if (!error) return;
-  if (!isMissingSchemaError(error.code ?? '', error.message ?? '')) fail(error);
-  if (issue.authorEmail.toLowerCase() !== selfEmail.toLowerCase()) {
-    throw new IssueDataError('본인이 등록한 이슈만 삭제할 수 있습니다.', '42501');
-  }
-  const { error: legacyError } = await supabase
-    .from('feedback_issues')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('id', issue.id);
-  if (legacyError) fail(legacyError);
+  if (error) fail(error);
 }
 
 // ---- attachments (private bucket, signed URLs) -----------------------------------------

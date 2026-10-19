@@ -42,7 +42,7 @@ source_of_truth: "repo code; manual verification 2026-10-13"
 
 - `get_product_docs` MCP 툴과 인증된 웹 조회 API(`/product-docs`, `/product-docs/{slug}`)는 **구현 완료, 배포 대기**다(working tree에 반영, 아직 미커밋/미배포). 설계는 `AGENT_DOCS_DESIGN.md`에 있고, 프론트엔드 클라이언트는 `src/lib/productDocs.ts`에 같은 계약으로 연결돼 있다.
 - 이 문서들은 서버 콘텐츠(`workflow-server/content/product-docs/`)에 보관되며, 웹 경로와 MCP 경로 모두 동일한 로더(`workflow-server/src/productDocs.ts`)를 호출한다. 프론트 번들에는 본문이 포함되지 않는다.
-- 권한검사: 웹 경로는 TecAce 도메인 허용목록(기본 `tecace.com`)으로 조직 구성원을 확인한 뒤 응답한다. MCP 경로는 org-verified 호출자(정적 키 또는 개인 토큰)만 `get_product_docs`를 쓸 수 있고, 익명/그래프 fallback 호출자는 문서 조회에서 차단된다.
+- 권한검사: 웹 경로는 호출자 토큰의 테넌트 ID가 `ALLOWED_MS_TENANT_IDS`에 있을 때만 응답한다(이메일 도메인은 쓰지 않음, 허용목록이 비면 거부). MCP 경로는 org-verified 호출자(정적 키, 개인 토큰, 테넌트가 확인된 OAuth/Graph 경로)만 `get_product_docs`를 쓸 수 있고, 익명 호출자와 허용목록 미설정 상태의 Graph fallback 호출자는 문서 조회에서 차단된다.
 
 ### 자동갱신 훅은 아직 배선되지 않음
 
