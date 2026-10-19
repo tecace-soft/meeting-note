@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(auth): trust only the Microsoft tenant, not mail domains, for app login and backend calls
 - fix(docs): make the product docs page scrollable inside the app shell
 - fix(auth): do not release queued Supabase requests as anon when the token provider is cleared
 - fix(upload): retry file-row insert and surface failure instead of swallowing it
@@ -53,10 +54,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(recorder): stop truncating or silently dropping a finished recording
 - fix(security): owner-scope the meeting-recordings storage bucket RLS
 - fix(security): enable RLS on public.chat and public.session
-
-**Performance**
-
-- perf(knowledge): compute ACK UTF-16 length without a per-character scan
 
 **Docs**
 

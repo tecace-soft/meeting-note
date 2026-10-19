@@ -3,6 +3,10 @@
 Notable decisions and a short reason each, newest first.
 This file is entirely prose; append a new entry when a meaningful decision is made (the `/update-docs` command helps).
 
+Structured, machine-checkable decision records now live in `docs/decisions/` (one file per decision, with `paths` globs; see its `README.md`).
+Record new decisions there.
+The entry below is preserved as prose and is also recorded as DEC-0007.
+
 ## 2026-10-08: AI-native documentation automation
 
 - **Layout: `docs/ai-native/` with `intro.md` (entry), `history.md`, `decision.md`.**

@@ -35,6 +35,8 @@ Directories only, to depth 2; generated / vendor directories (node_modules, dist
 .
 ├── docs/
 │   ├── ai-native/
+│   ├── axkh-node/
+│   ├── decisions/
 │   └── reviews/
 ├── meeting-note-mobile/
 │   ├── app/
@@ -43,7 +45,9 @@ Directories only, to depth 2; generated / vendor directories (node_modules, dist
 │   └── assets/
 ├── public/
 ├── scripts/
-│   └── ai-native-docs/
+│   ├── ai-native-docs/
+│   ├── axkh-node/
+│   └── decisions/
 ├── src/
 │   ├── __tests__/
 │   ├── assets/

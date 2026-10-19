@@ -1,0 +1,41 @@
+name: decisions-advisory
+
+# Advisory only: prints which active decisions (docs/decisions/) touch the changed files.
+# Never fails on matches; fails only when a decision file is malformed.
+# fetch-depth: 0 so the PR base ref can be diffed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  decisions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Decision checker unit tests
+        run: npm run decisions:test
+      - name: Check decisions (pull request)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: npm run decisions:check -- --base "origin/$BASE_REF...HEAD"
+      - name: Check decisions (push)
+        if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "No previous commit (new branch first push); skipping the advisory diff."
+            exit 0
+          fi
+          npm run decisions:check -- --base "$BEFORE_SHA...HEAD"

@@ -22,6 +22,8 @@ Audio transcription + summarization app (record/upload → transcribe → summar
 - **Deploys restart the backend**, which historically stranded in-flight jobs. A boot/periodic orphan sweep now fails stale jobs; still prefer deploy windows when testers are idle, and deploy backend changes before frontend ones that depend on them.
 - **Prefer existing patterns.** Match the surrounding code; don't introduce new libraries/state patterns casually. Verify changes E2E in the real app, not just types.
 - Follow the requirements-clarification skill before non-trivial features.
+- **Decisions**: before changing files, run `npm run decisions:check` (see `docs/decisions/README.md`). Do not contradict an active decision without recording a superseding decision.
+- When a plan has open questions for an external stakeholder that do not block our side, build with the recommended defaults first and adjust later, instead of waiting for their answer.
 
 ## Docs
 - `docs/ai-native/`: AI-native entry doc (start at `intro.md`). Structure auto-syncs via a pre-commit hook; after a meaningful change run `/update-docs`. One-time per clone: `git config core.hooksPath .githooks`.

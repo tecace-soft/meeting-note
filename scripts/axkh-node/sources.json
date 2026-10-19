@@ -1,0 +1,52 @@
+{
+  "title": "Meeting Note 현황",
+  "productSlug": "meeting-note",
+  "securityLevel": "S2",
+  "productDocs": [
+    {
+      "slug": "product-overview",
+      "mode": "intro"
+    },
+    {
+      "slug": "architecture",
+      "mode": "summary"
+    },
+    {
+      "slug": "transcription-diarization",
+      "mode": "summary"
+    },
+    {
+      "slug": "speaker-id",
+      "mode": "summary"
+    },
+    {
+      "slug": "memory",
+      "mode": "summary"
+    },
+    {
+      "slug": "knowledge-axkh-integration",
+      "mode": "summary"
+    }
+  ],
+  "history": {
+    "file": "docs/ai-native/history.md",
+    "maxCommits": 12,
+    "excludeCommitPrefixes": [
+      "fix(security)",
+      "fix(auth)"
+    ]
+  },
+  "decisions": {
+    "dir": "docs/decisions",
+    "statuses": [
+      "active"
+    ]
+  },
+  "currentWork": {
+    "file": "docs/axkh-node/current-work.md"
+  },
+  "allowedUrlPrefixes": [],
+  "story": {
+    "file": "docs/axkh-node/story.md"
+  }
+}
