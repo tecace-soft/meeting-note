@@ -25,6 +25,8 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
   const [contactsFailed, setContactsFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [partialSetup, setPartialSetup] = useState(false);
+  const [justSent, setJustSent] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const sessionRef = useRef<AbortController | null>(null);
@@ -39,7 +41,7 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
     pendingRef.current = false;
     const epoch = ++statusEpochRef.current;
     setStatus(null); setContacts([]); setSelectedId(''); setSearch('');
-    setLoading(true); setContactsLoading(true); setContactsFailed(false); setBusy(false); setErrorStatus(null);
+    setLoading(true); setContactsLoading(true); setContactsFailed(false); setBusy(false); setErrorStatus(null); setPartialSetup(false); setJustSent(false);
     void getMeetingKnowledgeStatus(noteId, controller.signal).then(next => {
       if (!controller.signal.aborted && statusEpochRef.current === epoch) setStatus(next);
     }).catch(error => {
@@ -104,10 +106,10 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
     const controller = sessionRef.current;
     if (!controller || controller.signal.aborted || pendingRef.current || (!status && action !== 'initialize')) return;
     ++statusEpochRef.current; // Older polls cannot overwrite a mutation's refreshed snapshot.
-    pendingRef.current = true; setBusy(true); setErrorStatus(null);
+    pendingRef.current = true; setBusy(true); setErrorStatus(null); setPartialSetup(false); setJustSent(false);
     try {
       await mutateMeetingKnowledge({ action, sourceId: noteId,
-        ...(action !== 'initialize' ? { expectedAccessRevision: status!.accessRevision! } : {}),
+        ...(action !== 'initialize' && action !== 'enable_all' ? { expectedAccessRevision: status!.accessRevision! } : {}),
         ...(subjectObjectId ? { subjectObjectId } : {}),
         ...(action === 'confirm_participant' ? { verificationRef: `owner-confirmed:${crypto.randomUUID()}` } : {}),
         ...(action === 'resync' && status?.processing?.binding ? {
@@ -116,14 +118,16 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
         } : {}),
       }, controller.signal);
       const next = await getMeetingKnowledgeStatus(noteId, controller.signal);
-      if (!controller.signal.aborted) { setStatus(next); setSelectedId(''); }
+      if (!controller.signal.aborted) { setStatus(next); setSelectedId(''); setJustSent(action === 'enable_all' && next.integrationEnabled); }
     } catch (error) {
       if (!controller.signal.aborted) {
         const code = error instanceof MeetingKnowledgeApiError ? error.status : 503;
         setErrorStatus(code);
+        setPartialSetup(error instanceof MeetingKnowledgeApiError && error.initialized);
         if ([401,403,404].includes(code)) { setStatus(null); setSelectedId(''); }
         // Refresh the owner snapshot after a conflict; never replay a mutation.
-        if (code === 409) {
+        // Re-read after a conflict or a partial one-click failure so the UI shows the real safe state.
+        if (code === 409 || (error instanceof MeetingKnowledgeApiError && error.initialized)) {
           try { const next = await getMeetingKnowledgeStatus(noteId, controller.signal); if (!controller.signal.aborted) setStatus(next); }
           catch (refreshError) { if (!controller.signal.aborted) { setStatus(null); setErrorStatus(refreshError instanceof MeetingKnowledgeApiError ? refreshError.status : 503); } }
         }
@@ -131,7 +135,9 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
     } finally { if (!controller.signal.aborted) { pendingRef.current = false; setBusy(false); } }
   };
   const buttonClass = 'summary-toolbar-btn rounded-lg px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50';
-  const errorText = errorStatus === 409 ? text('권한 정보가 변경되었습니다. 새 정보를 확인한 뒤 다시 선택해 주세요.', 'Access changed. Review the refreshed information before choosing again.')
+  const errorText = errorStatus === 422 ? text('원문이 연동 조건(지원 형식, 1MB 이하)을 충족하지 않아 전송을 켤 수 없습니다. 원문을 줄이거나 나눈 뒤 다시 시도해 주세요.', 'This source does not meet integration limits (supported format, under 1 MB), so delivery cannot be enabled. Shorten or split it and try again.')
+    : partialSetup ? text('연동 설정은 만들어졌지만 전송을 켜지 못했습니다. 전송은 꺼져 있는 안전한 상태입니다. 아래 "전송 켜기"를 다시 눌러 주세요.', 'Settings were created but delivery could not be enabled. Delivery is safely off. Press "Enable delivery" below to retry.')
+    : errorStatus === 409 ? text('권한 정보가 변경되었습니다. 새 정보를 확인한 뒤 다시 선택해 주세요.', 'Access changed. Review the refreshed information before choosing again.')
     : errorStatus === 401 ? text('검증된 Microsoft 로그인이 필요합니다. 다시 로그인해 주세요.', 'A verified Microsoft sign-in is required. Please sign in again.')
       : errorStatus === 403 ? text('회의록 소유자만 이 설정을 관리할 수 있습니다.', 'Only the note owner can manage these settings.')
         : text('연동 정보를 확인하거나 저장할 수 없습니다. 잠시 후 창을 다시 열어 주세요.', 'Could not load or save integration settings. Please reopen this window later.');
@@ -152,8 +158,9 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
         {loading ? <p className="flex items-center gap-2 py-6" role="status"><Loading className="h-4 w-4 animate-spin" aria-hidden />{text('연동 정보 확인 중…', 'Loading integration settings…')}</p> : null}
         {status ? <>
           {status.unsupportedTranscript ? <p className="mt-4 text-sm" style={{ color: 'var(--error)' }}>{text('원문 형식을 확인할 수 없어 연동을 시작할 수 없습니다. 기존 회의록은 계속 사용할 수 있습니다.', 'This transcript format cannot be verified for integration. You can continue using the note.')}</p> : null}
-          {!status.enrolled ? <div className="mt-4"><p className="mb-3 text-sm">{text('아직 연동 설정이 없습니다. 설정을 만들면 참석 확인을 시작할 수 있으며, 전송은 별도로 켜야 합니다.', 'Integration is not configured. Create settings to confirm attendance, then enable delivery separately.')}</p>
-            <button type="button" className={buttonClass} disabled={busy || status.unsupportedTranscript} onClick={() => void mutate('initialize')}>{text('연동 설정 만들기', 'Create integration settings')}</button></div> : <>
+          {!status.enrolled ? <div className="mt-4"><p className="mb-3 text-sm">{text('아직 연동되지 않았습니다. 버튼을 한 번 누르면 연동 설정을 만들고 이 회의록의 전송을 켭니다. 자동으로 보내지 않으며, 언제든 전송을 끌 수 있습니다.', 'Not connected yet. One click creates the integration settings and turns on delivery for this note. Nothing is sent automatically, and you can turn delivery off at any time.')}</p>
+            <button type="button" className={`${buttonClass} font-semibold`} style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-contrast, #fff)' }} disabled={busy || status.unsupportedTranscript} onClick={() => void mutate('enable_all')}>{text('연동하고 전송 켜기', 'Connect and enable delivery')}</button></div> : <>
+            {justSent ? <p className="mt-4 rounded-lg border p-3 text-sm" role="status" style={{ borderColor: 'var(--border)' }}>{text('전송이 켜졌습니다. 원하면 아래에서 실제 참석자를 확인할 수 있습니다(선택 사항).', 'Delivery is on. Optionally, confirm actual attendees below.')}</p> : null}
             <div className="mt-4 rounded-lg border p-3 text-sm" style={{ borderColor: 'var(--border)' }}>
               <div className="flex flex-wrap items-center justify-between gap-3"><span>{status.integrationEnabled ? text('전송 켜짐', 'Delivery enabled') : text('전송 꺼짐', 'Delivery disabled')}</span>
                 <button type="button" className={buttonClass} disabled={busy || ((status.unsupportedTranscript || status.processing?.sizing === 'oversized') && !status.integrationEnabled)} onClick={() => void mutate(status.integrationEnabled ? 'disable' : 'enable')}>{status.integrationEnabled ? text('전송 끄기', 'Disable delivery') : text('전송 켜기', 'Enable delivery')}</button></div>

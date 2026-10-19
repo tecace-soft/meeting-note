@@ -67,6 +67,9 @@ import {
 } from '../lib/noteImages';
 import { DEFAULT_SUMMARY_PROMPT, DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
 import ShareNoteModal from '../components/ShareNoteModal';
+import MeetingKnowledgeModal from '../components/MeetingKnowledgeModal';
+import AxkhIntegrationButton, { shouldShowAxkhEntry } from '../components/AxkhIntegrationButton';
+import { meetingKnowledgeUiEnabled } from '../services/meetingKnowledge';
 import { useRecorder } from '../context/RecorderContext';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -351,6 +354,7 @@ const TranscriptionSummary: React.FC = () => {
   const [isEditingSummary, setIsEditingSummary] = useState(false);
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
+  const [isKnowledgeModalOpen, setIsKnowledgeModalOpen] = useState(false);
   // Keep the generated note id stable across retries of the SAME source file.
   // The backend write is idempotent on note.id (upsert, ignoreDuplicates), so a
   // retried summary of the same audio must carry the same id or it creates a
@@ -1187,6 +1191,9 @@ const TranscriptionSummary: React.FC = () => {
   // server-side in the workflow-server summarize pipeline, so they cover every
   // note regardless of client (web or mobile). The web client no longer folds
   // memory itself; it only reads/displays the memory (see fetchUserMemory).
+
+  const showAxkhEntry = shouldShowAxkhEntry({ uiEnabled: meetingKnowledgeUiEnabled, noteId: currentNoteId,
+    ownerKnown: !!user?.id, summarizing: isSummarizing || isRegenerating, summary: summaryResult?.summary });
 
   const applySummaryResult = async (completedJob: WorkflowJobStatus, noteId: string) => {
     const result = completedJob.result ?? {};
@@ -2781,6 +2788,10 @@ const TranscriptionSummary: React.FC = () => {
                       className="summary-result-action-row grid max-sm:pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+3.25rem))] shrink-0 grid-cols-3 gap-1 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4"
                       style={{ borderColor: 'var(--border)' }}
                     >
+                      {showAxkhEntry ? (
+                        <AxkhIntegrationButton summaryReady language={appLanguage} className={resultActionBtnClass}
+                          labelClassName={resultActionBtnLabelClass} onOpen={() => setIsKnowledgeModalOpen(true)} />
+                      ) : null}
                       <button
                         type="button"
                         title={t('share')}
@@ -2867,6 +2878,11 @@ const TranscriptionSummary: React.FC = () => {
           setResultSegmentPlayback(null);
         }}
       />
+
+      {showAxkhEntry && isKnowledgeModalOpen && currentNoteId ? (
+        <MeetingKnowledgeModal key={currentNoteId} noteId={currentNoteId} noteTitle={summaryResult?.title ?? null}
+          onClose={() => setIsKnowledgeModalOpen(false)} />
+      ) : null}
 
       <ShareNoteModal
         isOpen={isShareNoteModalOpen}

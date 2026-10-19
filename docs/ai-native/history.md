@@ -26,6 +26,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(docs): add structured decision records, advisory checker, and AX-KH node assembler
 - feat(recordings): sort Recent recordings by upload time on web and mobile
 - feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
 - feat(docs): agent-readable product docs via web /docs + MCP get_product_docs
@@ -53,7 +54,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(pipeline): idempotent note writes, orphan convergence, transcript checkpoint
 - fix(recorder): stop truncating or silently dropping a finished recording
 - fix(security): owner-scope the meeting-recordings storage bucket RLS
-- fix(security): enable RLS on public.chat and public.session
 
 **Docs**
 

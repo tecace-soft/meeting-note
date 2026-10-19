@@ -195,3 +195,28 @@ test('owner resync requires complete revision fences and rejects identity inject
     assert.equal((await post(base, management, command, `Bearer ${key}`)).status, 401); assert.equal(calls.length, 1);
   });
 });
+
+test('enable_all is a strict two-field command and returns only the minimal acknowledgement', async () => {
+  await fixture(async (base, calls) => {
+    const jwt = await token();
+    for (const bad of [{ action: 'enable_all', sourceId: binding.sourceId, expectedAccessRevision: 1 },
+      { action: 'enable_all', sourceId: binding.sourceId, tenantId }]) {
+      assert.equal((await post(base, management, bad, `Bearer ${jwt}`)).status, 400);
+    }
+    assert.deepEqual(calls, []);
+    assert.equal((await post(base, management, { action: 'enable_all', sourceId: binding.sourceId }, `Bearer ${key}`)).status, 401);
+    const ok = await post(base, management, { action: 'enable_all', sourceId: binding.sourceId }, `Bearer ${jwt}`);
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), { sourceId: binding.sourceId, accessRevision: 1, integrationGeneration: 1, integrationEnabled: true });
+    assert.deepEqual(calls[0], ['status', owner, binding.sourceId]);
+  });
+});
+test('enable_all failure after initialize reports initialized and no raw details', async () => {
+  await fixture(async (base) => {
+    const response = await post(base, management, { action: 'enable_all', sourceId: binding.sourceId }, `Bearer ${await token()}`);
+    assert.equal(response.status, 503);
+    const text = await response.text();
+    assert.ok(!text.includes('synthetic-private-db-detail'));
+    assert.equal((JSON.parse(text) as { initialized?: boolean }).initialized, undefined);
+  }, environment(), 'STORE_UNAVAILABLE');
+});

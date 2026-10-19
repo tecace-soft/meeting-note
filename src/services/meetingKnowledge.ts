@@ -23,7 +23,7 @@ export interface MeetingKnowledgeStatus {
   processing?: MeetingProcessingStatus;
   workers?: { delivery: boolean; extraction: boolean };
 }
-export type MeetingKnowledgeAction = 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable' | 'resync';
+export type MeetingKnowledgeAction = 'initialize' | 'enable_all' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable' | 'resync';
 export interface MeetingKnowledgeCommand {
   sourceId: string;
   action: MeetingKnowledgeAction;
@@ -33,7 +33,13 @@ export interface MeetingKnowledgeCommand {
   contentRevision?: number; speakerRevision?: number; integrationGeneration?: number; sourceHash?: string;
 }
 export class MeetingKnowledgeApiError extends Error {
-  constructor(public readonly status: number) { super('Meeting knowledge request failed'); }
+  /** `initialized`: the server created settings (delivery still off) before failing; a retry only needs to enable. */
+  constructor(public readonly status: number, public readonly initialized = false) { super('Meeting knowledge request failed'); }
+}
+async function failureFrom(response: Response): Promise<MeetingKnowledgeApiError> {
+  const body: unknown = await response.json().catch(() => null);
+  const initialized = !!body && typeof body === 'object' && (body as { initialized?: unknown }).initialized === true;
+  return new MeetingKnowledgeApiError(response.status, initialized);
 }
 async function request(body: { sourceId: string; action: string; [key: string]: unknown }, signal?: AbortSignal): Promise<unknown> {
   if (!meetingKnowledgeUiEnabled || !API_URL) throw new MeetingKnowledgeApiError(503);
@@ -44,7 +50,7 @@ async function request(body: { sourceId: string; action: string; [key: string]: 
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body), signal, credentials: 'omit', redirect: 'error', cache: 'no-store',
   });
-  if (!response.ok) throw new MeetingKnowledgeApiError(response.status);
+  if (!response.ok) throw await failureFrom(response);
   return response.json().catch(() => { throw new MeetingKnowledgeApiError(502); });
 }
 function parseStatus(value: unknown, sourceId: string): MeetingKnowledgeStatus {

@@ -58,6 +58,7 @@ import { getNoteImageCounts } from '../lib/noteImages';
 import { getOutlookCalendarEvents, type OutlookCalendarEvent } from '../services/graphService';
 import ShareNoteModal from '../components/ShareNoteModal';
 import MeetingKnowledgeModal from '../components/MeetingKnowledgeModal';
+import AxkhIntegrationButton from '../components/AxkhIntegrationButton';
 import { meetingKnowledgeUiEnabled } from '../services/meetingKnowledge';
 import NoteImageAttachments from '../components/NoteImageAttachments';
 
@@ -2713,12 +2714,8 @@ const SummaryHistory: React.FC = () => {
                           </div>
                           <div className="summary-result-action-row grid max-sm:pb-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] shrink-0 grid-cols-3 justify-items-center gap-2 border-t pt-3 sm:flex sm:flex-wrap sm:justify-end sm:gap-2 sm:py-4 sm:pb-4 md:px-5" style={{ borderColor: 'var(--border)' }}>
                             {meetingKnowledgeUiEnabled && note.user_id === user?.id ? (
-                              <button type="button" onClick={() => setKnowledgeModalNoteId(note.id)} className={RESULT_ACTION_BTN_CLASS}
-                                title={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}
-                                aria-label={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}>
-                                <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{appLanguage === 'ko' ? 'AXKH 연동' : 'AXKH integration'}</span>
-                              </button>
+                              <AxkhIntegrationButton summaryReady={getLocalizedSummary(note, appLanguage).length > 0} language={appLanguage} className={RESULT_ACTION_BTN_CLASS}
+                                labelClassName={RESULT_ACTION_BTN_LABEL_CLASS} onOpen={() => setKnowledgeModalNoteId(note.id)} />
                             ) : null}
                             <button type="button" onClick={() => handleOpenShareModal(note)} className={RESULT_ACTION_BTN_CLASS} title={t('share')} aria-label={t('share')}>
                               <ShareAndroid className="h-4 w-4 shrink-0" aria-hidden />
@@ -3227,12 +3224,8 @@ const SummaryHistory: React.FC = () => {
                                           style={{ borderColor: 'var(--border)' }}
                                         >
                                           {meetingKnowledgeUiEnabled && note.user_id === user?.id ? (
-                                            <button type="button" onClick={() => setKnowledgeModalNoteId(note.id)} className={RESULT_ACTION_BTN_CLASS}
-                                              title={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}
-                                              aria-label={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}>
-                                              <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                              <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{appLanguage === 'ko' ? 'AXKH 연동' : 'AXKH integration'}</span>
-                                            </button>
+                                            <AxkhIntegrationButton summaryReady={getLocalizedSummary(note, appLanguage).length > 0} language={appLanguage} className={RESULT_ACTION_BTN_CLASS}
+                                              labelClassName={RESULT_ACTION_BTN_LABEL_CLASS} onOpen={() => setKnowledgeModalNoteId(note.id)} />
                                           ) : null}
                                           <button
                                             type="button"
@@ -3512,12 +3505,8 @@ const SummaryHistory: React.FC = () => {
                             style={{ borderColor: 'var(--border)' }}
                           >
                             {meetingKnowledgeUiEnabled && note.user_id === user?.id ? (
-                              <button type="button" onClick={() => setKnowledgeModalNoteId(note.id)} className={RESULT_ACTION_BTN_CLASS}
-                                title={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}
-                                aria-label={appLanguage === 'ko' ? 'AXKH 연동 · 참석 확인' : 'AXKH integration · attendance'}>
-                                <Users className="h-4 w-4 shrink-0" aria-hidden />
-                                <span className={RESULT_ACTION_BTN_LABEL_CLASS}>{appLanguage === 'ko' ? 'AXKH 연동' : 'AXKH integration'}</span>
-                              </button>
+                              <AxkhIntegrationButton summaryReady={getLocalizedSummary(note, appLanguage).length > 0} language={appLanguage} className={RESULT_ACTION_BTN_CLASS}
+                                labelClassName={RESULT_ACTION_BTN_LABEL_CLASS} onOpen={() => setKnowledgeModalNoteId(note.id)} />
                             ) : null}
                             <button
                               type="button"

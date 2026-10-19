@@ -6,9 +6,10 @@ import { checkMeetingSourceAccess, type MeetingSourceAccessRecord } from './sour
 import type { MeetingManagementAcknowledgement, MeetingOwnerStatus } from './management-status.js';
 import { fetchMeetingEvidence, type MeetingEvidenceStore } from './evidence.js';
 import { isMeetingEvidenceFetchRequest } from './evidence-contract.js';
+import { enableAll, EnableAllFailure } from './enable-all.js';
 
 export interface MeetingManagementCommand {
-  action: 'status' | 'initialize' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable' | 'resync';
+  action: 'status' | 'initialize' | 'enable_all' | 'confirm_participant' | 'revoke' | 'restore' | 'enable' | 'disable' | 'resync';
   sourceId: string;
   expectedAccessRevision?: number;
   subjectObjectId?: string;
@@ -17,7 +18,7 @@ export interface MeetingManagementCommand {
 }
 type Identity = { tenantId: string; objectId: string };
 type MeetingManagementMutation = Omit<MeetingManagementCommand, 'action' | 'expectedAccessRevision'> & {
-  action: Exclude<MeetingManagementCommand['action'], 'initialize' | 'status' | 'resync'>;
+  action: Exclude<MeetingManagementCommand['action'], 'initialize' | 'enable_all' | 'status' | 'resync'>;
   expectedAccessRevision: number;
 };
 export interface MeetingKnowledgeHttpStore {
@@ -78,10 +79,10 @@ function managementCommand(value: unknown, tenantId: string): MeetingManagementC
   const command = value as MeetingManagementCommand;
   if (Object.keys(command).some(key => !['action', 'sourceId', 'expectedAccessRevision', 'subjectObjectId', 'verificationRef', 'contentRevision', 'speakerRevision', 'integrationGeneration', 'sourceHash'].includes(key))
     || typeof command.sourceId !== 'string' || command.sourceId.length < 1 || command.sourceId.length > 256
-    || !['status', 'initialize', 'confirm_participant', 'revoke', 'restore', 'enable', 'disable', 'resync'].includes(command.action)) {
+    || !['status', 'initialize', 'enable_all', 'confirm_participant', 'revoke', 'restore', 'enable', 'disable', 'resync'].includes(command.action)) {
     throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
   }
-  if (command.action === 'initialize' || command.action === 'status') {
+  if (command.action === 'initialize' || command.action === 'enable_all' || command.action === 'status') {
     if (Object.keys(command).length !== 2) throw new HttpError(400, 'INVALID_MANAGEMENT_REQUEST');
     return command;
   }
@@ -189,18 +190,22 @@ export function createMeetingKnowledgeHttpHandler(store: MeetingKnowledgeHttpSto
           if (!store.resync) throw new HttpError(503, 'KNOWLEDGE_UNAVAILABLE');
           respond(res, 200, await store.resync(identity.identity, command)); return true;
         }
-        const source = command.action === 'initialize'
-          ? await store.initialize(identity.identity, command.sourceId)
-          : await store.mutate(identity.identity, command as MeetingManagementMutation);
+        const source = command.action === 'enable_all'
+          ? await enableAll(store, identity.identity, command.sourceId)
+          : command.action === 'initialize'
+            ? await store.initialize(identity.identity, command.sourceId)
+            : await store.mutate(identity.identity, command as MeetingManagementMutation);
         respond(res, 200, { sourceId: source.sourceId, accessRevision: source.accessRevision,
           integrationGeneration: source.integrationGeneration, integrationEnabled: source.integrationEnabled });
       }
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-      const status = code === 'SOURCE_NOT_MANAGEABLE' ? 404 : code === 'REVISION_CONFLICT' ? 409 : code === 'INVALID_MUTATION' ? 400 : 503;
+      const status = code === 'SOURCE_NOT_MANAGEABLE' ? 404 : code === 'REVISION_CONFLICT' ? 409 : code === 'INVALID_MUTATION' ? 400 : code === 'SOURCE_BLOCKED' ? 422 : 503;
       // Never pass SQL errors, identifiers, JWTs or upstream diagnostic text to the host logger.
       respond(res, error instanceof HttpError ? error.status : status,
-        { error: error instanceof HttpError ? error.code : status === 503 ? 'KNOWLEDGE_UNAVAILABLE' : code });
+        { error: error instanceof HttpError ? error.code : status === 503 ? 'KNOWLEDGE_UNAVAILABLE' : code,
+          // Tells the UI that settings exist with delivery still off (safe state) so a retry only needs to enable.
+          ...(error instanceof EnableAllFailure && error.initialized ? { initialized: true } : {}) });
       req.resume();
     }
     return true;
