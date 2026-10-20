@@ -3593,7 +3593,6 @@ function raiseIncident(input: WorkflowAlertInput): void {
 // token, same as the other workflow-server endpoints).
 const INSIGHT_BACKFILL_ADMIN_IDS = new Set<string>([
   '31d79bfe-2488-47c2-aa45-949375e93bde', // Andrew (andrewyoo@tecace.com)
-  TRANSCRIPTION_MODEL_TEST_USER_ID,
 ]);
 
 async function backfillInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {

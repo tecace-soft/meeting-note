@@ -9,7 +9,6 @@
 // src/lib/issues/permissions.ts (ids = ADMIN_MICROSOFT_USER_IDS in src/lib/adminAccess.ts).
 export const ISSUE_ADMIN_MICROSOFT_IDS: ReadonlySet<string> = new Set([
   'd84c9149-2261-4ced-b14c-01b1a377ba6b', // Hansoo Lee
-  'd9eb0f3d-819e-4b45-8df6-e9f229de2447', // Gene Kim
   '31d79bfe-2488-47c2-aa45-949375e93bde', // Andrew Yoo
 ]);
 

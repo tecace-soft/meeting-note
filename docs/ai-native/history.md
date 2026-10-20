@@ -26,12 +26,12 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(knowledge): collapse optional attendee confirmation in the AX-KH modal
 - feat(knowledge): add one-click AX-KH send from the meeting note
 - feat(docs): add structured decision records, advisory checker, and AX-KH node assembler
 - feat(recordings): sort Recent recordings by upload time on web and mobile
 - feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
 - feat(docs): agent-readable product docs via web /docs + MCP get_product_docs
-- feat(gemini): pin model ids in one registry with an offline drift test
 
 **Fixes**
 

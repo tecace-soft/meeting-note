@@ -10,7 +10,6 @@ const CORS = {
 
 const ADMIN_MICROSOFT_USER_IDS = new Set([
   'd84c9149-2261-4ced-b14c-01b1a377ba6b', // Hansoo Lee (hansoo@tecace.com)
-  'd9eb0f3d-819e-4b45-8df6-e9f229de2447', // Gene Kim (genekim@tecace.com)
   '31d79bfe-2488-47c2-aa45-949375e93bde', // Andrew Yoo (andrewyoo@tecace.com)
 ]);
 

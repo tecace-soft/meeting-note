@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CREATED_NOTIFY_WINDOW_MS,
+  ISSUE_ADMIN_MICROSOFT_IDS,
   LEGACY_NOTIFY_EMAIL,
   buildIssueMail,
   buildResolutionUserText,
@@ -50,6 +51,12 @@ test('canIssue: three levels on two roles (SEC-2)', () => {
   assert.equal(canIssue(ADMIN, 'issues.triage'), true);
   assert.equal(canIssue(ADMIN, 'issues.notify'), true);
   assert.equal(canIssue(null, 'issues'), false);
+});
+
+test('admin allowlist: exactly two admins, a non-listed id is not admin', () => {
+  assert.equal(ISSUE_ADMIN_MICROSOFT_IDS.size, 2);
+  assert.equal(ISSUE_ADMIN_MICROSOFT_IDS.has(ADMIN), true);
+  assert.equal(canIssue('bbbbbbbb-0000-4000-8000-000000000002', 'issues.triage'), false);
 });
 
 test('parseNotifyKind accepts only the three events', () => {
