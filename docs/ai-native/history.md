@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(mobile): show the loading screen while restoring the session on cold start
 - fix(product-docs): hash doc bodies line-ending independently and check signatures locally
 - fix(admin): remove a departed teammate from hardcoded admin allowlists
 - fix(auth): trust only the Microsoft tenant, not mail domains, for app login and backend calls
@@ -52,7 +53,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): enforce the org allowlist on the remaining edge-fn Graph auth
 - fix(security): close Group B cross-user memory/index/chat leaks
 - fix(security): enforce the org allowlist on the edge-fn Graph fallback
-- fix(recorder): reuse note id across summary retries to stop duplicate notes
 
 **Docs**
 
