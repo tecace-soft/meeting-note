@@ -3,7 +3,7 @@ title: "MCP 연결 가이드"
 slug: mcp-connection
 section: "Integrations"
 order: 1
-revision: "2026-10-13.1"
+revision: "2026-10-20.1"
 last_verified_commit: "56781a4be253a4edc98f56aaf3a53d14536ac96f"
 last_verified_at: "2026-10-13"
 source_of_truth: "repo code; manual verification 2026-10-13"
@@ -57,7 +57,7 @@ claude.ai 커넥터 실무 메모: Auth=None으로 두고 커넥터 헤더에 `A
 2. OAuth proxy 액세스 토큰: 이 서버가 authorization server 역할(DCR + Entra 위임 로그인)을 하는 모드. URL만으로 "OAuth" 연결하는 ChatGPT를 위해 `resolveUserIdFromProxyAccessToken`으로 검증.
 3. `MCP_USER_TOKENS`: 토큰 -> user_id 정적 매핑(JSON). `env.ts`에서 파싱.
 4. Azure JWT(oid): `MCP_OAUTH_RESOURCE` + `MCP_AZURE_TENANT_ID`가 있으면 Entra 발급 JWT를 검증해 `oid`로 Meeting Note 사용자를 해석. 이 경로는 테넌트를 검사한다.
-5. Microsoft Graph `/me` fallback: Bearer 토큰으로 Graph `/me`를 불러 사용자 ID만 해석한다. 이 경로는 테넌트를 검사하지 않는다(조직 게이팅을 쓰려면 이 경로에 조직 멤버십 검사를 추가해야 함).
+5. Microsoft Graph `/me` fallback: Bearer 토큰을 Graph `/me`로 검증하고 사용자 ID(oid)를 해석한다(`resolveGraphCaller`, `workflow-server/src/microsoftIdentity.ts`). 그 토큰의 테넌트 ID가 `ALLOWED_MS_TENANT_IDS`에 있어야 하며(이메일 도메인은 쓰지 않음), 외부 테넌트 토큰은 거부된다. 허용목록이 비어 있으면 기존처럼 통과하되 조직 검증(`orgVerified`)이 거짓이라 제품 문서 같은 공유 콘텐츠는 막힌다.
 
 토큰이 제시됐지만 어떤 경로로도 사용자로 resolve되지 않으면 fail-closed로 거부한다(기본 사용자의 회의를 몰래 서빙하지 않음).
 크레덴셜이 아예 없으면 `MCP_ALLOW_ANON_CHATGPT_FALLBACK`이 명시적으로 켜졌을 때만 단일 기본 사용자(`MEETING_NOTE_USER_ID`)로 떨어진다. 기본값은 꺼짐이다.

@@ -3,7 +3,7 @@ title: "피드백/이슈 트래커 (F2)"
 slug: f2-feedback
 section: "Features"
 order: 1
-revision: "2026-10-20.1"
+revision: "2026-10-20.2"
 source_of_truth: "repo code (AX-KH feedback-porting spec port, 2026-10-14); prod not yet verified"
 ---
 
@@ -160,7 +160,7 @@ Gemini 의 JSON 스키마 응답(`responseSchema`)을 쓰고 출력은 엄격히
 F9 은 service role 로 `OPS-` 키, `area = 'ops'`, RCA 해결책이 채워진 티켓을 올린다.
 같은 장애가 반복되면 `ai_suggestion` 의 발생 횟수만 올린다.
 화면은 `ops` 를 "운영"으로 보여 주지만 선택 목록에는 넣지 않는다.
-작성자가 시스템이라 아무도 삭제할 수 없고, 관리자가 닫는다.
+작성자가 시스템(`author_id` 없음)이라 작성자 본인 삭제는 없고, 관리자가 닫거나 삭제한다(위 "삭제" 항목 참고).
 
 ## 기준 명세와 다른 점
 

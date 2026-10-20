@@ -25,9 +25,9 @@
       "order": 2,
       "revision": "2026-10-20.1",
       "summary": "AI 에이전트가 Meeting Note와 작업하는 법: 문서를 먼저 읽고 명세에 맞춰 구현, MCP 툴 사용, 문서 발견 방법.",
-      "verified_body_hash": "0614390950452906bdd355673345b86a5e1b164c3077476e110fc652e1568553",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "c0167b57ce04d224cb4ea6b498bec088be57f2ca2995b1a7c2671053a89d59d1",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -42,9 +42,9 @@
         "workflow-server/src/mcp/server.ts",
         "src/App.tsx"
       ],
-      "verified_body_hash": "0c3fbffd8b14fc3f7feb5105f02cfc3be39e12a73c10b3856ed5022185af5ad2",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "92f39f10f7b3885d292ea26db2258ce95c080094f47ca872d86838a78bc3c47a",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -59,9 +59,9 @@
         "supabase/functions/supabase-token/",
         "supabase/functions/_shared/msGraphAllowlist.ts"
       ],
-      "verified_body_hash": "2431b0145e13c51fb136c8a558c671487fad2e2c6966372ffe4941b2c7e65a70",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "4011241e9899897270281fe1ebef058362dfc0dafa8e553f09cc5a0f4904a800",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -69,7 +69,7 @@
       "title": "피드백/이슈 트래커 (F2)",
       "section": "Features",
       "order": 1,
-      "revision": "2026-10-20.1",
+      "revision": "2026-10-20.2",
       "summary": "사내 피드백/이슈 트래커(F2)의 권한 3단계·데이터 모델·자동 분류·화면·AI 해결책·알림 메일 명세(AX-KH 이식 명세 기준).",
       "depends_on": [
         "src/lib/issues/**",
@@ -78,9 +78,9 @@
         "workflow-server/src/issues.ts",
         "supabase/migrations/20261014120000_feedback_issues_parity.sql"
       ],
-      "verified_body_hash": "e6b9485e527e84eff158f6f425a7995d48d5ad76e86ed0f7cdb553c9d0837016",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "399c2b5c2362db5162da990cd30c3e66bfc1e0409d4c6369ac2c0700c8d3aae3",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -95,8 +95,8 @@
         "workflow-server/src/parsers.ts"
       ],
       "verified_body_hash": "021fb1dda010726c0d73a9c98ed3b421c2d2a94ea1deb20791de221392a912c1",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -111,9 +111,9 @@
         "workflow-server/src/speakerAnchors.ts",
         "supabase/functions/identify-speakers/index.ts"
       ],
-      "verified_body_hash": "83c607ceb65c5f83e76aa983ad204aa9d1f00b3d25a4b22a6e30d13fe7ad417c",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "be8de802ae2a82097a0dc3b9ba82ee8504536386f4107ecaa5e6d1fe0c4b8154",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -138,14 +138,14 @@
       "title": "MCP 연결 가이드",
       "section": "Integrations",
       "order": 1,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-20.1",
       "summary": "Meeting Note MCP 서버 연결 방법: 엔드포인트(/mcp, /mcp-chatgpt), Bearer 토큰 인증 모델, 디스커버리 경로.",
       "depends_on": [
         "workflow-server/src/mcp/transports/http.ts"
       ],
-      "verified_body_hash": "b118f8f417e4978a775fcf7e6d820ce627a290e733fbd30019eaa734ee17fcd5",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "0bf852e1556989cd4615ab9919edcc2c60bf5fa3f3a63b5f887bde1760afdaa5",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -161,8 +161,8 @@
       ],
       "generated": true,
       "verified_body_hash": "8ee598654e67638eabf6bc60111d2f903a804c79c5e1d4fefa78f7cd3dd13217",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "docs:generate (generated)"
     },
     {
@@ -178,9 +178,9 @@
         "src/components/MeetingKnowledgeModal.tsx",
         "src/components/AxkhIntegrationButton.tsx"
       ],
-      "verified_body_hash": "972ce7fc3ae2dbc149daac191a3e00c41ed823938cc29672a742cd1450af8a8f",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "1b03a44f7201c1c76ff0072a957e16de11d308bc8db4cbaed1a06d938e0973a8",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
     {
@@ -190,9 +190,9 @@
       "order": 1,
       "revision": "2026-10-20.1",
       "summary": "main 커밋 히스토리 다이제스트와 서비스별 버전 추적 방식.",
-      "verified_body_hash": "e99e462f931f5a8ab99a019868afb516fbc26cab882e156b1721546ac40264a8",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
+      "verified_body_hash": "1d1c4549520b0cffc3f7311667029ef8db64b0a29cf0af7ee820e3c17c278717",
+      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     }
   ]
