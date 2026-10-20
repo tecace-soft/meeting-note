@@ -26,6 +26,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(knowledge): add one-click AX-KH send from the meeting note
 - feat(docs): add structured decision records, advisory checker, and AX-KH node assembler
 - feat(recordings): sort Recent recordings by upload time on web and mobile
 - feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
@@ -66,7 +67,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(review): record Group B verification verdicts (#2/#3/#4/#10)
 - docs(review): 2026-10-09 full-project review and strangler plan
 - docs(ops): mark MCP consolidation resolved, retire the dead deploy path
-- docs(ai-native): add agent entry docs with auto-synced structure
 
 **Other**
 

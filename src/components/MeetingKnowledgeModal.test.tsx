@@ -65,4 +65,44 @@ describe('MeetingKnowledgeModal one-click send', () => {
     fireEvent.click(await screen.findByRole('button', { name: '연동하고 전송 켜기' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('1MB 이하')
   })
+
+  describe('attendance area', () => {
+    const toggleName = '참석자 추가 (선택)'
+    it('is collapsed by default, with a hint, and expands on click', async () => {
+      getStatus.mockResolvedValue(enrolled({ integrationEnabled: true }))
+      render(<MeetingKnowledgeModal noteId="n1" onClose={() => {}} />)
+      const toggle = await screen.findByRole('button', { name: toggleName })
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.getByText(/AX-KH에서 이 회의를 찾아볼 수 있습니다/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '선택한 사람의 참석 확인' })).not.toBeInTheDocument()
+      fireEvent.click(toggle)
+      expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      expect(screen.getByRole('button', { name: '선택한 사람의 참석 확인' })).toBeInTheDocument()
+      expect(screen.getByLabelText('연락처 검색')).toBeInTheDocument()
+    })
+
+    it('hides the grants list when empty and shows it when there are grants', async () => {
+      getStatus.mockResolvedValue(enrolled({ integrationEnabled: true }))
+      const first = render(<MeetingKnowledgeModal noteId="n1" onClose={() => {}} />)
+      await screen.findByRole('button', { name: toggleName })
+      expect(screen.queryByText('참석·공유·철회 상태')).not.toBeInTheDocument()
+      expect(screen.queryByText(/확인된 참석자나 공유 대상이 없습니다/)).not.toBeInTheDocument()
+      first.unmount()
+      getStatus.mockResolvedValue(enrolled({ integrationEnabled: true, participants: ['a'], denies: ['b'] }))
+      render(<MeetingKnowledgeModal noteId="n1" onClose={() => {}} />)
+      expect(await screen.findByText('참석·공유·철회 상태')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '철회 해제' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: toggleName })).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('auto-expands after a successful one-click send', async () => {
+      getStatus.mockResolvedValueOnce(base()).mockResolvedValue(enrolled({ integrationEnabled: true, accessRevision: 2 }))
+      mutate.mockResolvedValue(undefined)
+      render(<MeetingKnowledgeModal noteId="n1" onClose={() => {}} />)
+      fireEvent.click(await screen.findByRole('button', { name: '연동하고 전송 켜기' }))
+      expect(await screen.findByText(/전송이 켜졌습니다/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: toggleName })).toHaveAttribute('aria-expanded', 'true')
+      expect(screen.getByRole('button', { name: '선택한 사람의 참석 확인' })).toBeInTheDocument()
+    })
+  })
 })

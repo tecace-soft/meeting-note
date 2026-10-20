@@ -27,6 +27,7 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [partialSetup, setPartialSetup] = useState(false);
   const [justSent, setJustSent] = useState(false);
+  const [attendOpen, setAttendOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const sessionRef = useRef<AbortController | null>(null);
@@ -41,7 +42,7 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
     pendingRef.current = false;
     const epoch = ++statusEpochRef.current;
     setStatus(null); setContacts([]); setSelectedId(''); setSearch('');
-    setLoading(true); setContactsLoading(true); setContactsFailed(false); setBusy(false); setErrorStatus(null); setPartialSetup(false); setJustSent(false);
+    setLoading(true); setContactsLoading(true); setContactsFailed(false); setBusy(false); setErrorStatus(null); setPartialSetup(false); setJustSent(false); setAttendOpen(false);
     void getMeetingKnowledgeStatus(noteId, controller.signal).then(next => {
       if (!controller.signal.aborted && statusEpochRef.current === epoch) setStatus(next);
     }).catch(error => {
@@ -118,7 +119,7 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
         } : {}),
       }, controller.signal);
       const next = await getMeetingKnowledgeStatus(noteId, controller.signal);
-      if (!controller.signal.aborted) { setStatus(next); setSelectedId(''); setJustSent(action === 'enable_all' && next.integrationEnabled); }
+      if (!controller.signal.aborted) { setStatus(next); setSelectedId(''); const sent = action === 'enable_all' && next.integrationEnabled; setJustSent(sent); if (sent) setAttendOpen(true); }
     } catch (error) {
       if (!controller.signal.aborted) {
         const code = error instanceof MeetingKnowledgeApiError ? error.status : 503;
@@ -186,20 +187,25 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
                 <button type="button" className={`${buttonClass} mt-2`} disabled={busy || !status.processing.canResync || status.processing.deliveryState === 'running'} onClick={() => void mutate('resync')}>{text('누락·실패한 전송 다시 동기화', 'Resync missing or failed delivery')}</button>
               </> : null}
             </div>
-            <h3 className="mt-5 text-sm font-semibold">{text('실제 참석자 확인', 'Confirm actual attendance')}</h3>
-            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>{text('참석 사실을 확인한 Microsoft 디렉터리 연락처를 선택하세요. 공유 설정은 기존 공유 메뉴에서 관리합니다.', 'Select a Microsoft directory contact whose attendance you have confirmed. Manage sharing in the existing Share menu.')}</p>
-            {contactsLoading ? <p className="mt-2 text-sm" role="status">{text('연락처 불러오는 중…', 'Loading contacts…')}</p> : contactsFailed ? <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>{text('디렉터리 연락처를 불러올 수 없습니다. 참석 확인은 창을 다시 연 후 시도해 주세요.', 'Directory contacts could not be loaded. Reopen this window to confirm attendance.')}</p> : null}
-            <label className="mt-3 block text-sm" htmlFor="meeting-knowledge-contact-search">{text('연락처 검색', 'Search contacts')}</label>
-            <input id="meeting-knowledge-contact-search" type="search" value={search} onChange={event => setSearch(event.target.value)} disabled={busy || contactsLoading}
-              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-            <label className="mt-3 block text-sm" htmlFor="meeting-knowledge-contact">{text('참석자', 'Participant')}</label>
-            <select id="meeting-knowledge-contact" value={selectedId} onChange={event => setSelectedId(event.target.value)} disabled={busy || contactsLoading || contactsFailed}
-              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}>
-              <option value="">{text('연락처 선택', 'Select a contact')}</option>
-              {filteredContacts.map(contact => <option key={contact.id} value={contact.id}>{contact.displayName} ({contact.email})</option>)}
-            </select>
-            <button type="button" className={`${buttonClass} mt-3`} disabled={busy || !selectedId || !contacts.some(contact => contact.id === selectedId) || status.participants.includes(selectedId) || status.denies.includes(selectedId)}
-              onClick={() => void mutate('confirm_participant', selectedId)}>{text('선택한 사람의 참석 확인', 'Confirm selected contact attended')}</button>
+            <button type="button" id="meeting-knowledge-attendance-toggle" className={`${buttonClass} mt-5 flex w-full items-center justify-between gap-2 text-left`} aria-expanded={attendOpen} aria-controls="meeting-knowledge-attendance" onClick={() => setAttendOpen(open => !open)}>
+              <span>{text('참석자 추가 (선택)', 'Add attendees (optional)')}</span><span aria-hidden>{attendOpen ? '▲' : '▼'}</span></button>
+            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>{text('참석자로 확인한 사람은 AX-KH에서 이 회의를 찾아볼 수 있습니다.', 'Confirmed attendees can find this meeting in AX-KH.')}</p>
+            {attendOpen ? <div id="meeting-knowledge-attendance" role="region" aria-labelledby="meeting-knowledge-attendance-toggle">
+              <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>{text('참석 사실을 확인한 Microsoft 디렉터리 연락처를 선택하세요. 공유 설정은 기존 공유 메뉴에서 관리합니다.', 'Select a Microsoft directory contact whose attendance you have confirmed. Manage sharing in the existing Share menu.')}</p>
+              {contactsLoading ? <p className="mt-2 text-sm" role="status">{text('연락처 불러오는 중…', 'Loading contacts…')}</p> : contactsFailed ? <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>{text('디렉터리 연락처를 불러올 수 없습니다. 참석 확인은 창을 다시 연 후 시도해 주세요.', 'Directory contacts could not be loaded. Reopen this window to confirm attendance.')}</p> : null}
+              <label className="mt-3 block text-sm" htmlFor="meeting-knowledge-contact-search">{text('연락처 검색', 'Search contacts')}</label>
+              <input id="meeting-knowledge-contact-search" type="search" value={search} onChange={event => setSearch(event.target.value)} disabled={busy || contactsLoading}
+                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              <label className="mt-3 block text-sm" htmlFor="meeting-knowledge-contact">{text('참석자', 'Participant')}</label>
+              <select id="meeting-knowledge-contact" value={selectedId} onChange={event => setSelectedId(event.target.value)} disabled={busy || contactsLoading || contactsFailed}
+                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}>
+                <option value="">{text('연락처 선택', 'Select a contact')}</option>
+                {filteredContacts.map(contact => <option key={contact.id} value={contact.id}>{contact.displayName} ({contact.email})</option>)}
+              </select>
+              <button type="button" className={`${buttonClass} mt-3`} disabled={busy || !selectedId || !contacts.some(contact => contact.id === selectedId) || status.participants.includes(selectedId) || status.denies.includes(selectedId)}
+                onClick={() => void mutate('confirm_participant', selectedId)}>{text('선택한 사람의 참석 확인', 'Confirm selected contact attended')}</button>
+            </div> : null}
+            {members.length > 0 ? <>
             <h3 className="mt-5 text-sm font-semibold flex items-center gap-2"><Users className="h-4 w-4" aria-hidden />{text('참석·공유·철회 상태', 'Attendance, sharing and revocation')}</h3>
             <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>{text('철회는 참석·공유 권한보다 우선합니다. 철회 해제는 참석이나 공유를 새로 추가하지 않습니다.', 'Revocation overrides attendance and sharing. Clearing a revocation does not add attendance or sharing.')}</p>
             <ul className="mt-3 divide-y" style={{ borderColor: 'var(--border)' }}>
@@ -212,7 +218,7 @@ const MeetingKnowledgeModal: React.FC<Props> = ({ noteId, noteTitle, onClose }) 
                 ].filter(Boolean).join(' · ')}</p></div>
                 <button type="button" className={buttonClass} disabled={busy} onClick={() => void mutate(status.denies.includes(id) ? 'restore' : 'revoke', id)}>{status.denies.includes(id) ? text('철회 해제', 'Clear revocation') : text('접근 철회', 'Revoke access')}</button></li>)}
             </ul>
-            {members.length === 0 ? <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>{text('확인된 참석자나 공유 대상이 없습니다.', 'No confirmed participants or sharing recipients.')}</p> : null}
+            </> : null}
           </>}
         </> : null}
         {errorStatus ? <p className="mt-4 text-sm" role="alert" style={{ color: 'var(--error)' }}>{errorText}</p> : null}
