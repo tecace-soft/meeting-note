@@ -69,7 +69,7 @@
       "title": "피드백/이슈 트래커 (F2)",
       "section": "Features",
       "order": 1,
-      "revision": "2026-10-15.1",
+      "revision": "2026-10-20.1",
       "summary": "사내 피드백/이슈 트래커(F2)의 권한 3단계·데이터 모델·자동 분류·화면·AI 해결책·알림 메일 명세(AX-KH 이식 명세 기준).",
       "depends_on": [
         "src/lib/issues/**",

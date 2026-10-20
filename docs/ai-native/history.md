@@ -55,10 +55,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): scope meeting-recordings RLS by owner_id, not a file join
 - fix(pipeline): idempotent note writes, orphan convergence, transcript checkpoint
 - fix(recorder): stop truncating or silently dropping a finished recording
-- fix(security): owner-scope the meeting-recordings storage bucket RLS
 
 **Docs**
 
+- docs(product-docs): refresh docs for tenant-only auth and one-click AX-KH send
 - docs(reviews): add 2026-09-29 ops stability technical review
 - docs(reviews): record legacy orphan note resolution (319 -> 0)
 - docs(design): C1 iOS m4a recovery via segment-splitting prevention

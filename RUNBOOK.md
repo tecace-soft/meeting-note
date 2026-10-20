@@ -50,7 +50,7 @@ There is no Management-API token wired into automation — schema DDL is a human
 
 | Signal | Source | Goes to |
 |---|---|---|
-| Service down / deploy failed / free-tier suspended | **Render's own emails** | the Render **account owner** (currently Gene's PERSONAL account) |
+| Service down / deploy failed / free-tier suspended | **Render's own emails** | the Render **account owner** (ownership unverified, check Render Team/Workspace members) |
 | A summarize job failed / uncaught server error | `sendWorkflowAlert` (P0.3) | `WORKFLOW_ALERT_TO` (default `genekim@tecace.com,andrewyoo@tecace.com`) via Resend |
 | App-level failure, with an auto-RCA | **F9 ops agent** → F2 board ticket + email | `/issues` board (see §4) + `WORKFLOW_ALERT_TO` |
 
@@ -125,7 +125,8 @@ A repo migration may not be applied in prod. Verify the column/table/function ex
 ## 7. Known fragilities / accounts to watch
 
 - **Free-tier 750h cap** → historically suspended both Node services monthly. Mitigated 2026-09-01 by merging the MCP into workflow-server + suspending the standalone `meeting-note-mcp`, leaving ONE free Node service. NOT yet proven across a full month. The durable fix (webhook-ize the backend to remove the always-on service) is OPS_BACKLOG P1.1, on hold.
-- **Azure auth app registration `f81ec595-…` is on Gene's PERSONAL account** (tenant `a141d6e8-…`). Escalate transfer to a TecAce org account — losing that account risks login for the whole app.
+- **Azure auth app registration `f81ec595-…` is in the TecAce CORPORATE tenant** (`a141d6e8-…`; tecace.com is a Verified custom domain, initial domain tecace.onmicrosoft.com). Owners are Hansoo Lee and Andrew Yoo. Verified 2026-10-20 in the Azure portal. No tenant migration is needed. (An earlier version of this note wrongly said Gene's personal account.)
+- **Render account ownership is unverified.** Check Render Team/Workspace members before assuming who owns it.
 - **Supabase Pro is paid** (storage). Render services are free-tier (hence the cap).
 - **Devices:** Z Fold (`adb R3CY405BXYW`) on `com.tecace` build; S23 (`R5CWB1HN1XN`). Boss has an Android.
 - **iOS** is Korea-owned; auth redirects for `com.tecace` are registered in Azure.

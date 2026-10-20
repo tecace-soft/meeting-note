@@ -3,7 +3,7 @@ title: "피드백/이슈 트래커 (F2)"
 slug: f2-feedback
 section: "Features"
 order: 1
-revision: "2026-10-15.1"
+revision: "2026-10-20.1"
 source_of_truth: "repo code (AX-KH feedback-porting spec port, 2026-10-14); prod not yet verified"
 ---
 
@@ -21,7 +21,7 @@ source_of_truth: "repo code (AX-KH feedback-porting spec port, 2026-10-14); prod
 | `issues.triage` | 관리자 | 분류 저장(종류 · 화면 · 긴급도 · 상태 · 담당자 · 처리 메모), AI 해결책 생성과 저장 |
 | `issues.notify` | 관리자 | 신규 이슈 알림 수신자 추가 · 제외 |
 
-관리자는 Microsoft object id 3개(Hansoo Lee, Gene Kim, Andrew Yoo)다.
+관리자는 Microsoft object id 2개(Hansoo Lee, Andrew Yoo)다.
 같은 규칙이 세 곳에 있고 서로를 주석으로 가리킨다.
 DB 는 `public.feedback_issues_can(key)`, 서버는 `workflow-server/src/issues.ts` 의 `canIssue`, 화면은 `src/lib/issues/permissions.ts` 의 `canIssue` 다.
 id 목록 원본은 `src/lib/adminAccess.ts` 이다.
