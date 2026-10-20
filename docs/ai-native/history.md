@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(product-docs): hash doc bodies line-ending independently and check signatures locally
 - fix(admin): remove a departed teammate from hardcoded admin allowlists
 - fix(auth): trust only the Microsoft tenant, not mail domains, for app login and backend calls
 - fix(docs): make the product docs page scrollable inside the app shell
@@ -66,7 +67,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(review): add the 2026-10-09 manual deploy checklist
 - docs(review): mark Group C, sibling edge-fn vulns, and R01 as done
 - docs(review): record Group B verification verdicts (#2/#3/#4/#10)
-- docs(review): 2026-10-09 full-project review and strangler plan
 
 **Other**
 
