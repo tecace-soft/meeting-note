@@ -102,9 +102,17 @@ export async function loadProductDocsManifest(): Promise<ProductDocsManifest> {
   return manifestCache;
 }
 
+// Normalize line endings (CRLF / lone CR -> LF). A Windows checkout can hold CRLF while git
+// commits (and the deploy serves) LF, so every body is normalized BEFORE stripping/hashing:
+// the hash then depends on content only, never on the checkout's line endings.
+export function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
 // Strip a leading YAML frontmatter block so the returned markdown renders cleanly for humans
 // and reads cleanly for agents. Only a frontmatter block at the very start is removed.
-function stripFrontmatter(markdown: string): string {
+// Expects LF input (see normalizeLineEndings).
+export function stripFrontmatter(markdown: string): string {
   if (!markdown.startsWith('---')) return markdown;
   const closeIndex = markdown.indexOf('\n---', 3);
   if (closeIndex === -1) return markdown;
@@ -112,8 +120,14 @@ function stripFrontmatter(markdown: string): string {
   return bodyStart === -1 ? '' : markdown.slice(bodyStart + 1).replace(/^\s+/, '');
 }
 
-function bodyHash(body: string): string {
-  return createHash('sha256').update(body, 'utf8').digest('hex');
+// THE single definition of "a doc's body" and its hash. Used by the runtime loader and by the
+// docs:verify / docs:check scripts so all three always agree.
+export function extractBody(rawFile: string): string {
+  return stripFrontmatter(normalizeLineEndings(rawFile));
+}
+
+export function bodyHash(body: string): string {
+  return createHash('sha256').update(normalizeLineEndings(body), 'utf8').digest('hex');
 }
 
 // Runtime freshness the agent/human SEES, computed WITHOUT git: it detects only an edited body
@@ -122,7 +136,7 @@ function bodyHash(body: string): string {
 // still reads 'fresh'. The git-based depends_on drift check runs in CI (check.ts) but is ADVISORY
 // (it does not fail the build), so code-drift is caught by human re-verification, not by this
 // signal. The guide tells agents to cross-check stale/unknown docs against the code.
-function computeFreshness(meta: ProductDocMeta, body: string): DocFreshness {
+export function computeFreshness(meta: ProductDocMeta, body: string): DocFreshness {
   const checked_against_commit = CURRENT_COMMIT ?? 'unknown';
   const stale_reasons: string[] = [];
   if (!meta.verified_body_hash || !meta.verified_revision) {
@@ -148,7 +162,7 @@ async function readBody(slug: string): Promise<string> {
   if (Buffer.byteLength(raw, 'utf8') > MAX_DOC_BYTES) {
     throw new Error(`Product doc "${slug}" exceeds the ${MAX_DOC_BYTES}-byte limit.`);
   }
-  const body = stripFrontmatter(raw);
+  const body = extractBody(raw);
   bodyCache.set(slug, body);
   return body;
 }

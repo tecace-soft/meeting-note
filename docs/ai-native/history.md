@@ -53,10 +53,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): enforce the org allowlist on the edge-fn Graph fallback
 - fix(recorder): reuse note id across summary retries to stop duplicate notes
 - fix(security): scope meeting-recordings RLS by owner_id, not a file join
-- fix(pipeline): idempotent note writes, orphan convergence, transcript checkpoint
 
 **Docs**
 
+- docs(product-docs): sign off 10 product docs and fix two inaccuracies
 - docs: correct login tenant and app registration ownership, refresh F2 admin list
 - docs(product-docs): refresh docs for tenant-only auth and one-click AX-KH send
 - docs(reviews): add 2026-09-29 ops stability technical review

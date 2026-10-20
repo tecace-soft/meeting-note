@@ -19,8 +19,8 @@ import {
   MAX_DOCS,
   headCommit,
   parseManifest,
-  sha256Hex,
-  stripFrontmatter,
+  bodyHash,
+  extractBody,
   todayIso,
 } from './shared.js';
 
@@ -38,7 +38,7 @@ async function bodyHashForSlug(slug: string): Promise<string> {
   } catch (error) {
     throw new Error(`Doc "${slug}" is in the manifest but ${path} is unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return sha256Hex(stripFrontmatter(raw));
+  return bodyHash(extractBody(raw));
 }
 
 async function main(): Promise<void> {

@@ -7,6 +7,10 @@
 //    `git diff --name-only <verified_revision>..HEAD` to report docs whose source globs changed
 //    since they were verified. Advisory in v1 to avoid over-detection; does NOT affect exit code.
 //
+// 3. ADVISORY (non-failing): body-hash drift. Uses the SAME computeFreshness the live server uses
+//    (line-ending-normalized), so a doc reported 'stale: body edited since verification' live is
+//    reported here too. Advisory like (2) so it does not break CI; fix with docs:verify.
+//
 // Exit 1 ONLY on the generated-doc mismatch.
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -21,6 +25,7 @@ import {
   renderGeneratedRegion,
   type ManifestDocEntry,
 } from './shared.js';
+import { computeFreshness, extractBody, type ProductDocMeta } from '../../src/productDocs.js';
 
 function toLines(text: string): string[] {
   return text.split('\n');
@@ -135,12 +140,26 @@ function advisoryDependsOnDrift(docs: ManifestDocEntry[]): void {
   console.log(`[docs:check] advisory: ${stale}/${withDeps.length} doc(s) with deps look stale (advisory only; not failing the build).`);
 }
 
+// Same body-hash comparison the live server performs (docs without a record are 'unknown').
+async function advisoryBodyHashDrift(docs: ManifestDocEntry[]): Promise<void> {
+  let problems = 0;
+  for (const doc of docs) {
+    const raw = await readFile(join(DOCS_DIR, `${doc.slug}.md`), 'utf8');
+    const result = computeFreshness(doc as unknown as ProductDocMeta, extractBody(raw));
+    if (result.freshness === 'fresh') continue;
+    problems += 1;
+    console.log(`[docs:check] advisory: "${doc.slug}" is ${result.freshness} live (${result.stale_reasons.join('; ')}). Re-verify with "npm run docs:verify -- --slug=${doc.slug}".`);
+  }
+  console.log(`[docs:check] advisory: ${problems}/${docs.length} doc(s) have body-hash mismatches or no verification record (advisory only; not failing the build).`);
+}
+
 async function main(): Promise<void> {
   const rawManifest = await readFile(MANIFEST_PATH, 'utf8');
   const manifest = parseManifest(rawManifest);
 
   const generatedOk = await checkGeneratedDoc();
   advisoryDependsOnDrift(manifest.docs);
+  await advisoryBodyHashDrift(manifest.docs);
 
   if (!generatedOk) process.exit(1);
   console.log('[docs:check] PASS.');

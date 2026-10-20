@@ -3,7 +3,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMeetingNoteMcpServer } from '../../src/mcp/server.js';
@@ -32,19 +31,10 @@ const TRACKING_FIELDS = new Set(['user_intent', 'reason_for_tool_choice', 'expec
 const EVAL_SUFFIX =
   '\n\nFor evaluation, always provide user_intent and reason_for_tool_choice. These fields help Meeting Note audit whether the correct MCP tool was used.';
 
-// Frontmatter strip: BYTE-FOR-BYTE identical to the runtime loader (src/productDocs.ts), so a
-// hash computed here matches verified_body_hash the loader checks. Do not "improve" this.
-export function stripFrontmatter(markdown: string): string {
-  if (!markdown.startsWith('---')) return markdown;
-  const closeIndex = markdown.indexOf('\n---', 3);
-  if (closeIndex === -1) return markdown;
-  const bodyStart = markdown.indexOf('\n', closeIndex + 1);
-  return bodyStart === -1 ? '' : markdown.slice(bodyStart + 1).replace(/^\s+/, '');
-}
-
-export function sha256Hex(body: string): string {
-  return createHash('sha256').update(body, 'utf8').digest('hex');
-}
+// Body extraction + hashing live in ONE place (src/productDocs.ts, the runtime loader) so a
+// hash computed by verify/check always equals what the server computes. Line endings are
+// normalized there, so a Windows CRLF checkout hashes the same as the committed LF content.
+export { bodyHash, extractBody, normalizeLineEndings, stripFrontmatter } from '../../src/productDocs.js';
 
 // Run git and return trimmed stdout. Throws (never swallows) so callers surface failures.
 export function git(args: string[]): string {

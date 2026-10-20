@@ -11,12 +11,18 @@
       "title": "제품 개요",
       "section": "Getting started",
       "order": 1,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-20.1",
       "summary": "Meeting Note가 무엇이고 어떻게 동작하는지: 녹음->전사->화자->요약->저장 파이프라인과 인증·데이터 보관의 개요.",
-      "verified_body_hash": "3fa9697ef31d075dc8595f200ced0b8f229ba568c8949b2e593d814a6699cb11",
-      "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
-      "verified_at": "2026-10-13",
-      "verified_by": "Andrew Yoo"
+      "verified_body_hash": "5384aa9b46f215a3aee5ad5dcc7840de08a477e417f24bbc7e872c3979857f3a",
+      "verified_revision": "a6efdf24ca12c65bdd25e6284cb72d6313933ec8",
+      "verified_at": "2026-10-20",
+      "verified_by": "Andrew Yoo",
+      "depends_on": [
+        "src/App.tsx",
+        "supabase/functions/**",
+        "workflow-server/src/gemini-models.ts",
+        "workflow-server/src/mcp/**"
+      ]
     },
     {
       "slug": "guide-for-ai-agents",
@@ -78,8 +84,8 @@
         "workflow-server/src/issues.ts",
         "supabase/migrations/20261014120000_feedback_issues_parity.sql"
       ],
-      "verified_body_hash": "399c2b5c2362db5162da990cd30c3e66bfc1e0409d4c6369ac2c0700c8d3aae3",
-      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_body_hash": "d77e10e55e0c38e6e396e35843f081d0fdc9d1dfd83ad979490b8f00e468adcf",
+      "verified_revision": "a6efdf24ca12c65bdd25e6284cb72d6313933ec8",
       "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
@@ -143,8 +149,8 @@
       "depends_on": [
         "workflow-server/src/mcp/transports/http.ts"
       ],
-      "verified_body_hash": "0bf852e1556989cd4615ab9919edcc2c60bf5fa3f3a63b5f887bde1760afdaa5",
-      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
+      "verified_body_hash": "666794ee33a09c5dcb8210b580aae7af475e3bdf328621935be47c0939ac8e83",
+      "verified_revision": "a6efdf24ca12c65bdd25e6284cb72d6313933ec8",
       "verified_at": "2026-10-20",
       "verified_by": "Andrew Yoo"
     },
