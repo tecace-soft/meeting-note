@@ -8,7 +8,9 @@ depends_on:
   - "workflow-server/src/knowledge/"
   - "supabase/migrations/20260807140000_create_note_insight_and_search_indexes.sql"
   - "supabase/migrations/20260810180000_search_notes_rpc.sql"
-source_of_truth: "repo code; manual verification 2026-10-13"
+  - "src/components/MeetingKnowledgeModal.tsx"
+  - "src/components/AxkhIntegrationButton.tsx"
+source_of_truth: "repo code; manual verification 2026-10-13; one-click send added 2026-10-20"
 ---
 
 # 지식 인덱스 + AXKH 연동 (프로듀서)
@@ -67,6 +69,30 @@ Microsoft 테넌트·오브젝트 id(UUID)로 식별하며, 표시 이름·이�
 units는 현재 source 리비전에만 수락되며 접근을 바꾸지 못한다.
 추출에는 청크 수 상한(`MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS`, 기본 16)과 30초 모델 데드라인이 걸린다.
 
+## 소유자 원클릭 전송 (웹 UI)
+
+요약이 끝난 노트에는 "AXKH로 보내기" 버튼이 보인다(`AxkhIntegrationButton`).
+버튼은 기록 직후 화면(TranscriptionSummary)과 히스토리 화면(SummaryHistory)의 노트 액션 영역 두 곳에 있다.
+요약이 아직 없는 노트에서는 같은 자리에 "AXKH 연동" 버튼이 일반 스타일로 남는다.
+UI는 프론트엔드 플래그(`meetingKnowledgeUiEnabled`)가 켜져 있고, 노트가 저장돼 있고, 로그인한 소유자가 확인될 때만 나온다.
+
+버튼은 모달(`MeetingKnowledgeModal`)을 열 뿐이며, 스스로 전송하지 않는다. 자동 전송은 없다.
+아직 연동되지 않은 노트의 모달에서 소유자가 강조된 버튼을 한 번 더 눌러야 전송이 켜진다. 그래서 전송까지는 두 번의 클릭이다.
+이 버튼은 `POST /knowledge/v1/source-access`의 `enable_all` 명령을 보낸다(`knowledge/enable-all.ts`).
+`enable_all`은 소유자 상태 확인, `initialize`(멱등), `enable`을 한 요청으로 묶는다.
+이미 켜져 있으면 그대로 성공을 돌려주고, 리비전 충돌이면 다시 읽고 최대 한 번만 재시도한다.
+
+- 소유 확인이 쓰기보다 먼저 일어난다. 소유자가 아니면 `SOURCE_NOT_MANAGEABLE`(404)이다.
+- 지원하지 않는 전사이거나 원문이 전달 상한(1MB)을 넘으면 `SOURCE_BLOCKED`(422)로 막고, 연동 행을 만들지 않는다.
+- 설정은 만들어졌는데 켜기에서 실패하면 응답에 `initialized: true`를 실어 보낸다. 전송이 꺼진 안전한 상태이며, UI는 "전송 켜기"를 다시 누르라고 안내한다.
+- 노트별 opt-in(`integration_enabled` 기본 꺼짐)은 그대로다. 소유자가 누른 노트만 전송된다.
+
+모달의 참석자 영역은 "참석자 추가 (선택)" 토글 뒤에 접혀 있다. 원클릭으로 전송이 막 켜진 직후에만 자동으로 펼쳐진다.
+참석자 확인은 선택이다. 하지만 참석 확인은 AXKH에서 그 사람이 이 회의를 찾아볼 수 있게 하는 접근 grant이므로, 필요한 사람만 펼쳐서 확인한다.
+확인된 참석자, 공유 대상, 철회 목록은 비어 있으면 화면에 나오지 않는다.
+이 변경은 `MeetingKnowledgeModal`과 `enable_all` 명령만 건드렸고, 계약 파일(`contract.ts` 등)과 전달 파이프라인은 바꾸지 않았다.
+AXKH 쪽 관리자 승인 단계를 없애는 일은 AXKH에서 진행하며, 이 문서가 다루는 Meeting Note 쪽 동작과는 별개다.
+
 ## 접근은 교집합 (AXKH 쪽 검색 게이트)
 
 AXKH가 회의 유래 지식을 검색·모델에 쓰기 전, 접근은 여러 조건의 교집합이어야 한다.
@@ -85,7 +111,7 @@ Meeting Note 쪽은 이 게이트를 위한 라우트와 사설 ledger를 제공
 
 - `POST /knowledge/v1/access-check`: 한 테넌트로 스코프된 전용 서버 키(`MEETING_KNOWLEDGE_ACCESS_KEY`, timing-safe 비교)로 인증. 호출자의 정확한 바인딩과 `allowed`만 반환.
 - `POST /knowledge/v1/evidence-fetch`: 같은 access 키. 버전 바인딩된 audience 접근이 맞는 evidence만 반환하며, 실패는 식별자·메타데이터를 노출하지 않고 균일하게 404.
-- `POST /knowledge/v1/source-access`: 소유자 관리(owner-management) 명령. 서버 검증된 업그레이드 owner JWT(테넌트 allowlist + SUPABASE_JWT_SECRET)로 인증하고, initialize / confirm_participant / revoke / restore / enable / disable / resync / status를 처리. 최소한의 리비전·활성 ack만 반환.
+- `POST /knowledge/v1/source-access`: 소유자 관리(owner-management) 명령. 서버 검증된 업그레이드 owner JWT(테넌트 allowlist + SUPABASE_JWT_SECRET)로 인증하고, initialize / enable_all / confirm_participant / revoke / restore / enable / disable / resync / status를 처리. 최소한의 리비전·활성 ack만 반환.
 
 브라우저/유저 역할은 이 사설 ledger 테이블·RPC를 실행할 수 없다.
 에러는 SQL 오류·식별자·JWT·업스트림 진단 텍스트를 호스트 로거로 흘리지 않는다.

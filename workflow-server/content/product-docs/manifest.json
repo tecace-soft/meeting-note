@@ -23,7 +23,7 @@
       "title": "AI 에이전트 작업 가이드",
       "section": "Getting started",
       "order": 2,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-20.1",
       "summary": "AI 에이전트가 Meeting Note와 작업하는 법: 문서를 먼저 읽고 명세에 맞춰 구현, MCP 툴 사용, 문서 발견 방법.",
       "verified_body_hash": "0614390950452906bdd355673345b86a5e1b164c3077476e110fc652e1568553",
       "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
@@ -35,7 +35,7 @@
       "title": "시스템 아키텍처",
       "section": "Getting started",
       "order": 3,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-20.1",
       "summary": "프론트엔드·workflow-server(+합친 MCP)·Supabase·배포를 잇는 전체 시스템 지도. 녹음->전사->화자->요약->저장 파이프라인과 MSAL->Supabase 토큰->RLS 인증 흐름의 진입점.",
       "depends_on": [
         "workflow-server/src/index.ts",
@@ -52,7 +52,7 @@
       "title": "데이터 모델과 보안",
       "section": "Getting started",
       "order": 4,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-20.1",
       "summary": "노트·메모리·화자·이슈 테이블과 RLS, 스토리지 버킷 소유자 스코프, MSAL->Supabase 토큰 교환을 저장소 명세로 정리. 저장소 명세와 운영 적용 상태를 명확히 분리한다.",
       "depends_on": [
         "supabase/migrations/",
@@ -170,11 +170,13 @@
       "title": "지식 인덱스 + AXKH 연동 (프로듀서)",
       "section": "Integrations",
       "order": 3,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-20.1",
       "summary": "노트를 검색 가능한 지식으로 만들고, 정책·접근 게이팅된 회의 지식을 AXKH 지식허브로 내구성 있게 전달하는 Meeting Note 쪽(프로듀서) 연동이다.",
       "depends_on": [
         "workflow-server/src/knowledge/",
-        "supabase/migrations/20260810180000_search_notes_rpc.sql"
+        "supabase/migrations/20260810180000_search_notes_rpc.sql",
+        "src/components/MeetingKnowledgeModal.tsx",
+        "src/components/AxkhIntegrationButton.tsx"
       ],
       "verified_body_hash": "972ce7fc3ae2dbc149daac191a3e00c41ed823938cc29672a742cd1450af8a8f",
       "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",
@@ -186,7 +188,7 @@
       "title": "변경 이력",
       "section": "History",
       "order": 1,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-20.1",
       "summary": "main 커밋 히스토리 다이제스트와 서비스별 버전 추적 방식.",
       "verified_body_hash": "e99e462f931f5a8ab99a019868afb516fbc26cab882e156b1721546ac40264a8",
       "verified_revision": "56781a4be253a4edc98f56aaf3a53d14536ac96f",

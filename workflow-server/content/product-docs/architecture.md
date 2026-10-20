@@ -80,7 +80,10 @@ record / upload  ->  transcribe (AssemblyAI)  ->  diarize + speaker-ID  ->  summ
 
 1. 프론트엔드가 MSAL(Azure AD)로 Microsoft 로그인을 하고 액세스/ID 토큰을 얻는다.
 2. `supabase-token` 엣지 함수가 그 토큰을 받아(테넌트 허용목록 통과 시. 이메일 도메인은 판정에 쓰지 않음) Supabase용 HS256 JWT를 발급한다. JWT의 `sub`는 Microsoft 사용자 식별자(oid)다.
-3. 프론트엔드는 이 JWT로 Supabase를 조회하고, RLS가 각 행을 소유자/공유 범위로 건다.
+3. 프론트엔드는 이 JWT로 Supabase를 조회하고, RLS가 각 행을 소유자/공유 범위로 건다. 이슈 보드의 작성자 판정은 이메일이 아니라 `author_id`(JWT `sub`)다.
+
+백엔드(workflow-server)도 같은 규칙을 쓴다. Microsoft 토큰은 Graph `/me`로 검증하고, 그 토큰의 테넌트 ID가 허용목록에 있어야 하며(`microsoftIdentity.ts`의 `resolveMicrosoftCaller`), 사용자 식별은 oid(UUID)로만 한다. 이메일은 표시용이다. 토큰의 앱 등록 확인은 기본 로그만 남기고, 켜면 막는다(`MS_TOKEN_REQUIRE_KNOWN_CLIENT`). `/health`는 두 게이트의 모드(`msTenantGate`, `msClientGate`)를 보여 준다. 모바일 앱도 ID 토큰(`x-ms-id-token`)을 함께 보낸다.
+MCP 관리자 판정도 oid 목록(`MCP_ADMIN_MICROSOFT_IDS`)만 쓰며, 이메일 경로는 없다.
 
 토큰이 없으면 RLS 때문에 빈 결과가 나온다.
 이를 절대 "데이터 없음"으로 해석하지 않는다.

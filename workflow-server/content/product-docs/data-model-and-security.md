@@ -8,7 +8,7 @@ depends_on:
   - "supabase/migrations/"
   - "supabase/functions/supabase-token/"
   - "supabase/functions/_shared/msGraphAllowlist.ts"
-source_of_truth: "repo code; manual verification 2026-10-13"
+source_of_truth: "repo code; manual verification 2026-10-13; tenant-only trust update 2026-10-20"
 ---
 
 # 데이터 모델과 보안
@@ -52,6 +52,8 @@ RLS 정책은 거의 전부 `auth.jwt() ->> 'sub'`를 그 사용자 id와 비교
 - 토큰의 `appid`/`azp`가 알려진 앱 등록(`MS_ID_TOKEN_CLIENT_IDS`, `MSAL_CLIENT_ID`, `MS_KNOWN_CLIENT_IDS`)이 아니면 `ms_token_client_check` 로그만 남기고 허용한다. `MS_TOKEN_REQUIRE_KNOWN_CLIENT=true`이면 403으로 막는다(confused deputy 방지).
 - `SUPABASE_TOKEN_REQUIRE_ID_TOKEN=true`이면 ID 토큰 없는 legacy 교환을 거부한다(기본 꺼짐). legacy 교환은 `supabase_token_legacy_exchange` 로그로 셀 수 있다.
 - 발급 JWT: `aud: authenticated`, `role: authenticated`, `iss: meeting-note`, `sub` = 검증된 `objectId`(없으면 Graph `id`). 만료는 `min(지금+1시간, ID 토큰 만료)`.
+- 모바일 앱도 ID 토큰(`x-ms-id-token`)을 함께 보내 ID 토큰 경로로 교환한다.
+- MCP 관리자 판정은 Microsoft oid 목록(`MCP_ADMIN_MICROSOFT_IDS`)만 쓴다. 이메일로 관리자를 판정하던 경로는 제거됐다.
 - 같은 허용목록 헬퍼를 `mcp-token`·`admin-analytics`·`admin-controls`·`generate-profile`·`identify-speakers`·`note-audio-url`의 Graph 경로도 재사용해 게이트가 어긋나지 않게 한다. workflow-server와 MCP의 Graph 토큰 경로는 `workflow-server/src/microsoftIdentity.ts`가 같은 규칙(같은 env 이름)을 적용한다.
 
 ## 테이블 (A, 저장소 명세)

@@ -3,7 +3,7 @@ title: "AI 에이전트 작업 가이드"
 slug: guide-for-ai-agents
 section: "Getting started"
 order: 2
-revision: "2026-10-13.1"
+revision: "2026-10-20.1"
 last_verified_commit: "56781a4be253a4edc98f56aaf3a53d14536ac96f"
 last_verified_at: "2026-10-13"
 source_of_truth: "repo code; manual verification 2026-10-13"
@@ -20,7 +20,8 @@ source_of_truth: "repo code; manual verification 2026-10-13"
 
 - 먼저 읽고, 그다음 구현한다. 어떤 시스템을 건드리기 전에 그 시스템의 문서(예: F2는 [f2-feedback](./f2-feedback))를 읽고 거기 적힌 데이터 모델·상태·엔드포인트·제약을 기준으로 작업한다.
 - 이 문서들은 실제 코드(마이그레이션, `src/`, `workflow-server/`)에 근거한다. 희망사항이 아니다. 각 문서의 frontmatter `source_of_truth`와 `last_verified_commit`이 근거를 가리킨다.
-- 문서와 코드가 어긋나면 코드가 진실이다. 어긋남을 발견하면 문서를 고치고 검증 메타(`revision`, `last_verified_commit`, `last_verified_at`)를 함께 갱신한다.
+- 문서와 코드가 어긋나면 코드가 진실이다. 어긋남을 발견하면 문서 본문을 고치고 `revision`을 올린다. 검증 메타(`verified_*`)는 사람이 `docs:verify`로 서명할 때만 갱신된다.
+- 결정(decision)을 어기지 않는다. `docs/decisions/`에 결정 기록이 있고, 파일을 고치기 전 `npm run decisions:check`(저장소 루트)를 돌리면 변경 파일이 활성 결정의 `paths`와 겹칠 때 해당 결정의 질문과 선택을 보여 준다. 경고일 뿐 실패하지 않는다(CI의 `decisions-advisory`도 같은 검사). 새 결정은 `docs/decisions/README.md` 형식대로 추가한다.
 - 회의에서 나온 제안이나 요청을, 확정된 결정으로 바꿔 말하지 않는다.
 
 ## 문서 디스커버리
@@ -31,7 +32,7 @@ source_of_truth: "repo code; manual verification 2026-10-13"
 - 에이전트: Meeting Note MCP 서버.
 
 에이전트가 문서를 찾는 진입점은 MCP 툴 `get_product_docs`다(AXKH의 동명 툴에 대응).
-입력은 문서 slug(`product-overview`, `guide-for-ai-agents`, `f2-feedback`, `mcp-connection`, `release-history`)이거나 목록 조회다.
+입력은 문서 slug이거나 목록 조회다. slug 전체 목록은 목록 조회로 얻는다(예: `product-overview`, `architecture`, `data-model-and-security`, `f2-feedback`, `knowledge-axkh-integration`, `mcp-connection`, `release-history`).
 출력은 해당 문서의 마크다운 본문과 메타데이터(revision, last_verified_commit, last_verified_at, source_of_truth)다.
 처음 붙는 에이전트는 이 `guide-for-ai-agents`부터 읽고, 필요한 시스템 문서로 이동한다.
 
@@ -40,16 +41,16 @@ source_of_truth: "repo code; manual verification 2026-10-13"
 
 ### 현재 구현 상태 (정직하게)
 
-- `get_product_docs` MCP 툴과 인증된 웹 조회 API(`/product-docs`, `/product-docs/{slug}`)는 **구현 완료, 배포 대기**다(working tree에 반영, 아직 미커밋/미배포). 설계는 `AGENT_DOCS_DESIGN.md`에 있고, 프론트엔드 클라이언트는 `src/lib/productDocs.ts`에 같은 계약으로 연결돼 있다.
+- `get_product_docs` MCP 툴과 인증된 웹 조회 API(`/product-docs`, `/product-docs/{slug}`)는 **구현돼 배포돼 있다**. 설계는 `AGENT_DOCS_DESIGN.md`에 있고, 프론트엔드 클라이언트는 `src/lib/productDocs.ts`에 같은 계약으로 연결돼 있다.
 - 이 문서들은 서버 콘텐츠(`workflow-server/content/product-docs/`)에 보관되며, 웹 경로와 MCP 경로 모두 동일한 로더(`workflow-server/src/productDocs.ts`)를 호출한다. 프론트 번들에는 본문이 포함되지 않는다.
 - 권한검사: 웹 경로는 호출자 토큰의 테넌트 ID가 `ALLOWED_MS_TENANT_IDS`에 있을 때만 응답한다(이메일 도메인은 쓰지 않음, 허용목록이 비면 거부). MCP 경로는 org-verified 호출자(정적 키, 개인 토큰, 테넌트가 확인된 OAuth/Graph 경로)만 `get_product_docs`를 쓸 수 있고, 익명 호출자와 허용목록 미설정 상태의 Graph fallback 호출자는 문서 조회에서 차단된다.
 
-### 자동갱신 훅은 아직 배선되지 않음
+### 문서 갱신과 검증 (workflow-server에서 실행)
 
-이 문서들은 지금 코드로부터 손으로 검증해 작성한다(hand-verified).
-코드에서 `.md`와 매니페스트를 재생성하는 결정적 생성기 + prebuild/CI 훅은 설계상 자리만 남겨뒀고 아직 배선하지 않았다.
-`scripts/ai-native-docs/generate.mjs`와 `scripts/gen-version.cjs` 옆에 붙이는 것이 자연스러운 연결점이다.
-자동 생성이 들어오면 "생성됨"과 "검증됨"을 반드시 분리해야 하며, `last_verified_*`는 실제 검증 시에만 갱신한다.
+- `npm run docs:generate`: MCP 툴 레퍼런스(`mcp-tools-reference`)의 생성 영역만 코드에서 재생성한다. 나머지 본문은 손으로 쓴다.
+- `npm run docs:check`: 생성 영역 일치 여부를 검사하고(실패 가능), 매니페스트 `depends_on` 경로가 마지막 검증 이후 바뀐 문서를 "stale일 수 있음"으로 알린다(경고만). CI(`product-docs-check`)도 같은 검사를 돌린다.
+- `npm run docs:verify`: 사람이 본문을 확인한 뒤 하는 서명이다. 본문 해시와 `verified_*`를 매니페스트에 기록한다. 에이전트는 `verified_*`를 직접 고치거나 대신 실행하지 않는다.
+- 자동 갱신 훅(코드 변경 시 본문 자동 재작성)은 없다. "생성됨"과 "검증됨"은 분리돼 있고, 검증은 사람이 한다.
 
 ## MCP가 노출하는 것 (실제 툴 이름)
 

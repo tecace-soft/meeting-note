@@ -3,7 +3,7 @@ title: "변경 이력"
 slug: release-history
 section: "History"
 order: 1
-revision: "2026-10-13.1"
+revision: "2026-10-20.1"
 last_verified_commit: "56781a4be253a4edc98f56aaf3a53d14536ac96f"
 last_verified_at: "2026-10-13"
 source_of_truth: "repo code; manual verification 2026-10-13"
@@ -21,6 +21,13 @@ source_of_truth: "repo code; manual verification 2026-10-13"
 서비스마다 자기 git SHA를 `/version` 엔드포인트로 보고한다. 프론트엔드는 `public/version.json`(service, sha, branch, deployedAt)도 함께 싣는다.
 모바일 앱은 빌드 스크립트로 따로 버전을 매긴다(versionCode `10000 + commit count`, versionName `<market>-<sha>`). pubspec 업데이트 시 GitHub Action이 자동 태그를 단다.
 작성 시점 기준 프론트엔드는 `46fde17`(2026-10-12 배포)이다.
+
+## 2026-10-15 ~ 10-20 - 인증 하드닝, 원클릭 AXKH 전송
+
+- 앱 로그인과 백엔드 호출이 Microsoft 테넌트(`tid`)와 oid만 신뢰하도록 변경. 메일 도메인 판정과 MCP 관리자 이메일 경로 제거. 알려진 클라이언트(앱 등록) 검사는 로그만 남기고 플래그로 강제.
+- 이슈 보드 소유 판정을 이메일에서 `author_id`로 변경.
+- 요약이 끝난 노트에 "AXKH로 보내기" 버튼 추가(기록 직후 화면과 히스토리). 자동 전송은 없고 모달에서 한 번 더 누르면 `enable_all`로 연동 설정과 전송 켜기를 한 번에 처리. 참석자 확인은 "참석자 추가 (선택)"으로 접음. [knowledge-axkh-integration](./knowledge-axkh-integration) 참고.
+- 결정 기록(`docs/decisions/`)과 자문형 검사기 추가.
 
 ## 2026-10 - 보안 강화, 신뢰성, 비공개 지식
 
