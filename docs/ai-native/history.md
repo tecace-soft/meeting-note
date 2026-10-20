@@ -52,10 +52,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): verify storage ownership before signing note audio (R01)
 - fix(security): enforce the org allowlist on the remaining edge-fn Graph auth
 - fix(security): close Group B cross-user memory/index/chat leaks
-- fix(security): enforce the org allowlist on the edge-fn Graph fallback
 
 **Docs**
 
+- docs(mobile): make keystore backup recommended, record accepted reinstall consequence
 - docs(product-docs): sign off 10 product docs and fix two inaccuracies
 - docs: correct login tenant and app registration ownership, refresh F2 admin list
 - docs(product-docs): refresh docs for tenant-only auth and one-click AX-KH send
