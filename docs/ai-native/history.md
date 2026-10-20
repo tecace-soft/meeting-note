@@ -53,7 +53,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): close Group B cross-user memory/index/chat leaks
 - fix(security): enforce the org allowlist on the edge-fn Graph fallback
 - fix(recorder): reuse note id across summary retries to stop duplicate notes
-- fix(security): scope meeting-recordings RLS by owner_id, not a file join
 
 **Docs**
 
@@ -70,6 +69,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
 - chore(lint): fix all eslint errors and make the lint gate blocking

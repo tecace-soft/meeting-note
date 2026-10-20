@@ -18,13 +18,13 @@ final routerProvider = Provider<GoRouter>((ref) {
   final auth = ref.watch(authControllerProvider);
 
   return GoRouter(
-    initialLocation: '/record',
+    initialLocation: '/loading',
     errorBuilder: (context, state) => RouteErrorScreen(error: state.error),
     redirect: (context, state) {
       final isSigningIn = state.matchedLocation == '/signin';
       final isLoading = state.matchedLocation == '/loading';
       if (auth.loading) {
-        return isLoading ? '/record' : null;
+        return isLoading ? null : '/loading';
       }
       if (isLoading) return auth.isAuthenticated ? '/record' : '/signin';
       if (!auth.isAuthenticated && !isSigningIn) return '/signin';

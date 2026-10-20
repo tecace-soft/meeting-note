@@ -49,6 +49,7 @@ class AuthState {
 
 class AuthController extends Notifier<AuthState> {
   static const _tokens = AuthTokenStore();
+  static const _restoreTimeout = Duration(seconds: 30);
 
   @override
   AuthState build() {
@@ -58,8 +59,11 @@ class AuthController extends Notifier<AuthState> {
 
   Future<void> _restoreSession() async {
     try {
-      final result =
-          await ref.read(microsoftAuthServiceProvider).acquireTokenSilent();
+      // Bounded so a hung MSAL call ends in sign-in, never an endless spinner.
+      final result = await ref
+          .read(microsoftAuthServiceProvider)
+          .acquireTokenSilent()
+          .timeout(_restoreTimeout);
       await _tokens.saveMicrosoftTokens(
         accessToken: result.accessToken,
         idToken: result.idToken,
