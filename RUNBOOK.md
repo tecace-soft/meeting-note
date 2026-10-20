@@ -137,10 +137,11 @@ A repo migration may not be applied in prod. Verify the column/table/function ex
 
 릴리스 APK는 Andrew의 PC에 있는 debug 키(`%USERPROFILE%\.android\debug.keystore`)로 서명한다.
 서명 인증서 SHA-256은 `fd2f24cf1c0df5d27ba2fab39a8bd75051afc9d4c6d0ab425ed339e6e8821ccb`다.
-이 keystore 파일은 반드시 백업한다(비밀번호 관리자 또는 보안 저장소).
+이 keystore 파일은 백업해 두는 것을 권장한다(필수는 아님). 비밀번호 관리자 또는 보안 저장소가 적당하다.
 다른 PC에서 빌드하거나 이 파일을 잃어버리면 서명이 달라진다.
-서명이 달라지면 모든 사용자가 앱을 삭제하고 다시 설치해야 업데이트할 수 있다.
-따라서 이 PC에서만 빌드하거나, 이 keystore를 복원한 환경에서만 빌드한다.
+그 경우 사용자는 앱을 한 번 삭제하고 다시 설치해야 업데이트할 수 있다(사용자가 이 결과를 수용하기로 했다).
+삭제 전에 업로드 대기 중인 녹음이 없는지 안내한다(삭제하면 앱 내부의 미업로드 녹음이 사라진다).
+가능하면 이 PC에서만 빌드하거나, 이 keystore를 복원한 환경에서 빌드한다.
 `meeting-note-mobile/build_apk.sh`는 빌드 후 인증서 SHA-256을 위 값과 비교하고, 다르면 큰 경고를 출력한다.
 결정은 2026-10-20에 기록했다(별도 릴리스 키를 만들지 않기로 사용자가 선택). 근거는 `docs/decisions/0020-android-debug-key-signing.md`.
 

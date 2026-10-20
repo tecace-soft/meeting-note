@@ -65,10 +65,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(review): mark the 2026-10-09 deploy steps 1-3 done
 - docs(review): add the 2026-10-09 manual deploy checklist
 - docs(review): mark Group C, sibling edge-fn vulns, and R01 as done
-- docs(review): record Group B verification verdicts (#2/#3/#4/#10)
 
 **Other**
 
+- chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
