@@ -1,5 +1,10 @@
 # Strangler refactor plan: index.ts and the frontend (2026-10-09)
 
+> 대체됨 (2026-10-21): 이 계획은 [docs/refactor/REFACTOR_PLAN.md](../refactor/REFACTOR_PLAN.md)로 대체되었다.
+> 이력으로만 남긴다.
+> 아래 줄 번호(index.ts 3,593줄 기준)와 "No code has been written" 상태는 오래되었다.
+> 갱신된 단계와 줄 번호는 REFACTOR_PLAN.md 5절에 있다.
+
 Companion to [2026-10-09-renovation-review.md](./2026-10-09-renovation-review.md).
 The review decided incremental over rewrite; this is the concrete, ordered strangler path for the two god-file clusters (Group A item 5).
 No code has been written from this plan yet.

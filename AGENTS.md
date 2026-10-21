@@ -28,6 +28,7 @@ Audio transcription + summarization app (record/upload → transcribe → summar
 
 ## Docs
 - `docs/ai-native/`: AI-native entry doc (start at `intro.md`). Structure auto-syncs via a pre-commit hook; after a meaningful change run `/update-docs`. One-time per clone: `git config core.hooksPath .githooks`.
+- `docs/refactor/REFACTOR_PLAN.md`: canonical #14 refactor plan and status (supersedes the 2026-10-09 reviews and the 2026-10-20 handoff).
 - `DEV_NOTES.md` — feature history and schema.
 - `RELIABILITY_AUDIT_KO.md` / `_EN.md` — known reliability/error-handling issues and roadmap.
 - `docs/API_LESSONS.md`: hard-won Gemini/API lessons; model ids are pinned in `workflow-server/src/gemini-models.ts` and guarded by a drift test (`npm test`). Read this before adding or changing a Gemini call.

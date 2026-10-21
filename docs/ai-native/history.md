@@ -51,10 +51,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(db): reconcile the two conflicting mcp_tracking migrations
 - fix(security): verify storage ownership before signing note audio (R01)
 - fix(security): enforce the org allowlist on the remaining edge-fn Graph auth
-- fix(security): close Group B cross-user memory/index/chat leaks
 
 **Docs**
 
+- docs(handoffs): add refactor handoff for continuing work in a fresh session
 - docs(mobile): make keystore backup recommended, record accepted reinstall consequence
 - docs(product-docs): sign off 10 product docs and fix two inaccuracies
 - docs: correct login tenant and app registration ownership, refresh F2 admin list

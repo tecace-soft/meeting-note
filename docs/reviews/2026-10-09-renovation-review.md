@@ -1,5 +1,10 @@
 # Full-project review: rewrite vs incremental (2026-10-09)
 
+> 대체됨 (2026-10-21): 이 문서는 [docs/refactor/REFACTOR_PLAN.md](../refactor/REFACTOR_PLAN.md)로 대체되었다.
+> 이력으로만 남긴다.
+> 아래 Status tracker는 오래되었다(예: "NOT committed", "lint gate deferred"는 모두 커밋/해결됨).
+> 검증된 현재 상태는 REFACTOR_PLAN.md 2절이 정본이다.
+
 Purpose: decide whether the "renovation" (full demolition and rebuild) floated in the 2026-10-08 meeting is justified, or whether incremental / strangler refactoring is the better path.
 This document is the input to that decision, plus the prioritized action list that came out of it.
 

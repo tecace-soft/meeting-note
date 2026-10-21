@@ -1,5 +1,8 @@
 # Handoff - Meeting Note 리팩터링 (2026-10-20)
 
+> 대체됨 (2026-10-21): 이 handoff는 [docs/refactor/REFACTOR_PLAN.md](../refactor/REFACTOR_PLAN.md)로 대체되었다.
+> 규칙, gotcha, 검증 명령은 모두 그 문서로 옮겼다.
+
 대상: 회사 SSH 서버에서 origin main(github tecace-soft/meeting-note)의 새 clone으로 작업하는 Codex.
 이 문서는 이전 세션의 기억이 없고 Andrew PC의 로컬 전용 파일을 볼 수 없다는 전제로 쓰였다.
 
