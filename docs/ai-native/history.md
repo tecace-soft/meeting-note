@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(gemini): use only lite models in every production path and guard model env overrides
 - fix(mobile): show the loading screen while restoring the session on cold start
 - fix(product-docs): hash doc bodies line-ending independently and check signatures locally
 - fix(admin): remove a departed teammate from hardcoded admin allowlists
@@ -49,7 +50,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): hybrid ownership check for note audio signing (R01)
 - fix(mobile): stop silently deleting an interrupted m4a recording
 - fix(db): reconcile the two conflicting mcp_tracking migrations
-- fix(security): verify storage ownership before signing note audio (R01)
 
 **Docs**
 

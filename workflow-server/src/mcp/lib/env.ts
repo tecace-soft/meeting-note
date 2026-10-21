@@ -59,7 +59,10 @@ function resolveDefaultTimeZone(raw: string | undefined): string {
 // convenience, not the source of truth.
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const envPath = resolve(moduleDir, '../../../.env');
-loadDotenv({ path: envPath, quiet: true });
+// Tests set MEETING_NOTE_SKIP_DOTENV=1 (src/test-setup.ts) so they never read the local .env.
+if (process.env.MEETING_NOTE_SKIP_DOTENV !== '1') {
+  loadDotenv({ path: envPath, quiet: true });
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
