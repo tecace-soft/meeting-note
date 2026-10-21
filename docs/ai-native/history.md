@@ -49,10 +49,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(security): stop inlining the whole import.meta.env into the client bundle
 - fix(security): hybrid ownership check for note audio signing (R01)
 - fix(mobile): stop silently deleting an interrupted m4a recording
-- fix(db): reconcile the two conflicting mcp_tracking migrations
 
 **Docs**
 
+- docs(refactor): plan revision 2 around stability, simplification and automation
 - docs(refactor): consolidate the refactor plan into one canonical document
 - docs(handoffs): add refactor handoff for continuing work in a fresh session
 - docs(mobile): make keystore backup recommended, record accepted reinstall consequence
