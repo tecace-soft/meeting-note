@@ -68,13 +68,13 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(server): never load the local .env or reach real services from tests
 - chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
 - chore(lint): fix all eslint errors and make the lint gate blocking
 - test(ci): stand up a frontend test runner and a CI gate
-- refactor(gemini): extract shared retryable + dedup helpers for the call wrappers
 
 ### Recent merges
 
