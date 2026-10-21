@@ -178,7 +178,7 @@ U10의 기존 선행 검증에는 이 재편집 일관성도 포함한다.
 | 최근 녹음 선택과 서버 또는 로컬 원본 삭제 | `src/pages/TranscriptionSummary.tsx:2229`, 모바일 `features/record/ui/record_screen.dart:302` | 업로드 진입점으로 통합하되 원본 삭제 확인과 참조 노트 삭제 가드를 유지한다. |
 | 모바일 홈의 직접 경로 입력 | 모바일 `features/record/ui/record_screen.dart:229`, `:273` | U7의 제거 범위를 새 노트 화면뿐 아니라 이 진입점까지 확장한다. |
 | 마이크 및 카메라 권한, 녹음 중 이동 확인 | `src/context/RecorderContext.tsx:653`, `src/components/RecordingNavigationGuard.tsx:45`, 모바일 `features/record/ui/record_screen.dart:169`, `:195` | 필요한 시점의 OS 권한 요청과 이동 안내는 유지하며 자동 권한 허용으로 대체하지 않는다. |
-| 화자 치환 범위와 전체 초기화 | `src/components/TranscriptDiarizedEditor.tsx:1394`, `:1441`, 모바일 `features/notes/ui/summary_screen.dart:2302`, `:2351` | U9/U26에 명시적으로 유지하고 한 구간 수정이 전체 발언 변경으로 확대되지 않게 한다. |
+| 화자 치환 범위와 전체 초기화 | `src/components/TranscriptDiarizedEditor.tsx:1394`, `:1441`, 모바일 `features/notes/ui/summary_screen.dart:2302`, `:2381` | U9/U26에 명시적으로 유지하고 한 구간 수정이 전체 발언 변경으로 확대되지 않게 한다. |
 | 원시 프로필 편집의 다른 진입점 | `src/components/TranscriptDiarizedEditor.tsx:1632`, `src/pages/SummaryHistory.tsx:3868`, 모바일 `features/settings/ui/settings_screen.dart:439` | U11을 설정 탭만의 작업으로 보지 말고 진입점별로 읽기, 구조화 편집, 제거 여부를 정한다. |
 | MCP 키 폐기와 연결 방식별 설치 단계 | `src/pages/AccountSettings.tsx:1465`, `:1591`, 모바일 `features/settings/ui/settings_screen.dart:799` | U14에 키 폐기와 OAuth 또는 개인 키별 안내를 유지하고 자동 생성이나 자동 클립보드 복사를 하지 않는다. |
 | 이슈 작성의 목적 및 영역 선택, 모바일 우선순위 및 심각도 | `src/components/issues/CreateForm.tsx:182`, `:204`, 모바일 `features/issues/ui/issues_screen.dart:404`, `:477` | 현재 자동 분류 기본값을 활용해 고급 선택을 접고 수정은 허용하며 제출과 수신자 변경은 사람에게 남긴다. |
