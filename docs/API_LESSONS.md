@@ -14,7 +14,7 @@ Those strings are pinned in `workflow-server/src/gemini-models.ts` and guarded b
   Every fallback chain must end on a live lite model, and dead ids must never reappear (the drift test enforces this).
 
 - Cost policy is lite-only in prod: no non-lite Gemini models (a severe team cost restriction).
-  Default and primary paths use `gemini-2.5-flash-lite` or `gemini-3.1-flash-lite`.
+  Every path, including every fallback chain, uses only `gemini-2.5-flash-lite` or `gemini-3.1-flash-lite` (the drift test fails any non-lite id).
 
 - A nested `responseSchema` makes `gemini-3.1-flash-lite` run away to MAX_TOKENS (about 50s, past the 30s abort).
   Dropping the schema yields compact valid JSON in a few seconds (the generate-profile fix, c9a5b34).

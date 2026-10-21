@@ -50,10 +50,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(mobile): stop silently deleting an interrupted m4a recording
 - fix(db): reconcile the two conflicting mcp_tracking migrations
 - fix(security): verify storage ownership before signing note audio (R01)
-- fix(security): enforce the org allowlist on the remaining edge-fn Graph auth
 
 **Docs**
 
+- docs(refactor): consolidate the refactor plan into one canonical document
 - docs(handoffs): add refactor handoff for continuing work in a fresh session
 - docs(mobile): make keystore backup recommended, record accepted reinstall consequence
 - docs(product-docs): sign off 10 product docs and fix two inaccuracies

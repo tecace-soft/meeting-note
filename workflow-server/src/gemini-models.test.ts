@@ -15,6 +15,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   KNOWN_MODELS,
+  LIVE_MODELS,
+  liteModelFromEnv,
+  isLiteModel,
   isRetiredModel,
   assertLiveModel,
   SUMMARY_MODEL,
@@ -23,11 +26,11 @@ import {
   PROJECT_CHAT_MODEL,
   TRANSCRIPTION_TEST_MODEL,
   STANDARD_FALLBACK_CHAIN,
-  FLASH_FIRST_FALLBACK_CHAIN,
   MEMORY_FALLBACK_CHAIN,
   ISSUE_RESOLUTION_FALLBACK_CHAIN,
   ISSUE_RESOLUTION_MODEL,
 } from './gemini-models.js';
+import { calculateGeminiUsageCost } from './costs.js';
 
 // This file lives at <repo>/workflow-server/src/gemini-models.test.ts.
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +47,9 @@ const SKIP_DIRS = new Set(['node_modules', 'build', 'dist', 'coverage', '.git'])
 // real model ids and never reach the API. Production model usage, the surface
 // that caused the real 404, lives in non-test source and is fully scanned.
 const SELF_FILES = new Set(['gemini-models.ts']);
+
+// DEC-0005: production may use only lite-tier Gemini models.
+const LITE_ONLY = /^gemini-\d[\d.]*-flash-lite$/;
 
 const MAX_FILES = 20000;
 const MAX_DEPTH = 20;
@@ -103,14 +109,21 @@ test('no scanned source literal is a retired or unregistered Gemini model', () =
 
   const retired: string[] = [];
   const unknown: string[] = [];
+  const nonLite: string[] = [];
   for (const file of files) {
     const rel = path.relative(REPO_ROOT, file).split(path.sep).join('/');
     for (const id of literalsIn(fs.readFileSync(file, 'utf8'))) {
+      if (!LITE_ONLY.test(id)) nonLite.push(`${rel}: "${id}"`);
       if (isRetiredModel(id)) retired.push(`${rel}: "${id}"`);
       else if (!KNOWN_MODELS.has(id)) unknown.push(`${rel}: "${id}"`);
     }
   }
 
+  assert.deepEqual(
+    nonLite,
+    [],
+    `Non-lite Gemini model id(s) in production source. DEC-0005 allows only flash-lite models: ${nonLite.join(', ')}`,
+  );
   assert.deepEqual(
     retired,
     [],
@@ -148,7 +161,6 @@ test('every role default is live and not retired', () => {
 test('every fallback chain entry is live and not retired', () => {
   const chains: Array<[string, readonly string[]]> = [
     ['STANDARD_FALLBACK_CHAIN', STANDARD_FALLBACK_CHAIN],
-    ['FLASH_FIRST_FALLBACK_CHAIN', FLASH_FIRST_FALLBACK_CHAIN],
     ['MEMORY_FALLBACK_CHAIN', MEMORY_FALLBACK_CHAIN],
     ['ISSUE_RESOLUTION_FALLBACK_CHAIN', ISSUE_RESOLUTION_FALLBACK_CHAIN],
     ['ISSUE_RESOLUTION_MODEL', [ISSUE_RESOLUTION_MODEL]],
@@ -175,4 +187,81 @@ test('assertLiveModel throws on retired/empty/unknown and returns live ids', () 
   assert.throws(() => assertLiveModel(''), /non-empty/);
   assert.throws(() => assertLiveModel('gemini-9.9-imaginary'), /not in the registry/);
   assert.equal(assertLiveModel('gemini-2.5-flash-lite'), 'gemini-2.5-flash-lite');
+});
+
+test('DEC-0005: registry, role defaults and every chain are lite-only and chains end in a lite model', () => {
+  for (const id of LIVE_MODELS) assert.match(id, LITE_ONLY, `LIVE_MODELS entry ${id} is not flash-lite`);
+  const singles: Array<[string, string]> = [
+    ['SUMMARY_MODEL', SUMMARY_MODEL],
+    ['REGENERATE_SUMMARY_MODEL', REGENERATE_SUMMARY_MODEL],
+    ['MEMORY_MODEL', MEMORY_MODEL],
+    ['PROJECT_CHAT_MODEL', PROJECT_CHAT_MODEL],
+    ['TRANSCRIPTION_TEST_MODEL', TRANSCRIPTION_TEST_MODEL],
+    ['ISSUE_RESOLUTION_MODEL', ISSUE_RESOLUTION_MODEL],
+  ];
+  for (const [name, id] of singles) assert.match(id, LITE_ONLY, `${name} (${id}) is not flash-lite`);
+  const chains: Array<[string, readonly string[]]> = [
+    ['STANDARD_FALLBACK_CHAIN', STANDARD_FALLBACK_CHAIN],
+    ['MEMORY_FALLBACK_CHAIN', MEMORY_FALLBACK_CHAIN],
+    ['ISSUE_RESOLUTION_FALLBACK_CHAIN', ISSUE_RESOLUTION_FALLBACK_CHAIN],
+  ];
+  for (const [name, chain] of chains) {
+    for (const id of chain) assert.match(id, LITE_ONLY, `${name}: ${id} is not flash-lite`);
+    const last = chain[chain.length - 1];
+    assert.ok(KNOWN_MODELS.has(last) && !isRetiredModel(last), `${name} must end in a live lite model`);
+  }
+});
+
+test('lite-only matcher rejects non-lite ids', () => {
+  for (const id of ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-pro', 'gemini-2.5-flash-preview']) {
+    assert.doesNotMatch(id, LITE_ONLY);
+  }
+  assert.match('gemini-3.1-flash-lite', LITE_ONLY);
+  assert.match('gemini-2.5-flash-lite', LITE_ONLY);
+});
+
+test('liteModelFromEnv: unset or blank uses the default silently', () => {
+  const warnings: string[] = [];
+  const warn = (m: string) => warnings.push(m);
+  assert.equal(liteModelFromEnv('X_MODEL', undefined, SUMMARY_MODEL, warn), SUMMARY_MODEL);
+  assert.equal(liteModelFromEnv('X_MODEL', '   ', SUMMARY_MODEL, warn), SUMMARY_MODEL);
+  assert.deepEqual(warnings, []);
+});
+
+test('liteModelFromEnv: a valid lite model is used without a warning', () => {
+  const warnings: string[] = [];
+  const out = liteModelFromEnv('X_MODEL', ' gemini-3.1-flash-lite ', SUMMARY_MODEL, (m) => warnings.push(m));
+  assert.equal(out, 'gemini-3.1-flash-lite');
+  assert.deepEqual(warnings, []);
+});
+
+test('liteModelFromEnv: a non-lite model warns once naming the env var and uses the default', () => {
+  const warnings: string[] = [];
+  const out = liteModelFromEnv('GEMINI_SUMMARY_MODEL', 'gemini-2.5-flash', SUMMARY_MODEL, (m) => warnings.push(m));
+  assert.equal(out, SUMMARY_MODEL);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /GEMINI_SUMMARY_MODEL/);
+});
+
+test('liteModelFromEnv: an unknown or retired id warns once and uses the default', () => {
+  for (const bad of ['gemini-9.9-flash-lite', 'gemini-2.0-flash-lite', 'not-a-model']) {
+    const warnings: string[] = [];
+    assert.equal(liteModelFromEnv('ISSUE_RESOLUTION_MODEL', bad, ISSUE_RESOLUTION_MODEL, (m) => warnings.push(m)), ISSUE_RESOLUTION_MODEL);
+    assert.equal(warnings.length, 1, `expected one warning for ${bad}`);
+    assert.match(warnings[0], /ISSUE_RESOLUTION_MODEL/);
+  }
+  assert.equal(isLiteModel('gemini-2.5-flash'), false);
+});
+
+test('every LIVE_MODELS entry has a nonzero price in costs.ts', () => {
+  for (const model of LIVE_MODELS) {
+    for (const inputType of ['audio', 'text'] as const) {
+      const cost = calculateGeminiUsageCost({
+        model,
+        inputType,
+        usageMetadata: { promptTokenCount: 1_000_000, candidatesTokenCount: 1_000_000, totalTokenCount: 2_000_000 },
+      });
+      assert.ok(cost.estimatedCostUsd > 0, `${model} (${inputType}) has no price in costs.ts`);
+    }
+  }
 });

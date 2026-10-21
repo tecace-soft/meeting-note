@@ -12,19 +12,19 @@
 // string scan in the drift test, which already passes because they use live
 // models.
 
-// Canonical live model ids. These three literals are the ONLY place the raw
+// Canonical live model ids. These two literals are the ONLY place the raw
 // strings are written; every role default and chain below composes from them.
+// DEC-0005 (cost rule): production may use ONLY lite-tier models. Do not add a
+// non-lite id here; the drift test fails any registry entry that is not flash-lite.
 export const GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite';
-export const GEMINI_2_5_FLASH = 'gemini-2.5-flash';
 export const GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite';
 
 // The models actually in use across the scanned surface (workflow-server/src
 // and supabase/functions). The drift test validates every scanned literal
 // against this set.
 export const LIVE_MODELS = [
-  GEMINI_2_5_FLASH_LITE,
-  GEMINI_2_5_FLASH,
   GEMINI_3_1_FLASH_LITE,
+  GEMINI_2_5_FLASH_LITE,
 ] as const;
 
 export type LiveModel = (typeof LIVE_MODELS)[number];
@@ -55,21 +55,15 @@ export const SUMMARY_MODEL = GEMINI_2_5_FLASH_LITE;
 export const REGENERATE_SUMMARY_MODEL = GEMINI_3_1_FLASH_LITE;
 export const MEMORY_MODEL = GEMINI_2_5_FLASH_LITE;
 export const PROJECT_CHAT_MODEL = GEMINI_3_1_FLASH_LITE;
-export const TRANSCRIPTION_TEST_MODEL = GEMINI_2_5_FLASH;
+export const TRANSCRIPTION_TEST_MODEL = GEMINI_3_1_FLASH_LITE;
+export const KNOWLEDGE_EXTRACTION_MODEL = GEMINI_3_1_FLASH_LITE;
 
-// Failover chains. Order is load-bearing: it IS the runtime failover order, so
-// the two orderings present in index.ts are kept as distinct named chains
-// rather than collapsed into one.
+// Failover chains (DEC-0005: lite-only, each ends in a live lite model). Order is
+// load-bearing: it IS the runtime failover order. The call site passes the primary
+// model separately and the chain is deduplicated against it.
 export const STANDARD_FALLBACK_CHAIN = [
-  GEMINI_2_5_FLASH_LITE,
-  GEMINI_2_5_FLASH,
   GEMINI_3_1_FLASH_LITE,
-] as const;
-
-export const FLASH_FIRST_FALLBACK_CHAIN = [
-  GEMINI_2_5_FLASH,
   GEMINI_2_5_FLASH_LITE,
-  GEMINI_3_1_FLASH_LITE,
 ] as const;
 
 // F2 issue resolution (workflow-server/src/issues.ts). Lite-only per the cost policy in
@@ -80,9 +74,32 @@ export const ISSUE_RESOLUTION_FALLBACK_CHAIN = [
 ] as const;
 
 export const MEMORY_FALLBACK_CHAIN = [
-  GEMINI_2_5_FLASH,
   GEMINI_3_1_FLASH_LITE,
 ] as const;
+
+// DEC-0005 env guard. Every env-driven model setting goes through this helper so a
+// stale or wrong value on the host can never route production to a non-lite model.
+// Never throws (a startup crash would take prod down): unset/blank silently uses the
+// role default; a value that is not a live lite model in the registry logs ONE warning
+// naming the env var and the rejected id, then uses the lite default.
+const LITE_MODEL_PATTERN = /^gemini-\d[\d.]*-flash-lite$/;
+
+export function isLiteModel(id: string): boolean {
+  return typeof id === 'string' && LITE_MODEL_PATTERN.test(id) && KNOWN_MODELS.has(id);
+}
+
+export function liteModelFromEnv(
+  envName: string,
+  raw: string | undefined,
+  fallback: string,
+  warn: (message: string) => void = console.warn,
+): string {
+  const value = (raw ?? '').trim();
+  if (value === '') return fallback;
+  if (isLiteModel(value)) return value;
+  warn(`${envName}: "${value}" is not a live lite model in the registry (DEC-0005); using the default "${fallback}".`);
+  return fallback;
+}
 
 // Fail loud: throw on a retired or unknown model id so a bad value cannot
 // silently reach the API. Returns the trimmed id for convenient inline use.

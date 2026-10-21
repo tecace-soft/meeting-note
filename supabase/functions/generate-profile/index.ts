@@ -240,12 +240,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** DEC-0005: lite-only. Deno cannot import the workflow-server registry, so the check is duplicated here. */
+const LITE_MODEL_PATTERN = /^gemini-\d[\d.]*-flash-lite$/;
+
+function isLiteModel(id: string): boolean {
+  return LITE_MODEL_PATTERN.test(id);
+}
+
+/** Primary model from GEMINI_MODEL; a non-lite value logs one warning and uses the lite default. */
+function modelFromEnv(): string {
+  const value = (Deno.env.get('GEMINI_MODEL') ?? '').trim();
+  if (value === '') return DEFAULT_GEMINI_MODEL;
+  if (isLiteModel(value)) return value;
+  console.warn(`GEMINI_MODEL: "${value}" is not a lite model (DEC-0005); using the default "${DEFAULT_GEMINI_MODEL}".`);
+  return DEFAULT_GEMINI_MODEL;
+}
+
 function parseFallbackModels(primaryModel: string): string[] {
   const configured = Deno.env.get('GEMINI_FALLBACK_MODELS')
     ?.split(',')
     .map((model) => model.trim())
     .filter(Boolean);
-  const fallbackModels = configured?.length ? configured : DEFAULT_GEMINI_FALLBACK_MODELS;
+  const liteConfigured = configured?.filter(isLiteModel);
+  if (configured && liteConfigured && liteConfigured.length !== configured.length) {
+    console.warn('GEMINI_FALLBACK_MODELS: non-lite entries ignored (DEC-0005).');
+  }
+  const fallbackModels = liteConfigured?.length ? liteConfigured : DEFAULT_GEMINI_FALLBACK_MODELS;
   return [primaryModel, ...fallbackModels].filter((model, index, models) => model && models.indexOf(model) === index);
 }
 
@@ -715,7 +735,7 @@ serve(async (req) => {
     const { speakerName, speakerId = '', transcriptText, existingProfile } = body;
 
     const apiKey = Deno.env.get('GEMINI_API_KEY') ?? Deno.env.get('GOOGLE_API_KEY') ?? '';
-    const model = (Deno.env.get('GEMINI_MODEL') ?? DEFAULT_GEMINI_MODEL).trim();
+    const model = modelFromEnv();
     if (!apiKey) {
       return new Response(
         JSON.stringify({

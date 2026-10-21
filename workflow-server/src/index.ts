@@ -12,15 +12,15 @@ import { Agent, setGlobalDispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
 import {
   GEMINI_2_5_FLASH_LITE,
-  GEMINI_2_5_FLASH,
   SUMMARY_MODEL,
   REGENERATE_SUMMARY_MODEL,
   PROJECT_CHAT_MODEL,
   TRANSCRIPTION_TEST_MODEL,
   STANDARD_FALLBACK_CHAIN,
-  FLASH_FIRST_FALLBACK_CHAIN,
   ISSUE_RESOLUTION_MODEL,
   ISSUE_RESOLUTION_FALLBACK_CHAIN,
+  KNOWLEDGE_EXTRACTION_MODEL,
+  liteModelFromEnv,
 } from './gemini-models.js';
 import {
   CREATED_MAIL_LIMIT_PER_HOUR,
@@ -283,9 +283,9 @@ const env = {
   // so an empty GEMINI_SUMMARY_MODEL="" would 404 the model, and empty numeric vars would
   // become Number("")=0 (port 0, zero timeouts, zero price). API keys/URLs above keep `??`
   // because "" is their intended "not configured" sentinel.
-  summaryModel: process.env.GEMINI_SUMMARY_MODEL || SUMMARY_MODEL,
-  regenerateSummaryModel: process.env.GEMINI_REGENERATE_SUMMARY_MODEL || REGENERATE_SUMMARY_MODEL,
-  transcriptionTestGeminiModel: process.env.GEMINI_TRANSCRIPTION_TEST_MODEL || TRANSCRIPTION_TEST_MODEL,
+  summaryModel: liteModelFromEnv('GEMINI_SUMMARY_MODEL', process.env.GEMINI_SUMMARY_MODEL, SUMMARY_MODEL),
+  regenerateSummaryModel: liteModelFromEnv('GEMINI_REGENERATE_SUMMARY_MODEL', process.env.GEMINI_REGENERATE_SUMMARY_MODEL, REGENERATE_SUMMARY_MODEL),
+  transcriptionTestGeminiModel: liteModelFromEnv('GEMINI_TRANSCRIPTION_TEST_MODEL', process.env.GEMINI_TRANSCRIPTION_TEST_MODEL, TRANSCRIPTION_TEST_MODEL),
   transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL || 'gpt-4o-transcribe',
   assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL || 'universal-3-pro',
   assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD || '0.21'),
@@ -2729,7 +2729,7 @@ async function streamProjectChat(req: IncomingMessage, res: ServerResponse): Pro
 
   // Unique ordering for project chat (primary PROJECT_CHAT_MODEL first); kept
   // inline but built from the registry consts to preserve this failover order.
-  const models = [PROJECT_CHAT_MODEL, GEMINI_2_5_FLASH_LITE, GEMINI_2_5_FLASH];
+  const models = [PROJECT_CHAT_MODEL, GEMINI_2_5_FLASH_LITE];
   let response: Response | null = null;
   let lastError = '';
   for (const model of models) {
@@ -3241,7 +3241,7 @@ async function issueResolution(req: IncomingMessage, res: ServerResponse): Promi
   const imageParts = await issueAttachmentImageParts(request.issueKey);
   const result = await callGeminiWithFallback({
     stage: 'Issue resolution',
-    model: process.env.ISSUE_RESOLUTION_MODEL || ISSUE_RESOLUTION_MODEL,
+    model: liteModelFromEnv('ISSUE_RESOLUTION_MODEL', process.env.ISSUE_RESOLUTION_MODEL, ISSUE_RESOLUTION_MODEL),
     fallbackModels: [...ISSUE_RESOLUTION_FALLBACK_CHAIN],
     responseMimeType: 'application/json',
     responseSchema: ISSUE_RESOLUTION_SCHEMA,
@@ -3458,7 +3458,7 @@ async function generateOpsRca(detail: string): Promise<{ resolution: ReturnType<
   const result = await callGeminiWithFallback({
     stage: 'Ops RCA',
     model: env.summaryModel,
-    fallbackModels: [...FLASH_FIRST_FALLBACK_CHAIN],
+    fallbackModels: [...STANDARD_FALLBACK_CHAIN],
     responseMimeType: 'application/json',
     responseSchema: ISSUE_RESOLUTION_SCHEMA,
     maxOutputTokens: 4096,
@@ -3966,8 +3966,9 @@ server.listen(env.port, () => {
     try {
       if (!env.supabaseUrl || !env.serviceRoleKey || !env.geminiApiKey
         || process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED !== 'true') throw new Error('CONFIG_UNAVAILABLE');
-      const model = process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL;
-      if (!model) throw new Error('CONFIG_UNAVAILABLE');
+      // Unset keeps extraction unconfigured; a set but non-lite value falls back to the lite default (DEC-0005).
+      if (!process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL?.trim()) throw new Error('CONFIG_UNAVAILABLE');
+      const model = liteModelFromEnv('MEETING_KNOWLEDGE_EXTRACTION_MODEL', process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL, KNOWLEDGE_EXTRACTION_MODEL);
       const stopExtraction = startMeetingExtractionWorker(createMeetingExtractionStore({
         rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
       }), {
