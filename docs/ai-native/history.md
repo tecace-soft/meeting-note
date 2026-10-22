@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(server): recognize symlinked entrypoints by real path
 - fix(gemini): use only lite models in every production path and guard model env overrides
 - fix(mobile): show the loading screen while restoring the session on cold start
 - fix(product-docs): hash doc bodies line-ending independently and check signatures locally
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
-- chore(lint): fix all eslint errors and make the lint gate blocking
 
 ### Recent merges
 

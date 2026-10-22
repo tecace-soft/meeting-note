@@ -3963,7 +3963,9 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
   server.once('close', cleanup);
   server.once('error', cleanup);
   server.listen(options.port ?? env.port, options.host, () => {
-    console.log(`Meeting Note workflow server listening on :${env.port}`);
+    const address = server.address();
+    const port = address && typeof address !== 'string' ? address.port : options.port ?? env.port;
+    console.log(`Meeting Note workflow server listening on :${port}`);
     console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
     void failOrphanedJobs();
     sweepTimer = setInterval(() => void failOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
