@@ -51,6 +51,7 @@
         "workflow-server/src/ai/**",
         "workflow-server/src/pipeline/**",
         "workflow-server/src/parsers.ts",
+        "workflow-server/src/routes/transcriptionTest.ts",
         "workflow-server/src/mcp/server.ts",
         "src/App.tsx",
         "src/pages/Project.tsx",
@@ -112,6 +113,7 @@
         "workflow-server/src/ai/**",
         "workflow-server/src/pipeline/**",
         "workflow-server/src/parsers.ts",
+        "workflow-server/src/routes/transcriptionTest.ts",
         "workflow-server/src/parsers.ts"
       ],
       "verified_body_hash": "021fb1dda010726c0d73a9c98ed3b421c2d2a94ea1deb20791de221392a912c1",

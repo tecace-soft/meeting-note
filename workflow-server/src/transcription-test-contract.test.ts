@@ -9,7 +9,7 @@ const models = ['assembly_universal2_codeswitch', 'assembly_universal3pro_auto',
 
 test('T1-1 transcription-test parser and authenticated route contracts', async (t) => {
   const f = await workflowFixture(); t.after(() => f.close());
-  const { parseTranscriptionTestInput } = await import('./index.js');
+  const { parseTranscriptionTestInput } = await import('./routes/transcriptionTest.js');
   const { env } = await import('./config/env.js'); env.openAiApiKey = 'synthetic-openai';
   await t.test('parser preserves defaults, trimming, valid models and exact input errors', () => {
     for (const model of models) {
