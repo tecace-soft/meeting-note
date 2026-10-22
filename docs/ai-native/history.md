@@ -45,11 +45,12 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs: regenerate history after syncing s12 with main
 - docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
 - docs(S1): require read-only job preflight before deployment merges
-- docs(S10): design durable recovery and execution ownership
+- docs(S12): design ordered shutdown and completed-job preservation
 - docs(notes): track extracted repository in decisions and product docs
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
@@ -65,7 +66,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 **Other**
 
 - test(project): distinguish owned-note success from shared-note rejection
-- test(S10): record recovery failures as todo without implementing them
+- test(S12): reproduce shutdown failures in isolated signal children
 - refactor(notes): extract Project note writes without changing behavior
 - test(project): reproduce silent zero-row note update success
 - test(notes): add pinned PGlite note RLS contracts
@@ -74,11 +75,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(server): never load the local .env or reach real services from tests
 - chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
-- chore(supabase): stop tracking CLI local state in supabase/.temp
 
 ### Recent merges
 
-- merge: sync s10 design tests with main e91dc63
+- merge: sync s12 design tests with main e91dc63
 - Merge pull request #26 from tecace-soft/refactor/t1-0a-test-isolation
 - merge: sync server test isolation with main a8c8b54
 - Merge pull request #27 from tecace-soft/refactor/t2-1-note-update-permissions
