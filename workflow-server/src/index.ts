@@ -1,5 +1,5 @@
-import { loadEnv } from './config/loadEnv.js';
-import { loadWorkflowEnv, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL, TRANSLATION_ENABLED } from './config/env.js';
+import './config/loadEnv.js';
+import { env, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL, TRANSLATION_ENABLED } from './config/env.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createWriteStream, realpathSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
@@ -58,7 +58,6 @@ import { createGeminiMeetingGenerator } from './knowledge/extraction-provider.js
 import { createMeetingExtractionStore } from './knowledge/extraction-store.js';
 import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
 
-loadEnv();
 
 interface SummarizeAudioRequest {
   downloadUrl?: unknown;
@@ -269,7 +268,6 @@ interface TranscriptionSettings {
   summaryContext: string;
 }
 
-const env = loadWorkflowEnv();
 
 const ASSEMBLYAI_CODE_SWITCHING_MODELS = ['universal-2'] as const;
 const ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL = ASSEMBLYAI_CODE_SWITCHING_MODELS.join('+');
@@ -3931,7 +3929,7 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
   };
   server.once('close', cleanup);
   server.once('error', cleanup);
-  server.listen(options.port ?? env.port, options.host, () => {
+  server.listen(options.port ?? env.port, options.host ?? env.listenHost, () => {
     const address = server.address();
     const port = address && typeof address !== 'string' ? address.port : options.port ?? env.port;
     console.log(`Meeting Note workflow server listening on :${port}`);
@@ -4009,6 +4007,3 @@ if (process.argv[1]) {
 if (isDirectExecution) {
   startServer();
 }
-
-// Characterization seam before T1-0b extraction.
-export { env };

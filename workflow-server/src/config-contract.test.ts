@@ -31,7 +31,7 @@ test('T1-0b env contracts preserve absent, empty and explicitly configured value
     import assert from 'node:assert/strict';
     delete process.env.GOOGLE_API_KEY;
     Object.assign(process.env, ${JSON.stringify(entry.vars)});
-    const { env } = await import(${JSON.stringify(new URL('./index.ts', import.meta.url).href)});
+    const { env } = await import(${JSON.stringify(new URL('./config/env.ts', import.meta.url).href)});
     const expected = ${JSON.stringify(entry.expected)};
     for (const key of Object.keys(expected)) assert.equal(env[key], expected[key], key);
   `], workflow));
@@ -46,7 +46,7 @@ test('T1-0b dotenv path is the server directory for root/server and tsx/build ex
     await writeFile(join(serverDir, 'package.json'), '{"type":"module"}');
     await symlink(join(workflow, 'node_modules'), join(serverDir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     await writeFile(join(scratch, '.env'), 'CONFIG_CONTRACT_SOURCE=wrong-root\nPORT=9462\n');
-    await writeFile(join(serverDir, '.env'), 'CONFIG_CONTRACT_SOURCE=synthetic-server\nPORT=9461\n');
+    await writeFile(join(serverDir, '.env'), 'CONFIG_CONTRACT_SOURCE=synthetic-server\nPORT=9461\nWORKFLOW_ALERT_TO=canary@example.invalid\n');
     await run([join(workflow, 'node_modules/typescript/bin/tsc'), '--outDir', join(serverDir, 'build')], workflow);
     for (const skip of [false, true]) {
       const stub = join(serverDir, `probe-${skip}.mjs`);
@@ -54,6 +54,7 @@ test('T1-0b dotenv path is the server directory for root/server and tsx/build ex
         import assert from 'node:assert/strict';
         import fs from 'node:fs';
         import { Server } from 'node:http';
+        import { pathToFileURL } from 'node:url';
         const read = fs.readFileSync;
         fs.readFileSync = function(path, ...args) {
           if (String(path).endsWith('.env')) {
@@ -70,9 +71,16 @@ test('T1-0b dotenv path is the server directory for root/server and tsx/build ex
           setImmediate(() => this.emit('close'));
           return this;
         };
-        process.on('beforeExit', () => {
+        process.on('beforeExit', async () => {
+          try {
           assert.equal(starts, 1);
           assert.equal(process.env.CONFIG_CONTRACT_SOURCE, ${skip ? 'undefined' : "'synthetic-server'"});
+          if (!${skip}) {
+            const extension = process.argv[1].endsWith('.ts') ? '.ts' : '.js';
+            const { alertRecipients } = await import(new URL('./alerts' + extension, pathToFileURL(process.argv[1])));
+            assert.deepEqual(alertRecipients(), ['canary@example.invalid']);
+          }
+          } catch (error) { console.error(error); process.exitCode = 1; }
         });
       `);
       for (const [mode, entry] of [['tsx', join(serverDir, 'src/index.ts')], ['build', join(serverDir, 'build/index.js')]]) {
@@ -82,4 +90,32 @@ test('T1-0b dotenv path is the server directory for root/server and tsx/build ex
       }
     }
   } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+
+test('T1-0b local host defaults to IPv4 loopback and preserves Render host selection', async (t) => {
+  for (const [render, configured, expected] of [
+    [undefined, undefined, '127.0.0.1'],
+    ['false', '', '127.0.0.1'],
+    ['true', undefined, undefined],
+    ['true', '127.0.0.1', '127.0.0.1'],
+  ] as const) {
+    await t.test(`Render=${render}, configured=${configured}`, () => run(['--import', loader, '--import', preload, '--input-type=module', '--eval', `
+      import assert from 'node:assert/strict';
+      import { Server } from 'node:http';
+      delete process.env.RENDER;
+      delete process.env.WORKFLOW_HOST;
+      if (${JSON.stringify(render)} !== undefined) process.env.RENDER = ${JSON.stringify(render)};
+      if (${JSON.stringify(configured)} !== undefined) process.env.WORKFLOW_HOST = ${JSON.stringify(configured)};
+      let actual = null;
+      Server.prototype.listen = function(port, host) {
+        actual = host;
+        setImmediate(() => this.emit('close'));
+        return this;
+      };
+      const { startServer } = await import(${JSON.stringify(new URL('./index.ts', import.meta.url).href)});
+      startServer({ port: 0 });
+      process.on('beforeExit', () => { assert.equal(actual, ${JSON.stringify(expected)}); });
+    `], workflow));
+  }
 });

@@ -1,7 +1,6 @@
 import { liteModelFromEnv, SUMMARY_MODEL, REGENERATE_SUMMARY_MODEL, TRANSCRIPTION_TEST_MODEL } from '../gemini-models.js';
 
-export function loadWorkflowEnv() {
-return {
+export const env = {
   supabaseUrl: process.env.SUPABASE_URL ?? '',
   serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
   geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
@@ -20,10 +19,11 @@ return {
   assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD || '0.21'),
   frontendOrigin: process.env.APP_FRONTEND_ORIGIN || '*',
   port: Number(process.env.PORT || '8787'),
+  // Render retains its platform host; local startup binds only IPv4 loopback.
+  listenHost: process.env.WORKFLOW_HOST || (process.env.RENDER === 'true' ? undefined : '127.0.0.1'),
   fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS || '1200000'),
   fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS || '1200000'),
 };
-}
 
 export const ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS = ['universal-2'] as const;
 export const ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL = ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS.join('+');

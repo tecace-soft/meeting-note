@@ -45,6 +45,7 @@
       "summary": "프론트엔드·workflow-server(+합친 MCP)·Supabase·배포를 잇는 전체 시스템 지도. 녹음->전사->화자->요약->저장 파이프라인과 MSAL->Supabase 토큰->RLS 인증 흐름의 진입점.",
       "depends_on": [
         "workflow-server/src/index.ts",
+        "workflow-server/src/config/**",
         "workflow-server/src/mcp/server.ts",
         "src/App.tsx",
         "src/pages/Project.tsx",
@@ -100,6 +101,7 @@
       "summary": "녹음/업로드한 오디오를 AssemblyAI로 전사하고 화자별 세그먼트로 분리하는 파이프라인. 불변 speakerKey, 무음 처리(422), 과분할 주의점 포함.",
       "depends_on": [
         "workflow-server/src/index.ts",
+        "workflow-server/src/config/**",
         "workflow-server/src/parsers.ts"
       ],
       "verified_body_hash": "021fb1dda010726c0d73a9c98ed3b421c2d2a94ea1deb20791de221392a912c1",
