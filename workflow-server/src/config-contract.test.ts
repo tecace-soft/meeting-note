@@ -71,7 +71,10 @@ test('T1-0b dotenv path is the server directory for root/server and tsx/build ex
           setImmediate(() => this.emit('close'));
           return this;
         };
-        process.on('beforeExit', async () => {
+        // Node 22 can emit beforeExit again after a cached dynamic import.
+        // Run the unchanged assertions once and prove the async check finished.
+        let checksCompleted = false;
+        process.once('beforeExit', async () => {
           try {
           assert.equal(starts, 1);
           assert.equal(process.env.CONFIG_CONTRACT_SOURCE, ${skip ? 'undefined' : "'synthetic-server'"});
@@ -81,6 +84,10 @@ test('T1-0b dotenv path is the server directory for root/server and tsx/build ex
             assert.deepEqual(alertRecipients(), ['canary@example.invalid']);
           }
           } catch (error) { console.error(error); process.exitCode = 1; }
+          finally { checksCompleted = true; }
+        });
+        process.once('exit', () => {
+          assert.equal(checksCompleted, true, 'entrypoint assertions must finish before exit');
         });
       `);
       for (const [mode, entry] of [['tsx', join(serverDir, 'src/index.ts')], ['build', join(serverDir, 'build/index.js')]]) {
