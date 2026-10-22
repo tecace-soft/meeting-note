@@ -3874,3 +3874,5 @@ if (process.argv[1]) {
 if (isDirectExecution) {
   startServer();
 }
+
+export { callGeminiWithFallback, delay, recordGeminiUsage, recordAssemblyUsage, getPersonalMemoryContext, buildSpeakerContextFromSegments, normalizeTranscriptSegment, recoverCompleteDiarizedSegments, parseDiarizedSegmentsWithRecovery };
