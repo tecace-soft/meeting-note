@@ -36,7 +36,8 @@ jobs:
         working-directory: workflow-server
         run: npm run build
 
-      - name: Test
+      # npm ci uses the exact devDependency and lockfile version of PGlite.
+      - name: Test (includes offline note RLS contracts)
         working-directory: workflow-server
         run: npm test
 

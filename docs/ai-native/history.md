@@ -67,6 +67,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(notes): extract Project note writes without changing behavior
 - test(project): reproduce silent zero-row note update success
 - test(notes): add pinned PGlite note RLS contracts
 - test(server): never load the local .env or reach real services from tests
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
-- chore(lint): fix all eslint errors and make the lint gate blocking
 
 ### Recent merges
 

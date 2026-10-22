@@ -40,15 +40,15 @@ beforeEach(() => { fixture.user = { id: 'project-owner' }; fixture.updateData = 
 afterEach(cleanup);
 async function openProject() {
   render(<MemoryRouter initialEntries={['/project?id=fixture-project']}><Project /></MemoryRouter>);
-  fireEvent.click(await screen.findByRole('button', { name: 'projectNotes', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'projectNotes' }));
   await screen.findByText('Original title');
 }
 async function editSummary() {
   await openProject();
   fireEvent.click(screen.getByText('Original title'));
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
   fireEvent.change(screen.getByDisplayValue('Original summary'), { target: { value: 'Changed summary' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Done', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 }
 async function renameNote() {
   await openProject();
@@ -65,7 +65,7 @@ describe('T2-1 Project note write regression', () => {
     await waitFor(() => expect(fixture.updates).toHaveLength(1));
     expect(await screen.findByText(/권한이 없을 수/)).toBeInTheDocument();
     expect(screen.getByDisplayValue('Changed summary')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Edit', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
   it('keeps the rename input and reports failure when UPDATE returns zero rows', async () => {
     await renameNote();
@@ -76,8 +76,8 @@ describe('T2-1 Project note write regression', () => {
   it('only updates the displayed summary after a returned row confirms success', async () => {
     fixture.updateData = { id: 'fixture-note' };
     await editSummary();
-    expect(await screen.findByText('Changed summary')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByDisplayValue('Changed summary')).not.toBeInTheDocument());
+    expect(screen.getByText('Changed summary')).toBeInTheDocument();
     expect(fixture.updates[0]).toEqual({ patch: { summary_edit: 'Changed summary' }, filters: [['id', 'fixture-note'], ['user_id', 'project-owner']], selected: 'id' });
   });
   it('only updates the displayed title after a returned row confirms success', async () => {
