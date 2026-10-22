@@ -50,7 +50,7 @@ import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, o
 import { handleMcpRequest } from './mcp/transports/http.js';
 import { noteAccessFilterFor } from './mcp/lib/supabase.js';
 import { loadProductDoc, loadProductDocsIndex } from './productDocs.js';
-import { clientGateMode, tenantGateMode, type MicrosoftCaller } from './microsoftIdentity.js';
+import { clientGateMode, resolveMicrosoftCaller, tenantGateMode } from './microsoftIdentity.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
