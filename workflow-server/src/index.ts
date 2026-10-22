@@ -2,13 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createWriteStream } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
 import { config as loadDotenv } from 'dotenv';
-import { Agent, setGlobalDispatcher } from 'undici';
+import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
 import {
   GEMINI_2_5_FLASH_LITE,
@@ -61,7 +61,9 @@ import { createMeetingExtractionStore } from './knowledge/extraction-store.js';
 import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
 
 const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-loadDotenv({ path: join(workflowDir, '.env') });
+if (process.env.MEETING_NOTE_SKIP_DOTENV !== '1') {
+  loadDotenv({ path: join(workflowDir, '.env') });
+}
 
 interface SummarizeAudioRequest {
   downloadUrl?: unknown;
@@ -311,11 +313,6 @@ const OPENAI_MULTILINGUAL_TRANSCRIPTION_PROMPT = [
 // when false, AssemblyAI skips per-utterance translation and only one summary
 // (in the selected language) is generated. Flip to true to restore them.
 const TRANSLATION_ENABLED = false;
-
-setGlobalDispatcher(new Agent({
-  headersTimeout: env.fetchHeadersTimeoutMs,
-  bodyTimeout: env.fetchBodyTimeoutMs,
-}));
 
 const supabase = createClient(env.supabaseUrl || 'https://placeholder.supabase.co', env.serviceRoleKey || 'missing-service-role-key', {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -3677,7 +3674,7 @@ const handleMeetingKnowledgeRequest = createMeetingKnowledgeHttpHandler(createMe
   rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(2_000)),
 }), process.env);
 
-const server = createServer((req, res) => {
+export const server = createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     // New private routes own their CORS, credential checks and content-free errors.
@@ -3794,24 +3791,6 @@ const server = createServer((req, res) => {
       });
     }
     sendJson(res, status, { error: message });
-  });
-});
-
-process.on('unhandledRejection', (error) => {
-  console.error('Unhandled workflow rejection:', error);
-  void raiseIncident({
-    title: 'Unhandled workflow rejection',
-    error,
-    context: { source: 'process.unhandledRejection' },
-  });
-});
-
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught workflow exception:', error);
-  void raiseIncident({
-    title: 'Uncaught workflow exception',
-    error,
-    context: { source: 'process.uncaughtException' },
   });
 });
 
@@ -3936,61 +3915,117 @@ async function failOrphanedJobs(): Promise<void> {
   console.log(`Marked ${failedIds.length} orphaned workflow job(s) as failed.`);
 }
 
-server.listen(env.port, () => {
-  console.log(`Meeting Note workflow server listening on :${env.port}`);
-  console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
-  void failOrphanedJobs();
-  setInterval(() => void failOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
-  // Existing transcription and MCP startup remain independent of this opt-in.
-  if (process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED === 'true') {
-    try {
-      if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('CONFIG_UNAVAILABLE');
-      const stopDelivery = startMeetingKnowledgeDelivery(createMeetingOutboxStore({
-        rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
-      }), {
-        MEETING_KNOWLEDGE_DELIVERY_ENABLED: process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED,
-        MEETING_KNOWLEDGE_AXKH_URL: process.env.MEETING_KNOWLEDGE_AXKH_URL,
-        MEETING_KNOWLEDGE_INGEST_KEY: process.env.MEETING_KNOWLEDGE_INGEST_KEY,
-        MEETING_KNOWLEDGE_ACCESS_KEY: process.env.MEETING_KNOWLEDGE_ACCESS_KEY,
-        MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
-        MEETING_KNOWLEDGE_NOTE_BASE_URL: process.env.MEETING_KNOWLEDGE_NOTE_BASE_URL,
-        MEETING_KNOWLEDGE_TIMEZONE: process.env.MEETING_KNOWLEDGE_TIMEZONE,
-      });
-      server.once('close', stopDelivery);
-    } catch {
-      // Never print endpoint, secret, source data or upstream diagnostics.
-      console.warn('Meeting knowledge delivery: CONFIG_UNAVAILABLE');
-    }
-  }
-  if (process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED === 'true') {
-    try {
-      if (!env.supabaseUrl || !env.serviceRoleKey || !env.geminiApiKey
-        || process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED !== 'true') throw new Error('CONFIG_UNAVAILABLE');
-      // Unset keeps extraction unconfigured; a set but non-lite value falls back to the lite default (DEC-0005).
-      if (!process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL?.trim()) throw new Error('CONFIG_UNAVAILABLE');
-      const model = liteModelFromEnv('MEETING_KNOWLEDGE_EXTRACTION_MODEL', process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL, KNOWLEDGE_EXTRACTION_MODEL);
-      const stopExtraction = startMeetingExtractionWorker(createMeetingExtractionStore({
-        rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
-      }), {
-        MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
-        MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
-        MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
-        MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS: process.env.MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS,
-      }, {
-        generate: createGeminiMeetingGenerator({ apiKey: env.geminiApiKey, model }),
-        authorizeModel: createMeetingModelPolicyClient({
-          MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
+// Importing this module only constructs the handler.
+// Production startup stays explicit so tests can own all process resources.
+export function startServer(options: { port?: number; host?: string; dispatcher?: Dispatcher } = {}): () => Promise<void> {
+  if (server.listening) throw new Error('Workflow server is already listening.');
+  const previousDispatcher = getGlobalDispatcher();
+  const dispatcher = options.dispatcher ?? new Agent({
+    headersTimeout: env.fetchHeadersTimeoutMs,
+    bodyTimeout: env.fetchBodyTimeoutMs,
+  });
+  setGlobalDispatcher(dispatcher);
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
+  const workerStops: Array<() => void> = [];
+  const onRejection = (error: unknown) => {
+    console.error('Unhandled workflow rejection:', error);
+    void raiseIncident({
+      title: 'Unhandled workflow rejection',
+      error,
+      context: { source: 'process.unhandledRejection' },
+    });
+  };
+
+  const onException = (error: Error) => {
+    console.error('Uncaught workflow exception:', error);
+    void raiseIncident({
+      title: 'Uncaught workflow exception',
+      error,
+      context: { source: 'process.uncaughtException' },
+    });
+  };
+
+  process.on('unhandledRejection', onRejection);
+  process.on('uncaughtException', onException);
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    server.off('close', cleanup);
+    server.off('error', cleanup);
+    if (sweepTimer) clearInterval(sweepTimer);
+    for (const stopWorker of workerStops.splice(0)) stopWorker();
+    process.off('unhandledRejection', onRejection);
+    process.off('uncaughtException', onException);
+    setGlobalDispatcher(previousDispatcher);
+    if (dispatcher !== previousDispatcher) void dispatcher.close();
+  };
+  server.once('close', cleanup);
+  server.once('error', cleanup);
+  server.listen(options.port ?? env.port, options.host, () => {
+    console.log(`Meeting Note workflow server listening on :${env.port}`);
+    console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
+    void failOrphanedJobs();
+    sweepTimer = setInterval(() => void failOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
+    // Existing transcription and MCP startup remain independent of this opt-in.
+    if (process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED === 'true') {
+      try {
+        if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('CONFIG_UNAVAILABLE');
+        const stopDelivery = startMeetingKnowledgeDelivery(createMeetingOutboxStore({
+          rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+        }), {
+          MEETING_KNOWLEDGE_DELIVERY_ENABLED: process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED,
           MEETING_KNOWLEDGE_AXKH_URL: process.env.MEETING_KNOWLEDGE_AXKH_URL,
-          MEETING_KNOWLEDGE_MODEL_POLICY_KEY: process.env.MEETING_KNOWLEDGE_MODEL_POLICY_KEY,
           MEETING_KNOWLEDGE_INGEST_KEY: process.env.MEETING_KNOWLEDGE_INGEST_KEY,
           MEETING_KNOWLEDGE_ACCESS_KEY: process.env.MEETING_KNOWLEDGE_ACCESS_KEY,
           MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
-          MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
-        }),
-      });
-      server.once('close', stopExtraction);
-    } catch {
-      console.warn('Meeting knowledge extraction: CONFIG_UNAVAILABLE');
+          MEETING_KNOWLEDGE_NOTE_BASE_URL: process.env.MEETING_KNOWLEDGE_NOTE_BASE_URL,
+          MEETING_KNOWLEDGE_TIMEZONE: process.env.MEETING_KNOWLEDGE_TIMEZONE,
+        });
+        workerStops.push(stopDelivery);
+      } catch {
+        // Never print endpoint, secret, source data or upstream diagnostics.
+        console.warn('Meeting knowledge delivery: CONFIG_UNAVAILABLE');
+      }
     }
-  }
-});
+    if (process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED === 'true') {
+      try {
+        if (!env.supabaseUrl || !env.serviceRoleKey || !env.geminiApiKey
+          || process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED !== 'true') throw new Error('CONFIG_UNAVAILABLE');
+        // Unset keeps extraction unconfigured; a set but non-lite value falls back to the lite default (DEC-0005).
+        if (!process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL?.trim()) throw new Error('CONFIG_UNAVAILABLE');
+        const model = liteModelFromEnv('MEETING_KNOWLEDGE_EXTRACTION_MODEL', process.env.MEETING_KNOWLEDGE_EXTRACTION_MODEL, KNOWLEDGE_EXTRACTION_MODEL);
+        const stopExtraction = startMeetingExtractionWorker(createMeetingExtractionStore({
+          rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+        }), {
+          MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
+          MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+          MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
+          MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS: process.env.MEETING_KNOWLEDGE_EXTRACTION_MAX_CHUNKS,
+        }, {
+          generate: createGeminiMeetingGenerator({ apiKey: env.geminiApiKey, model }),
+          authorizeModel: createMeetingModelPolicyClient({
+            MEETING_KNOWLEDGE_EXTRACTION_ENABLED: process.env.MEETING_KNOWLEDGE_EXTRACTION_ENABLED,
+            MEETING_KNOWLEDGE_AXKH_URL: process.env.MEETING_KNOWLEDGE_AXKH_URL,
+            MEETING_KNOWLEDGE_MODEL_POLICY_KEY: process.env.MEETING_KNOWLEDGE_MODEL_POLICY_KEY,
+            MEETING_KNOWLEDGE_INGEST_KEY: process.env.MEETING_KNOWLEDGE_INGEST_KEY,
+            MEETING_KNOWLEDGE_ACCESS_KEY: process.env.MEETING_KNOWLEDGE_ACCESS_KEY,
+            MEETING_KNOWLEDGE_TENANT_ID: process.env.MEETING_KNOWLEDGE_TENANT_ID,
+            MEETING_KNOWLEDGE_EXTRACTION_MODEL: model,
+          }),
+        });
+        workerStops.push(stopExtraction);
+      } catch {
+        console.warn('Meeting knowledge extraction: CONFIG_UNAVAILABLE');
+      }
+    }
+  });
+  return () => new Promise<void>((resolveStop, rejectStop) => {
+    server.close((error) => error ? rejectStop(error) : resolveStop());
+    server.closeIdleConnections();
+  });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  startServer();
+}
