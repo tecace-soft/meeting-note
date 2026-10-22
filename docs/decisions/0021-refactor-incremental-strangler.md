@@ -10,6 +10,7 @@ chosen: 점진적 strangler를 기준안으로 한다. index.ts는 handle<Group>
 reason: 2026-10-09 리뷰의 다섯 관점이 모두 재작성은 정당화되지 않는다고 결론냈다. 신뢰성 처리(heartbeat, orphan sweep, 멱등성, 재시도)가 이미 코드에 있고, knowledge와 mcp가 같은 seam으로 운영 중이다. 문제는 god-file과 중복 호출부에 몰려 있어 기계적으로 추출할 수 있다.
 paths:
   - workflow-server/src/index.ts
+  - workflow-server/src/config/**
   - src/pages/Project.tsx
   - src/lib/notes/repository.ts
   - src/pages/SummaryHistory.tsx
