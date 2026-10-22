@@ -191,6 +191,7 @@ Codex는 코드를 수정하지 않고 마지막 절 "Codex 검토 요청"의 �
 | UX | Teams 전달, OneDrive 내보내기 제거 | (2026-08-21 팀 결정) | 완료, 남은 문자열은 5절 U24 |
 | S1 | RUNBOOK.md의 merge 전 읽기 전용 SQL과 판정 규칙 | 이 PR | 문서와 합성 SQL 검증만 완료, 운영 실행은 Andrew, S2와 S9 미수행 |
 | T2-1 / A17 첫 부분 | note RLS PGlite 도구와 Project 소유자 쓰기 검사 | 이 PR | 0행 성공 처리 재현 후 수정, 로컬 검증 완료, Andrew 소유 노트 수동 확인과 2계정 E2E 대기 |
+| T1-0a | 서버 전체 격리, import 안전성, 18개 경로 parity와 인증 후 계약 | 이 PR | 로컬 검증 완료, merge 전 S1과 Andrew의 배포 후 확인 대기 |
 
 ### 2.4 10/09 이후 새로 생긴 코드
 
