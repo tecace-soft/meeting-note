@@ -4,7 +4,9 @@ import { EventEmitter } from 'node:events';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { env } from './config/env.js';
 import { MicrosoftIdentityError } from './microsoftIdentity.js';
-import { HttpError, corsHeaders, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, requiredString, getBearerToken, getMicrosoftUserId, getMicrosoftProfile, supabase } from './index.js';
+import { HttpError, corsHeaders, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, requiredString, getBearerToken } from './http/shared.js';
+import { getMicrosoftUserId, getMicrosoftProfile } from './http/identity.js';
+import { supabase } from './db/supabaseClient.js';
 
 function bodyRequest() {
   const stream = new EventEmitter() as EventEmitter & { destroy(): void; destroyed: boolean };
@@ -97,5 +99,5 @@ test('identity wrappers preserve Graph validation and tenant rejection; DB clien
   assert.equal(await getMicrosoftUserId(token(tid)), id);
   await assert.rejects(getMicrosoftProfile(token('33333333-3333-4333-8333-333333333333')), (error: unknown) => getHttpStatus(error) === 403);
   status = 401; await assert.rejects(getMicrosoftUserId(token(tid)), (error: unknown) => getHttpStatus(error) === 401);
-  assert.equal((await import('./index.js')).supabase, supabase);
+  assert.equal((await import('./db/supabaseClient.js')).supabase, supabase);
 });

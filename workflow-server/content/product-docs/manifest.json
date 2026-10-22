@@ -46,6 +46,8 @@
       "depends_on": [
         "workflow-server/src/index.ts",
         "workflow-server/src/config/**",
+        "workflow-server/src/http/**",
+        "workflow-server/src/db/**",
         "workflow-server/src/mcp/server.ts",
         "src/App.tsx",
         "src/pages/Project.tsx",
@@ -102,6 +104,8 @@
       "depends_on": [
         "workflow-server/src/index.ts",
         "workflow-server/src/config/**",
+        "workflow-server/src/http/**",
+        "workflow-server/src/db/**",
         "workflow-server/src/parsers.ts"
       ],
       "verified_body_hash": "021fb1dda010726c0d73a9c98ed3b421c2d2a94ea1deb20791de221392a912c1",
