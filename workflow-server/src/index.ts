@@ -1,21 +1,19 @@
+import { loadEnv } from './config/loadEnv.js';
+import { loadWorkflowEnv, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL, TRANSLATION_ENABLED } from './config/env.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createWriteStream, realpathSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
-import { config as loadDotenv } from 'dotenv';
 import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { calculateGeminiUsageCost } from './costs.js';
 import {
   GEMINI_2_5_FLASH_LITE,
-  SUMMARY_MODEL,
-  REGENERATE_SUMMARY_MODEL,
   PROJECT_CHAT_MODEL,
-  TRANSCRIPTION_TEST_MODEL,
   STANDARD_FALLBACK_CHAIN,
   ISSUE_RESOLUTION_MODEL,
   ISSUE_RESOLUTION_FALLBACK_CHAIN,
@@ -60,10 +58,7 @@ import { createGeminiMeetingGenerator } from './knowledge/extraction-provider.js
 import { createMeetingExtractionStore } from './knowledge/extraction-store.js';
 import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
 
-const workflowDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-if (process.env.MEETING_NOTE_SKIP_DOTENV !== '1') {
-  loadDotenv({ path: join(workflowDir, '.env') });
-}
+loadEnv();
 
 interface SummarizeAudioRequest {
   downloadUrl?: unknown;
@@ -274,33 +269,11 @@ interface TranscriptionSettings {
   summaryContext: string;
 }
 
-const env = {
-  supabaseUrl: process.env.SUPABASE_URL ?? '',
-  serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
-  geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '',
-  assemblyAiApiKey: process.env.ASSEMBLYAI_API_KEY ?? '',
-  openAiApiKey: process.env.OPENAI_API_KEY ?? '',
-  // `||` (not `??`) for values with a meaningful default: an env var set to an EMPTY
-  // string must fall back to the default, not keep "". `??` only catches null/undefined,
-  // so an empty GEMINI_SUMMARY_MODEL="" would 404 the model, and empty numeric vars would
-  // become Number("")=0 (port 0, zero timeouts, zero price). API keys/URLs above keep `??`
-  // because "" is their intended "not configured" sentinel.
-  summaryModel: liteModelFromEnv('GEMINI_SUMMARY_MODEL', process.env.GEMINI_SUMMARY_MODEL, SUMMARY_MODEL),
-  regenerateSummaryModel: liteModelFromEnv('GEMINI_REGENERATE_SUMMARY_MODEL', process.env.GEMINI_REGENERATE_SUMMARY_MODEL, REGENERATE_SUMMARY_MODEL),
-  transcriptionTestGeminiModel: liteModelFromEnv('GEMINI_TRANSCRIPTION_TEST_MODEL', process.env.GEMINI_TRANSCRIPTION_TEST_MODEL, TRANSCRIPTION_TEST_MODEL),
-  transcriptionTestOpenAiModel: process.env.OPENAI_TRANSCRIPTION_TEST_MODEL || 'gpt-4o-transcribe',
-  assemblyAiSpeechModel: process.env.ASSEMBLYAI_SPEECH_MODEL || 'universal-3-pro',
-  assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD || '0.21'),
-  frontendOrigin: process.env.APP_FRONTEND_ORIGIN || '*',
-  port: Number(process.env.PORT || '8787'),
-  fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS || '1200000'),
-  fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS || '1200000'),
-};
+const env = loadWorkflowEnv();
 
 const ASSEMBLYAI_CODE_SWITCHING_MODELS = ['universal-2'] as const;
 const ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL = ASSEMBLYAI_CODE_SWITCHING_MODELS.join('+');
-const ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS = ['universal-2'] as const;
-const ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL = ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS.join('+');
+
 const TRANSCRIPTION_MODEL_TEST_USER_ID = 'd9eb0f3d-819e-4b45-8df6-e9f229de2447';
 const OPENAI_MULTILINGUAL_TRANSCRIPTION_PROMPT = [
   'Transcribe the audio exactly as spoken in the original language or languages.',
@@ -309,10 +282,6 @@ const OPENAI_MULTILINGUAL_TRANSCRIPTION_PROMPT = [
   'Do not infer, summarize, or normalize the conversation beyond transcription.',
 ].join(' ');
 
-// Translation features are temporarily disabled to shorten processing time:
-// when false, AssemblyAI skips per-utterance translation and only one summary
-// (in the selected language) is generated. Flip to true to restore them.
-const TRANSLATION_ENABLED = false;
 
 const supabase = createClient(env.supabaseUrl || 'https://placeholder.supabase.co', env.serviceRoleKey || 'missing-service-role-key', {
   auth: { persistSession: false, autoRefreshToken: false },
