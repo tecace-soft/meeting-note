@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fixture = vi.hoisted(() => ({
   user: { id: 'project-owner' } as { id: string } | null,
+  noteOwner: 'note-owner',
   updateData: null as { id: string } | null,
   updateError: null as { message: string } | null,
   updates: [] as Array<{ patch: Record<string, string>; filters: Array<[string, unknown]>; selected: string | null }>,
@@ -21,7 +22,7 @@ vi.mock('../config/supabaseConfig', () => ({
         ? { data: fixture.updateData, error: fixture.updateError }
         : table === 'project'
           ? { data: { id: 'fixture-project', user_id: 'project-owner', name: 'Fixture project', notes: ['fixture-note'] }, error: null }
-          : { data: table === 'note' ? [{ id: 'fixture-note', name: 'Original title', summary: 'Original summary', user_id: 'note-owner', projects: ['fixture-project'] }] : [], error: null };
+          : { data: table === 'note' ? [{ id: 'fixture-note', name: 'Original title', summary: 'Original summary', user_id: fixture.noteOwner, projects: ['fixture-project'] }] : [], error: null };
       const query: any = {
         select(columns: string) { if (mutation) mutation.selected = columns; return query; },
         update(patch: Record<string, string>) { mutation = { patch, filters: [], selected: null }; fixture.updates.push(mutation); return query; },
@@ -36,7 +37,7 @@ vi.mock('../config/supabaseConfig', () => ({
 }));
 import Project from './Project';
 
-beforeEach(() => { fixture.user = { id: 'project-owner' }; fixture.updateData = null; fixture.updateError = null; fixture.updates.length = 0; });
+beforeEach(() => { fixture.user = { id: 'project-owner' }; fixture.noteOwner = 'note-owner'; fixture.updateData = null; fixture.updateError = null; fixture.updates.length = 0; });
 afterEach(cleanup);
 async function openProject() {
   render(<MemoryRouter initialEntries={['/project?id=fixture-project']}><Project /></MemoryRouter>);
@@ -74,6 +75,7 @@ describe('T2-1 Project note write regression', () => {
     expect(screen.queryByTitle('Changed title')).not.toBeInTheDocument();
   });
   it('only updates the displayed summary after a returned row confirms success', async () => {
+    fixture.noteOwner = 'project-owner';
     fixture.updateData = { id: 'fixture-note' };
     await editSummary();
     await waitFor(() => expect(screen.queryByDisplayValue('Changed summary')).not.toBeInTheDocument());
@@ -81,6 +83,7 @@ describe('T2-1 Project note write regression', () => {
     expect(fixture.updates[0]).toEqual({ patch: { summary_edit: 'Changed summary' }, filters: [['id', 'fixture-note'], ['user_id', 'project-owner']], selected: 'id' });
   });
   it('only updates the displayed title after a returned row confirms success', async () => {
+    fixture.noteOwner = 'project-owner';
     fixture.updateData = { id: 'fixture-note' };
     await renameNote();
     expect(await screen.findByTitle('Changed title')).toBeInTheDocument();

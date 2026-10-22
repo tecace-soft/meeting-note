@@ -51,6 +51,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(notes): track extracted repository in decisions and product docs
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
 - docs(refactor): plan revision 2 around stability, simplification and automation
@@ -63,7 +64,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(reviews): add 2026-09-29 ops stability technical review
 - docs(reviews): record legacy orphan note resolution (319 -> 0)
 - docs(design): C1 iOS m4a recovery via segment-splitting prevention
-- docs(review): mark the 2026-10-09 deploy steps 1-3 done
 
 **Other**
 
