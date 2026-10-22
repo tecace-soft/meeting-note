@@ -51,6 +51,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(S10): design durable recovery and execution ownership
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
 - docs(refactor): plan revision 2 around stability, simplification and automation
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
-- chore(lint): fix all eslint errors and make the lint gate blocking
 
 ### Recent merges
 
