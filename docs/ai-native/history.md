@@ -30,7 +30,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): add one-click AX-KH send from the meeting note
 - feat(docs): add structured decision records, advisory checker, and AX-KH node assembler
 - feat(recordings): sort Recent recordings by upload time on web and mobile
-- feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
 
 **Fixes**
 
@@ -43,14 +42,14 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(admin): remove a departed teammate from hardcoded admin allowlists
 - fix(auth): trust only the Microsoft tenant, not mail domains, for app login and backend calls
 - fix(docs): make the product docs page scrollable inside the app shell
-- fix(auth): do not release queued Supabase requests as anon when the token provider is cleared
-- fix(upload): retry file-row insert and surface failure instead of swallowing it
 
 **Docs**
 
+- docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
 - docs(S1): require read-only job preflight before deployment merges
+- docs(S10): design durable recovery and execution ownership
 - docs(notes): track extracted repository in decisions and product docs
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
@@ -66,6 +65,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 **Other**
 
 - test(project): distinguish owned-note success from shared-note rejection
+- test(S10): record recovery failures as todo without implementing them
 - refactor(notes): extract Project note writes without changing behavior
 - test(project): reproduce silent zero-row note update success
 - test(notes): add pinned PGlite note RLS contracts
@@ -78,6 +78,8 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 ### Recent merges
 
+- merge: sync s10 design tests with main e91dc63
+- Merge pull request #26 from tecace-soft/refactor/t1-0a-test-isolation
 - merge: sync server test isolation with main a8c8b54
 - Merge pull request #27 from tecace-soft/refactor/t2-1-note-update-permissions
 - merge: sync server test isolation with main e5ec45c
@@ -86,6 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #24: private meeting knowledge with verified MED fixes
 - Merge pull request #25: enable project-scoped RLS on chat and session
 - Merge branch 'main' into fix/supabase-upload-limit
-- Merge memory feature (F1a auto-accumulate, F1b speaker suggest, F1c personal memory) into main
-- Merge latest main (predecessor processing-screen rewrite) into phase3b-1
 <!-- ai-native:auto:END -->
