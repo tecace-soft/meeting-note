@@ -45,6 +45,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs: regenerate history after syncing s12 with main
 - docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(server): never load the local .env or reach real services from tests
 - chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
-- chore(supabase): stop tracking CLI local state in supabase/.temp
 
 ### Recent merges
 
