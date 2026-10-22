@@ -46,10 +46,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(upload): retry file-row insert and surface failure instead of swallowing it
 - fix(recordings): block deleting recent audio that a note still references
 - fix(docs): render date-only verified_at as a local date without time
-- fix(summarize): show a clear no-speech message instead of a raw transcription error
 
 **Docs**
 
+- docs(S1): require read-only job preflight before deployment merges
 - docs(notes): track extracted repository in decisions and product docs
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
@@ -78,6 +78,8 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 ### Recent merges
 
+- merge: sync note update permissions with main e5ec45c
+- Merge pull request #30 from tecace-soft/refactor/s1-predeploy-runbook
 - Merge pull request #24: private meeting knowledge with verified MED fixes
 - Merge pull request #25: enable project-scoped RLS on chat and session
 - Merge branch 'main' into fix/supabase-upload-limit
@@ -86,6 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge branch 'main' of https://github.com/tecace-soft/meeting-note
 - Merge Phase 3 security batch 1 (supabase-token tenant gate) into main
 - Merge pull request #18 from tecace-soft/mobile-app
-- Merge Reliability Phase 2 (error visibility, 0-row guards, alert removal, env fail-fast) into main
-- Merge pull request #17 from tecace-soft/mcp-server
 <!-- ai-native:auto:END -->
