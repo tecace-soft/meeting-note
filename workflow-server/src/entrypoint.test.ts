@@ -21,11 +21,11 @@ async function run(args: string[], cwd: string) {
   } finally { clearTimeout(timer); }
 }
 
-test('entrypoint starts once from root/workflow with tsx and compiled node', async () => {
+test('entrypoint starts once from root/workflow with tsx and compiled node', async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), 'meeting-note-entry-'));
   try {
     await writeFile(join(scratch, 'package.json'), '{"type":"module"}');
-    await symlink(join(workflow, 'node_modules'), join(scratch, 'node_modules'), 'dir');
+    await symlink(join(workflow, 'node_modules'), join(scratch, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     await writeFile(join(scratch, '.env'), 'ENTRY_SENTINEL=dotenv-was-read\n');
     const stub = join(scratch, 'listen.mjs');
     await writeFile(stub, `
@@ -38,15 +38,52 @@ test('entrypoint starts once from root/workflow with tsx and compiled node', asy
         return this;
       };
       process.on('beforeExit', () => {
-        assert.equal(starts, 1);
+        assert.equal(starts, globalThis.entryExpectedStarts ?? 1);
         assert.equal(process.env.ENTRY_SENTINEL, undefined);
       });
     `);
     await run([join(workflow, 'node_modules/typescript/bin/tsc'), '--outDir', join(scratch, 'build')], workflow);
-    const preload = ['--import', pathToFileURL(join(workflow, 'node_modules/tsx/dist/loader.mjs')).href, '--import', join(workflow, 'src/test-setup.ts'), '--import', stub];
-    for (const cwd of [root, workflow]) {
-      await run([...preload, relative(cwd, join(workflow, 'src/index.ts'))], cwd);
-      await run(['--import', join(scratch, 'build/test-setup.js'), '--import', stub, relative(cwd, join(scratch, 'build/index.js'))], cwd);
+    const sourceEntry = join(workflow, 'src/index.ts');
+    const compiledEntry = join(scratch, 'build/index.js');
+    const sourcePreload = ['--import', pathToFileURL(join(workflow, 'node_modules/tsx/dist/loader.mjs')).href, '--import', join(workflow, 'src/test-setup.ts'), '--import', stub];
+    const compiledPreload = ['--import', join(scratch, 'build/test-setup.js'), '--import', stub];
+    for (const [label, cwd] of [['root', root], ['workflow', workflow]]) {
+      await t.test(`tsx from ${label}`, async () => { await run([...sourcePreload, relative(cwd, sourceEntry)], cwd); });
+      await t.test(`compiled node from ${label}`, async () => { await run([...compiledPreload, relative(cwd, compiledEntry)], cwd); });
+    }
+    await t.test('symbolic-link entrypoints start once with tsx and compiled node', async (t) => {
+      const sourceLink = join(scratch, 'linked-index.ts');
+      const compiledLink = join(scratch, 'linked-index.js');
+      try {
+        await symlink(sourceEntry, sourceLink, 'file');
+        await symlink(compiledEntry, compiledLink, 'file');
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (process.platform === 'win32' && ['EPERM', 'EACCES', 'ENOSYS', 'ENOTSUP'].includes(code ?? '')) {
+          t.skip(`Windows file symlinks unavailable: ${code}`);
+          return;
+        }
+        throw error;
+      }
+      for (const cwd of [root, workflow]) {
+        await run([...sourcePreload, relative(cwd, sourceLink)], cwd);
+        await run([...compiledPreload, relative(cwd, compiledLink)], cwd);
+      }
+    });
+    for (const [label, argv] of [
+      ['missing argv', 'delete process.argv[1]'],
+      ['different existing entrypoint', `process.argv[1] = ${JSON.stringify(stub)}`],
+      ['unresolvable entrypoint', `process.argv[1] = ${JSON.stringify(join(scratch, 'missing-entry.js'))}`],
+    ]) {
+      await t.test(`${label} keeps imports inert`, async () => {
+        for (const [preload, entry] of [[sourcePreload, sourceEntry], [compiledPreload, compiledEntry]] as const) {
+          await run([...preload, '--input-type=module', '--eval', `
+            globalThis.entryExpectedStarts = 0;
+            ${argv};
+            await import(${JSON.stringify(pathToFileURL(entry).href)});
+          `], workflow);
+        }
+      });
     }
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });

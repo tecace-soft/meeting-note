@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, realpathSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
@@ -4026,6 +4026,15 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
   });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let isDirectExecution = false;
+if (process.argv[1]) {
+  try {
+    isDirectExecution = realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    // Missing or inaccessible paths cannot establish direct execution.
+    // Keep imports inert rather than failing while resolving an entrypoint.
+  }
+}
+if (isDirectExecution) {
   startServer();
 }
