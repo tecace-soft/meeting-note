@@ -60,3 +60,11 @@ test('every manifest verified_body_hash matches the committed (HEAD) content', (
     assert.equal(bodyHash(extractBody(committed)), doc.verified_body_hash, `${doc.slug} hash mismatch vs committed content`);
   }
 });
+
+test('product-doc manifest dependency paths are unique within each document', () => {
+  const manifest = JSON.parse(readFileSync(join(DOCS_DIR, 'manifest.json'), 'utf8')) as { docs: ProductDocMeta[] };
+  for (const doc of manifest.docs) {
+    const paths = doc.depends_on ?? [];
+    assert.equal(new Set(paths).size, paths.length, `${doc.slug} has duplicate depends_on paths`);
+  }
+});
