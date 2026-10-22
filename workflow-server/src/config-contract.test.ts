@@ -100,10 +100,10 @@ test('T1-0b dotenv path is the server directory for root/server and tsx/build ex
 });
 
 
-test('T1-0b local host defaults to IPv4 loopback and preserves Render host selection', async (t) => {
+test('T1-0b host is opt-in and tests always pass an explicit loopback host', async (t) => {
   for (const [render, configured, expected] of [
-    [undefined, undefined, '127.0.0.1'],
-    ['false', '', '127.0.0.1'],
+    [undefined, undefined, undefined],
+    ['false', '', undefined],
     ['true', undefined, undefined],
     ['true', '127.0.0.1', '127.0.0.1'],
   ] as const) {
@@ -120,9 +120,11 @@ test('T1-0b local host defaults to IPv4 loopback and preserves Render host selec
         setImmediate(() => this.emit('close'));
         return this;
       };
+      const { env } = await import(${JSON.stringify(new URL('./config/env.ts', import.meta.url).href)});
+      assert.equal(env.listenHost, ${JSON.stringify(expected)});
       const { startServer } = await import(${JSON.stringify(new URL('./index.ts', import.meta.url).href)});
-      startServer({ port: 0 });
-      process.on('beforeExit', () => { assert.equal(actual, ${JSON.stringify(expected)}); });
+      startServer({ port: 0, host: '127.0.0.1' });
+      process.once('beforeExit', () => { assert.equal(actual, '127.0.0.1'); });
     `], workflow));
   }
 });
