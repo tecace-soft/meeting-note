@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../config/supabaseConfig';
+import { updateOwnedNote } from '../lib/notes/repository';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -722,12 +723,7 @@ const Project: React.FC = () => {
     setSavingNoteId(note.id);
     setNoteEditError(null);
     try {
-      const { error: updateError } = await supabase
-        .from('note')
-        .update({ summary_edit: noteEditDraft })
-        .eq('id', note.id);
-
-      if (updateError) throw updateError;
+      await updateOwnedNote({ noteId: note.id, userId: user?.id, patch: { summary_edit: noteEditDraft } });
 
       setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, summary_edit: noteEditDraft } : n)));
       setEditingNoteId(null);
@@ -753,11 +749,7 @@ const Project: React.FC = () => {
     }
     try {
       setNoteActionError(null);
-      const { error: renameError } = await supabase
-        .from('note')
-        .update({ name })
-        .eq('id', noteId);
-      if (renameError) throw renameError;
+      await updateOwnedNote({ noteId, userId: user?.id, patch: { name } });
       setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, name } : n)));
       setRenamingNoteId(null);
       setRenameNoteDraft('');

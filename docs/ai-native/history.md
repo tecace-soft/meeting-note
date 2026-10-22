@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(notes): require owner identity and a returned row before UI success
 - fix(gemini): use only lite models in every production path and guard model env overrides
 - fix(mobile): show the loading screen while restoring the session on cold start
 - fix(product-docs): hash doc bodies line-ending independently and check signatures locally
@@ -45,12 +46,11 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(upload): retry file-row insert and surface failure instead of swallowing it
 - fix(recordings): block deleting recent audio that a note still references
 - fix(docs): render date-only verified_at as a local date without time
-- fix(summarize): show a clear no-speech message instead of a raw transcription error
-- fix(security): stop inlining the whole import.meta.env into the client bundle
-- fix(security): hybrid ownership check for note audio signing (R01)
 
 **Docs**
 
+- docs(S1): require read-only job preflight before deployment merges
+- docs(notes): track extracted repository in decisions and product docs
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
 - docs(refactor): plan revision 2 around stability, simplification and automation
@@ -63,21 +63,23 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(reviews): add 2026-09-29 ops stability technical review
 - docs(reviews): record legacy orphan note resolution (319 -> 0)
 - docs(design): C1 iOS m4a recovery via segment-splitting prevention
-- docs(review): mark the 2026-10-09 deploy steps 1-3 done
-- docs(review): add the 2026-10-09 manual deploy checklist
-- docs(review): mark Group C, sibling edge-fn vulns, and R01 as done
 
 **Other**
 
+- test(project): distinguish owned-note success from shared-note rejection
+- refactor(notes): extract Project note writes without changing behavior
+- test(project): reproduce silent zero-row note update success
+- test(notes): add pinned PGlite note RLS contracts
 - test(server): never load the local .env or reach real services from tests
 - chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
-- chore(lint): fix all eslint errors and make the lint gate blocking
 
 ### Recent merges
 
+- merge: sync note update permissions with main e5ec45c
+- Merge pull request #30 from tecace-soft/refactor/s1-predeploy-runbook
 - Merge pull request #24: private meeting knowledge with verified MED fixes
 - Merge pull request #25: enable project-scoped RLS on chat and session
 - Merge branch 'main' into fix/supabase-upload-limit
@@ -86,6 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge branch 'main' of https://github.com/tecace-soft/meeting-note
 - Merge Phase 3 security batch 1 (supabase-token tenant gate) into main
 - Merge pull request #18 from tecace-soft/mobile-app
-- Merge Reliability Phase 2 (error visibility, 0-row guards, alert removal, env fail-fast) into main
-- Merge pull request #17 from tecace-soft/mcp-server
 <!-- ai-native:auto:END -->
