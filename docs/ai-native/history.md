@@ -52,6 +52,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(refactor): record the 2026-10-21 direction decisions
 - docs(refactor): plan revision 2 around stability, simplification and automation
 - docs(refactor): consolidate the refactor plan into one canonical document
 - docs(handoffs): add refactor handoff for continuing work in a fresh session
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - chore(supabase): stop tracking CLI local state in supabase/.temp
 - test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
 - chore(lint): fix all eslint errors and make the lint gate blocking
-- test(ci): stand up a frontend test runner and a CI gate
 
 ### Recent merges
 
