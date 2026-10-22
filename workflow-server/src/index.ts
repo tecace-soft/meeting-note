@@ -4040,3 +4040,6 @@ if (process.argv[1]) {
 if (isDirectExecution) {
   startServer();
 }
+
+// Characterization seam before T1-0b extraction.
+export { env };
