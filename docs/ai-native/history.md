@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(notes): require owner identity and a returned row before UI success
 - fix(gemini): use only lite models in every production path and guard model env overrides
 - fix(mobile): show the loading screen while restoring the session on cold start
 - fix(product-docs): hash doc bodies line-ending independently and check signatures locally
@@ -47,7 +48,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(docs): render date-only verified_at as a local date without time
 - fix(summarize): show a clear no-speech message instead of a raw transcription error
 - fix(security): stop inlining the whole import.meta.env into the client bundle
-- fix(security): hybrid ownership check for note audio signing (R01)
 
 **Docs**
 

@@ -46,7 +46,9 @@
       "depends_on": [
         "workflow-server/src/index.ts",
         "workflow-server/src/mcp/server.ts",
-        "src/App.tsx"
+        "src/App.tsx",
+        "src/pages/Project.tsx",
+        "src/lib/notes/repository.ts"
       ],
       "verified_body_hash": "92f39f10f7b3885d292ea26db2258ce95c080094f47ca872d86838a78bc3c47a",
       "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
