@@ -143,7 +143,7 @@ test('T1-0a authenticated route contracts use offline Graph, Supabase and AI bou
     const body = { fileName: 'fixture.ogg', dataBase64: 'T2dnUw==', mimeType: 'audio/ogg', model: 'assembly_universal2_codeswitch' };
     assert.equal((await f.request('/transcription-test', { body })).status, 403);
     // Reuse the existing gate without duplicating an operational id in the fixture.
-    const source = await readFile(new URL('./index.ts', import.meta.url), 'utf8');
+    const source = await readFile(new URL('./routes/transcriptionTest.ts', import.meta.url), 'utf8');
     f.state.caller = source.match(/const TRANSCRIPTION_MODEL_TEST_USER_ID = '([^']+)'/)![1]!;
     const r = await f.request('/transcription-test', { body });
     assert.equal(r.status, 200, r.text);
