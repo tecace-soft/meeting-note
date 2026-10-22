@@ -48,10 +48,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(summarize): show a clear no-speech message instead of a raw transcription error
 - fix(security): stop inlining the whole import.meta.env into the client bundle
 - fix(security): hybrid ownership check for note audio signing (R01)
-- fix(mobile): stop silently deleting an interrupted m4a recording
 
 **Docs**
 
+- docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
 - docs(refactor): plan revision 2 around stability, simplification and automation
 - docs(refactor): consolidate the refactor plan into one canonical document
