@@ -47,7 +47,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(recordings): block deleting recent audio that a note still references
 - fix(docs): render date-only verified_at as a local date without time
 - fix(summarize): show a clear no-speech message instead of a raw transcription error
-- fix(security): stop inlining the whole import.meta.env into the client bundle
 
 **Docs**
 
@@ -67,6 +66,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(project): distinguish owned-note success from shared-note rejection
 - refactor(notes): extract Project note writes without changing behavior
 - test(project): reproduce silent zero-row note update success
 - test(notes): add pinned PGlite note RLS contracts
