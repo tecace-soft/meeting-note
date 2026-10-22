@@ -44,9 +44,11 @@ export function sendNoContent(res: ServerResponse): void {
 export function readBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
     req.on('data', (chunk: Buffer) => {
       chunks.push(chunk);
-      if (Buffer.concat(chunks).byteLength > maxBytes) {
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxBytes) {
         reject(new Error('Request body is too large.'));
         req.destroy();
       }

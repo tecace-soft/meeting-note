@@ -101,3 +101,19 @@ test('identity wrappers preserve Graph validation and tenant rejection; DB clien
   status = 401; await assert.rejects(getMicrosoftUserId(token(tid)), (error: unknown) => getHttpStatus(error) === 401);
   assert.equal((await import('./db/supabaseClient.js')).supabase, supabase);
 });
+
+test('S13 readBody avoids reassembling every chunk and concatenates only the accepted body', async (t) => {
+  const { stream, req } = bodyRequest();
+  const concat = t.mock.method(Buffer, 'concat');
+  const result = readBody(req);
+  const raw = Buffer.from(JSON.stringify({ text: '가😀'.repeat(100) }));
+  for (const byte of raw) stream.emit('data', Buffer.from([byte]));
+  stream.emit('end');
+  assert.deepEqual(await result, { text: '가😀'.repeat(100) });
+  assert.equal(concat.mock.callCount(), 1);
+  concat.mock.resetCalls();
+  const huge = bodyRequest(); const rejected = readBody(huge.req, 1);
+  huge.stream.emit('data', Buffer.from('xx'));
+  await assert.rejects(rejected, { message: 'Request body is too large.' });
+  assert.equal(concat.mock.callCount(), 0);
+});
