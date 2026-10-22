@@ -4007,3 +4007,5 @@ if (process.argv[1]) {
 if (isDirectExecution) {
   startServer();
 }
+
+export { HttpError, corsHeaders, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, requiredString, getBearerToken, getMicrosoftUserId, getMicrosoftProfile, supabase };
