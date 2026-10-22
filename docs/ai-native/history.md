@@ -48,10 +48,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(recordings): block deleting recent audio that a note still references
 - fix(docs): render date-only verified_at as a local date without time
 - fix(summarize): show a clear no-speech message instead of a raw transcription error
-- fix(security): stop inlining the whole import.meta.env into the client bundle
 
 **Docs**
 
+- docs: regenerate history after merging main into test isolation
 - docs(S1): require read-only job preflight before deployment merges
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
