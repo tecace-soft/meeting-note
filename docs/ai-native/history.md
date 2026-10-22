@@ -52,6 +52,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(S1): require read-only job preflight before deployment merges
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
 - docs(refactor): plan revision 2 around stability, simplification and automation
@@ -64,7 +65,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(reviews): add 2026-09-29 ops stability technical review
 - docs(reviews): record legacy orphan note resolution (319 -> 0)
 - docs(design): C1 iOS m4a recovery via segment-splitting prevention
-- docs(review): mark the 2026-10-09 deploy steps 1-3 done
 
 **Other**
 
@@ -78,6 +78,8 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 ### Recent merges
 
+- merge: sync server test isolation with main e5ec45c
+- Merge pull request #30 from tecace-soft/refactor/s1-predeploy-runbook
 - Merge pull request #24: private meeting knowledge with verified MED fixes
 - Merge pull request #25: enable project-scoped RLS on chat and session
 - Merge branch 'main' into fix/supabase-upload-limit
@@ -86,6 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge branch 'main' of https://github.com/tecace-soft/meeting-note
 - Merge Phase 3 security batch 1 (supabase-token tenant gate) into main
 - Merge pull request #18 from tecace-soft/mobile-app
-- Merge Reliability Phase 2 (error visibility, 0-row guards, alert removal, env fail-fast) into main
-- Merge pull request #17 from tecace-soft/mcp-server
 <!-- ai-native:auto:END -->
