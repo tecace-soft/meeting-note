@@ -30,27 +30,27 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(knowledge): add one-click AX-KH send from the meeting note
 - feat(docs): add structured decision records, advisory checker, and AX-KH node assembler
 - feat(recordings): sort Recent recordings by upload time on web and mobile
-- feat(issues): port AX-KH feedback/issues spec with server-enforced permissions
-- feat(docs): agent-readable product docs via web /docs + MCP get_product_docs
 
 **Fixes**
 
+- fix(server): log the bound port and explain IPv4-only tests
+- fix(server): recognize symlinked entrypoints by real path
+- fix(notes): require owner identity and a returned row before UI success
 - fix(gemini): use only lite models in every production path and guard model env overrides
 - fix(mobile): show the loading screen while restoring the session on cold start
 - fix(product-docs): hash doc bodies line-ending independently and check signatures locally
 - fix(admin): remove a departed teammate from hardcoded admin allowlists
 - fix(auth): trust only the Microsoft tenant, not mail domains, for app login and backend calls
 - fix(docs): make the product docs page scrollable inside the app shell
-- fix(auth): do not release queued Supabase requests as anon when the token provider is cleared
-- fix(upload): retry file-row insert and surface failure instead of swallowing it
-- fix(recordings): block deleting recent audio that a note still references
-- fix(docs): render date-only verified_at as a local date without time
-- fix(summarize): show a clear no-speech message instead of a raw transcription error
-- fix(security): stop inlining the whole import.meta.env into the client bundle
 
 **Docs**
 
+- docs: regenerate history after syncing main a8c8b54
+- docs: regenerate history after merging main into test isolation
+- docs: regenerate history after merging main into note permissions
+- docs(S1): require read-only job preflight before deployment merges
 - docs(S12): design ordered shutdown and completed-job preservation
+- docs(notes): track extracted repository in decisions and product docs
 - docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
 - docs(refactor): record the 2026-10-21 direction decisions
 - docs(refactor): plan revision 2 around stability, simplification and automation
@@ -61,31 +61,31 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs: correct login tenant and app registration ownership, refresh F2 admin list
 - docs(product-docs): refresh docs for tenant-only auth and one-click AX-KH send
 - docs(reviews): add 2026-09-29 ops stability technical review
-- docs(reviews): record legacy orphan note resolution (319 -> 0)
-- docs(design): C1 iOS m4a recovery via segment-splitting prevention
-- docs(review): mark the 2026-10-09 deploy steps 1-3 done
 
 **Other**
 
+- test(project): distinguish owned-note success from shared-note rejection
 - test(S12): reproduce shutdown failures in isolated signal children
+- refactor(notes): extract Project note writes without changing behavior
+- test(project): reproduce silent zero-row note update success
+- test(notes): add pinned PGlite note RLS contracts
 - test(server): enforce offline isolation and freeze workflow route contracts
 - refactor(server): make workflow startup explicit and disposable
 - test(server): never load the local .env or reach real services from tests
 - chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
 - test(mobile): make the sign-in widget test deterministic with a fake auth service
 - chore(supabase): stop tracking CLI local state in supabase/.temp
-- test(record): add C1 segment-splitting boundary-gap probe (iOS gate)
 
 ### Recent merges
 
+- merge: sync s12 design tests with main e91dc63
+- Merge pull request #26 from tecace-soft/refactor/t1-0a-test-isolation
+- merge: sync server test isolation with main a8c8b54
+- Merge pull request #27 from tecace-soft/refactor/t2-1-note-update-permissions
+- merge: sync server test isolation with main e5ec45c
+- merge: sync note update permissions with main e5ec45c
+- Merge pull request #30 from tecace-soft/refactor/s1-predeploy-runbook
 - Merge pull request #24: private meeting knowledge with verified MED fixes
 - Merge pull request #25: enable project-scoped RLS on chat and session
 - Merge branch 'main' into fix/supabase-upload-limit
-- Merge memory feature (F1a auto-accumulate, F1b speaker suggest, F1c personal memory) into main
-- Merge latest main (predecessor processing-screen rewrite) into phase3b-1
-- Merge branch 'main' of https://github.com/tecace-soft/meeting-note
-- Merge Phase 3 security batch 1 (supabase-token tenant gate) into main
-- Merge pull request #18 from tecace-soft/mobile-app
-- Merge Reliability Phase 2 (error visibility, 0-row guards, alert removal, env fail-fast) into main
-- Merge pull request #17 from tecace-soft/mcp-server
 <!-- ai-native:auto:END -->
