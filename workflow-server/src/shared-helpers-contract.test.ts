@@ -3,7 +3,11 @@ import test from 'node:test';
 import { env } from './config/env.js';
 import { supabase } from './db/supabaseClient.js';
 import { GEMINI_2_5_FLASH_LITE as primary, GEMINI_3_1_FLASH_LITE as fallback } from './gemini-models.js';
-import { callGeminiWithFallback, delay, recordGeminiUsage, recordAssemblyUsage, getPersonalMemoryContext, buildSpeakerContextFromSegments, normalizeTranscriptSegment, recoverCompleteDiarizedSegments, parseDiarizedSegmentsWithRecovery } from './index.js';
+import { callGeminiWithFallback, delay } from './ai/geminiFallback.js';
+import { recordGeminiUsage, recordAssemblyUsage } from './pipeline/usage.js';
+import { getPersonalMemoryContext } from './pipeline/memoryContext.js';
+import { buildSpeakerContextFromSegments } from './pipeline/speakerContext.js';
+import { normalizeTranscriptSegment, recoverCompleteDiarizedSegments, parseDiarizedSegmentsWithRecovery } from './parsers.js';
 
 const success = () => Response.json({ candidates: [{ content: { parts: [{ text: 'fixture result' }] } }], usageMetadata: { promptTokenCount: 3 } });
 const input = { stage: 'Fixture', model: primary, fallbackModels: [primary, fallback, fallback], parts: [{ text: 'fixture' }] };
@@ -67,12 +71,12 @@ test('usage helpers preserve provider payloads, Assembly price and non-throwing 
 test('memory context retains credential guards, owner scope and best-effort failure behavior', async (t) => {
   const previous = { supabaseUrl: env.supabaseUrl, serviceRoleKey: env.serviceRoleKey };
   t.after(() => { Object.assign(env, previous); });
-  const calls: unknown[][] = []; let fail = false;
+  const calls: unknown[][] = []; let fail = false; let memory: unknown = null; let dbError = false;
   t.mock.method(supabase, 'from', (table: string) => {
     calls.push([table]);
     return { select: (columns: string) => ({ eq: (key: string, value: string) => ({ maybeSingle: async () => {
       calls.push([columns, key, value]); if (fail) throw new Error('fixture failure');
-      return { data: { memory: null }, error: null };
+      return { data: { memory }, error: dbError ? { message: 'fixture' } : null };
     } }) }) } as never;
   });
   env.supabaseUrl = ''; env.serviceRoleKey = '';
@@ -81,7 +85,10 @@ test('memory context retains credential guards, owner scope and best-effort fail
   assert.equal(await getPersonalMemoryContext(undefined), ''); assert.equal(calls.length, 0);
   assert.equal(await getPersonalMemoryContext('owner'), '');
   assert.deepEqual(calls, [['user_memory'], ['memory', 'user_id', 'owner']]);
-  fail = true; t.mock.method(console, 'warn', () => undefined);
+  memory = { version: 2, items: [{ text: 'active' }, { text: 'archived', status: 'archived' }] };
+  assert.equal(await getPersonalMemoryContext('owner'), '- active');
+  dbError = true; assert.equal(await getPersonalMemoryContext('owner'), '');
+  dbError = false; fail = true; t.mock.method(console, 'warn', () => undefined);
   assert.equal(await getPersonalMemoryContext('owner'), '');
 });
 

@@ -9,6 +9,7 @@ options:
 chosen: gemini-2.5-flash-lite 또는 gemini-3.1-flash-lite만 쓰고, id는 gemini-models.ts에만 두며 drift 테스트(npm test)를 통과시킨다. 폴백 체인은 살아있는 lite 모델로 끝나야 한다.
 reason: 팀의 엄격한 비용 제한이 있고, 퇴역한 모델 id(gemini-2.0-*)가 edge function 404를 일으켰다. 더 큰 모델이 화자 구분력을 개선하지 않는다는 bakeoff 결과도 있다.
 paths:
+  - workflow-server/src/ai/geminiFallback.ts
   - workflow-server/src/gemini-models.ts
   - workflow-server/src/gemini.ts
   - supabase/functions/identify-speakers/**

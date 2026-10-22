@@ -200,3 +200,91 @@ export function formatMeetingDateForPrompt(date: Date, timeZone?: string | null)
     return date.toISOString();
   }
 }
+
+export function normalizeTranscriptSegment(segment: Record<string, unknown>): TranscriptSegment | null {
+  const text = typeof segment.text === 'string' ? segment.text.trim() : '';
+  if (!text) return null;
+  const speaker = typeof segment.speaker === 'string' && segment.speaker.trim()
+    ? segment.speaker.trim()
+    : 'Unknown Speaker';
+  const rawKey = segment.speakerKey ?? segment.speaker_key;
+  const speakerKey = typeof rawKey === 'string' && rawKey.trim() ? rawKey.trim() : undefined;
+  const start = typeof segment.start === 'number' && Number.isFinite(segment.start) ? segment.start : undefined;
+  const end = typeof segment.end === 'number' && Number.isFinite(segment.end) ? segment.end : undefined;
+  return {
+    speaker,
+    ...(speakerKey !== undefined ? { speakerKey } : {}),
+    text,
+    ...(start !== undefined ? { start } : {}),
+    ...(end !== undefined ? { end } : {}),
+  };
+}
+
+export function recoverCompleteDiarizedSegments(raw: string): TranscriptSegment[] {
+  const stripped = stripJsonCodeFences(raw);
+  const segmentsKeyIndex = stripped.indexOf('"segments"');
+  const arrayStart = stripped.indexOf('[', segmentsKeyIndex >= 0 ? segmentsKeyIndex : 0);
+  if (arrayStart < 0) return [];
+
+  const recovered: TranscriptSegment[] = [];
+  let objectStart = -1;
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = arrayStart + 1; index < stripped.length; index += 1) {
+    const char = stripped[index];
+
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === '\\') {
+        escaping = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') {
+      if (depth === 0) objectStart = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === '}') {
+      if (depth === 0) continue;
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        const objectText = stripped.slice(objectStart, index + 1);
+        try {
+          const parsed = JSON.parse(objectText) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const segment = normalizeTranscriptSegment(parsed as Record<string, unknown>);
+            if (segment) recovered.push(segment);
+          }
+        } catch {
+          // Ignore malformed objects and keep scanning for the next complete one.
+        }
+        objectStart = -1;
+      }
+    }
+  }
+
+  return recovered;
+}
+
+export function parseDiarizedSegmentsWithRecovery(raw: string): { segments: TranscriptSegment[]; recovered: boolean } {
+  try {
+    return { segments: parseDiarizedSegments(raw), recovered: false };
+  } catch (error) {
+    const recovered = recoverCompleteDiarizedSegments(raw);
+    if (recovered.length > 0) return { segments: recovered, recovered: true };
+    throw error;
+  }
+}

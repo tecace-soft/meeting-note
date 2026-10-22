@@ -9,6 +9,7 @@ options:
 chosen: 중첩 responseSchema를 쓰지 않는다.
 reason: 측정 결과 중첩 스키마가 3.1-flash-lite를 MAX_TOKENS까지 폭주시켜(약 50초) 30초 abort를 넘겼고, 스키마를 빼면 약 3.4초에 간결한 유효 JSON이 나왔다.
 paths:
+  - workflow-server/src/ai/geminiFallback.ts
   - workflow-server/src/gemini.ts
   - workflow-server/src/memory.ts
   - supabase/functions/generate-profile/**

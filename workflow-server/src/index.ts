@@ -1,4 +1,8 @@
 import './config/loadEnv.js';
+import { callGeminiWithFallback, delay, type GeminiWorkflowCallResult } from './ai/geminiFallback.js';
+import { recordGeminiUsage, recordAssemblyUsage } from './pipeline/usage.js';
+import { getPersonalMemoryContext } from './pipeline/memoryContext.js';
+import { buildSpeakerContextFromSegments } from './pipeline/speakerContext.js';
 import { HttpError, corsHeaders, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, requiredString, getBearerToken } from './http/shared.js';
 import { getMicrosoftUserId, getMicrosoftProfile } from './http/identity.js';
 import { supabase } from './db/supabaseClient.js';
@@ -12,7 +16,6 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from 'undici';
-import { calculateGeminiUsageCost } from './costs.js';
 import {
   GEMINI_2_5_FLASH_LITE,
   PROJECT_CHAT_MODEL,
@@ -41,10 +44,10 @@ import {
   type NotifyKind,
   type RecipientsRead,
 } from './issues.js';
-import { callGemini, dedupeModels, isRetryableGeminiError, uploadGeminiFile, type GeminiUsageMetadata } from './gemini.js';
-import { buildNoteName, formatMeetingDateForPrompt, parseDiarizedSegments, parseSummary, stripJsonCodeFences, formatTranscriptText, type TranscriptSegment } from './parsers.js';
+import { callGemini, uploadGeminiFile } from './gemini.js';
+import { buildNoteName, formatMeetingDateForPrompt, parseSummary, stripJsonCodeFences, formatTranscriptText, normalizeTranscriptSegment, parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptRepairPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
-import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryForContext, renderMemoryItemsForBriefing, type BriefingMemoryItem } from './memory.js';
+import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryItemsForBriefing, type BriefingMemoryItem } from './memory.js';
 import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 import { handleMcpRequest } from './mcp/transports/http.js';
@@ -587,13 +590,6 @@ function getOppositeTranscriptLanguage(language: 'en' | 'ko' | null): 'en' | 'ko
   return null;
 }
 
-interface GeminiWorkflowCallResult {
-  text: string;
-  model: string;
-  usageMetadata: GeminiUsageMetadata;
-  latencyMs: number;
-}
-
 interface SummarizeAudioInput {
   downloadUrl: string;
   fileName: string;
@@ -633,72 +629,6 @@ interface WorkflowJobRow {
   progress: number | null;
   result: unknown;
   error: string | null;
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Transient Gemini failures (429/5xx/network) get a few backoff retries on the
-// SAME model before falling back, so a rate-limit blip mid-demo does not kill
-// the whole summarize job.
-const MAX_GEMINI_TRANSIENT_RETRIES = 3;
-
-async function callGeminiWithFallback(input: {
-  stage: string;
-  model: string;
-  fallbackModels: string[];
-  parts: Parameters<typeof callGemini>[0]['parts'];
-  responseMimeType?: 'application/json' | 'text/plain';
-  responseSchema?: unknown;
-  maxOutputTokens?: number;
-  // When set (e.g. 0), disables model "thinking" so latency isn't spent on
-  // reasoning tokens. The summary/translation calls emit plain JSON and gain
-  // nothing from thinking, so we pass 0 to cut a fixed per-call latency floor.
-  thinkingBudget?: number;
-}): Promise<GeminiWorkflowCallResult> {
-  const models = dedupeModels([input.model, ...input.fallbackModels]);
-  let lastError: unknown = null;
-  for (const model of models) {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        console.log(`${input.stage}: calling Gemini model ${model}${attempt > 0 ? ` (retry ${attempt})` : ''}`);
-        const startedAt = performance.now();
-        const result = await callGemini({
-          apiKey: env.geminiApiKey,
-          model,
-          parts: input.parts,
-          responseMimeType: input.responseMimeType,
-          responseSchema: input.responseSchema,
-          maxOutputTokens: input.maxOutputTokens,
-          thinkingBudget: input.thinkingBudget,
-        });
-        return {
-          text: result.text,
-          model,
-          usageMetadata: result.usageMetadata,
-          latencyMs: Math.round(performance.now() - startedAt),
-        };
-      } catch (error) {
-        lastError = error;
-        const message = error instanceof Error ? error.message : String(error);
-        const isMissingModel = message.includes('404') || message.includes('not found') || message.includes('not supported');
-        if (isMissingModel) {
-          console.warn(`${input.stage}: Gemini model ${model} unavailable, trying fallback if configured. ${message}`);
-          break; // move on to the next fallback model
-        }
-        const retryable = isRetryableGeminiError(error);
-        if (retryable && attempt < MAX_GEMINI_TRANSIENT_RETRIES) {
-          const backoffMs = Math.min(1000 * 2 ** attempt, 8000) + Math.floor(Math.random() * 500);
-          console.warn(`${input.stage}: Gemini model ${model} transient error (attempt ${attempt + 1}/${MAX_GEMINI_TRANSIENT_RETRIES + 1}), retrying in ${backoffMs}ms. ${message}`);
-          await delay(backoffMs);
-          continue; // retry the same model
-        }
-        throw new Error(`${input.stage}: ${message}`);
-      }
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Gemini request failed.'));
 }
 
 async function loadSummaryPrompt(promptId: string, userId: string): Promise<string> {
@@ -1017,73 +947,6 @@ ${input.existingSummary}
       ...input.attachmentParts,
     ],
   });
-}
-
-async function recordGeminiUsage(input: {
-  noteId: string;
-  userId: string;
-  stage: string;
-  model: string;
-  inputType: 'audio' | 'text';
-  usageMetadata: GeminiUsageMetadata;
-  latencyMs: number;
-}): Promise<void> {
-  const usage = calculateGeminiUsageCost({
-    model: input.model,
-    inputType: input.inputType,
-    usageMetadata: input.usageMetadata,
-  });
-  const { error } = await supabase.from('workflow_usage').insert({
-    note_id: input.noteId,
-    user_id: input.userId,
-    stage: input.stage,
-    provider: 'google-gemini',
-    model: input.model,
-    input_type: input.inputType,
-    prompt_tokens: usage.promptTokens,
-    candidates_tokens: usage.candidatesTokens,
-    total_tokens: usage.totalTokens,
-    cached_content_tokens: usage.cachedContentTokens,
-    thoughts_tokens: usage.thoughtsTokens,
-    latency_ms: input.latencyMs,
-    estimated_cost_usd: usage.estimatedCostUsd,
-    usage_metadata: input.usageMetadata,
-  });
-  if (error) {
-    console.warn(`Could not record Gemini usage for ${input.stage}: ${error.message}`);
-  }
-}
-
-async function recordAssemblyUsage(input: {
-  noteId: string;
-  userId: string;
-  model: string;
-  latencyMs: number;
-  transcriptId: string;
-  audioDurationSeconds: number;
-}): Promise<void> {
-  const durationHours = Math.max(0, input.audioDurationSeconds) / 3600;
-  const estimatedCostUsd = Number.isFinite(env.assemblyAiPricePerHourUsd)
-    ? durationHours * env.assemblyAiPricePerHourUsd
-    : 0;
-  const { error } = await supabase.from('workflow_usage').insert({
-    note_id: input.noteId,
-    user_id: input.userId,
-    stage: 'transcription',
-    provider: 'assemblyai',
-    model: input.model,
-    input_type: 'audio',
-    latency_ms: input.latencyMs,
-    estimated_cost_usd: Number(estimatedCostUsd.toFixed(6)),
-    usage_metadata: {
-      transcriptId: input.transcriptId,
-      audioDurationSeconds: input.audioDurationSeconds,
-      pricePerHourUsd: env.assemblyAiPricePerHourUsd,
-    },
-  });
-  if (error) {
-    console.warn(`Could not record AssemblyAI usage for transcription: ${error.message}`);
-  }
 }
 
 async function insertNote(input: {
@@ -1433,94 +1296,6 @@ async function transcribeAssemblyForTest(input: {
     },
     latencyMs: Math.round(performance.now() - startedAt),
   };
-}
-
-function normalizeTranscriptSegment(segment: Record<string, unknown>): TranscriptSegment | null {
-  const text = typeof segment.text === 'string' ? segment.text.trim() : '';
-  if (!text) return null;
-  const speaker = typeof segment.speaker === 'string' && segment.speaker.trim()
-    ? segment.speaker.trim()
-    : 'Unknown Speaker';
-  const rawKey = segment.speakerKey ?? segment.speaker_key;
-  const speakerKey = typeof rawKey === 'string' && rawKey.trim() ? rawKey.trim() : undefined;
-  const start = typeof segment.start === 'number' && Number.isFinite(segment.start) ? segment.start : undefined;
-  const end = typeof segment.end === 'number' && Number.isFinite(segment.end) ? segment.end : undefined;
-  return {
-    speaker,
-    ...(speakerKey !== undefined ? { speakerKey } : {}),
-    text,
-    ...(start !== undefined ? { start } : {}),
-    ...(end !== undefined ? { end } : {}),
-  };
-}
-
-function recoverCompleteDiarizedSegments(raw: string): TranscriptSegment[] {
-  const stripped = stripJsonCodeFences(raw);
-  const segmentsKeyIndex = stripped.indexOf('"segments"');
-  const arrayStart = stripped.indexOf('[', segmentsKeyIndex >= 0 ? segmentsKeyIndex : 0);
-  if (arrayStart < 0) return [];
-
-  const recovered: TranscriptSegment[] = [];
-  let objectStart = -1;
-  let depth = 0;
-  let inString = false;
-  let escaping = false;
-
-  for (let index = arrayStart + 1; index < stripped.length; index += 1) {
-    const char = stripped[index];
-
-    if (inString) {
-      if (escaping) {
-        escaping = false;
-      } else if (char === '\\') {
-        escaping = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-
-    if (char === '{') {
-      if (depth === 0) objectStart = index;
-      depth += 1;
-      continue;
-    }
-
-    if (char === '}') {
-      if (depth === 0) continue;
-      depth -= 1;
-      if (depth === 0 && objectStart >= 0) {
-        const objectText = stripped.slice(objectStart, index + 1);
-        try {
-          const parsed = JSON.parse(objectText) as unknown;
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            const segment = normalizeTranscriptSegment(parsed as Record<string, unknown>);
-            if (segment) recovered.push(segment);
-          }
-        } catch {
-          // Ignore malformed objects and keep scanning for the next complete one.
-        }
-        objectStart = -1;
-      }
-    }
-  }
-
-  return recovered;
-}
-
-function parseDiarizedSegmentsWithRecovery(raw: string): { segments: TranscriptSegment[]; recovered: boolean } {
-  try {
-    return { segments: parseDiarizedSegments(raw), recovered: false };
-  } catch (error) {
-    const recovered = recoverCompleteDiarizedSegments(raw);
-    if (recovered.length > 0) return { segments: recovered, recovered: true };
-    throw error;
-  }
 }
 
 async function translateTranscriptSegments(input: {
@@ -2046,23 +1821,6 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
     audioDurationSeconds,
     meetingStartAt,
   };
-}
-
-/**
- * The logged-in user's personal memory as a bounded BACKGROUND context block for the
- * summary prompt. Best-effort and guaranteed non-throwing: a memory read must never block
- * or fail a summary. Returns '' when there is no memory, no DB configured, or on any error.
- */
-async function getPersonalMemoryContext(userId: string | undefined): Promise<string> {
-  if (!userId || !env.supabaseUrl || !env.serviceRoleKey) return '';
-  try {
-    const { data, error } = await supabase.from('user_memory').select('memory').eq('user_id', userId).maybeSingle();
-    if (error || !data) return '';
-    return renderMemoryForContext((data as { memory?: unknown }).memory ?? null);
-  } catch (memoryError) {
-    console.warn(`Personal memory context read failed for user ${userId}:`, memoryError);
-    return '';
-  }
 }
 
 // Post-summary enrichment that does NOT change the returned summary: fold the note
@@ -2718,21 +2476,6 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
   } catch (memoryError) {
     console.warn(`Memory fold (regenerate) failed for note ${input.noteId}:`, memoryError);
   }
-}
-
-// F5.0: build a speaker-context hint from a NAMED diarization — the distinct real
-// speaker names present (generic "Speaker A/B" / "Unknown Speaker" labels are dropped).
-// Lets insight extraction resolve action owners and participants to real names.
-function buildSpeakerContextFromSegments(segments: TranscriptSegment[]): string | null {
-  const names = Array.from(
-    new Set(
-      segments
-        .map((segment) => segment.speaker)
-        .filter((name) => name && name !== 'Unknown Speaker' && !/^speaker\s/i.test(name)),
-    ),
-  );
-  if (names.length === 0) return null;
-  return `Meeting participants (the transcript's speaker labels are these real names): ${names.join(', ')}.`;
 }
 
 // F5.1: at ingest, auto-name speakers ONLY in the reliable SINGLE-speaker case (a solo
@@ -3874,5 +3617,3 @@ if (process.argv[1]) {
 if (isDirectExecution) {
   startServer();
 }
-
-export { callGeminiWithFallback, delay, recordGeminiUsage, recordAssemblyUsage, getPersonalMemoryContext, buildSpeakerContextFromSegments, normalizeTranscriptSegment, recoverCompleteDiarizedSegments, parseDiarizedSegmentsWithRecovery };
