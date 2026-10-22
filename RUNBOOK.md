@@ -2,7 +2,7 @@
 
 Operator-facing guide: how to run, deploy, monitor, and troubleshoot the system.
 For the WHY / decision history / backlog, see `OPS_BACKLOG.md`; this file is the "how do I operate it" companion.
-Last updated: 2026-09-01.
+Last updated: 2026-10-22 (S1 deployment gate).
 
 ---
 
@@ -38,11 +38,116 @@ So audio upload keeps working even when the backend is down — only transcribe/
 | **iOS** | Owned by the Korea side (needs a Mac); not built here. |
 
 **Confirm what is live:** `GET /version` on workflow-server returns `{ shortSha, branch, deployedAt }` (from `RENDER_GIT_COMMIT`). The merged MCP shares this host, so there is no separate MCP `/version`.
-After any deploy, poll `/version` until the new SHA shows.
+For a backend deployment, check `/version` against the expected backend merge SHA within a bounded observation window.
+For a frontend or documentation change that does not redeploy the backend, skip waiting for a new backend SHA and check the frontend `/version.json` when applicable.
 
 **Prod DB schema changes:** apply via the **Supabase SQL Editor** (paste SQL), then record the migration.
-The migration ledger (`supabase_migrations.schema_migrations`) was backfilled to 34 rows on 2026-08-17; going forward, prefer `supabase db push` so it self-records (see OPS_BACKLOG P1.4).
+Migrations are files for review, with PRE/POST checks and ROLLBACK.
+Andrew applies approved SQL in the SQL Editor and records the migration; agents do not run production schema writes or automated db push.
 There is no Management-API token wired into automation — schema DDL is a human SQL-Editor step.
+
+---
+
+## 2.1 S1: every backend deployment requires a pre-merge gate
+
+This procedure implements REFACTOR_PLAN.md revision 3, sections 4.2 S1, 4.5, 9 and 10, and the Q5/Q10 decisions.
+It applies to backend rollbacks as well as forward deployments.
+The delivery sequence is branch, PR, all three blocking CI jobs, this preflight, then a human merge by Andrew.
+Merging main can start Render deployment, so running this check after merge is too late.
+Do not push code directly to main or merge a PR as an agent.
+Deploy backend changes before frontend changes that depend on them.
+
+1. Confirm the PR head has passing backend, frontend and lint CI jobs.
+2. Record the PR, target merge/deployment, current known-good backend SHA and operator.
+3. If testers may submit new recordings, Andrew asks them to pause submissions during the check and merge window.
+4. In the SQL Editor, use a role that can inspect every workflow_job row.
+   A client JWT or RLS-filtered empty result is not evidence that no jobs exist.
+5. Run the following read-only SQL together in one snapshot.
+   The visibility result must contain exactly one row with full_table_visibility=true.
+   This document only supplies SQL; no production query was executed for this PR.
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL statement_timeout = '10s';
+
+SELECT
+  current_user AS query_role,
+  has_table_privilege(current_user, c.oid, 'SELECT')
+    AND (
+      NOT c.relrowsecurity
+      OR r.rolsuper
+      OR r.rolbypassrls
+      OR (c.relowner = r.oid AND NOT c.relforcerowsecurity)
+    ) AS full_table_visibility
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_roles r ON r.rolname = current_user
+WHERE n.nspname = 'public' AND c.relname = 'workflow_job';
+
+SELECT status, count(*) AS active_jobs, min(updated_at) AS oldest_update
+FROM public.workflow_job
+WHERE status IN ('queued', 'processing')
+GROUP BY status;
+
+SELECT count(*) AS recently_updated_jobs
+FROM public.workflow_job
+WHERE updated_at > now() - interval '2 minutes';
+
+SELECT status, count(*) AS stale_active_jobs, min(updated_at) AS oldest_update
+FROM public.workflow_job
+WHERE status IN ('queued', 'processing')
+  AND updated_at < now() - interval '5 minutes'
+GROUP BY status;
+
+ROLLBACK;
+```
+
+The active query intentionally counts every queued/processing row regardless of updated_at, including a failed or delayed heartbeat.
+The recent-update query includes every status, including completed jobs whose memory or speaker enrichment still refreshes updated_at.
+Neither query substitutes for the other.
+The stale-active query is diagnostic and never grants permission to deploy.
+If any statement fails, end the aborted transaction with ROLLBACK and investigate before rerunning the entire check.
+
+| Observation | Decision |
+| --- | --- |
+| Visibility confirmed, total active_jobs=0 and recently_updated_jobs=0 | Pass, Andrew may merge promptly while submissions remain paused |
+| Any query fails, times out, returns an unreadable result or visibility is unconfirmed | Do not pass; unknown is not zero |
+| Any active row, even with a stale or null updated_at | Do not pass |
+| Active rows with recent updates | Wait for completion, then rerun both checks |
+| Active row older than five minutes | Wait one orphan sweep cycle of two minutes, then rerun; if still present, investigate or safely converge before allowing deployment |
+| No active rows but recent updates exist | Wait for enrichment and the two-minute window to clear, then rerun |
+| New submissions resume, the PR head changes, or merge is delayed beyond the controlled window | Repeat the check before merge |
+
+Jobless synchronous requests such as regeneration, project chat, briefing and issue resolution are invisible to these queries.
+The plan accepts that limit because those requests ordinarily finish within tens of seconds.
+This check does not cancel work, delete stale rows, mark jobs failed, disable workers or guarantee that unrecorded client submissions are safe.
+Progress recordings and jobs must not be lost; an internal outage of several hours is acceptable under Q10.
+
+Record only operational counts and times in the PR or deployment record.
+Do not publish note contents, user identifiers, tokens or signed URLs.
+
+| Evidence | Fill before merge or during observation |
+| --- | --- |
+| PR and tested head SHA, expected backend merge SHA | Operator fills |
+| Current known-good backend SHA, source and UTC time | Andrew verifies live; not inferred from old documentation |
+| Three CI jobs and full-table visibility | Pass/fail and links |
+| Active counts by status and recent-update count | Counts and UTC time |
+| Stale-row wait and recheck, if needed | Two-minute wait, recheck result and disposition |
+| Submission pause, merge and deployment time | UTC times and operator |
+| Post-deploy checks and actual work | Version, health, errors, sweep, job convergence and E2E result |
+| Decision and rollback owner | Andrew |
+
+After a backend redeployment, verify /version matches its expected merge SHA, /health is healthy, errors and F9 incidents do not increase, and sweep reports no unexpected orphaned jobs.
+Observe for 30 minutes and until one actual workflow completes.
+Check interrupted jobs and notes for recovery or convergence under M1; a sweep count alone is not proof of no lost work.
+A frontend or documentation merge that does not redeploy the backend skips waiting for a new backend SHA.
+Andrew verifies build-filter behavior and Render settings in S2; S2 and S9 were intentionally not performed in this task.
+
+If health, error rate, incidents or the affected E2E regress, Andrew decides rollback.
+Create a revert branch and PR, pass CI, perform this same preflight, then let Andrew merge.
+Use Render dashboard rollback only for an emergency and record whether automatic deployment must be re-enabled, as described in plan 4.5.
+Code rollback does not restore incorrect data or interrupted jobs, so inspect persisted job/note convergence and keep client recovery information.
+No edge function deployment or production DB write is authorized by this runbook change.
 
 ---
 
@@ -104,12 +209,15 @@ First check the Render dashboard Usage tab.
 Historically the free-tier **750h monthly suspension**: two free Node services (backend + MCP) drew against the shared 750 instance-hour/month HARD CAP; their combined draw exhausted it near **month-end**, so they suspended on the last day(s) of the cycle and auto-resumed at the next monthly reset. (Free services spin down when idle, so the draw is usage-driven — not a flat 24/7 2× figure.)
 As of 2026-09-01 the MCP is merged into workflow-server and the standalone `meeting-note-mcp` is **suspended**, leaving ONE always-on free Node service (~730h) which should stay under 750h — check the Usage tab; a suspension should no longer happen once this holds through month-end.
 The static frontend and Supabase are unaffected (and audio upload still works).
-Options: wait for the reset, or take the paid-host decision (OPS_BACKLOG P1.3, on hold).
+The backend stays on the free plan under the 2026-10-21 decision.
+Andrew handles the Render usage and settings checks in S2 and S9; preserve submissions while waiting for the monthly limit to reset.
 
 **"A meeting failed to process."**
 Look for an F9 ops ticket on `/issues` (it has the RCA), and/or the job-failure email.
 Check the `workflow_job` row status in Supabase.
-Jobs are safe once submitted (server-side); the client resumes to `/processing/{jobId}` on reopen.
+Submission alone does not guarantee recovery after restart.
+Check the persisted job and note before retrying, preserving the original recording and submission identifiers.
+A stored transcript checkpoint or provider transcript id can avoid retranscription only when that saved state is actually reused; the submit-success/id-save gap remains a separate S10 risk.
 
 **"Which commit is live?"**
 `GET /version` on workflow-server (the merged MCP shares this host). Frontend: check the Render deploy.

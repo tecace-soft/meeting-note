@@ -24,6 +24,10 @@ The backend also hosts the MCP server on the same process (merged to save hostin
 Supabase (`supabase/`) holds the schema, migrations, RLS policies, and Deno edge functions used for token exchange, signed audio URLs, profile generation, and admin.
 A Flutter app (`meeting-note-mobile/`) is the mobile client, kept roughly at web parity.
 
+Project의 요약 편집과 이름 변경은 `src/lib/notes/repository.ts`의 소유자 쓰기 메서드를 사용한다.
+인증된 사용자 범위와 반환된 행을 확인한 뒤에만 화면을 성공 상태로 갱신한다.
+`workflow-server`의 고정 버전 PGlite 개발 의존성과 `npm run test:note-rls`는 실제 migration의 note RLS를 메모리 DB에서 검증하며 CI의 `npm test`에도 포함된다.
+
 백엔드 테스트는 `src/test-setup.ts`가 상속된 서비스 자격정보를 비우고 dotenv와 알림을 끄며, undici MockAgent로 외부 연결과 redirect를 차단한다.
 `index.ts`를 import해도 서버나 worker가 시작되지 않으며, `startServer()`가 등록한 리소스는 반환된 정리 함수로 해제한다.
 라우트 parity와 계약 테스트는 실제 dispatcher를 loopback 서버에서 실행하고 외부 서비스 경계를 합성 응답으로 대체한다.

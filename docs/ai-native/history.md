@@ -47,7 +47,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(docs): render date-only verified_at as a local date without time
 - fix(summarize): show a clear no-speech message instead of a raw transcription error
 - fix(security): stop inlining the whole import.meta.env into the client bundle
-- fix(security): hybrid ownership check for note audio signing (R01)
 
 **Docs**
 
@@ -68,6 +67,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(S10): record recovery failures as todo without implementing them
 - test(server): enforce offline isolation and freeze workflow route contracts
 - refactor(server): make workflow startup explicit and disposable
 - test(server): never load the local .env or reach real services from tests
