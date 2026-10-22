@@ -13,7 +13,9 @@ process.env.WORKFLOW_ALERTS_ENABLED = 'false';
 process.env.F9_OPS_AGENT_ENABLED = 'false';
 
 // The dispatcher checks every connection, including fetch redirects.
-// Only numeric loopback connections to test HTTP servers are allowed.
+// Literal 127.0.0.1 matches the IPv4 address every test server binds to.
+// localhost depends on DNS/hosts configuration and may resolve to ::1; allowing
+// that hostname would not guarantee a connection to the bound IPv4 loopback.
 const previousDispatcher = getGlobalDispatcher();
 export const testDispatcher = new MockAgent();
 testDispatcher.disableNetConnect();

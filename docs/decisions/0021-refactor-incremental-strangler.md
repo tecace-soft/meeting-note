@@ -11,6 +11,7 @@ reason: 2026-10-09 리뷰의 다섯 관점이 모두 재작성은 정당화되�
 paths:
   - workflow-server/src/index.ts
   - src/pages/Project.tsx
+  - src/lib/notes/repository.ts
   - src/pages/SummaryHistory.tsx
 supersedes: []
 source: docs/reviews/2026-10-09-renovation-review.md Verdict, docs/refactor/REFACTOR_PLAN.md, 2026-10-19 회의(안정성 우선, 필요하면 재설계, 자동화 최대화)

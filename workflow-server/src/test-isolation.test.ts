@@ -110,8 +110,13 @@ test('startServer cleanup removes timers, handlers, worker hooks and restores di
   const exceptionCount = process.listenerCount('uncaughtException');
   const interval = t.mock.method(globalThis, 'setInterval');
   const clear = t.mock.method(globalThis, 'clearInterval');
+  const logs = t.mock.method(console, 'log', () => undefined);
   const stop = startServer({ port: 0, host: '127.0.0.1', dispatcher: previous });
   await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  assert.ok(address.port > 0);
+  assert.ok(logs.mock.calls.some((call) => call.arguments[0] === `Meeting Note workflow server listening on :${address.port}`));
   assert.equal(process.listenerCount('unhandledRejection'), rejectionCount + 1);
   assert.equal(interval.mock.callCount(), 1);
   await stop();
