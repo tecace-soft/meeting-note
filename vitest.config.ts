@@ -6,6 +6,7 @@ import { defineConfig } from 'vitest/config'
 // so we let esbuild handle the JSX transform via the automatic runtime instead
 // of the react plugin. This keeps the app build toolchain (Vite 4) untouched.
 export default defineConfig({
+  envDir: false, // Test runs must never read local .env files.
   esbuild: {
     jsx: 'automatic',
   },
