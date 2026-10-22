@@ -64,10 +64,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(reviews): record legacy orphan note resolution (319 -> 0)
 - docs(design): C1 iOS m4a recovery via segment-splitting prevention
 - docs(review): mark the 2026-10-09 deploy steps 1-3 done
-- docs(review): add the 2026-10-09 manual deploy checklist
 
 **Other**
 
+- test(project): reproduce silent zero-row note update success
 - test(notes): add pinned PGlite note RLS contracts
 - test(server): never load the local .env or reach real services from tests
 - chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
