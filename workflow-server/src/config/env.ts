@@ -19,8 +19,8 @@ export const env = {
   assemblyAiPricePerHourUsd: Number(process.env.ASSEMBLYAI_TRANSCRIPTION_PRICE_PER_HOUR_USD || '0.21'),
   frontendOrigin: process.env.APP_FRONTEND_ORIGIN || '*',
   port: Number(process.env.PORT || '8787'),
-  // Render retains its platform host; local startup binds only IPv4 loopback.
-  listenHost: process.env.WORKFLOW_HOST || (process.env.RENDER === 'true' ? undefined : '127.0.0.1'),
+  // Preserve the platform default unless the operator explicitly sets a host.
+  listenHost: process.env.WORKFLOW_HOST || undefined,
   fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS || '1200000'),
   fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS || '1200000'),
 };
