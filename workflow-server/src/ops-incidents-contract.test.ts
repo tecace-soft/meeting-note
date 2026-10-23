@@ -7,7 +7,7 @@ test('T1-3 ops incidents keep guards, dedupe, caps, owner metadata and non-throw
   // Only the fake DB ticket path is enabled. Real alerts stay disabled by preload.
   process.env.F9_OPS_AGENT_ENABLED='true';
   const f=await workflowFixture();t.after(()=>f.close());t.mock.method(console,'warn',()=>undefined);
-  const {fileOpsIncident,raiseIncident}=await import('./index.js');const {env}=await import('./config/env.js');
+  const {fileOpsIncident,raiseIncident}=await import('./ops/incidents.js');const {env}=await import('./config/env.js');
   const input={title:'fixture incident',error:new Error('fixture failure')};
   const fingerprint=incidentFingerprint(input.title,'Error','fixture failure');
   let rows:unknown[]=[];let count=0;let dbFail=false;let writes:{method:string;body:any}[]=[];let queries:URL[]=[];
