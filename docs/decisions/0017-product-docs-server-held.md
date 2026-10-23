@@ -11,6 +11,7 @@ options:
 chosen: 문서 본문의 단일 출처는 서버이며, 사람은 인증된 웹 경로로, 에이전트는 MCP 툴(get_product_docs)로 읽는다. 두 경로가 같은 로더와 권한검사를 쓴다.
 reason: 공개 서빙은 내부 명세를 무인증으로 노출하고, 프런트 번들 포함은 정적 JS에서 본문을 추출할 수 있어 비공개가 아니다. 서버 단일 출처가 본문 일치와 소스 단일화를 보장한다.
 paths:
+  - workflow-server/src/routes/productDocs.ts
   - workflow-server/src/productDocs.ts
   - workflow-server/src/mcp/tools/productDocs.ts
   - src/lib/productDocs.ts

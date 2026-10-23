@@ -18,6 +18,9 @@ paths:
   - supabase/functions/identify-speakers/**
   - supabase/functions/generate-profile/**
   - docs/API_LESSONS.md
+  - workflow-server/src/routes/projectChat.ts
+  - workflow-server/src/ops/incidents.ts
+  - workflow-server/src/routes/issues.ts
 supersedes: []
 source: docs/API_LESSONS.md (비용 정책, 모델 고정, bakeoff 2026-08-26), 커밋 4d0348f의 edge function lite-only 수정
 ---

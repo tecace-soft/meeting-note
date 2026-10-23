@@ -1,13 +1,13 @@
 import './config/loadEnv.js';
-import { handleRegenerateSummaryRequest } from './routes/regenerateSummary.js';
-import { loadSummaryPrompt, resolveSummaryPromptForAndroid } from './pipeline/promptLoaders.js';
+import { raiseIncident } from './ops/incidents.js';
+import { handleIssuesRequest } from './routes/issues.js';
 import { handleTranscriptionTestRequest, ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL } from './routes/transcriptionTest.js';
 import { callGeminiWithFallback, delay, type GeminiWorkflowCallResult } from './ai/geminiFallback.js';
 import { recordGeminiUsage, recordAssemblyUsage } from './pipeline/usage.js';
 import { getPersonalMemoryContext } from './pipeline/memoryContext.js';
 import { buildSpeakerContextFromSegments } from './pipeline/speakerContext.js';
-import { HttpError, corsHeaders, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, requiredString, getBearerToken } from './http/shared.js';
-import { getMicrosoftUserId, getMicrosoftProfile } from './http/identity.js';
+import { HttpError, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, requiredString, getBearerToken } from './http/shared.js';
+import { getMicrosoftUserId } from './http/identity.js';
 import { supabase } from './db/supabaseClient.js';
 import { env, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL, TRANSLATION_ENABLED } from './config/env.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -15,22 +15,17 @@ import { createWriteStream, realpathSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID, randomBytes, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from 'undici';
-import { GEMINI_2_5_FLASH_LITE, PROJECT_CHAT_MODEL, STANDARD_FALLBACK_CHAIN, ISSUE_RESOLUTION_MODEL, ISSUE_RESOLUTION_FALLBACK_CHAIN, KNOWLEDGE_EXTRACTION_MODEL, liteModelFromEnv } from './gemini-models.js';
-import { CREATED_MAIL_LIMIT_PER_HOUR, ISSUE_KEY_PATTERN, ISSUE_RESOLUTION_SCHEMA, ISSUE_RESOLUTION_SYSTEM_PROMPT, buildIssueMail, buildResolutionUserText, canIssue, decideNotify, firstFrontendOrigin, imageAttachmentPaths, parseNotifyKind, parseResolutionRequest, resolveNotifyEmails, validateResolution, type IssueRow, type NotifyKind, type RecipientsRead } from './issues.js';
+import { PROJECT_CHAT_MODEL, STANDARD_FALLBACK_CHAIN, KNOWLEDGE_EXTRACTION_MODEL, liteModelFromEnv } from './gemini-models.js';
 import { callGemini, uploadGeminiFile } from './gemini.js';
-import { buildNoteName, formatMeetingDateForPrompt, parseSummary, stripJsonCodeFences, formatTranscriptText, normalizeTranscriptSegment, parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from './parsers.js';
+import { buildNoteName, formatMeetingDateForPrompt, parseSummary, stripJsonCodeFences, formatTranscriptText, parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from './parsers.js';
 import { buildSummaryPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
-import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryItemsForBriefing, type BriefingMemoryItem } from './memory.js';
-import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAlertError, sanitizeContext as sanitizeAlertContext, type WorkflowAlertInput } from './alerts.js';
-import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
+import { extractAndStoreInsight, foldNoteIntoMemory } from './memory.js';
 import { handleMcpRequest } from './mcp/transports/http.js';
-import { noteAccessFilterFor } from './mcp/lib/supabase.js';
-import { loadProductDoc, loadProductDocsIndex } from './productDocs.js';
-import { clientGateMode, resolveMicrosoftCaller, tenantGateMode } from './microsoftIdentity.js';
+import { clientGateMode, tenantGateMode } from './microsoftIdentity.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
@@ -39,6 +34,16 @@ import { createMeetingModelPolicyClient } from './knowledge/model-policy-client.
 import { createGeminiMeetingGenerator } from './knowledge/extraction-provider.js';
 import { createMeetingExtractionStore } from './knowledge/extraction-store.js';
 import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
+import { handleProductDocsRequest } from './routes/productDocs.js';
+import { handleBriefingRequest } from './routes/briefing.js';
+import { handleBackfillInsightRequest, handleRefreshNoteInsightRequest } from './routes/insight.js';
+import { handleProjectChatRequest } from './routes/projectChat.js';
+import { handleRegenerateSummaryRequest } from './routes/regenerateSummary.js';
+import { loadSummaryPrompt, resolveSummaryPromptForAndroid } from './pipeline/promptLoaders.js';
+
+
+
+
 
 
 interface SummarizeAudioRequest {
@@ -56,11 +61,6 @@ interface SummarizeAudioRequest {
   speakerContext?: unknown;
   attachments?: unknown;
   language?: unknown;
-}
-
-interface ProjectChatRequest {
-  message?: unknown;
-  project_id?: unknown;
 }
 
 interface SummaryAttachmentInput {
@@ -105,7 +105,9 @@ function noSpeechMessage(language: 'en' | 'ko'): string {
 }
 
 const AUDIO_BUCKET = 'meeting-recordings';
+
 const ANDROID_AUDIO_MAX_BYTES = 100 * 1024 * 1024;
+
 const ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS = [
   '3ga',
   '8svx',
@@ -140,10 +142,12 @@ const ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS = [
   'webm',
   'wma',
 ] as const;
+
 const ASSEMBLYAI_AUDIO_EXTENSION_RE = new RegExp(
   `\\.(${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS.join('|')})$`,
   'i'
 );
+
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).
 
 const SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES = new Set([
@@ -381,49 +385,6 @@ function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: n
     return end.toISOString();
   }
   return new Date(end.getTime() - Math.round(durationSeconds * 1000)).toISOString();
-}
-
-// Short-lived identity cache for the click-heavy docs path, so browsing N docs does not make
-// N+1 Graph /me calls (and risk 429). Keyed by a hash of the token (never the raw token); small
-// TTL so a revoked token stops resolving quickly. Only successful MEMBER lookups are cached;
-// non-members are re-checked every time. Bounded size (Power of Ten rule 8).
-const PRODUCT_DOCS_IDENTITY_TTL_MS = 60_000;
-const PRODUCT_DOCS_IDENTITY_CACHE_MAX = 256;
-const productDocsIdentityCache = new Map<string, { id: string; expiresAt: number }>();
-
-// TecAce org gate for product docs. These are internal specs served identically to every
-// caller, so a valid Microsoft token is not enough: the token's tenant must be allowlisted.
-// The mail / UPN domain is NOT used (an outside tenant admin can set mail to x@tecace.com).
-// requireOrg: an unconfigured tenant allowlist refuses docs instead of serving everyone.
-// Throws 401 (bad token) or 403 (outside tenant / gate unconfigured).
-async function assertProductDocsMember(req: IncomingMessage): Promise<string> {
-  const token = getBearerToken(req);
-  const key = createHash('sha256').update(token).digest('hex');
-  const now = Date.now();
-  const cached = productDocsIdentityCache.get(key);
-  if (cached && cached.expiresAt > now) return cached.id;
-
-  const caller = await resolveMicrosoftCaller(token, { requireOrg: true, surface: 'product-docs' });
-  // Simple bound: clear when full rather than tracking LRU (the set is tiny and TTL-bounded).
-  if (productDocsIdentityCache.size >= PRODUCT_DOCS_IDENTITY_CACHE_MAX) productDocsIdentityCache.clear();
-  productDocsIdentityCache.set(key, { id: caller.id, expiresAt: now + PRODUCT_DOCS_IDENTITY_TTL_MS });
-  return caller.id;
-}
-
-async function getProductDocsIndexRoute(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  await assertProductDocsMember(req);
-  const index = await loadProductDocsIndex();
-  sendJson(res, 200, index);
-}
-
-async function getProductDocRoute(req: IncomingMessage, res: ServerResponse, slug: string): Promise<void> {
-  await assertProductDocsMember(req);
-  const doc = await loadProductDoc(slug);
-  if (!doc) {
-    sendJson(res, 404, { error: 'Unknown product doc.' });
-    return;
-  }
-  sendJson(res, 200, doc);
 }
 
 function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
@@ -1026,10 +987,12 @@ async function translateTranscriptSegments(input: {
 // orphan sweep (failOrphanedJobs) can distinguish a live job on another
 // instance from one stranded by a crashed/redeployed process.
 const JOB_HEARTBEAT_INTERVAL_MS = 60_000;
+
 // A queued/processing job whose updated_at is older than this is considered
 // orphaned. Must exceed the heartbeat interval by a safe margin so a genuinely
 // live job (heartbeating every minute) is never swept.
 const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
+
 // How often to re-scan for orphans. A boot-only scan would miss a job orphaned
 // moments before boot (not yet past the staleness threshold), stranding it
 // forever; a periodic scan cleans it once it crosses the threshold.
@@ -1711,226 +1674,6 @@ async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId:
   if (row.status === 'completed') completedJobResults.delete(jobId);
 }
 
-function parseProjectChatInput(body: ProjectChatRequest): { message: string; projectId: string; projectIdFilterValue: string | number } {
-  const message = requiredString(body, 'message');
-  const rawProjectId = body.project_id;
-  const projectId =
-    typeof rawProjectId === 'string' || typeof rawProjectId === 'number'
-      ? String(rawProjectId).trim()
-      : '';
-  if (!projectId) throw new HttpError(400, 'project_id is required.');
-  const asNumber = Number(projectId);
-  return {
-    message,
-    projectId,
-    projectIdFilterValue: Number.isNaN(asNumber) ? projectId : asNumber,
-  };
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((item) => String(item)) : [];
-}
-
-function noteText(row: Record<string, unknown>, key: string): string {
-  const value = row[key];
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function projectChatContext(notes: Array<Record<string, unknown>>): string {
-  return notes.map((note, index) => {
-    const n = index + 1;
-    const transcription = noteText(note, 'transcription');
-    const summary = noteText(note, 'summary');
-    return `transcription${n}:\n${transcription}\n\nsummary${n}:\n${summary}\n\n`;
-  }).join('\n\n');
-}
-
-function buildProjectChatPrompt(context: string, message: string): string {
-  return `You are an internal AI assistant for TecAce Software, Ltd. Your primary role is to answer user questions accurately, concisely, and professionally, based EXCLUSIVELY on the provided company meeting transcriptions and the summaries of those transcriptions.
-
-### CORE DIRECTIVES
-1. **Strict Grounding:** You must base your answers ONLY on the context provided in the prompt (the transcripts, summaries, and associated metadata). Under no circumstances should you use outside knowledge, speculate, guess, or hallucinate information. First check the summaries for your answers. If unable to generate a response based on summary information alone start digging deeper into the transcription itself to see if more information can be found there.
-2. **Handling Missing Information:** If the provided context does not contain the answer to the user's question, you must clearly state: "I cannot find the answer to that in the provided meeting documents." Do not attempt to infer an answer if the data is missing.
-3. **Cite Sources:** Whenever possible, reference the specific meeting date, title, or speaker associated with the information to build trust (e.g., "During the Q3 All-Hands on October 12th, Jane Doe stated...").
-4. **Maintain Objectivity:** Present the information exactly as it was discussed. Do not inject personal opinions, bias, or commentary on the meeting's contents.
-
-### RESPONSE GUIDELINES
-- **Clarity & Brevity:** Keep your answers direct and easy to read. Use bullet points when summarizing multiple topics, listing action items, or detailing decisions.
-- **Direct Quotes:** If a user asks exactly what a specific person said, or if the exact phrasing is highly important, provide a brief direct quote from the transcript enclosed in quotation marks.
-- **Action Items & Decisions:** If asked about next steps or outcomes, clearly identify what was decided, who is responsible, and any stated deadlines—provided that information exists in the text.
-- **Ambiguity:** If the meeting text is ambiguous, speakers are unclear, or multiple meetings have conflicting information, point out this discrepancy to the user rather than guessing the "correct" interpretation.
-
-### TRANSCRIPTION AND SUMMARIES
-${context}
-
-### USER QUESTION
-${message}`;
-}
-
-async function projectChatPromptFromRequest(req: IncomingMessage): Promise<string> {
-  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
-  const input = parseProjectChatInput((await readBody(req)) as ProjectChatRequest);
-
-  let { data: projectRow, error: projectError } = await supabase
-    .from('project')
-    .select('id,user_id,shared_users')
-    .eq('id', input.projectId)
-    .maybeSingle();
-  if (!projectRow && !projectError && input.projectIdFilterValue !== input.projectId) {
-    const fallback = await supabase
-      .from('project')
-      .select('id,user_id,shared_users')
-      .eq('id', input.projectIdFilterValue)
-      .maybeSingle();
-    projectRow = fallback.data;
-    projectError = fallback.error;
-  }
-  if (projectError) throw projectError;
-  if (!projectRow) {
-    throw new HttpError(404, 'Project not found.');
-  }
-
-  const project = projectRow as Record<string, unknown>;
-  const sharedUsers = stringArray(project.shared_users);
-  const hasProjectAccess = project.user_id === tokenUserId || sharedUsers.includes(tokenUserId);
-  if (!hasProjectAccess) {
-    throw new HttpError(403, 'You do not have access to this project.');
-  }
-
-  // Project access alone is NOT note access. Project chat runs as service_role
-  // (RLS bypassed), so restrict the fed notes to ones this caller may actually
-  // see, reusing the exact per-note visibility rule the MCP path enforces (own,
-  // directly shared, or owned by a project owner who shared the project with the
-  // caller). Without this, a third party's note merely attached to the project
-  // would leak its transcript/summary into the answer.
-  const accessFilter = await noteAccessFilterFor(supabase, tokenUserId);
-  let noteQuery = supabase
-    .from('note')
-    .select('transcription,summary')
-    .contains('projects', [input.projectIdFilterValue]);
-  if (accessFilter) noteQuery = noteQuery.or(accessFilter);
-  const { data: noteRows, error: noteError } = await noteQuery;
-  if (noteError) throw noteError;
-  const notes = (noteRows ?? []) as Array<Record<string, unknown>>;
-  if (notes.length === 0) {
-    return 'I cannot find the answer to that in the provided meeting documents.';
-  }
-  return buildProjectChatPrompt(projectChatContext(notes), input.message);
-}
-
-async function projectChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
-  const prompt = await projectChatPromptFromRequest(req);
-  if (prompt === 'I cannot find the answer to that in the provided meeting documents.') {
-    sendJson(res, 200, { response: prompt });
-    return;
-  }
-  const result = await callGeminiWithFallback({
-    stage: 'Project chat',
-    model: PROJECT_CHAT_MODEL,
-    fallbackModels: [...STANDARD_FALLBACK_CHAIN],
-    responseMimeType: 'text/plain',
-    maxOutputTokens: 4096,
-    parts: [{ text: prompt }],
-  });
-  sendJson(res, 200, { response: result.text.trim() });
-}
-
-function projectChatDelta(data: unknown): string {
-  if (!data || typeof data !== 'object') return '';
-  const candidates = (data as { candidates?: unknown }).candidates;
-  if (!Array.isArray(candidates)) return '';
-  return candidates
-    .flatMap((candidate) => {
-      const parts = (candidate as { content?: { parts?: unknown } }).content?.parts;
-      return Array.isArray(parts) ? parts : [];
-    })
-    .map((part) => (part as { text?: unknown }).text)
-    .filter((text): text is string => typeof text === 'string')
-    .join('');
-}
-
-async function streamProjectChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
-  const prompt = await projectChatPromptFromRequest(req);
-  const openStream = () => {
-    res.writeHead(200, {
-      ...corsHeaders(),
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    res.flushHeaders?.();
-  };
-  const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  if (prompt === 'I cannot find the answer to that in the provided meeting documents.') {
-    openStream();
-    send({ delta: prompt });
-    send({ done: true });
-    res.end();
-    return;
-  }
-
-  // Unique ordering for project chat (primary PROJECT_CHAT_MODEL first); kept
-  // inline but built from the registry consts to preserve this failover order.
-  const models = [PROJECT_CHAT_MODEL, GEMINI_2_5_FLASH_LITE];
-  let response: Response | null = null;
-  let lastError = '';
-  for (const model of models) {
-    const candidate = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': env.geminiApiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 4096,
-            responseMimeType: 'text/plain',
-          },
-        }),
-      },
-    );
-    if (candidate.ok && candidate.body) {
-      response = candidate;
-      break;
-    }
-    lastError = `Gemini stream failed (${candidate.status}): ${(await candidate.text()).slice(0, 500)}`;
-  }
-  if (!response || !response.body) {
-    throw new Error(lastError || 'Gemini stream failed.');
-  }
-
-  openStream();
-  send({ delta: '' });
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split(/\r?\n\r?\n/);
-    buffer = events.pop() ?? '';
-    for (const event of events) {
-      for (const line of event.split('\n')) {
-        if (!line.startsWith('data:')) continue;
-        const raw = line.slice('data:'.length).trim();
-        if (!raw || raw === '[DONE]') continue;
-        const delta = projectChatDelta(JSON.parse(raw));
-        if (delta) send({ delta });
-      }
-    }
-  }
-  send({ done: true });
-  res.end();
-}
-
 // F5.1: at ingest, auto-name speakers ONLY in the reliable SINGLE-speaker case (a solo
 // recording = the owner's own voice, named deterministically below). Multi-speaker self
 // auto-apply was REMOVED 2026-08-25: a read-only measurement (eval/self-autoapply-precision.ts)
@@ -1999,672 +1742,6 @@ async function applyNamedSpeakers(
   console.log(`Auto-named ${nameByLabel.size} speaker(s) for note ${noteId}: ${Array.from(nameByLabel.values()).join(', ')}`);
 }
 
-// Step-2 (memory value surface): the deterministic MEETING BRIEFING for the records tab.
-// Assembles, with NO LLM (cost 0, drift 0), two robust memory-derived views scoped to the
-// authenticated user: (1) durable cross-meeting context from user_memory (active items),
-// (2) recent MEETING-LEVEL decisions/events from note_insight for the newest notes. It
-// deliberately OMITS action items / owner attribution — those depend on speaker-ID, which is
-// measured-unreliable, so surfacing "your commitments" here would amplify a weak signal.
-const BRIEFING_MEMORY_LIMIT = 8;
-const BRIEFING_RECENT_NOTES = 8;
-const BRIEFING_MAX_PER_NOTE = 6;
-
-interface BriefingDecision { text: string; rationale: string }
-interface BriefingEvent { cause: string; effect: string }
-interface BriefingRecentNote {
-  noteId: string;
-  noteName: string;
-  date: string;
-  decisions: BriefingDecision[];
-  events: BriefingEvent[];
-}
-
-function briefingStr(value: unknown, max = 400): string {
-  return typeof value === 'string' ? value.trim().slice(0, max) : '';
-}
-
-function coerceBriefingDecisions(raw: unknown): BriefingDecision[] {
-  if (!Array.isArray(raw)) return [];
-  const out: BriefingDecision[] = [];
-  for (const d of raw) {
-    const o = d && typeof d === 'object' ? (d as Record<string, unknown>) : {};
-    const text = briefingStr(o.text);
-    if (!text) continue;
-    out.push({ text, rationale: briefingStr(o.rationale) });
-    if (out.length >= BRIEFING_MAX_PER_NOTE) break;
-  }
-  return out;
-}
-
-function coerceBriefingEvents(raw: unknown): BriefingEvent[] {
-  if (!Array.isArray(raw)) return [];
-  const out: BriefingEvent[] = [];
-  for (const e of raw) {
-    const o = e && typeof e === 'object' ? (e as Record<string, unknown>) : {};
-    const cause = briefingStr(o.cause);
-    const effect = briefingStr(o.effect);
-    if (!cause && !effect) continue;
-    out.push({ cause, effect });
-    if (out.length >= BRIEFING_MAX_PER_NOTE) break;
-  }
-  return out;
-}
-
-async function meetingBriefing(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // Auth: derive the user from the Microsoft Graph token; never trust a client-supplied id.
-  const userId = await getMicrosoftUserId(getBearerToken(req));
-
-  // (1) durable cross-meeting context (active user_memory items).
-  const { data: memRow, error: memError } = await supabase
-    .from('user_memory')
-    .select('memory')
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (memError) throw memError;
-  const memoryItems: BriefingMemoryItem[] = renderMemoryItemsForBriefing(
-    (memRow as { memory?: unknown } | null)?.memory ?? null,
-    BRIEFING_MEMORY_LIMIT,
-  );
-
-  // (2) recent MEETING-LEVEL decisions/events from the user's own newest notes. Owner-free
-  // by construction (no actions column read), so speaker-ID accuracy cannot corrupt it.
-  const { data: noteRows, error: noteError } = await supabase
-    .from('note')
-    .select('id, name, meeting_at, created_at')
-    .eq('user_id', userId)
-    .order('meeting_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false })
-    .limit(BRIEFING_RECENT_NOTES);
-  if (noteError) throw noteError;
-  const notes = (noteRows ?? []) as { id: string; name?: unknown; meeting_at?: unknown; created_at?: unknown }[];
-  const noteIds = notes.map((n) => n.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
-
-  const insightByNote = new Map<string, { decisions?: unknown; events?: unknown }>();
-  if (noteIds.length) {
-    const { data: insightRows, error: insightError } = await supabase
-      .from('note_insight')
-      .select('note_id, decisions, events')
-      .in('note_id', noteIds);
-    if (insightError) throw insightError;
-    for (const row of (insightRows ?? []) as { note_id?: unknown; decisions?: unknown; events?: unknown }[]) {
-      if (typeof row.note_id === 'string') insightByNote.set(row.note_id, { decisions: row.decisions, events: row.events });
-    }
-  }
-
-  const recent: BriefingRecentNote[] = [];
-  for (const n of notes) {
-    const ins = insightByNote.get(n.id);
-    const decisions = coerceBriefingDecisions(ins?.decisions);
-    const events = coerceBriefingEvents(ins?.events);
-    if (!decisions.length && !events.length) continue; // skip notes with nothing meeting-level to show
-    recent.push({
-      noteId: n.id,
-      noteName: briefingStr(n.name, 200) || 'Untitled',
-      date: briefingStr(n.meeting_at, 40) || briefingStr(n.created_at, 40),
-      decisions,
-      events,
-    });
-  }
-
-  sendJson(res, 200, { memoryItems, recent, generatedAt: new Date().toISOString() });
-}
-
-// F5.0: re-extract note_insight for a note from its NAMED diarization, so action owners
-// and participant names resolve to real people after a speaker rename. Insight-only — it
-// does NOT re-fold personal memory (that path is idempotent per note and needs a
-// supersede design; deferred). Auth mirrors regenerate-summary (Microsoft Graph token,
-// owner-or-shared access).
-async function refreshNoteInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
-  const body = (await readBody(req, 1_000_000)) as { noteId?: unknown } | null;
-  const noteId = typeof body?.noteId === 'string' ? body.noteId.trim() : '';
-  if (!noteId) {
-    sendJson(res, 400, { error: 'noteId is required.' });
-    return;
-  }
-
-  const { data: noteRow, error: noteError } = await supabase
-    .from('note')
-    .select('id, user_id, shared_users, diarization, transcription')
-    .eq('id', noteId)
-    .maybeSingle();
-  if (noteError) throw noteError;
-  if (!noteRow) {
-    sendJson(res, 404, { error: 'Note not found.' });
-    return;
-  }
-  const note = noteRow as { user_id?: unknown; shared_users?: unknown; diarization?: unknown; transcription?: unknown };
-  const ownerId = typeof note.user_id === 'string' ? note.user_id : '';
-  const sharedUsers = Array.isArray(note.shared_users) ? note.shared_users.map((value) => String(value)) : [];
-  if (ownerId !== tokenUserId && !sharedUsers.includes(tokenUserId)) {
-    sendJson(res, 403, { error: 'You do not have access to this note.' });
-    return;
-  }
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
-
-  // Prefer the named diarization (real speaker names) over the frozen "Speaker A/B"
-  // transcription column — that asymmetry is why owners were unattributed before.
-  const segments = Array.isArray(note.diarization)
-    ? (note.diarization as unknown[])
-        .filter((segment): segment is Record<string, unknown> => Boolean(segment) && typeof segment === 'object' && !Array.isArray(segment))
-        .map(normalizeTranscriptSegment)
-        .filter((segment): segment is TranscriptSegment => Boolean(segment))
-    : [];
-  const transcript = segments.length
-    ? formatTranscriptText(segments, 'original')
-    : (typeof note.transcription === 'string' ? note.transcription : '');
-  if (!transcript.trim()) {
-    sendJson(res, 422, { error: 'Note has no transcript to index.' });
-    return;
-  }
-
-  const result = await extractAndStoreInsight({
-    supabase,
-    apiKey: env.geminiApiKey,
-    userId: ownerId,
-    noteId,
-    transcript,
-    speakerContext: buildSpeakerContextFromSegments(segments),
-  });
-  if (!result.ok) {
-    sendJson(res, 502, { error: `Insight extraction failed: ${result.reason ?? 'unknown'}` });
-    return;
-  }
-  sendJson(res, 200, { ok: true, noteId });
-}
-
-// ── F2: feedback / issue tracker: AI resolution + server-side notification mail ──────
-// Rules (permissions, recipients, templates, schema) live in ./issues.ts; these handlers do
-// the I/O. Spec: docs/feedback-issues-porting-prompt.md sections 3.7, 3.9, 7.1, 9.
-
-const ISSUE_ATTACHMENT_BUCKET = 'feedback-attachments';
-// Spec 1.4 says 30 days; shortened to 24 hours after the 2026-10-15 security review so a
-// forwarded mail does not keep screenshots open for a month. The deep-link button (which
-// re-signs on open) is the primary way back to the issue.
-const ISSUE_MAIL_URL_TTL_SECONDS = 24 * 60 * 60;
-
-function strArray(v: unknown, cap = 12): string[] {
-  return (Array.isArray(v) ? v : []).map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).slice(0, cap);
-}
-
-// Lenient parse kept for the F9 ops agent's RCA (system tickets); the human issue path
-// uses the strict validateResolution() from ./issues.ts.
-function parseIssueResolution(raw: string): {
-  summary: string; rootCauses: string[]; checks: string[]; fixPlan: string[]; verification: string[]; confidence: 'low' | 'medium' | 'high';
-} | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonCodeFences(raw));
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const o = parsed as Record<string, unknown>;
-  const summary = typeof o.summary === 'string' ? o.summary.trim() : '';
-  if (!summary) return null;
-  const conf = typeof o.confidence === 'string' ? o.confidence.toLowerCase() : '';
-  const confidence = conf === 'high' || conf === 'medium' ? conf : 'low';
-  return {
-    summary,
-    rootCauses: strArray(o.rootCauses),
-    checks: strArray(o.checks),
-    fixPlan: strArray(o.fixPlan),
-    verification: strArray(o.verification),
-    confidence,
-  };
-}
-
-// AI-4: up to 3 image attachments, read from the private bucket with the service role and
-// handed to Gemini inline. The paths come from the issue ROW in the DB (looked up by
-// issueKey), never from the request body, and must pass isSafeAttachmentPath, so a caller
-// cannot point the service role at another object. The spec's 15-minute signed URL is the
-// alternative; inline bytes need no URL at all.
-async function issueAttachmentImageParts(issueKey: string): Promise<Array<{ inlineData: { mimeType: string; data: string } }>> {
-  const parts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
-  if (!ISSUE_KEY_PATTERN.test(issueKey)) return parts;
-  const { data: row, error: rowError } = await supabase
-    .from('feedback_issues')
-    .select('attachments')
-    .eq('issue_key', issueKey)
-    .is('deleted_at', null)
-    .maybeSingle();
-  if (rowError) throw rowError;
-  const paths = imageAttachmentPaths((row as { attachments?: unknown } | null)?.attachments, 3);
-  for (const path of paths) {
-    try {
-      const { data, error } = await supabase.storage.from(ISSUE_ATTACHMENT_BUCKET).download(path);
-      if (error || !data) continue;
-      const mimeType = data.type || 'image/png';
-      if (!mimeType.startsWith('image/')) continue;
-      const buffer = Buffer.from(await data.arrayBuffer());
-      if (buffer.length > 8 * 1024 * 1024) continue;
-      parts.push({ inlineData: { mimeType, data: buffer.toString('base64') } });
-    } catch (error) {
-      console.warn(`Issue attachment fetch failed (${path}):`, error);
-    }
-  }
-  return parts;
-}
-
-// Section 7.1. Order: method, issues.triage, input, LLM, response. Always JSON.
-// The endpoint never writes the DB (AI-3); the browser saves the result with triage rights.
-async function issueResolution(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (req.method !== 'POST') {
-    sendJson(res, 405, { error: 'POST 요청만 받습니다.' });
-    return;
-  }
-  const caller = await getMicrosoftProfile(getBearerToken(req));
-  if (!canIssue(caller.id, 'issues.triage')) {
-    sendJson(res, 403, { error: '해결책 생성은 관리자 권한이 필요합니다.' });
-    return;
-  }
-  const parsed = parseResolutionRequest(await readBody(req, 200_000));
-  if (!parsed.ok) {
-    sendJson(res, 400, { error: parsed.error });
-    return;
-  }
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
-  const request = parsed.value;
-  const imageParts = await issueAttachmentImageParts(request.issueKey);
-  const result = await callGeminiWithFallback({
-    stage: 'Issue resolution',
-    model: liteModelFromEnv('ISSUE_RESOLUTION_MODEL', process.env.ISSUE_RESOLUTION_MODEL, ISSUE_RESOLUTION_MODEL),
-    fallbackModels: [...ISSUE_RESOLUTION_FALLBACK_CHAIN],
-    responseMimeType: 'application/json',
-    responseSchema: ISSUE_RESOLUTION_SCHEMA,
-    maxOutputTokens: 16000,
-    // docs/API_LESSONS.md: thinking tokens eat the output budget and truncate JSON on lite models.
-    thinkingBudget: 0,
-    parts: [...imageParts, { text: `${ISSUE_RESOLUTION_SYSTEM_PROMPT}\n\n${buildResolutionUserText(request)}` }],
-  });
-  const resolution = validateResolution(result.text);
-  if (!resolution) {
-    sendJson(res, 502, { error: '해결책 응답이 지정한 형식과 맞지 않습니다. 다시 생성해 주세요.' });
-    return;
-  }
-  sendJson(res, 200, { resolution, model: result.model });
-}
-
-// APP_FRONTEND_ORIGIN may be a comma-separated CORS list: the first origin is the mail link
-// base. With '*' or nothing set, links stay relative (they do not open from a mail client).
-let warnedRelativeDeepLink = false;
-function issueDeepLink(issueKey: string): string {
-  const origin = firstFrontendOrigin(process.env.APP_FRONTEND_ORIGIN);
-  if (!origin && !warnedRelativeDeepLink) {
-    warnedRelativeDeepLink = true;
-    console.warn('APP_FRONTEND_ORIGIN is "*" or unset: issue mail deep links are relative and will not open from a mail client.');
-  }
-  return `${origin}/issues?issue=${encodeURIComponent(issueKey)}`;
-}
-
-async function readNotifyRecipients(): Promise<RecipientsRead> {
-  const { data, error } = await supabase.from('issue_notify_recipients').select('email');
-  if (error) {
-    const missing = error.code === '42P01' || error.code === 'PGRST205' || /could not find|does not exist/i.test(error.message ?? '');
-    console.warn(`Issue notify recipients unreadable (${missing ? 'missing table' : 'error'}): ${error.message}`);
-    return missing ? { status: 'missing_table' } : { status: 'error' };
-  }
-  const emails = ((data as Array<{ email?: unknown }>) ?? [])
-    .map((r) => (typeof r.email === 'string' ? r.email : ''))
-    .filter(Boolean);
-  return { status: 'ok', emails };
-}
-
-/** Issues the author filed in the last hour (soft-deleted ones count too). */
-// Counted by author_id (the object id; an email can be shared by several accounts). Rows
-// without author_id (filed before 20261015120000) fall back to the email count.
-async function countAuthorIssuesLastHour(row: Pick<IssueRow, 'author_id' | 'author_email'>): Promise<number> {
-  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const authorId = row.author_id?.trim().toLowerCase();
-  const query = supabase
-    .from('feedback_issues')
-    .select('id', { count: 'exact', head: true })
-    .gte('created_at', hourAgo);
-  const pattern = row.author_email.replace(/[\\%_]/g, (c) => `\\${c}`); // exact, case-insensitive match
-  const { count, error } = authorId
-    ? await query.eq('author_id', authorId)
-    : await query.ilike('author_email', pattern);
-  if (error) throw error;
-  return count ?? 0;
-}
-
-async function sendIssueMail(kind: NotifyKind, row: IssueRow, to: string[], actor: { name: string | null; email: string }): Promise<void> {
-  try {
-    const paths = imageAttachmentPaths(row.attachments);
-    let imageUrls: string[] = [];
-    if (paths.length > 0 && kind !== 'resolved') {
-      const { data } = await supabase.storage.from(ISSUE_ATTACHMENT_BUCKET).createSignedUrls(paths, ISSUE_MAIL_URL_TTL_SECONDS);
-      imageUrls = (data ?? []).map((d) => d.signedUrl).filter((u): u is string => Boolean(u));
-    }
-    const mail = buildIssueMail({ kind, row, actor, imageUrls, deepLink: issueDeepLink(row.issue_key) });
-    const sent = await sendEmail({ to, subject: mail.subject, html: mail.html });
-    if (!sent) console.warn(`Issue mail (${kind}) for ${row.issue_key} was not sent.`);
-  } catch (error) {
-    // NOTIFY-4: best effort, log only.
-    console.warn(`Issue mail (${kind}) for ${row.issue_key} failed:`, error);
-  }
-}
-
-// N1 / N2 / N3. The body names an event and an issue key only; recipients and content come
-// from the DB row (the old endpoint mailed client-supplied text to client-supplied addresses).
-// Mobile still posts { kind: 'created', issueKey, ...legacy fields }; the extra fields are ignored.
-async function issueNotify(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const caller = await getMicrosoftProfile(getBearerToken(req));
-  const body = (await readBody(req, 200_000)) as Record<string, unknown> | null;
-  const kind = parseNotifyKind(body?.kind);
-  const issueKey = typeof body?.issueKey === 'string' ? body.issueKey.trim() : '';
-  if (!kind || !ISSUE_KEY_PATTERN.test(issueKey)) {
-    sendJson(res, 400, { error: 'kind 와 issueKey 가 필요합니다.' });
-    return;
-  }
-  const { data, error } = await supabase
-    .from('feedback_issues')
-    .select('issue_key, title, description, purpose, area, status, priority, assignee_email, assignee_name, triage_note, resolution, attachments, author_email, author_name, author_id, created_at, deleted_at')
-    .eq('issue_key', issueKey)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) {
-    sendJson(res, 404, { error: '이슈를 찾을 수 없습니다.' });
-    return;
-  }
-  const row = data as IssueRow;
-  const createdRecipients = kind === 'created' ? resolveNotifyEmails(await readNotifyRecipients()) : [];
-  const decision = decideNotify({ kind, row, caller: { id: caller.id, email: caller.email }, createdRecipients, now: Date.now() });
-  if (!decision.ok) {
-    sendJson(res, decision.status, { error: decision.error });
-    return;
-  }
-  if (kind === 'created') {
-    const recent = await countAuthorIssuesLastHour(row);
-    if (recent > CREATED_MAIL_LIMIT_PER_HOUR) {
-      console.warn(`Issue mail (created) for ${row.issue_key} skipped: ${recent} issues by this author in the last hour (limit ${CREATED_MAIL_LIMIT_PER_HOUR}).`);
-      sendJson(res, 429, { error: '최근 1시간 동안 등록이 많아 알림 메일을 보내지 않았습니다.' });
-      return;
-    }
-  }
-  // CREATE-11: answer with the confirmed recipients first, then send in the background.
-  sendJson(res, 200, { ok: true, notifiedEmails: decision.to });
-  // The new-issue mail goes out once per issue. NOTE: this dedupe is in-memory, so it resets
-  // when the server restarts / redeploys; the 15-minute window and the hourly author cap
-  // above bound what a retry can do across restarts.
-  if (kind === 'created') {
-    if (createdIssueMailSent.has(row.issue_key)) return;
-    if (createdIssueMailSent.size >= CREATED_MAIL_DEDUPE_MAX) createdIssueMailSent.clear();
-    createdIssueMailSent.add(row.issue_key);
-  }
-  if (decision.to.length > 0) void sendIssueMail(kind, row, decision.to, { name: caller.name, email: caller.email });
-}
-
-// Bounded (Power of Ten rule 8); entries only matter inside the 15-minute created window.
-const CREATED_MAIL_DEDUPE_MAX = 1000;
-const createdIssueMailSent = new Set<string>();
-
-// ---------------------------------------------------------------------------
-// F9 — Autonomous ops agent (v1: detect → RCA draft → F2 ticket, human-gated)
-//
-// Every workflow alert (job failure, 500, uncaught/unhandled) is also handed to
-// this agent, which drafts a root-cause analysis with the SAME structured LLM
-// path the human issue-resolution endpoint uses (ISSUE_RESOLUTION_SCHEMA), then
-// files an ops-tagged ticket on the existing F2 `feedback_issues` board and
-// emails the on-call. It NEVER touches prod code — remediation stays human
-// (auto-fix is deferred to F9.2). Repeats of the same failure are de-duped by
-// fingerprint so a flapping error updates one ticket instead of flooding the
-// board. This function is fully self-contained and MUST NOT reject: it runs off
-// the alert path (incl. process.uncaughtException), so a throw here would loop
-// back through the same alert handler. All failures are swallowed with a warn.
-// ---------------------------------------------------------------------------
-
-const F9_ENABLED = (process.env.F9_OPS_AGENT_ENABLED ?? 'true').toLowerCase() !== 'false';
-const OPS_AGENT_AUTHOR_EMAIL = 'ops-agent@tecace.com';
-const OPS_AGENT_AUTHOR_NAME = 'Ops Agent (F9)';
-const OPS_INCIDENT_THROTTLE_MS = 24 * 60 * 60 * 1000; // one open ticket per signature per 24h
-// Storm cap: max NEW ops tickets (= distinct failure classes) filed per rolling hour.
-// De-dup already collapses identical failures; this bounds an incident STORM of many
-// DIFFERENT classes (e.g. a bad deploy 500-ing every endpoint) so it cannot flood the
-// board, the on-call inbox, OR the Gemini bill (each new ticket = one RCA call). Over
-// the cap, new classes are dropped with a warn (existing tickets still de-dup/bump).
-const OPS_MAX_NEW_TICKETS_PER_HOUR = Number(process.env.F9_MAX_NEW_TICKETS_PER_HOUR || '10');
-
-const OPS_RCA_SYSTEM_PROMPT = `너는 사내 "Meeting Note"(회의 녹음 → AI 전사·요약·메모리·검색 앱) 백엔드를 운영하는 시니어 SRE다.
-스택: Node workflow-server(Render)에서 Gemini 호출, DB Supabase(Postgres + RLS + Storage), 전사 AssemblyAI, 인증 Azure MSAL, 프론트 React/Vite, 모바일 Flutter.
-운영 중 발생한 장애 알림(에러 + 컨텍스트)을 읽고 담당 엔지니어가 바로 착수할 수 있는 근본원인 분석(RCA)을 작성한다. 규칙:
-- 한국어로, 각 배열 원소는 한 문장씩. 실행 가능한 내용만 쓴다.
-- rootCauses 는 스택/메시지/컨텍스트를 근거로, 확인되지 않은 가설임을 전제로 가능성이 높은 순서로 쓴다.
-- checks 는 담당자가 로그/DB/대시보드에서 실제로 조회하거나 재현해 볼 절차로 쓴다.
-- fixPlan 은 손대야 할 위치와 방향을 순서대로 쓴다. 확실하지 않은 파일명을 지어내지 않는다.
-- verification 은 수정 후 무엇이 어떻게 보이면 해결로 볼 수 있는지 쓴다.
-- 정보가 부족하면 추측을 늘리지 말고 confidence 를 "low"로 두고 checks 에 무엇을 더 확인해야 하는지 적는다.
-- confidence 는 정확히 "low" | "medium" | "high" 중 하나.`;
-
-function opsEnvironment(): string {
-  return process.env.RENDER_SERVICE_NAME || process.env.NODE_ENV || 'development';
-}
-
-/**
- * Find an open (non-DONE/CLOSED, non-deleted) ops ticket for this fingerprint within the
- * throttle window. Matches the fingerprint SERVER-SIDE (`ai_suggestion->>fingerprint`) so
- * de-dup is exact regardless of how many open ops tickets exist — a JS scan of a capped
- * row window could miss a match beyond the cap during a storm and file a duplicate.
- */
-async function findOpenOpsTicket(fingerprint: string): Promise<{ id: string; meta: OpsSuggestionMeta } | null> {
-  const cutoff = new Date(Date.now() - OPS_INCIDENT_THROTTLE_MS).toISOString();
-  const { data, error } = await supabase
-    .from('feedback_issues')
-    .select('id, ai_suggestion, status, created_at')
-    .eq('area', 'ops')
-    .like('issue_key', 'OPS-%')
-    .is('deleted_at', null)
-    .not('status', 'in', '(DONE,CLOSED)')
-    .gte('created_at', cutoff)
-    .eq('ai_suggestion->>source', 'f9-ops-agent')
-    .eq('ai_suggestion->>fingerprint', fingerprint)
-    .order('created_at', { ascending: false })
-    .limit(5);
-  if (error) throw error;
-  // matchOpsTicket re-validates source/fingerprint on the (already-filtered) rows — cheap
-  // belt-and-suspenders that also narrows unknown[] to the typed meta.
-  return matchOpsTicket((data as Array<{ id: string; ai_suggestion: unknown }>) ?? [], fingerprint);
-}
-
-/** Count NEW ops tickets filed in the last rolling hour (area='ops' rows are F9's alone). */
-async function countRecentOpsTickets(): Promise<number> {
-  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const { count, error } = await supabase
-    .from('feedback_issues')
-    .select('id', { count: 'exact', head: true })
-    .eq('area', 'ops')
-    .like('issue_key', 'OPS-%')
-    .is('deleted_at', null)
-    .gte('created_at', oneHourAgo);
-  if (error) throw error;
-  return count ?? 0;
-}
-
-async function generateOpsRca(detail: string): Promise<{ resolution: ReturnType<typeof parseIssueResolution>; model: string } | null> {
-  if (!env.geminiApiKey) return null;
-  const result = await callGeminiWithFallback({
-    stage: 'Ops RCA',
-    model: env.summaryModel,
-    fallbackModels: [...STANDARD_FALLBACK_CHAIN],
-    responseMimeType: 'application/json',
-    responseSchema: ISSUE_RESOLUTION_SCHEMA,
-    maxOutputTokens: 4096,
-    parts: [{ text: `${OPS_RCA_SYSTEM_PROMPT}\n\n장애 알림:\n${detail}\n\n위 장애에 대한 RCA를 지정된 JSON 스키마로만 작성하라.` }],
-  });
-  return { resolution: parseIssueResolution(result.text), model: result.model };
-}
-
-async function fileOpsIncident(input: WorkflowAlertInput): Promise<void> {
-  if (!F9_ENABLED) return;
-  if (!env.supabaseUrl || !env.serviceRoleKey) return; // no DB → nothing to file
-  try {
-    const severity: 'error' | 'warning' = input.severity === 'warning' ? 'warning' : 'error';
-    const rawErr = formatAlertError(input.error);
-    const err = { name: rawErr.name, message: rawErr.message, stack: rawErr.stack };
-    const context = sanitizeAlertContext(input.context);
-    const fingerprint = incidentFingerprint(input.title, err.name, err.message);
-    const nowIso = new Date().toISOString();
-
-    // De-dup: a repeat of the same failure only bumps the existing ticket's counter.
-    // Only `ai_suggestion` (display-only agent metadata) is updated — NOT `triage_note`,
-    // which is human-authored and must not be clobbered by an automatic recurrence note.
-    const existing = await findOpenOpsTicket(fingerprint);
-    if (existing) {
-      const meta = bumpOccurrence(existing.meta, nowIso);
-      const { error: updateError } = await supabase
-        .from('feedback_issues')
-        .update({ ai_suggestion: meta })
-        .eq('id', existing.id);
-      if (updateError) throw updateError;
-      return;
-    }
-
-    // Storm cap: a new failure class, but if too many NEW ops tickets were filed this
-    // hour, drop it (warn only) rather than flooding the board/inbox/Gemini bill. Placed
-    // AFTER de-dup so recurring known failures still bump their ticket during a storm.
-    const recentCount = await countRecentOpsTickets();
-    if (recentCount >= OPS_MAX_NEW_TICKETS_PER_HOUR) {
-      console.warn(`F9: ops ticket rate cap reached (${recentCount}/${OPS_MAX_NEW_TICKETS_PER_HOUR} this hour) — dropping new incident "${input.title}" (fingerprint ${fingerprint}).`);
-      return;
-    }
-
-    // New failure class → draft an RCA and open a ticket.
-    const contextText = Object.keys(context).length ? JSON.stringify(context, null, 2) : '(없음)';
-    const detail = buildOpsIncidentDetail({ title: input.title, severity, environment: opsEnvironment(), err, contextText });
-
-    let resolution: ReturnType<typeof parseIssueResolution> = null;
-    let resolutionModel: string | null = null;
-    try {
-      const rca = await generateOpsRca(detail);
-      resolution = rca?.resolution ?? null;
-      resolutionModel = rca?.model ?? null;
-    } catch (rcaError) {
-      console.warn('F9 ops RCA generation failed (filing ticket without RCA):', rcaError);
-    }
-
-    const issueKey = makeOpsIssueKey(new Date(), randomBytes(4).toString('hex'));
-    const { priority, severity: ticketSeverity } = opsSeverityToPriority(severity);
-    const meta: OpsSuggestionMeta = {
-      source: 'f9-ops-agent',
-      fingerprint,
-      occurrences: 1,
-      firstSeen: nowIso,
-      lastSeen: nowIso,
-      environment: opsEnvironment(),
-      severity,
-    };
-    const description = buildOpsTicketDescription({ title: input.title, err, contextText });
-
-    const { error: insertError } = await supabase.from('feedback_issues').insert({
-      issue_key: issueKey,
-      title: `[운영] ${input.title}`.slice(0, 200),
-      description,
-      purpose: 'bug',
-      area: 'ops',
-      status: 'OPEN',
-      priority,
-      severity: ticketSeverity,
-      ai_suggestion: meta,
-      resolution: resolution ?? null,
-      resolution_generated_at: resolution ? nowIso : null,
-      resolution_model: resolutionModel,
-      author_email: OPS_AGENT_AUTHOR_EMAIL,
-      author_name: OPS_AGENT_AUTHOR_NAME,
-    });
-    if (insertError) throw insertError;
-
-    // Notify the on-call. Reuses the F2 email renderer so ops tickets read like any issue.
-    const { html } = buildIssueMail({
-      kind: 'created',
-      row: {
-        issue_key: issueKey,
-        title: `[운영] ${input.title}`,
-        description,
-        purpose: 'bug',
-        area: 'ops',
-        status: 'OPEN',
-        priority,
-        assignee_email: null,
-        assignee_name: null,
-        triage_note: null,
-        resolution,
-        attachments: [],
-        author_email: OPS_AGENT_AUTHOR_EMAIL,
-        author_name: OPS_AGENT_AUTHOR_NAME,
-        created_at: nowIso,
-      },
-      actor: { name: OPS_AGENT_AUTHOR_NAME, email: OPS_AGENT_AUTHOR_EMAIL },
-      imageUrls: [],
-      deepLink: issueDeepLink(issueKey),
-      includeResolution: true,
-    });
-    await sendEmail({ to: alertRecipients(), subject: `[운영 장애] ${issueKey} ${input.title}`, html });
-  } catch (fileError) {
-    // Never rethrow — this runs off the alert path (incl. uncaughtException), so a
-    // throw would re-enter the alert handler and loop.
-    console.warn('F9 fileOpsIncident failed:', fileError);
-  }
-}
-
-/** Emit an ops alert: the existing email PLUS an F9 RCA ticket. Fire-and-forget, never throws. */
-function raiseIncident(input: WorkflowAlertInput): void {
-  void sendWorkflowAlert(input);
-  void fileOpsIncident(input);
-}
-
-// F4 backfill: populate note_insight for existing notes (insight only, no memory
-// fold). Admin-gated and batched — call repeatedly until `processed` is 0. Each
-// call pulls a batch of notes still lacking a note_insight row (server-side filter
-// via notes_needing_insight) and extracts one row each.
-// Admins allowed to run maintenance backfills (validated via the Microsoft Graph
-// token, same as the other workflow-server endpoints).
-const INSIGHT_BACKFILL_ADMIN_IDS = new Set<string>([
-  '31d79bfe-2488-47c2-aa45-949375e93bde', // Andrew (andrewyoo@tecace.com)
-]);
-
-async function backfillInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
-  if (!tokenUserId || !INSIGHT_BACKFILL_ADMIN_IDS.has(tokenUserId)) {
-    sendJson(res, 403, { error: 'Insight backfill is not available for this user.' });
-    return;
-  }
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
-
-  const body = (await readBody(req, 1_000_000)) as { limit?: unknown } | null;
-  const limit = Math.max(1, Math.min(Math.floor(Number(body?.limit) || 25), 50));
-
-  const { data, error } = await supabase.rpc('notes_needing_insight', { p_limit: limit });
-  if (error) throw error;
-  const notes = (data as Array<{ id: string; user_id: string; transcription: string }>) ?? [];
-
-  let written = 0;
-  let failed = 0;
-  const sampleFailures: string[] = [];
-  for (const note of notes) {
-    try {
-      const result = await extractAndStoreInsight({
-        supabase,
-        apiKey: env.geminiApiKey,
-        userId: note.user_id,
-        noteId: note.id,
-        transcript: note.transcription ?? '',
-      });
-      if (result.ok) {
-        written += 1;
-      } else {
-        failed += 1;
-        if (sampleFailures.length < 5 && result.reason) sampleFailures.push(`${note.id.slice(0, 8)}: ${result.reason}`);
-      }
-    } catch (backfillError) {
-      failed += 1;
-      if (sampleFailures.length < 5) sampleFailures.push(`${note.id.slice(0, 8)}: threw ${(backfillError as Error).message.slice(0, 160)}`);
-      console.warn(`Backfill insight failed for note ${note.id}:`, backfillError);
-    }
-  }
-
-  sendJson(res, 200, { processed: notes.length, written, failed, sampleFailures });
-}
-
 // Git-derived build identity. Render injects RENDER_GIT_COMMIT / RENDER_GIT_BRANCH
 // at build + runtime; locally they are unset so we report 'dev'/'local'. This is a
 // per-service traceability stamp (which commit is live right now), NOT a shared
@@ -2725,44 +1802,13 @@ export const server = createServer((req, res) => {
       return;
     }
     if (await handleTranscriptionTestRequest(req, res)) return;
-    if (req.method === 'POST' && req.url === '/admin/backfill-insight') {
-      await backfillInsight(req, res);
-      return;
-    }
+    if (await handleBackfillInsightRequest(req, res)) return;
     if (await handleRegenerateSummaryRequest(req, res)) return;
-    if (req.method === 'POST' && req.url === '/refresh-note-insight') {
-      await refreshNoteInsight(req, res);
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/meeting-briefing') {
-      await meetingBriefing(req, res);
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/product-docs') {
-      await getProductDocsIndexRoute(req, res);
-      return;
-    }
-    const productDocMatch = url.pathname.match(/^\/product-docs\/([a-z0-9-]+)$/);
-    if (req.method === 'GET' && productDocMatch?.[1]) {
-      await getProductDocRoute(req, res, productDocMatch[1]);
-      return;
-    }
-    if (url.pathname === '/issue-resolution') {
-      await issueResolution(req, res);
-      return;
-    }
-    if (req.method === 'POST' && req.url === '/issue-notify') {
-      await issueNotify(req, res);
-      return;
-    }
-    if (req.method === 'POST' && req.url === '/project-chat') {
-      await projectChat(req, res);
-      return;
-    }
-    if (req.method === 'POST' && req.url === '/project-chat/stream') {
-      await streamProjectChat(req, res);
-      return;
-    }
+    if (await handleRefreshNoteInsightRequest(req, res)) return;
+    if (await handleBriefingRequest(req, res, url)) return;
+    if (await handleProductDocsRequest(req, res, url)) return;
+    if (await handleIssuesRequest(req, res, url)) return;
+    if (await handleProjectChatRequest(req, res)) return;
     if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {
       await createSummarizeJob(req, res);
       return;
@@ -3031,6 +2077,7 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
 }
 
 let isDirectExecution = false;
+
 if (process.argv[1]) {
   try {
     isDirectExecution = realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
@@ -3039,6 +2086,7 @@ if (process.argv[1]) {
     // Keep imports inert rather than failing while resolving an entrypoint.
   }
 }
+
 if (isDirectExecution) {
   startServer();
 }
