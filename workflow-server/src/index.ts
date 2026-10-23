@@ -1,4 +1,5 @@
 import './config/loadEnv.js';
+import { handleBackfillInsightRequest, handleRefreshNoteInsightRequest } from './routes/insight.js';
 import { handleTranscriptionTestRequest, ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL } from './routes/transcriptionTest.js';
 import { callGeminiWithFallback, delay, type GeminiWorkflowCallResult } from './ai/geminiFallback.js';
 import { recordGeminiUsage, recordAssemblyUsage } from './pipeline/usage.js';
@@ -2370,70 +2371,6 @@ async function meetingBriefing(req: IncomingMessage, res: ServerResponse): Promi
   sendJson(res, 200, { memoryItems, recent, generatedAt: new Date().toISOString() });
 }
 
-// F5.0: re-extract note_insight for a note from its NAMED diarization, so action owners
-// and participant names resolve to real people after a speaker rename. Insight-only — it
-// does NOT re-fold personal memory (that path is idempotent per note and needs a
-// supersede design; deferred). Auth mirrors regenerate-summary (Microsoft Graph token,
-// owner-or-shared access).
-async function refreshNoteInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
-  const body = (await readBody(req, 1_000_000)) as { noteId?: unknown } | null;
-  const noteId = typeof body?.noteId === 'string' ? body.noteId.trim() : '';
-  if (!noteId) {
-    sendJson(res, 400, { error: 'noteId is required.' });
-    return;
-  }
-
-  const { data: noteRow, error: noteError } = await supabase
-    .from('note')
-    .select('id, user_id, shared_users, diarization, transcription')
-    .eq('id', noteId)
-    .maybeSingle();
-  if (noteError) throw noteError;
-  if (!noteRow) {
-    sendJson(res, 404, { error: 'Note not found.' });
-    return;
-  }
-  const note = noteRow as { user_id?: unknown; shared_users?: unknown; diarization?: unknown; transcription?: unknown };
-  const ownerId = typeof note.user_id === 'string' ? note.user_id : '';
-  const sharedUsers = Array.isArray(note.shared_users) ? note.shared_users.map((value) => String(value)) : [];
-  if (ownerId !== tokenUserId && !sharedUsers.includes(tokenUserId)) {
-    sendJson(res, 403, { error: 'You do not have access to this note.' });
-    return;
-  }
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
-
-  // Prefer the named diarization (real speaker names) over the frozen "Speaker A/B"
-  // transcription column — that asymmetry is why owners were unattributed before.
-  const segments = Array.isArray(note.diarization)
-    ? (note.diarization as unknown[])
-        .filter((segment): segment is Record<string, unknown> => Boolean(segment) && typeof segment === 'object' && !Array.isArray(segment))
-        .map(normalizeTranscriptSegment)
-        .filter((segment): segment is TranscriptSegment => Boolean(segment))
-    : [];
-  const transcript = segments.length
-    ? formatTranscriptText(segments, 'original')
-    : (typeof note.transcription === 'string' ? note.transcription : '');
-  if (!transcript.trim()) {
-    sendJson(res, 422, { error: 'Note has no transcript to index.' });
-    return;
-  }
-
-  const result = await extractAndStoreInsight({
-    supabase,
-    apiKey: env.geminiApiKey,
-    userId: ownerId,
-    noteId,
-    transcript,
-    speakerContext: buildSpeakerContextFromSegments(segments),
-  });
-  if (!result.ok) {
-    sendJson(res, 502, { error: `Insight extraction failed: ${result.reason ?? 'unknown'}` });
-    return;
-  }
-  sendJson(res, 200, { ok: true, noteId });
-}
-
 // ── F2: feedback / issue tracker: AI resolution + server-side notification mail ──────
 // Rules (permissions, recipients, templates, schema) live in ./issues.ts; these handlers do
 // the I/O. Spec: docs/feedback-issues-porting-prompt.md sections 3.7, 3.9, 7.1, 9.
@@ -2873,59 +2810,6 @@ function raiseIncident(input: WorkflowAlertInput): void {
   void fileOpsIncident(input);
 }
 
-// F4 backfill: populate note_insight for existing notes (insight only, no memory
-// fold). Admin-gated and batched — call repeatedly until `processed` is 0. Each
-// call pulls a batch of notes still lacking a note_insight row (server-side filter
-// via notes_needing_insight) and extracts one row each.
-// Admins allowed to run maintenance backfills (validated via the Microsoft Graph
-// token, same as the other workflow-server endpoints).
-const INSIGHT_BACKFILL_ADMIN_IDS = new Set<string>([
-  '31d79bfe-2488-47c2-aa45-949375e93bde', // Andrew (andrewyoo@tecace.com)
-]);
-
-async function backfillInsight(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
-  if (!tokenUserId || !INSIGHT_BACKFILL_ADMIN_IDS.has(tokenUserId)) {
-    sendJson(res, 403, { error: 'Insight backfill is not available for this user.' });
-    return;
-  }
-  if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
-
-  const body = (await readBody(req, 1_000_000)) as { limit?: unknown } | null;
-  const limit = Math.max(1, Math.min(Math.floor(Number(body?.limit) || 25), 50));
-
-  const { data, error } = await supabase.rpc('notes_needing_insight', { p_limit: limit });
-  if (error) throw error;
-  const notes = (data as Array<{ id: string; user_id: string; transcription: string }>) ?? [];
-
-  let written = 0;
-  let failed = 0;
-  const sampleFailures: string[] = [];
-  for (const note of notes) {
-    try {
-      const result = await extractAndStoreInsight({
-        supabase,
-        apiKey: env.geminiApiKey,
-        userId: note.user_id,
-        noteId: note.id,
-        transcript: note.transcription ?? '',
-      });
-      if (result.ok) {
-        written += 1;
-      } else {
-        failed += 1;
-        if (sampleFailures.length < 5 && result.reason) sampleFailures.push(`${note.id.slice(0, 8)}: ${result.reason}`);
-      }
-    } catch (backfillError) {
-      failed += 1;
-      if (sampleFailures.length < 5) sampleFailures.push(`${note.id.slice(0, 8)}: threw ${(backfillError as Error).message.slice(0, 160)}`);
-      console.warn(`Backfill insight failed for note ${note.id}:`, backfillError);
-    }
-  }
-
-  sendJson(res, 200, { processed: notes.length, written, failed, sampleFailures });
-}
-
 // Git-derived build identity. Render injects RENDER_GIT_COMMIT / RENDER_GIT_BRANCH
 // at build + runtime; locally they are unset so we report 'dev'/'local'. This is a
 // per-service traceability stamp (which commit is live right now), NOT a shared
@@ -2986,18 +2870,12 @@ export const server = createServer((req, res) => {
       return;
     }
     if (await handleTranscriptionTestRequest(req, res)) return;
-    if (req.method === 'POST' && req.url === '/admin/backfill-insight') {
-      await backfillInsight(req, res);
-      return;
-    }
+    if (await handleBackfillInsightRequest(req, res)) return;
     if (req.method === 'POST' && req.url === '/regenerate-summary') {
       await regenerateSummary(req, res);
       return;
     }
-    if (req.method === 'POST' && req.url === '/refresh-note-insight') {
-      await refreshNoteInsight(req, res);
-      return;
-    }
+    if (await handleRefreshNoteInsightRequest(req, res)) return;
     if (req.method === 'GET' && url.pathname === '/meeting-briefing') {
       await meetingBriefing(req, res);
       return;
