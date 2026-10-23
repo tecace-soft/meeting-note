@@ -14,6 +14,7 @@ paths:
   - workflow-server/src/memory.ts
   - src/lib/userMemory.ts
   - src/components/UserMemoryView.tsx
+  - workflow-server/src/routes/briefing.ts
 supersedes: []
 source: MEMORY_FEATURE_DESIGN.md "F1' Dynamic relational memory", Direction (locked 2026-08-06)
 ---

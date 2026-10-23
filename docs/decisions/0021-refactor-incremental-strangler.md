@@ -21,6 +21,12 @@ paths:
   - src/pages/Project.tsx
   - src/lib/notes/repository.ts
   - src/pages/SummaryHistory.tsx
+  - workflow-server/src/routes/briefing.ts
+  - workflow-server/src/routes/productDocs.ts
+  - workflow-server/src/ops/incidents.ts
+  - workflow-server/src/routes/issues.ts
+  - workflow-server/src/issueLinks.ts
+  - workflow-server/src/issues.ts
 supersedes: []
 source: docs/reviews/2026-10-09-renovation-review.md Verdict, docs/refactor/REFACTOR_PLAN.md, 2026-10-19 회의(안정성 우선, 필요하면 재설계, 자동화 최대화)
 ---
