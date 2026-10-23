@@ -5,7 +5,8 @@ import { workflowFixture, ADMIN, USER } from './test-support/workflow.js';
 test('T1-2 issues preserve methods, validation, triage, notification and parser contracts', async (t) => {
   const f = await workflowFixture(); t.after(() => f.close());
   t.mock.method(console, 'error', () => undefined);
-  const { parseIssueResolution, issueDeepLink } = await import('./index.js');
+  const { parseIssueResolution } = await import('./issues.js');
+  const { issueDeepLink } = await import('./issueLinks.js');
   await t.test('lenient ops parser and shared link retain their exact behavior', () => {
     assert.equal(parseIssueResolution('{}'), null); assert.equal(parseIssueResolution('invalid'), null);
     assert.deepEqual(parseIssueResolution('```json\n{"summary":" x ","rootCauses":[" a ",1],"confidence":"HIGH"}\n```'), { summary: 'x', rootCauses: ['a'], checks: [], fixPlan: [], verification: [], confidence: 'high' });
