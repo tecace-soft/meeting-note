@@ -1,4 +1,5 @@
 import './config/loadEnv.js';
+import { handleProductDocsRequest } from './routes/productDocs.js';
 import { handleTranscriptionTestRequest, ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL } from './routes/transcriptionTest.js';
 import { callGeminiWithFallback, delay, type GeminiWorkflowCallResult } from './ai/geminiFallback.js';
 import { recordGeminiUsage, recordAssemblyUsage } from './pipeline/usage.js';
@@ -13,38 +14,12 @@ import { createWriteStream, realpathSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID, randomBytes, createHash } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from 'undici';
-import {
-  GEMINI_2_5_FLASH_LITE,
-  PROJECT_CHAT_MODEL,
-  STANDARD_FALLBACK_CHAIN,
-  ISSUE_RESOLUTION_MODEL,
-  ISSUE_RESOLUTION_FALLBACK_CHAIN,
-  KNOWLEDGE_EXTRACTION_MODEL,
-  liteModelFromEnv,
-} from './gemini-models.js';
-import {
-  CREATED_MAIL_LIMIT_PER_HOUR,
-  ISSUE_KEY_PATTERN,
-  ISSUE_RESOLUTION_SCHEMA,
-  ISSUE_RESOLUTION_SYSTEM_PROMPT,
-  buildIssueMail,
-  buildResolutionUserText,
-  canIssue,
-  decideNotify,
-  firstFrontendOrigin,
-  imageAttachmentPaths,
-  parseNotifyKind,
-  parseResolutionRequest,
-  resolveNotifyEmails,
-  validateResolution,
-  type IssueRow,
-  type NotifyKind,
-  type RecipientsRead,
-} from './issues.js';
+import { GEMINI_2_5_FLASH_LITE, PROJECT_CHAT_MODEL, STANDARD_FALLBACK_CHAIN, ISSUE_RESOLUTION_MODEL, ISSUE_RESOLUTION_FALLBACK_CHAIN, KNOWLEDGE_EXTRACTION_MODEL, liteModelFromEnv } from './gemini-models.js';
+import { CREATED_MAIL_LIMIT_PER_HOUR, ISSUE_KEY_PATTERN, ISSUE_RESOLUTION_SCHEMA, ISSUE_RESOLUTION_SYSTEM_PROMPT, buildIssueMail, buildResolutionUserText, canIssue, decideNotify, firstFrontendOrigin, imageAttachmentPaths, parseNotifyKind, parseResolutionRequest, resolveNotifyEmails, validateResolution, type IssueRow, type NotifyKind, type RecipientsRead } from './issues.js';
 import { callGemini, uploadGeminiFile } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseSummary, stripJsonCodeFences, formatTranscriptText, normalizeTranscriptSegment, parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
@@ -53,8 +28,8 @@ import { sendWorkflowAlert, sendEmail, alertRecipients, formatError as formatAle
 import { incidentFingerprint, matchOpsTicket, bumpOccurrence, makeOpsIssueKey, opsSeverityToPriority, buildOpsIncidentDetail, buildOpsTicketDescription, type OpsSuggestionMeta } from './opsAgent.js';
 import { handleMcpRequest } from './mcp/transports/http.js';
 import { noteAccessFilterFor } from './mcp/lib/supabase.js';
-import { loadProductDoc, loadProductDocsIndex } from './productDocs.js';
-import { clientGateMode, resolveMicrosoftCaller, tenantGateMode } from './microsoftIdentity.js';
+
+import { clientGateMode, tenantGateMode } from './microsoftIdentity.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
@@ -476,49 +451,6 @@ function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: n
     return end.toISOString();
   }
   return new Date(end.getTime() - Math.round(durationSeconds * 1000)).toISOString();
-}
-
-// Short-lived identity cache for the click-heavy docs path, so browsing N docs does not make
-// N+1 Graph /me calls (and risk 429). Keyed by a hash of the token (never the raw token); small
-// TTL so a revoked token stops resolving quickly. Only successful MEMBER lookups are cached;
-// non-members are re-checked every time. Bounded size (Power of Ten rule 8).
-const PRODUCT_DOCS_IDENTITY_TTL_MS = 60_000;
-const PRODUCT_DOCS_IDENTITY_CACHE_MAX = 256;
-const productDocsIdentityCache = new Map<string, { id: string; expiresAt: number }>();
-
-// TecAce org gate for product docs. These are internal specs served identically to every
-// caller, so a valid Microsoft token is not enough: the token's tenant must be allowlisted.
-// The mail / UPN domain is NOT used (an outside tenant admin can set mail to x@tecace.com).
-// requireOrg: an unconfigured tenant allowlist refuses docs instead of serving everyone.
-// Throws 401 (bad token) or 403 (outside tenant / gate unconfigured).
-async function assertProductDocsMember(req: IncomingMessage): Promise<string> {
-  const token = getBearerToken(req);
-  const key = createHash('sha256').update(token).digest('hex');
-  const now = Date.now();
-  const cached = productDocsIdentityCache.get(key);
-  if (cached && cached.expiresAt > now) return cached.id;
-
-  const caller = await resolveMicrosoftCaller(token, { requireOrg: true, surface: 'product-docs' });
-  // Simple bound: clear when full rather than tracking LRU (the set is tiny and TTL-bounded).
-  if (productDocsIdentityCache.size >= PRODUCT_DOCS_IDENTITY_CACHE_MAX) productDocsIdentityCache.clear();
-  productDocsIdentityCache.set(key, { id: caller.id, expiresAt: now + PRODUCT_DOCS_IDENTITY_TTL_MS });
-  return caller.id;
-}
-
-async function getProductDocsIndexRoute(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  await assertProductDocsMember(req);
-  const index = await loadProductDocsIndex();
-  sendJson(res, 200, index);
-}
-
-async function getProductDocRoute(req: IncomingMessage, res: ServerResponse, slug: string): Promise<void> {
-  await assertProductDocsMember(req);
-  const doc = await loadProductDoc(slug);
-  if (!doc) {
-    sendJson(res, 404, { error: 'Unknown product doc.' });
-    return;
-  }
-  sendJson(res, 200, doc);
 }
 
 function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
@@ -3002,15 +2934,7 @@ export const server = createServer((req, res) => {
       await meetingBriefing(req, res);
       return;
     }
-    if (req.method === 'GET' && url.pathname === '/product-docs') {
-      await getProductDocsIndexRoute(req, res);
-      return;
-    }
-    const productDocMatch = url.pathname.match(/^\/product-docs\/([a-z0-9-]+)$/);
-    if (req.method === 'GET' && productDocMatch?.[1]) {
-      await getProductDocRoute(req, res, productDocMatch[1]);
-      return;
-    }
+    if (await handleProductDocsRequest(req, res, url)) return;
     if (url.pathname === '/issue-resolution') {
       await issueResolution(req, res);
       return;

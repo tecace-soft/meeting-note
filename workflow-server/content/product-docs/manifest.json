@@ -55,7 +55,8 @@
         "workflow-server/src/mcp/server.ts",
         "src/App.tsx",
         "src/pages/Project.tsx",
-        "src/lib/notes/repository.ts"
+        "src/lib/notes/repository.ts",
+        "workflow-server/src/routes/productDocs.ts"
       ],
       "verified_body_hash": "92f39f10f7b3885d292ea26db2258ce95c080094f47ca872d86838a78bc3c47a",
       "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
@@ -113,7 +114,8 @@
         "workflow-server/src/ai/**",
         "workflow-server/src/pipeline/**",
         "workflow-server/src/parsers.ts",
-        "workflow-server/src/routes/transcriptionTest.ts"
+        "workflow-server/src/routes/transcriptionTest.ts",
+        "workflow-server/src/routes/productDocs.ts"
       ],
       "verified_body_hash": "021fb1dda010726c0d73a9c98ed3b421c2d2a94ea1deb20791de221392a912c1",
       "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",

@@ -9,6 +9,7 @@ options:
 chosen: tenant id allowlist(ALLOWED_MS_TENANT_IDS)와 object id만 신뢰한다. 이메일은 표시용 데이터다.
 reason: Entra 테넌트 관리자는 mail 값을 본인 소유가 아닌 주소로 설정할 수 있어 이메일과 도메인은 신뢰할 수 없다.
 paths:
+  - workflow-server/src/routes/productDocs.ts
   - workflow-server/src/routes/transcriptionTest.ts
   - workflow-server/src/http/identity.ts
   - workflow-server/src/microsoftIdentity.ts
