@@ -9,6 +9,7 @@ options:
 chosen: SUPABASE_SERVICE_ROLE_KEY는 서버 전용이며 VITE_* 나 프런트엔드 코드에 두지 않는다. .env는 커밋하지 않는다.
 reason: VITE_* 값은 번들에 포함되어 공개되고, service role key는 RLS를 우회한다.
 paths:
+  - workflow-server/src/routes/projectChat.ts
   - workflow-server/src/db/supabaseClient.ts
   - .env.example
   - workflow-server/.env.example

@@ -5,7 +5,7 @@ import { PROJECT_CHAT_MODEL, GEMINI_2_5_FLASH_LITE } from './gemini-models.js';
 
 test('T1-7 project chat keeps per-note access, numeric ids, SSE framing and model order',async(t)=>{
  const f=await workflowFixture();t.after(()=>f.close());t.mock.method(console,'error',()=>undefined);
- const {parseProjectChatInput,projectChatContext,projectChatDelta}=await import('./index.js');
+ const {parseProjectChatInput,projectChatContext,projectChatDelta}=await import('./routes/projectChat.js');
  const body={project_id:'0007',message:'Question'};let mode='ok';const calls:URL[]=[];const previous=globalThis.fetch;
  t.mock.method(globalThis,'fetch',async(input:Parameters<typeof fetch>[0],init?:RequestInit)=>{
   const url=new URL(String(input));calls.push(url);
