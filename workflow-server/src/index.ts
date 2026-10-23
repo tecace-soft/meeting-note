@@ -3306,3 +3306,5 @@ if (process.argv[1]) {
 if (isDirectExecution) {
   startServer();
 }
+
+export { parseRegenerateSummaryInput, loadSummaryPrompt, resolveSummaryPromptForAndroid, resolveRegenerateSummaryRules, DEFAULT_SUMMARY_PROMPT };
