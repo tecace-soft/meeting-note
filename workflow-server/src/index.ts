@@ -1,8 +1,6 @@
 import './config/loadEnv.js';
 import { raiseIncident } from './ops/incidents.js';
 import { handleIssuesRequest } from './routes/issues.js';
-
-
 import { handleTranscriptionTestRequest, ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL } from './routes/transcriptionTest.js';
 import { callGeminiWithFallback, delay, type GeminiWorkflowCallResult } from './ai/geminiFallback.js';
 import { recordGeminiUsage, recordAssemblyUsage } from './pipeline/usage.js';
@@ -17,22 +15,19 @@ import { createWriteStream, realpathSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from 'undici';
 import { GEMINI_2_5_FLASH_LITE, PROJECT_CHAT_MODEL, STANDARD_FALLBACK_CHAIN, KNOWLEDGE_EXTRACTION_MODEL, liteModelFromEnv } from './gemini-models.js';
-
 import { callGemini, uploadGeminiFile } from './gemini.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseSummary, stripJsonCodeFences, formatTranscriptText, normalizeTranscriptSegment, parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from './parsers.js';
 import { buildRegenerateSummaryPrompt, buildSummaryPrompt, buildTranscriptTranslationPrompt } from './prompts.js';
 import { extractAndStoreInsight, foldNoteIntoMemory, renderMemoryItemsForBriefing, type BriefingMemoryItem } from './memory.js';
-
-
 import { handleMcpRequest } from './mcp/transports/http.js';
 import { noteAccessFilterFor } from './mcp/lib/supabase.js';
-import { loadProductDoc, loadProductDocsIndex } from './productDocs.js';
-import { clientGateMode, resolveMicrosoftCaller, tenantGateMode } from './microsoftIdentity.js';
+
+import { clientGateMode, tenantGateMode } from './microsoftIdentity.js';
 import { createMeetingKnowledgeHttpHandler } from './knowledge/http.js';
 import { createMeetingKnowledgeStore } from './knowledge/store.js';
 import { createMeetingOutboxStore } from './knowledge/outbox.js';
@@ -41,6 +36,10 @@ import { createMeetingModelPolicyClient } from './knowledge/model-policy-client.
 import { createGeminiMeetingGenerator } from './knowledge/extraction-provider.js';
 import { createMeetingExtractionStore } from './knowledge/extraction-store.js';
 import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
+import { handleProductDocsRequest } from './routes/productDocs.js';
+
+
+
 
 interface SummarizeAudioRequest {
   downloadUrl?: unknown;
@@ -115,8 +114,11 @@ function noSpeechMessage(language: 'en' | 'ko'): string {
 }
 
 const AUDIO_BUCKET = 'meeting-recordings';
+
 const ANDROID_AUDIO_MAX_BYTES = 100 * 1024 * 1024;
+
 const DEFAULT_SUMMARY_PROMPT_NAME = 'Default';
+
 const ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS = [
   '3ga',
   '8svx',
@@ -151,10 +153,12 @@ const ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS = [
   'webm',
   'wma',
 ] as const;
+
 const ASSEMBLYAI_AUDIO_EXTENSION_RE = new RegExp(
   `\\.(${ASSEMBLYAI_SUPPORTED_AUDIO_EXTENSIONS.join('|')})$`,
   'i'
 );
+
 // Keep in sync with src/constants/defaultSummaryPrompt.ts (the web copy that seeds a user's
 // "Default" summary_prompt row). This backend copy is the FALLBACK when no DB row exists
 // (android-default + resolveRegenerateSummaryRules last resort).
@@ -181,6 +185,7 @@ Notes
 - No hallucinations. 반드시 Transcript 기반으로만 작성. 트랜스크립트에 없는 사실·담당자·결정은 추가 금지.
 - 원문 언어 준수 (한국어 회의는 한국어 출력, 영어 회의는 영어 출력).
 Reminder: 요약으로 시작, 주제별 정리(세부 구체성 유지), 결정은 "결정 사항"에, 일정은 "일정 정리"에, 실행 항목은 표로. 각 섹션은 필요한 만큼 구체적으로 쓰되 중복은 피할 것.`;
+
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).
 
 const SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES = new Set([
@@ -453,49 +458,6 @@ function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: n
     return end.toISOString();
   }
   return new Date(end.getTime() - Math.round(durationSeconds * 1000)).toISOString();
-}
-
-// Short-lived identity cache for the click-heavy docs path, so browsing N docs does not make
-// N+1 Graph /me calls (and risk 429). Keyed by a hash of the token (never the raw token); small
-// TTL so a revoked token stops resolving quickly. Only successful MEMBER lookups are cached;
-// non-members are re-checked every time. Bounded size (Power of Ten rule 8).
-const PRODUCT_DOCS_IDENTITY_TTL_MS = 60_000;
-const PRODUCT_DOCS_IDENTITY_CACHE_MAX = 256;
-const productDocsIdentityCache = new Map<string, { id: string; expiresAt: number }>();
-
-// TecAce org gate for product docs. These are internal specs served identically to every
-// caller, so a valid Microsoft token is not enough: the token's tenant must be allowlisted.
-// The mail / UPN domain is NOT used (an outside tenant admin can set mail to x@tecace.com).
-// requireOrg: an unconfigured tenant allowlist refuses docs instead of serving everyone.
-// Throws 401 (bad token) or 403 (outside tenant / gate unconfigured).
-async function assertProductDocsMember(req: IncomingMessage): Promise<string> {
-  const token = getBearerToken(req);
-  const key = createHash('sha256').update(token).digest('hex');
-  const now = Date.now();
-  const cached = productDocsIdentityCache.get(key);
-  if (cached && cached.expiresAt > now) return cached.id;
-
-  const caller = await resolveMicrosoftCaller(token, { requireOrg: true, surface: 'product-docs' });
-  // Simple bound: clear when full rather than tracking LRU (the set is tiny and TTL-bounded).
-  if (productDocsIdentityCache.size >= PRODUCT_DOCS_IDENTITY_CACHE_MAX) productDocsIdentityCache.clear();
-  productDocsIdentityCache.set(key, { id: caller.id, expiresAt: now + PRODUCT_DOCS_IDENTITY_TTL_MS });
-  return caller.id;
-}
-
-async function getProductDocsIndexRoute(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  await assertProductDocsMember(req);
-  const index = await loadProductDocsIndex();
-  sendJson(res, 200, index);
-}
-
-async function getProductDocRoute(req: IncomingMessage, res: ServerResponse, slug: string): Promise<void> {
-  await assertProductDocsMember(req);
-  const doc = await loadProductDoc(slug);
-  if (!doc) {
-    sendJson(res, 404, { error: 'Unknown product doc.' });
-    return;
-  }
-  sendJson(res, 200, doc);
 }
 
 function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
@@ -1161,10 +1123,12 @@ async function translateTranscriptSegments(input: {
 // orphan sweep (failOrphanedJobs) can distinguish a live job on another
 // instance from one stranded by a crashed/redeployed process.
 const JOB_HEARTBEAT_INTERVAL_MS = 60_000;
+
 // A queued/processing job whose updated_at is older than this is considered
 // orphaned. Must exceed the heartbeat interval by a safe margin so a genuinely
 // live job (heartbeating every minute) is never swept.
 const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
+
 // How often to re-scan for orphans. A boot-only scan would miss a job orphaned
 // moments before boot (not yet past the staleness threshold), stranding it
 // forever; a periodic scan cleans it once it crosses the threshold.
@@ -2244,11 +2208,15 @@ async function applyNamedSpeakers(
 // deliberately OMITS action items / owner attribution — those depend on speaker-ID, which is
 // measured-unreliable, so surfacing "your commitments" here would amplify a weak signal.
 const BRIEFING_MEMORY_LIMIT = 8;
+
 const BRIEFING_RECENT_NOTES = 8;
+
 const BRIEFING_MAX_PER_NOTE = 6;
 
 interface BriefingDecision { text: string; rationale: string }
+
 interface BriefingEvent { cause: string; effect: string }
+
 interface BriefingRecentNote {
   noteId: string;
   noteName: string;
@@ -2540,15 +2508,7 @@ export const server = createServer((req, res) => {
       await meetingBriefing(req, res);
       return;
     }
-    if (req.method === 'GET' && url.pathname === '/product-docs') {
-      await getProductDocsIndexRoute(req, res);
-      return;
-    }
-    const productDocMatch = url.pathname.match(/^\/product-docs\/([a-z0-9-]+)$/);
-    if (req.method === 'GET' && productDocMatch?.[1]) {
-      await getProductDocRoute(req, res, productDocMatch[1]);
-      return;
-    }
+    if (await handleProductDocsRequest(req, res, url)) return;
     if (await handleIssuesRequest(req, res, url)) return;
     if (req.method === 'POST' && req.url === '/project-chat') {
       await projectChat(req, res);
@@ -2826,6 +2786,7 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
 }
 
 let isDirectExecution = false;
+
 if (process.argv[1]) {
   try {
     isDirectExecution = realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
@@ -2834,6 +2795,7 @@ if (process.argv[1]) {
     // Keep imports inert rather than failing while resolving an entrypoint.
   }
 }
+
 if (isDirectExecution) {
   startServer();
 }
