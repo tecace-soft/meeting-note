@@ -1,7 +1,7 @@
 // F2 feedback / issue tracker: server-side rules (no I/O here, so it is unit-testable).
 // Spec: docs/feedback-issues-porting-prompt.md sections 3.1 (SEC-8, SEC-10), 3.7 (NOTIFY),
 // 7.1 / 7.3 / 7.4 (AI resolution) and 9 (mail templates).
-// The HTTP handlers that call these live in index.ts (issueResolution, issueNotify).
+// The HTTP handlers that call these live in routes/issues.ts (issueResolution, issueNotify).
 
 // ---- permissions (SEC-2, SEC-10) -----------------------------------------------------
 // SAME RULE AS public.feedback_issues_can() in
@@ -367,4 +367,37 @@ export function validateResolution(raw: string): IssueResolution | null {
   if (!summary || !rootCauses || !checks || !fixPlan || !verification) return null;
   if (confidence !== 'low' && confidence !== 'medium' && confidence !== 'high') return null;
   return { summary, rootCauses, checks, fixPlan, verification, confidence };
+}
+
+import { stripJsonCodeFences } from './parsers.js';
+
+function strArray(v: unknown, cap = 12): string[] {
+  return (Array.isArray(v) ? v : []).map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).slice(0, cap);
+}
+
+// Lenient parse kept for the F9 ops agent's RCA (system tickets); the human issue path
+// uses the strict validateResolution() from ./issues.ts.
+export function parseIssueResolution(raw: string): {
+  summary: string; rootCauses: string[]; checks: string[]; fixPlan: string[]; verification: string[]; confidence: 'low' | 'medium' | 'high';
+} | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonCodeFences(raw));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const o = parsed as Record<string, unknown>;
+  const summary = typeof o.summary === 'string' ? o.summary.trim() : '';
+  if (!summary) return null;
+  const conf = typeof o.confidence === 'string' ? o.confidence.toLowerCase() : '';
+  const confidence = conf === 'high' || conf === 'medium' ? conf : 'low';
+  return {
+    summary,
+    rootCauses: strArray(o.rootCauses),
+    checks: strArray(o.checks),
+    fixPlan: strArray(o.fixPlan),
+    verification: strArray(o.verification),
+    confidence,
+  };
 }
