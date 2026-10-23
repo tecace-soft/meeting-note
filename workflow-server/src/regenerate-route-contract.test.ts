@@ -4,7 +4,8 @@ import { workflowFixture, USER, OTHER, regenerateBody } from './test-support/wor
 
 test('T1-8 regeneration keeps prompt ownership and attributes memory/insight to the note owner',async(t)=>{
  const f=await workflowFixture();t.after(()=>f.close());t.mock.method(console,'warn',()=>undefined);t.mock.method(console,'error',()=>undefined);
- const {parseRegenerateSummaryInput,loadSummaryPrompt,resolveSummaryPromptForAndroid,resolveRegenerateSummaryRules,DEFAULT_SUMMARY_PROMPT}=await import('./index.js');
+ const {parseRegenerateSummaryInput}=await import('./routes/regenerateSummary.js');
+ const {loadSummaryPrompt,resolveSummaryPromptForAndroid,resolveRegenerateSummaryRules,DEFAULT_SUMMARY_PROMPT}=await import('./pipeline/promptLoaders.js');
  let selected:string|null=' selected ';let rows:any[]=[{name:'Default',prompt:' default ',created_at:'2026-02'},{name:'early',prompt:' first ',created_at:'2026-01'}];let promptError=false,missing=false,access=true,updateFail=false;
  const reads:URL[]=[];const previous=globalThis.fetch;
  t.mock.method(globalThis,'fetch',async(input:Parameters<typeof fetch>[0],init?:RequestInit)=>{
