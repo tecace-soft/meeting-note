@@ -9,6 +9,7 @@ options:
 chosen: 점진적 strangler를 기준안으로 한다. index.ts는 handle<Group>Request 한 줄 dispatch로 경로 단위 추출하고, 웹은 src/lib/<domain>/ repository로 데이터 접근을 모은다. 단계마다 특성화 테스트, 라우트 parity, 롤백을 갖춘다. 2026-10-21 Andrew 승인("고치면서 새 모습으로", 백엔드는 단계적 교체, 화면과 흐름은 재설계, 서버는 무료 플랜 유지). 뒤집히면 대체 결정을 기록한다.
 reason: 2026-10-09 리뷰의 다섯 관점이 모두 재작성은 정당화되지 않는다고 결론냈다. 신뢰성 처리(heartbeat, orphan sweep, 멱등성, 재시도)가 이미 코드에 있고, knowledge와 mcp가 같은 seam으로 운영 중이다. 문제는 god-file과 중복 호출부에 몰려 있어 기계적으로 추출할 수 있다.
 paths:
+  - workflow-server/src/routes/briefing.ts
   - workflow-server/src/routes/transcriptionTest.ts
   - workflow-server/src/ai/**
   - workflow-server/src/pipeline/**

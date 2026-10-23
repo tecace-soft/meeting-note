@@ -4,7 +4,7 @@ import { workflowFixture, USER, OTHER } from './test-support/workflow.js';
 
 test('T1-5 briefing keeps owner-only reads, bounded output, empty and failure contracts',async(t)=>{
  const f=await workflowFixture();t.after(()=>f.close());t.mock.method(console,'error',()=>undefined);
- const {coerceBriefingDecisions,coerceBriefingEvents}=await import('./index.js');
+ const {coerceBriefingDecisions,coerceBriefingEvents}=await import('./routes/briefing.js');
  let empty=false,failed='';const queries:URL[]=[];const previous=globalThis.fetch;
  t.mock.method(globalThis,'fetch',async(input:Parameters<typeof fetch>[0],init?:RequestInit)=>{
   const url=new URL(String(input)),table=url.pathname.split('/').pop();
