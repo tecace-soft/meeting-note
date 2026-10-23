@@ -9,6 +9,7 @@ options:
 chosen: 텍스트와 컨텍스트(identify-speakers, user_memory, speaker.profile, MS 참석자)만 쓴다. 음향 voiceprint는 저장하지 않는다.
 reason: Azure Speaker Recognition이 2025-09에 폐기되어 저렴한 관리형 옵션이 없고, 자체 호스팅은 상시 컴퓨트 비용이 든다. 무료 텍스트 접근을 먼저 출시하고 측정한다.
 paths:
+  - workflow-server/src/routes/insight.ts
   - workflow-server/src/pipeline/speakerContext.ts
   - workflow-server/src/speakerAnchors.ts
   - workflow-server/src/speakerSignature.ts

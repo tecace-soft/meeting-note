@@ -9,10 +9,12 @@ options:
 chosen: 내러티브 메모리를 사람이 읽는 주 계층으로 두고 갱신은 append가 아니라 update/supersede로 한다. 관계 그래프는 F4 인덱스와 함께 후속으로 쌓는다.
 reason: 2026-08-06 팀 리뷰 피드백이 CRM 덤프 같은 사실 중심 메모리 대신 컨텍스트와 관계 중심의 장기 메모리를 요구했다.
 paths:
+  - workflow-server/src/routes/insight.ts
   - workflow-server/src/pipeline/memoryContext.ts
   - workflow-server/src/memory.ts
   - src/lib/userMemory.ts
   - src/components/UserMemoryView.tsx
+  - workflow-server/src/routes/briefing.ts
 supersedes: []
 source: MEMORY_FEATURE_DESIGN.md "F1' Dynamic relational memory", Direction (locked 2026-08-06)
 ---

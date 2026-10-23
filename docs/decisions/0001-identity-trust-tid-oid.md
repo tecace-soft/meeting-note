@@ -19,6 +19,10 @@ paths:
   - supabase/functions/supabase-token/**
   - supabase/functions/_shared/verified-microsoft-identity.ts
   - src/context/AuthContext.tsx
+  - workflow-server/src/routes/insight.ts
+  - workflow-server/src/routes/briefing.ts
+  - workflow-server/src/routes/productDocs.ts
+  - workflow-server/src/routes/issues.ts
 supersedes: []
 source: AGENTS.md "Identity trust", 커밋 af6635d (2026-10-19). 원 결정일은 이 커밋 기준.
 ---
