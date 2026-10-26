@@ -38,17 +38,16 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs: update refactor plan progress through T1-8 (2026-10-26)
 - docs: regenerate history after syncing s12 with main
 - docs: regenerate history after syncing s10 with main
 - docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
+- docs(S1): require read-only job preflight before deployment merges
 
 **Other**
 
-- refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
-- refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
-- test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
 - test(regenerate): freeze prompt fallback and note-owner enrichment contracts
 - refactor(project-chat): extract JSON and SSE routes preserving note access filtering
@@ -75,6 +74,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(config): move dotenv loading and workflow env definitions
 - test(config): characterize env defaults and entrypoint dotenv paths
 - test(project): distinguish owned-note success from shared-note rejection
+- test(S12): reproduce shutdown failures in isolated signal children
 
 ### Recent merges
 

@@ -189,11 +189,23 @@ Codex는 코드를 수정하지 않고 마지막 절 "Codex 검토 요청"의 �
 | UX | 참석 인원 수동 입력 제거 | 260e729 | 완료(8cf6519를 되돌림) |
 | UX | AX-KH 모달의 참석자 확인을 선택 사항으로 접음 | 43152df | 완료 |
 | UX | Teams 전달, OneDrive 내보내기 제거 | (2026-08-21 팀 결정) | 완료, 남은 문자열은 5절 U24 |
-| S1 | RUNBOOK.md의 merge 전 읽기 전용 SQL과 판정 규칙 | 이 PR | 문서와 합성 SQL 검증만 완료, 운영 실행은 Andrew, S2와 S9 미수행 |
-| T2-1 / A17 첫 부분 | note RLS PGlite 도구와 Project 소유자 쓰기 검사 | 이 PR | 0행 성공 처리 재현 후 수정, 로컬 검증 완료, Andrew 소유 노트 수동 확인과 2계정 E2E 대기 |
-| T1-0a | 서버 전체 격리, import 안전성, 18개 경로 parity와 인증 후 계약 | 이 PR | 로컬 검증 완료, merge 전 S1과 Andrew의 배포 후 확인 대기 |
-| S10 설계 | S10_JOB_RECOVERY_DESIGN.md와 실패 재현 todo | 이 PR | 설계와 테스트만 작성, 구현은 T1-9b 후 |
-| S12 설계 | S12_SHUTDOWN_DESIGN.md와 종료 신호 실패 재현 todo | 이 PR | 설계와 테스트만 작성, 구현은 T1-9b와 S10 후 |
+| S1 | RUNBOOK.md의 merge 전 읽기 전용 SQL과 판정 규칙 | #30 | main 반영(2026-10-26 기준 3f2ce23), 문서와 합성 SQL 검증만 완료, 운영 실행은 Andrew, S2와 S9 미수행 |
+| T2-1 / A17 첫 부분 | note RLS PGlite 도구와 Project 소유자 쓰기 검사 | #27 | main 반영, 0행 성공 처리 재현 후 수정, Andrew 소유 노트 수동 확인과 2계정 E2E 대기 |
+| T1-0a | 서버 전체 격리, import 안전성, 18개 경로 parity와 인증 후 계약 | #26 | main 반영, 배포 완료 |
+| S10 설계 | S10_JOB_RECOVERY_DESIGN.md와 실패 재현 todo | #28 | main 반영, 설계와 테스트만 작성, 구현은 T1-9b 후 |
+| S12 설계 | S12_SHUTDOWN_DESIGN.md와 종료 신호 실패 재현 todo | #29 | main 반영, 설계와 테스트만 작성, 구현은 T1-9b와 S10 후 |
+| T1-0b | config/loadEnv.ts, config/env.ts, 상수 이동, 로컬 loopback 바인딩 | #31 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-0c / S13 readBody | HTTP primitive, requiredString, identity 위임, supabase client, readBody 바이트 카운터(별도 커밋); 닫힌 #32를 대체 | #35 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-0d | 공유 AI/usage helper, memory context, speaker context, 순수 parser 이동 | #33 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-1 | transcription-test 라우트와 테스트 전용 엔진 | #34 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-2 | issues 라우트, issueLinks.ts | #36 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-3 | ops 인시던트(fileOpsIncident, raiseIncident) | #37 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-4 | product-docs 라우트 2개 | #38 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-5 | meeting-briefing 라우트 | #39 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-6 | refresh-note-insight, admin/backfill-insight 라우트 | #40 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-7 | project-chat 라우트와 SSE | #41 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-8 | regenerate-summary 라우트와 prompt loader | #42 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-9a | job store, checkpoint, pipeline 타입, 오류, 입력을 index.ts에서 분리 (index.ts 2092줄에서 1815줄, 계약 테스트 11개) | #44 | main 반영 (최신 main 458816d) |
 
 ### 2.4 10/09 이후 새로 생긴 코드
 
@@ -921,6 +933,8 @@ DEC 충돌과 정리할 기록:
 - 커버리지와 순환 검사 도구는 설치돼 있지 않다; 새 의존성은 Andrew 승인 후에만(Q11).
 - PGlite는 저장소 의존성이 아니다; 기존 SQL harness는 scratch 폴더에 설치한 PGlite 경로를 인자로 받는다.
 - 무료 백엔드에 주기 ping을 걸지 않는다(무료 시간 소모).
+- 운영 교훈(2026-10-26): 쌓은(stacked) PR은 base 브랜치를 지우기 전에 다음 PR의 base를 main으로 바꿔야 한다(안 바꾸면 PR이 닫힐 수 있다).
+  서로 독립인 브랜치가 같은 index.ts를 고치면 충돌하므로 순서대로 쌓는다.
 
 ## 13. 검증 명령
 
