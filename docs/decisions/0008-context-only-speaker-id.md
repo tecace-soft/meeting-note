@@ -15,6 +15,7 @@ paths:
   - workflow-server/src/speakerSignature.ts
   - supabase/functions/identify-speakers/**
   - src/lib/identifySpeakers.ts
+  - workflow-server/src/pipeline/finalize.ts
 supersedes: []
 source: MEMORY_FEATURE_DESIGN.md "Decisions (2026-08-04)", F5_SPEAKER_ID_DESIGN.md "Decisions locked (2026-08-12)" 1번
 ---
