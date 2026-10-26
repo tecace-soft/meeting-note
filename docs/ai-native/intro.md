@@ -53,7 +53,6 @@ Directories only, to depth 2; generated / vendor directories (node_modules, dist
 │   └── docs/
 ├── product-page/
 │   └── assets/
-├── public/
 ├── scripts/
 │   ├── ai-native-docs/
 │   ├── axkh-node/

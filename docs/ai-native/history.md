@@ -36,6 +36,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
 - refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
 - refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
@@ -71,10 +72,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(project-chat): freeze note visibility, numeric ids and SSE framing
 - refactor(insight): extract refresh and backfill at their existing dispatch positions
 - test(insight): freeze owner attribution, admin limits and failure aggregation
-- refactor(briefing): extract owner-scoped meeting briefing route
 
 ### Recent merges
 
+- Merge pull request #49 from tecace-soft/refactor/t2-2-note-repository
 - Merge origin/main into refactor/t2-2-note-repository
 - Merge pull request #48 from tecace-soft/refactor/t1-9b-job-runner
 - Merge pull request #47 from tecace-soft/refactor/t1-10c-summarize-finalize
@@ -84,5 +85,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge origin/main into docs/refactor-progress-2026-10-26; add T1-9a row
 - Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
 - Merge pull request #42 from tecace-soft/refactor/t1-8-regenerate-summary
-- Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
 <!-- ai-native:auto:END -->
