@@ -29,6 +29,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage, type TranslationKey } from '../context/LanguageContext';
 import { useTheme } from '../theme/ThemeProvider';
 import { supabase } from '../config/supabaseConfig';
+import { listVisibleNotes } from '../lib/notes/repository';
 import { normalizeTranscript } from '../lib/transcriptSegments';
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { canAccessTranscriptionModelTest, isAdminMicrosoftUser } from '../lib/adminAccess';
@@ -295,14 +296,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     const loadNotes = async () => {
       try {
         setNotesLoading(true);
-        const { data, error } = await supabase
-          .from('note')
-          .select('*')
-          .or(`user_id.eq.${user.id},shared_users.cs.{${user.id}}`)
-          .order('created_at', { ascending: false });
-
-        if (error) throw error;
-        if (!cancelled) setNotes((data as SidebarNote[]) || []);
+        const data = await listVisibleNotes<SidebarNote>(user.id);
+        if (!cancelled) setNotes(data);
       } catch (err) {
         console.error('Sidebar: failed to load notes', err);
         if (!cancelled) setNotes([]);

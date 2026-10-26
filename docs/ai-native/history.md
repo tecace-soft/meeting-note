@@ -24,6 +24,10 @@ For the per-commit detail of the most recent work, see the auto-region below; fo
 
 Last 40 non-merge commits, newest first, grouped by type.
 
+**Features**
+
+- feat(web): add note repository read, patch and delete methods for T2-2 (unused)
+
 **Fixes**
 
 - fix(config): keep host binding opt-in through WORKFLOW_HOST
@@ -71,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(routes): extract transcription-test engines and handler
 - test(transcription): freeze model-test parser, engines and recovery contracts
 - refactor(pipeline): extract shared AI, usage, memory, speaker and recovery helpers
-- test(pipeline): characterize shared AI, usage, memory and parser contracts
 
 ### Recent merges
 
