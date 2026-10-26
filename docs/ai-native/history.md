@@ -24,10 +24,6 @@ For the per-commit detail of the most recent work, see the auto-region below; fo
 
 Last 40 non-merge commits, newest first, grouped by type.
 
-**Fixes**
-
-- fix(config): keep host binding opt-in through WORKFLOW_HOST
-
 **Docs**
 
 - docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
@@ -38,6 +34,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(workflow-server): bound the timer-driven runner and sweep retry contracts
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
 - refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
