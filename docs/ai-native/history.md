@@ -37,6 +37,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): ensureSelfSpeakerRow reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): share the owner id guard between repositories (T2-3)
 - test(web): pin speaker call-chain contracts before the T2-3 repository move
 - refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
 - test(regenerate): freeze prompt fallback and note-owner enrichment contracts
-- refactor(project-chat): extract JSON and SSE routes preserving note access filtering
 
 ### Recent merges
 
