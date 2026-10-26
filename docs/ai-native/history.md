@@ -39,6 +39,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): AppSidebar reads notes through the note repository (T2-2)
 - test(web): pin note call-chain contracts before the T2-2 repository move
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
 - test(workflow-server): make the translation contract fail when the note write does not await the translation
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(routes): follow transcription-test ownership for the existing gate fixture
 - refactor(routes): extract transcription-test engines and handler
 - test(transcription): freeze model-test parser, engines and recovery contracts
-- refactor(pipeline): extract shared AI, usage, memory, speaker and recovery helpers
 
 ### Recent merges
 
