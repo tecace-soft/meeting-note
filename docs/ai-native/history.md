@@ -27,7 +27,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 **Fixes**
 
 - fix(config): keep host binding opt-in through WORKFLOW_HOST
-- fix(http): retain direct org-gated identity import for product docs
 
 **Docs**
 
@@ -36,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
 - test(workflow-server): make the translation contract fail when the note write does not await the translation
 - test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
