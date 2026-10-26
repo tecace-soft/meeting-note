@@ -29,11 +29,14 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(web): add speaker repository with owner-scoped methods for T2-3 (unused)
 - feat(web): add note repository read, patch and delete methods for T2-2 (unused)
 
+**Fixes**
+
+- fix(web): type speaker name lookup result so pages can cast the rows (T2-3)
+
 **Docs**
 
 - docs(decisions): point DEC-0001/0003 at the T1-9b job modules
 - docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
-- docs: update refactor plan progress through T1-8 (2026-10-26)
 
 **Other**
 
