@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, startTransition } from
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../components/ConfirmDialog';
+import { patchNoteReturningId, saveNoteTranslations } from '../lib/notes/repository';
 import {
   supabase,
   AUDIO_BUCKET,
@@ -1451,13 +1452,7 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-      const { data, error } = await supabase
-        .from('note')
-        .update({ summary_edit: summaryText })
-        .eq('id', currentNoteId)
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
+      const data = await patchNoteReturningId({ noteId: currentNoteId, patch: { summary_edit: summaryText } });
       // 0 rows updated (RLS denied / note gone): don't report a save that
       // didn't happen — the edit would silently vanish on refresh.
       if (!data) throw new Error('Could not save your edit. Please refresh and try again.');
@@ -1491,13 +1486,7 @@ const TranscriptionSummary: React.FC = () => {
 
     try {
       setSummaryEditError(null);
-      const { data, error } = await supabase
-        .from('note')
-        .update({ name })
-        .eq('id', currentNoteId)
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
+      const data = await patchNoteReturningId({ noteId: currentNoteId, patch: { name } });
       // 0 rows updated (RLS denied / note gone): don't fake a successful rename.
       if (!data) throw new Error('Could not save the title. Please refresh and try again.');
       setSummaryResult((prev) => (prev ? { ...prev, title: name } : prev));
@@ -1544,20 +1533,14 @@ const TranscriptionSummary: React.FC = () => {
       return;
     }
     const nextTranslations = updateTranslationMap(summaryResult?.diarization_translations, language, next);
-    const { data, error } = await supabase
-      .from('note')
-      .update({
-        diarization_translations: nextTranslations,
-        transcription_translations: {
-          ...(summaryResult?.transcription_translations ?? {}),
-          [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
-        },
-      })
-      .eq('id', currentNoteId)
-      .select('id')
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) throw new Error('Transcript translation save did not update the note.');
+    await saveNoteTranslations({
+      noteId: currentNoteId,
+      diarizationTranslations: nextTranslations,
+      transcriptionTranslations: {
+        ...(summaryResult?.transcription_translations ?? {}),
+        [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+      },
+    });
   };
 
   const updateGeneratedTranscript = (language: TranscriptLanguage, next: TranscriptSegment[]) => {

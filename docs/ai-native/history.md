@@ -24,9 +24,9 @@ For the per-commit detail of the most recent work, see the auto-region below; fo
 
 Last 40 non-merge commits, newest first, grouped by type.
 
-**Fixes**
+**Features**
 
-- fix(config): keep host binding opt-in through WORKFLOW_HOST
+- feat(web): add note repository read, patch and delete methods for T2-2 (unused)
 
 **Docs**
 
@@ -36,6 +36,17 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
+- refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
+- refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
+- refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
+- refactor(web): persistNoteDiarization writes through the note repository (T2-2)
+- refactor(web): audio reference check pages notes through the note repository (T2-2)
+- refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
+- refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
+- refactor(web): AppSidebar reads notes through the note repository (T2-2)
+- test(web): pin note call-chain contracts before the T2-2 repository move
+- refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
 - refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
 - test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
@@ -61,20 +72,12 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(insight): extract refresh and backfill at their existing dispatch positions
 - test(insight): freeze owner attribution, admin limits and failure aggregation
 - refactor(briefing): extract owner-scoped meeting briefing route
-- refactor(product-docs): extract routes with one bounded token cache
-- test(briefing): freeze owner scope, bounded output and dependency failures
-- test(product-docs): freeze org gate, token cache and route contracts
-- refactor(ops): give incidents a single module without route dependencies
-- test(ops): freeze incident dedupe, caps and failure handling
-- refactor(issues): extract handlers and assign shared parser and link ownership
-- test(issues): freeze route, parser and deep-link contracts
-- test(docs): reject duplicate product-doc dependency paths
-- test(config): make async entrypoint checks one-shot on Node 22
-- test(routes): follow transcription-test ownership for the existing gate fixture
-- refactor(routes): extract transcription-test engines and handler
 
 ### Recent merges
 
+- Merge origin/main into refactor/t2-2-note-repository
+- Merge pull request #48 from tecace-soft/refactor/t1-9b-job-runner
+- Merge pull request #47 from tecace-soft/refactor/t1-10c-summarize-finalize
 - Merge pull request #46 from tecace-soft/refactor/t1-10b-transcription
 - Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
 - Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
@@ -82,7 +85,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
 - Merge pull request #42 from tecace-soft/refactor/t1-8-regenerate-summary
 - Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
-- Merge pull request #40 from tecace-soft/refactor/t1-6-note-insight
-- Merge pull request #39 from tecace-soft/refactor/t1-5-meeting-briefing
-- Merge pull request #38 from tecace-soft/refactor/t1-4-product-docs
 <!-- ai-native:auto:END -->

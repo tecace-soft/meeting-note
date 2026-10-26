@@ -6,6 +6,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
 import { supabase, getSupabaseAccessTokenForRequest } from '../config/supabaseConfig';
+import { getNoteSharing, setNoteSharedUsers } from '../lib/notes/repository';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import {
   anonymousLabelsInTranscript,
@@ -672,14 +673,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     const targetUserId = microsoftUserId?.trim();
     if (!noteId || !targetUserId) return;
 
-    const { data, error: fetchError } = await supabase
-      .from('note')
-      .select('user_id, shared_users')
-      .eq('id', noteId)
-      .single();
-    if (fetchError) throw fetchError;
-
-    const noteRow = data as { user_id?: string | null; shared_users?: unknown } | null;
+    const noteRow = await getNoteSharing(noteId);
     if (!noteRow) return;
 
     const rawSharedUsers = noteRow.shared_users;
@@ -692,11 +686,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     }
 
     const nextSharedUsers = [...sharedUsers, targetUserId];
-    const { error: updateError } = await supabase
-      .from('note')
-      .update({ shared_users: nextSharedUsers })
-      .eq('id', noteId);
-    if (updateError) throw updateError;
+    await setNoteSharedUsers({ noteId, sharedUsers: nextSharedUsers });
     onNoteShared?.(nextSharedUsers);
   };
 
