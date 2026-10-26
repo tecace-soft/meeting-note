@@ -38,7 +38,7 @@ test('T1-10a Android upload route contract (multipart, limits, storage, errors)'
   t.after(() => f.close());
   const token = `fixture.${Buffer.from(JSON.stringify({ oid: USER, tid: f.state.tenant })).toString('base64url')}.fixture`;
   const send = async (body: Buffer | string, contentType = `multipart/form-data; boundary=${BOUNDARY}`) => {
-    const r = await fetch(f.base + '/android/recordings/jobs', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': contentType }, body });
+    const r = await fetch(f.base + '/android/recordings/jobs', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': contentType }, body: typeof body === 'string' ? body : new Uint8Array(body) });
     const text = await r.text();
     return { status: r.status, text, body: JSON.parse(text) as Record<string, any> };
   };

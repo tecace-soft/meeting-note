@@ -29,7 +29,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(config): keep host binding opt-in through WORKFLOW_HOST
 - fix(http): retain direct org-gated identity import for product docs
 - fix(config): load dotenv before consumers and default local startup to loopback
-- fix(server): log the bound port and explain IPv4-only tests
 
 **Performance**
 
@@ -46,6 +45,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(workflow-server): pin Android upload route contract before T1-10a move
 - chore: restore generated docs/ai-native to main (not part of T1-9a)
 - refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
 - refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
