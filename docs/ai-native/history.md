@@ -40,10 +40,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs: regenerate history after syncing s12 with main
 - docs: regenerate history after syncing s10 with main
 - docs: regenerate history after syncing main a8c8b54
-- docs: regenerate history after merging main into test isolation
 
 **Other**
 
+- refactor(workflow-server): move Android upload helpers to pipeline/androidUpload (T1-10a)
 - test(workflow-server): fix body typing in Android upload contract test
 - test(workflow-server): pin Android upload route contract before T1-10a move
 - chore: restore generated docs/ai-native to main (not part of T1-9a)
