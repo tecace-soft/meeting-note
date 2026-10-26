@@ -55,7 +55,7 @@ import { type WorkflowJobRow, updateWorkflowJob, deleteTranscriptCheckpoint, JOB
 
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).
 
-function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: number | null): string | null {
+export function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: number | null): string | null {
   if (!recordingEndedAt) return null;
   const end = new Date(recordingEndedAt);
   if (Number.isNaN(end.getTime())) return null;
@@ -65,7 +65,7 @@ function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: n
   return new Date(end.getTime() - Math.round(durationSeconds * 1000)).toISOString();
 }
 
-async function buildGeminiAttachmentParts(attachments: SummaryAttachmentInput[]): Promise<Parameters<typeof callGemini>[0]['parts']> {
+export async function buildGeminiAttachmentParts(attachments: SummaryAttachmentInput[]): Promise<Parameters<typeof callGemini>[0]['parts']> {
   if (attachments.length === 0) return [];
 
   const uploaded: Array<{ name: string; mimeType: string; fileUri: string }> = [];
@@ -107,16 +107,16 @@ ${uploaded.map((file, index) => `${index + 1}. ${file.name} (${file.mimeType})`)
   ];
 }
 
-function attachmentSectionHeading(language: 'en' | 'ko'): string {
+export function attachmentSectionHeading(language: 'en' | 'ko'): string {
   return language === 'ko' ? '## 첨부 파일' : '## Attached Files';
 }
 
-function summaryHasAttachmentSection(summary: string, language: 'en' | 'ko'): boolean {
+export function summaryHasAttachmentSection(summary: string, language: 'en' | 'ko'): boolean {
   const exactHeading = attachmentSectionHeading(language).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`^${exactHeading}\\s*$`, 'im').test(summary);
 }
 
-function parseAttachmentSection(raw: string, language: 'en' | 'ko'): string {
+export function parseAttachmentSection(raw: string, language: 'en' | 'ko'): string {
   const parsed = JSON.parse(stripJsonCodeFences(raw)) as unknown;
   const sectionMarkdown = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
     ? (parsed as { sectionMarkdown?: unknown }).sectionMarkdown
@@ -127,7 +127,7 @@ function parseAttachmentSection(raw: string, language: 'en' | 'ko'): string {
   return section.startsWith(heading) ? section : `${heading}\n${section}`;
 }
 
-function fallbackAttachmentSection(attachments: SummaryAttachmentInput[], language: 'en' | 'ko'): string {
+export function fallbackAttachmentSection(attachments: SummaryAttachmentInput[], language: 'en' | 'ko'): string {
   const heading = attachmentSectionHeading(language);
   const fileLines = attachments.length > 0
     ? attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType}): ${language === 'ko'
@@ -139,7 +139,7 @@ function fallbackAttachmentSection(attachments: SummaryAttachmentInput[], langua
   return `${heading}\n${fileLines.join('\n')}`;
 }
 
-async function generateAttachmentSummarySection(input: {
+export async function generateAttachmentSummarySection(input: {
   attachmentParts: Parameters<typeof callGemini>[0]['parts'];
   attachments: SummaryAttachmentInput[];
   transcriptText: string;
@@ -198,7 +198,7 @@ ${input.existingSummary}
   });
 }
 
-async function insertNote(input: {
+export async function insertNote(input: {
   noteId: string;
   userId: string;
   userName: string;
@@ -270,7 +270,7 @@ async function insertNote(input: {
   if (error) throw error;
 }
 
-async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | null = null): Promise<SummarizeAudioResult> {
+export async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | null = null): Promise<SummarizeAudioResult> {
   if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('Supabase service configuration is missing.');
   if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
   if (!env.assemblyAiApiKey) throw new Error('AssemblyAI API key is missing.');
@@ -496,7 +496,7 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
 // is sent, so the user sees the summary without waiting on these extra Gemini calls.
 // Guaranteed non-throwing: each step is best-effort and the whole body is guarded, so a
 // caller can await or fire-and-forget it without risk of an unhandled rejection.
-async function finalizeNoteMemory(input: SummarizeAudioInput, segments: TranscriptSegment[]): Promise<void> {
+export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: TranscriptSegment[]): Promise<void> {
   try {
     const transcriptText = formatTranscriptText(segments, 'original');
     // Fold into personal memory + write the note_insight index. Idempotent:
@@ -833,7 +833,7 @@ async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId:
 // Re-extracts note_insight from the named transcript; does NOT re-fold personal memory (the fold
 // above kept generic labels, so a misID can't corrupt memory). Best-effort.
 
-async function autoIdentifySpeakersAtIngest(input: {
+export async function autoIdentifySpeakersAtIngest(input: {
   noteId: string;
   userId: string;
   selfName: string | null;

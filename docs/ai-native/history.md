@@ -40,6 +40,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(workflow-server): add direct transcript-stage tests for transcribeOrReuseCheckpoint
 - refactor(workflow-server): split transcription into submit/poll/parse and a transcript stage (T1-10b)
 - refactor(workflow-server): move AssemblyAI transcription to pipeline/transcription (T1-10b)
 - test(workflow-server): pin AssemblyAI transcription pipeline contracts before T1-10b move
@@ -74,10 +75,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(pipeline): characterize shared AI, usage, memory and parser contracts
 - refactor(http): extract shared HTTP, Microsoft identity wrappers and DB client
 - test(http): freeze shared HTTP and identity contracts before extraction
-- refactor(config): move dotenv loading and workflow env definitions
 
 ### Recent merges
 
+- Merge pull request #46 from tecace-soft/refactor/t1-10b-transcription
 - Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
 - Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
 - Merge origin/main into docs/refactor-progress-2026-10-26; add T1-9a row
@@ -87,5 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #40 from tecace-soft/refactor/t1-6-note-insight
 - Merge pull request #39 from tecace-soft/refactor/t1-5-meeting-briefing
 - Merge pull request #38 from tecace-soft/refactor/t1-4-product-docs
-- merge: stack T1-8 on T1-7 preserving prompt loaders and route order
 <!-- ai-native:auto:END -->
