@@ -54,12 +54,12 @@ import { type WorkflowJobRow, updateWorkflowJob, loadTranscriptCheckpoint, saveT
 
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).
 
-interface CustomSpellingRule {
+export interface CustomSpellingRule {
   from: string[];
   to: string;
 }
 
-interface TranscriptionSettings {
+export interface TranscriptionSettings {
   speechModel: string;
   keytermsPrompt: string[];
   customSpelling: CustomSpellingRule[];
@@ -76,7 +76,7 @@ function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: n
   return new Date(end.getTime() - Math.round(durationSeconds * 1000)).toISOString();
 }
 
-function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
+export function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase().replace('_', '-');
   if (normalized === 'en' || normalized.startsWith('en-')) return 'en';
@@ -84,14 +84,14 @@ function normalizeDetectedTranscriptLanguage(value: unknown): 'en' | 'ko' | null
   return null;
 }
 
-function getOppositeTranscriptLanguage(language: 'en' | 'ko' | null): 'en' | 'ko' | null {
+export function getOppositeTranscriptLanguage(language: 'en' | 'ko' | null): 'en' | 'ko' | null {
   if (language === 'en') return 'ko';
   if (language === 'ko') return 'en';
   return null;
 }
 
 
-function normalizeKeytermsPrompt(value: unknown): string[] {
+export function normalizeKeytermsPrompt(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   const terms: string[] = [];
@@ -105,7 +105,7 @@ function normalizeKeytermsPrompt(value: unknown): string[] {
   return terms.slice(0, 250);
 }
 
-function normalizeCustomSpelling(value: unknown): CustomSpellingRule[] {
+export function normalizeCustomSpelling(value: unknown): CustomSpellingRule[] {
   if (!Array.isArray(value)) return [];
   const rules: CustomSpellingRule[] = [];
   for (const item of value) {
@@ -122,7 +122,7 @@ function normalizeCustomSpelling(value: unknown): CustomSpellingRule[] {
   return rules.slice(0, 100);
 }
 
-async function loadTranscriptionSettings(): Promise<TranscriptionSettings> {
+export async function loadTranscriptionSettings(): Promise<TranscriptionSettings> {
   const fallback: TranscriptionSettings = {
     speechModel: env.assemblyAiSpeechModel,
     keytermsPrompt: [],
@@ -361,7 +361,7 @@ async function insertNote(input: {
   if (error) throw error;
 }
 
-async function transcribeWithAssembly(input: {
+export async function transcribeWithAssembly(input: {
   downloadUrl: string;
   noteId: string;
   userId: string;
@@ -537,7 +537,7 @@ async function transcribeWithAssembly(input: {
   return { segments, latencyMs, audioDurationSeconds, detectedLanguage: normalizeDetectedTranscriptLanguage(transcript.language_code) };
 }
 
-async function translateTranscriptSegments(input: {
+export async function translateTranscriptSegments(input: {
   segments: TranscriptSegment[];
   targetLanguage: 'en' | 'ko';
   noteId: string;
