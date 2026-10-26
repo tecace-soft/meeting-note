@@ -40,34 +40,14 @@ import { handleBackfillInsightRequest, handleRefreshNoteInsightRequest } from '.
 import { handleProjectChatRequest } from './routes/projectChat.js';
 import { handleRegenerateSummaryRequest } from './routes/regenerateSummary.js';
 import { loadSummaryPrompt, resolveSummaryPromptForAndroid } from './pipeline/promptLoaders.js';
+import type { SummarizeAudioRequest, SummaryAttachmentInput, SummarizeAudioInput, SummarizeAudioResult } from './pipeline/types.js';
+import { NoSpeechDetectedError, noSpeechMessage } from './pipeline/errors.js';
+import { parseSummarizeInput } from './pipeline/inputs.js';
 
 
 
 
 
-
-export interface SummarizeAudioRequest {
-  downloadUrl?: unknown;
-  fileName?: unknown;
-  instructions?: unknown;
-  promptId?: unknown;
-  summaryRulesOverride?: unknown;
-  userId?: unknown;
-  userName?: unknown;
-  noteId?: unknown;
-  meetingAt?: unknown;
-  userTimeZone?: unknown;
-  fileId?: unknown;
-  speakerContext?: unknown;
-  attachments?: unknown;
-  language?: unknown;
-}
-
-export interface SummaryAttachmentInput {
-  name: string;
-  mimeType: string;
-  dataBase64: string;
-}
 
 interface AndroidUploadFile {
   fieldName: string;
@@ -80,28 +60,6 @@ interface AndroidUploadFile {
 interface AndroidRecordingUpload {
   file: AndroidUploadFile;
   fields: Record<string, string>;
-}
-
-// Thrown when transcription succeeds but the audio held no detectable speech
-// (a recording left running in a silent room, or an interrupted capture whose
-// recovered audio is only ambient noise). This is a normal user outcome, not a
-// system failure: it must surface a clear, localized message and must NOT raise
-// an ops incident. 422 = the request was well-formed but the audio is
-// unprocessable, for the direct (non-job) summarize endpoint.
-export class NoSpeechDetectedError extends HttpError {
-  constructor(message: string) {
-    super(422, message);
-    this.name = 'NoSpeechDetectedError';
-  }
-}
-
-// User-facing message for a no-speech recording, in the selected summary
-// language. Shown verbatim to the user (mobile processing screen, web job
-// poll), so it must read as guidance, never as an internal error string.
-export function noSpeechMessage(language: 'en' | 'ko'): string {
-  return language === 'ko'
-    ? '녹음에서 음성을 찾지 못했어요. 말소리가 담긴 녹음으로 다시 시도해 주세요.'
-    : 'No speech was found in this recording. Please try again with audio that contains speech.';
 }
 
 const AUDIO_BUCKET = 'meeting-recordings';
@@ -149,40 +107,6 @@ const ASSEMBLYAI_AUDIO_EXTENSION_RE = new RegExp(
 );
 
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).
-
-const SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES = new Set([
-  'text/html',
-  'text/css',
-  'text/plain',
-  'text/xml',
-  'text/csv',
-  'text/rtf',
-  'text/javascript',
-  'application/json',
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/bmp',
-  'image/heic',
-  'image/heif',
-  'video/mp4',
-  'video/mpeg',
-  'video/quicktime',
-  'video/avi',
-  'video/x-flv',
-  'video/mpg',
-  'video/webm',
-  'video/wmv',
-  'video/3gpp',
-  'audio/wav',
-  'audio/mp3',
-  'audio/mpeg',
-  'audio/aiff',
-  'audio/aac',
-  'audio/ogg',
-  'audio/flac',
-]);
 
 interface CustomSpellingRule {
   from: string[];
@@ -325,58 +249,6 @@ function parseAndroidMultipartUpload(req: IncomingMessage): Promise<AndroidRecor
   });
 }
 
-export function parseSummaryAttachments(value: unknown): SummaryAttachmentInput[] {
-  if (!Array.isArray(value)) return [];
-  const attachments: SummaryAttachmentInput[] = [];
-  let totalBytes = 0;
-
-  for (const item of value.slice(0, 10)) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-    const record = item as Record<string, unknown>;
-    const name = typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 240) : 'attachment';
-    const mimeType = typeof record.mimeType === 'string' && record.mimeType.trim()
-      ? record.mimeType.trim()
-      : 'application/octet-stream';
-    if (!SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES.has(mimeType)) continue;
-    const dataBase64 = typeof record.dataBase64 === 'string' ? record.dataBase64.trim() : '';
-    if (!dataBase64 || !/^[A-Za-z0-9+/=]+$/.test(dataBase64)) continue;
-    const estimatedBytes = Math.floor((dataBase64.length * 3) / 4);
-    totalBytes += estimatedBytes;
-    if (estimatedBytes > 25 * 1024 * 1024 || totalBytes > 50 * 1024 * 1024) break;
-    attachments.push({ name, mimeType, dataBase64 });
-  }
-
-  return attachments;
-}
-
-export function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
-  const meetingAt = typeof body.meetingAt === 'string' && body.meetingAt.trim()
-    ? new Date(body.meetingAt)
-    : null;
-  const userTimeZone = typeof body.userTimeZone === 'string' && body.userTimeZone.trim()
-    ? body.userTimeZone.trim()
-    : null;
-  return {
-    downloadUrl: requiredString(body, 'downloadUrl'),
-    fileName: requiredString(body, 'fileName'),
-    promptId: requiredString(body, 'promptId'),
-    summaryRulesOverride:
-      typeof body.summaryRulesOverride === 'string'
-        ? body.summaryRulesOverride
-        : undefined,
-    userId: requiredString(body, 'userId'),
-    userName: typeof body.userName === 'string' ? body.userName.trim() : '',
-    noteId: requiredString(body, 'noteId'),
-    meetingAt: meetingAt && !Number.isNaN(meetingAt.getTime()) ? meetingAt.toISOString() : null,
-    userTimeZone,
-    fileId: typeof body.fileId === 'string' && body.fileId.trim() ? body.fileId.trim() : null,
-    instructions: typeof body.instructions === 'string' ? body.instructions : '',
-    speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
-    attachments: parseSummaryAttachments(body.attachments),
-    language: body.language === 'ko' ? 'ko' : 'en',
-  };
-}
-
 function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: number | null): string | null {
   if (!recordingEndedAt) return null;
   const end = new Date(recordingEndedAt);
@@ -399,36 +271,6 @@ function getOppositeTranscriptLanguage(language: 'en' | 'ko' | null): 'en' | 'ko
   if (language === 'en') return 'ko';
   if (language === 'ko') return 'en';
   return null;
-}
-
-export interface SummarizeAudioInput {
-  downloadUrl: string;
-  fileName: string;
-  instructions: string;
-  promptId: string;
-  summaryRulesOverride?: string;
-  userId: string;
-  userName: string;
-  noteId: string;
-  meetingAt: string | null;
-  userTimeZone: string | null;
-  fileId: string | null;
-  speakerContext: string;
-  attachments: SummaryAttachmentInput[];
-  language: 'en' | 'ko';
-}
-
-export interface SummarizeAudioResult {
-  transcript: TranscriptSegment[];
-  summary: string;
-  summaryTranslations?: Record<'en' | 'ko', string>;
-  transcriptionLanguage?: 'en' | 'ko' | null;
-  transcriptionTranslations?: Partial<Record<'en' | 'ko', string>>;
-  diarizationTranslations?: Partial<Record<'en' | 'ko', TranscriptSegment[]>>;
-  title: string;
-  tags: string[];
-  audioDurationSeconds: number | null;
-  meetingStartAt: string | null;
 }
 
 export interface WorkflowJobRow {

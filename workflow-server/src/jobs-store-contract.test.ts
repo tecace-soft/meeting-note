@@ -9,8 +9,9 @@ process.env.GEMINI_API_KEY = 'synthetic-gemini';
 process.env.ASSEMBLYAI_API_KEY = 'synthetic-assembly';
 const { supabase } = await import('./db/supabaseClient.js');
 const { HttpError, getHttpStatus } = await import('./http/shared.js');
+const { NoSpeechDetectedError, noSpeechMessage } = await import('./pipeline/errors.js');
+const { parseSummarizeInput, parseSummaryAttachments } = await import('./pipeline/inputs.js');
 const {
-  NoSpeechDetectedError, noSpeechMessage, parseSummarizeInput, parseSummaryAttachments,
   updateWorkflowJob, loadTranscriptCheckpoint, saveTranscriptCheckpoint, deleteTranscriptCheckpoint,
   JOB_HEARTBEAT_INTERVAL_MS, ORPHANED_JOB_THRESHOLD_MS, ORPHANED_JOB_SWEEP_INTERVAL_MS,
 } = await import('./index.js');

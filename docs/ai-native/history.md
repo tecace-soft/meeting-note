@@ -44,10 +44,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
 - docs(S1): require read-only job preflight before deployment merges
-- docs(S12): design ordered shutdown and completed-job preservation
 
 **Other**
 
+- test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
 - test(regenerate): freeze prompt fallback and note-owner enrichment contracts
 - refactor(project-chat): extract JSON and SSE routes preserving note access filtering
