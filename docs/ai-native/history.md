@@ -39,6 +39,8 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
+- test(workflow-server): make the translation contract fail when the note write does not await the translation
 - test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
 - test(workflow-server): add direct transcript-stage tests for transcribeOrReuseCheckpoint
 - refactor(workflow-server): split transcription into submit/poll/parse and a transcript stage (T1-10b)
@@ -73,8 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(transcription): freeze model-test parser, engines and recovery contracts
 - refactor(pipeline): extract shared AI, usage, memory, speaker and recovery helpers
 - test(pipeline): characterize shared AI, usage, memory and parser contracts
-- refactor(http): extract shared HTTP, Microsoft identity wrappers and DB client
-- test(http): freeze shared HTTP and identity contracts before extraction
 
 ### Recent merges
 

@@ -20,10 +20,11 @@ const { buildSummaryPrompt } = await import('./prompts.js');
 const { buildNoteName, formatMeetingDateForPrompt } = await import('./parsers.js');
 const { renderMemoryForContext } = await import('./memory.js');
 const {
-  inferMeetingStartAt, buildGeminiAttachmentParts, attachmentSectionHeading, summaryHasAttachmentSection,
-  parseAttachmentSection, fallbackAttachmentSection, generateAttachmentSummarySection, insertNote,
-  runSummarizeAudio, finalizeNoteMemory, autoIdentifySpeakersAtIngest,
-} = await import('./index.js');
+  buildGeminiAttachmentParts, attachmentSectionHeading, summaryHasAttachmentSection,
+  parseAttachmentSection, fallbackAttachmentSection, generateAttachmentSummarySection,
+} = await import('./pipeline/attachments.js');
+const { inferMeetingStartAt, insertNote, runSummarizeAudio } = await import('./pipeline/summarize.js');
+const { finalizeNoteMemory, autoIdentifySpeakersAtIngest } = await import('./pipeline/finalize.js');
 
 type DbError = { message: string; code?: string };
 type DbResult = { data?: unknown; error?: DbError | null };
