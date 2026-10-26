@@ -46,7 +46,7 @@ import { loadSummaryPrompt, resolveSummaryPromptForAndroid } from './pipeline/pr
 
 
 
-interface SummarizeAudioRequest {
+export interface SummarizeAudioRequest {
   downloadUrl?: unknown;
   fileName?: unknown;
   instructions?: unknown;
@@ -63,7 +63,7 @@ interface SummarizeAudioRequest {
   language?: unknown;
 }
 
-interface SummaryAttachmentInput {
+export interface SummaryAttachmentInput {
   name: string;
   mimeType: string;
   dataBase64: string;
@@ -88,7 +88,7 @@ interface AndroidRecordingUpload {
 // system failure: it must surface a clear, localized message and must NOT raise
 // an ops incident. 422 = the request was well-formed but the audio is
 // unprocessable, for the direct (non-job) summarize endpoint.
-class NoSpeechDetectedError extends HttpError {
+export class NoSpeechDetectedError extends HttpError {
   constructor(message: string) {
     super(422, message);
     this.name = 'NoSpeechDetectedError';
@@ -98,7 +98,7 @@ class NoSpeechDetectedError extends HttpError {
 // User-facing message for a no-speech recording, in the selected summary
 // language. Shown verbatim to the user (mobile processing screen, web job
 // poll), so it must read as guidance, never as an internal error string.
-function noSpeechMessage(language: 'en' | 'ko'): string {
+export function noSpeechMessage(language: 'en' | 'ko'): string {
   return language === 'ko'
     ? '녹음에서 음성을 찾지 못했어요. 말소리가 담긴 녹음으로 다시 시도해 주세요.'
     : 'No speech was found in this recording. Please try again with audio that contains speech.';
@@ -325,7 +325,7 @@ function parseAndroidMultipartUpload(req: IncomingMessage): Promise<AndroidRecor
   });
 }
 
-function parseSummaryAttachments(value: unknown): SummaryAttachmentInput[] {
+export function parseSummaryAttachments(value: unknown): SummaryAttachmentInput[] {
   if (!Array.isArray(value)) return [];
   const attachments: SummaryAttachmentInput[] = [];
   let totalBytes = 0;
@@ -349,7 +349,7 @@ function parseSummaryAttachments(value: unknown): SummaryAttachmentInput[] {
   return attachments;
 }
 
-function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
+export function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
   const meetingAt = typeof body.meetingAt === 'string' && body.meetingAt.trim()
     ? new Date(body.meetingAt)
     : null;
@@ -401,7 +401,7 @@ function getOppositeTranscriptLanguage(language: 'en' | 'ko' | null): 'en' | 'ko
   return null;
 }
 
-interface SummarizeAudioInput {
+export interface SummarizeAudioInput {
   downloadUrl: string;
   fileName: string;
   instructions: string;
@@ -418,7 +418,7 @@ interface SummarizeAudioInput {
   language: 'en' | 'ko';
 }
 
-interface SummarizeAudioResult {
+export interface SummarizeAudioResult {
   transcript: TranscriptSegment[];
   summary: string;
   summaryTranslations?: Record<'en' | 'ko', string>;
@@ -431,7 +431,7 @@ interface SummarizeAudioResult {
   meetingStartAt: string | null;
 }
 
-interface WorkflowJobRow {
+export interface WorkflowJobRow {
   id: string;
   user_id: string;
   note_id: string;
@@ -986,19 +986,19 @@ async function translateTranscriptSegments(input: {
 // While a job is running, bump its updated_at on this cadence so the boot-time
 // orphan sweep (failOrphanedJobs) can distinguish a live job on another
 // instance from one stranded by a crashed/redeployed process.
-const JOB_HEARTBEAT_INTERVAL_MS = 60_000;
+export const JOB_HEARTBEAT_INTERVAL_MS = 60_000;
 
 // A queued/processing job whose updated_at is older than this is considered
 // orphaned. Must exceed the heartbeat interval by a safe margin so a genuinely
 // live job (heartbeating every minute) is never swept.
-const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
+export const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
 
 // How often to re-scan for orphans. A boot-only scan would miss a job orphaned
 // moments before boot (not yet past the staleness threshold), stranding it
 // forever; a periodic scan cleans it once it crosses the threshold.
-const ORPHANED_JOB_SWEEP_INTERVAL_MS = 2 * 60_000;
+export const ORPHANED_JOB_SWEEP_INTERVAL_MS = 2 * 60_000;
 
-async function updateWorkflowJob(jobId: string | null, patch: {
+export async function updateWorkflowJob(jobId: string | null, patch: {
   status?: WorkflowJobRow['status'];
   stage?: string;
   progress?: number;
@@ -1032,13 +1032,13 @@ async function updateWorkflowJob(jobId: string | null, patch: {
 // of paying AssemblyAI again. Keyed by noteId (not jobId) so it survives across
 // job retries -- the mobile client reuses noteId when it retries. This is a
 // durable checkpoint on the existing job model, not a redesign of it.
-interface TranscriptCheckpoint {
+export interface TranscriptCheckpoint {
   segments: TranscriptSegment[];
   audioDurationSeconds: number | null;
   detectedLanguage: 'en' | 'ko' | null;
 }
 
-async function loadTranscriptCheckpoint(noteId: string, userId: string): Promise<TranscriptCheckpoint | null> {
+export async function loadTranscriptCheckpoint(noteId: string, userId: string): Promise<TranscriptCheckpoint | null> {
   const { data, error } = await supabase
     .from('workflow_transcript_checkpoint')
     .select('segments, audio_duration_seconds, detected_language')
@@ -1062,7 +1062,7 @@ async function loadTranscriptCheckpoint(noteId: string, userId: string): Promise
   };
 }
 
-async function saveTranscriptCheckpoint(input: { noteId: string; userId: string } & TranscriptCheckpoint): Promise<void> {
+export async function saveTranscriptCheckpoint(input: { noteId: string; userId: string } & TranscriptCheckpoint): Promise<void> {
   const { error } = await supabase
     .from('workflow_transcript_checkpoint')
     .upsert({
@@ -1080,7 +1080,7 @@ async function saveTranscriptCheckpoint(input: { noteId: string; userId: string 
   }
 }
 
-async function deleteTranscriptCheckpoint(noteId: string): Promise<void> {
+export async function deleteTranscriptCheckpoint(noteId: string): Promise<void> {
   const { error } = await supabase
     .from('workflow_transcript_checkpoint')
     .delete()
