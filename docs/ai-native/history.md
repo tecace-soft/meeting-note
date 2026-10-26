@@ -26,6 +26,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(db): return the stored job request only to a recover claim
 - feat(workflow-server): claim, fence and resume summarize jobs across restarts (S10)
 - feat(db): add the S10 workflow_job lease, generation and submission schema
 
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(briefing): extract owner-scoped meeting briefing route
 - refactor(product-docs): extract routes with one bounded token cache
 - test(briefing): freeze owner scope, bounded output and dependency failures
-- test(product-docs): freeze org gate, token cache and route contracts
 
 ### Recent merges
 

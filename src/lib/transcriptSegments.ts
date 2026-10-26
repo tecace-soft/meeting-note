@@ -1,4 +1,4 @@
-import { supabase } from '../config/supabaseConfig';
+import { patchNoteReturningId } from './notes/repository';
 
 export type TranscriptLanguage = 'original' | 'en' | 'ko';
 
@@ -237,12 +237,6 @@ export function deriveOriginalLabels(transcription: string | null | undefined, s
 
 export async function persistNoteDiarization(noteId: string, segments: TranscriptSegment[]): Promise<void> {
   if (!noteId) return;
-  const { data, error } = await supabase
-    .from('note')
-    .update({ diarization: segments })
-    .eq('id', noteId)
-    .select('id')
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) throw new Error('Diarization save did not update the note. You may not have permission to edit this note.');
+  const row = await patchNoteReturningId({ noteId, patch: { diarization: segments } });
+  if (!row) throw new Error('Diarization save did not update the note. You may not have permission to edit this note.');
 }

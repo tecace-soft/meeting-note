@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, CloseMd, Loading, SearchMagnifyingGlass, ShareAndroid, Users } from 'react-coolicons';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
-import { supabase } from '../config/supabaseConfig';
+import { setNoteSharedUsersAsOwner } from '../lib/notes/repository';
 import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
 
 interface ShareNoteModalProps {
@@ -90,12 +90,7 @@ const ShareNoteModal: React.FC<ShareNoteModalProps> = ({
     setSaving(true);
     setError(null);
     try {
-      const { error: updateError } = await supabase
-        .from('note')
-        .update({ shared_users: selectedIds })
-        .eq('id', noteId)
-        .eq('user_id', user.id);
-      if (updateError) throw updateError;
+      await setNoteSharedUsersAsOwner({ noteId, userId: user.id, sharedUsers: selectedIds });
       onShared?.(noteId, selectedIds);
       onClose();
     } catch (err) {
