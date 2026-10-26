@@ -47,6 +47,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
 - test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
 - test(regenerate): freeze prompt fallback and note-owner enrichment contracts
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(config): move dotenv loading and workflow env definitions
 - test(config): characterize env defaults and entrypoint dotenv paths
 - test(project): distinguish owned-note success from shared-note rejection
-- test(S12): reproduce shutdown failures in isolated signal children
 
 ### Recent merges
 

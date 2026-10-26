@@ -10,6 +10,7 @@ chosen: orphan sweep(failOrphanedJobs)으로 오래된 작업을 실패 처리�
 reason: 배포는 백엔드를 재시작하고 과거에 진행 중 작업을 방치시킨 이력이 있다.
 paths:
   - workflow-server/src/ops/incidents.ts
+  - workflow-server/src/jobs/store.ts
   - workflow-server/src/index.ts
 supersedes: []
 source: AGENTS.md "Deploys restart the backend" (최초 추가 커밋 5c44c39, 2026-07-23)

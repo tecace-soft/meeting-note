@@ -14,7 +14,7 @@ const { parseSummarizeInput, parseSummaryAttachments } = await import('./pipelin
 const {
   updateWorkflowJob, loadTranscriptCheckpoint, saveTranscriptCheckpoint, deleteTranscriptCheckpoint,
   JOB_HEARTBEAT_INTERVAL_MS, ORPHANED_JOB_THRESHOLD_MS, ORPHANED_JOB_SWEEP_INTERVAL_MS,
-} = await import('./index.js');
+} = await import('./jobs/store.js');
 const { workflowFixture, summarizeBody, USER } = await import('./test-support/workflow.js');
 
 type Call = { table: string; op: string; payload?: unknown; filters: [string, unknown][]; options?: unknown };
