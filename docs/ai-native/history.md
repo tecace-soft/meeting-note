@@ -36,6 +36,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): share the owner id guard between repositories (T2-3)
 - test(web): pin speaker call-chain contracts before the T2-3 repository move
 - refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(regenerate): freeze prompt fallback and note-owner enrichment contracts
 - refactor(project-chat): extract JSON and SSE routes preserving note access filtering
 - test(project-chat): freeze note visibility, numeric ids and SSE framing
-- refactor(insight): extract refresh and backfill at their existing dispatch positions
 
 ### Recent merges
 
