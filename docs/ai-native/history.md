@@ -41,10 +41,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs: regenerate history after syncing s10 with main
 - docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
-- docs: regenerate history after merging main into note permissions
 
 **Other**
 
+- test(workflow-server): fix body typing in Android upload contract test
 - test(workflow-server): pin Android upload route contract before T1-10a move
 - chore: restore generated docs/ai-native to main (not part of T1-9a)
 - refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
