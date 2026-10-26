@@ -80,9 +80,8 @@ test('S10: successful transcription submission persists its id before the first 
   assert.ok(saved >= 0 && saved < poll, 'a crash after submit currently discards the paid provider id');
 });
 
-test('S10: conditional SQL claim has exactly one winner for the same job row', {
-  skip: 'Requires the T1-9b claim seam and approved S10 lease/generation SQL; use pinned PGlite transactions, not a fake that assumes atomicity',
-});
+// The conditional SQL claim (exactly one winner per job row, takeover only after database-time
+// expiry, stale generations fenced out) runs against pinned PGlite in job-lease-sql.test.ts.
 test('S10: crash between provider submit and id persistence stays uncertain until an explicit retry policy resolves it', {
   skip: 'Requires the approved durable submission-attempt schema; do not implement or silently resubmit in this design-only PR',
 });

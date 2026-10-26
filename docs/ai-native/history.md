@@ -24,6 +24,10 @@ For the per-commit detail of the most recent work, see the auto-region below; fo
 
 Last 40 non-merge commits, newest first, grouped by type.
 
+**Features**
+
+- feat(db): add the S10 workflow_job lease, generation and submission schema
+
 **Docs**
 
 - docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
@@ -68,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(ops): give incidents a single module without route dependencies
 - test(ops): freeze incident dedupe, caps and failure handling
 - refactor(issues): extract handlers and assign shared parser and link ownership
-- test(issues): freeze route, parser and deep-link contracts
 
 ### Recent merges
 

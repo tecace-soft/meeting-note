@@ -12,6 +12,9 @@ reason: 무료 플랜 유지(Q12)로 재시작과 정지가 잦고 Q10(작업을
 paths:
   - supabase/migrations/20261026120000_workflow_job_s10_lease_and_resume.sql
   - docs/refactor/S10_MIGRATION_CHECKS.md
+  - supabase/tests/workflow_job_fixture_schema.sql
+  - workflow-server/src/jobs/lease.ts
+  - workflow-server/src/job-lease-sql.test.ts
   - workflow-server/src/jobs/store.ts
   - workflow-server/src/jobs/runner.ts
   - workflow-server/src/jobs/orphanSweep.ts
