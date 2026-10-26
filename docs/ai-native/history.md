@@ -40,6 +40,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(workflow-server): split transcription into submit/poll/parse and a transcript stage (T1-10b)
 - refactor(workflow-server): move AssemblyAI transcription to pipeline/transcription (T1-10b)
 - test(workflow-server): pin AssemblyAI transcription pipeline contracts before T1-10b move
 - test(workflow-server): add direct androidUpload helper tests
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(http): extract shared HTTP, Microsoft identity wrappers and DB client
 - test(http): freeze shared HTTP and identity contracts before extraction
 - refactor(config): move dotenv loading and workflow env definitions
-- test(config): characterize env defaults and entrypoint dotenv paths
 
 ### Recent merges
 

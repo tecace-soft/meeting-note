@@ -13,23 +13,23 @@ process.env.ASSEMBLYAI_API_KEY = 'synthetic-assembly';
 const { supabase } = await import('./db/supabaseClient.js');
 const { env } = await import('./config/env.js');
 const { getHttpStatus } = await import('./http/shared.js');
-const { noSpeechMessage } = await import('./pipeline/errors.js');
+const { NoSpeechDetectedError, noSpeechMessage } = await import('./pipeline/errors.js');
 const { buildTranscriptTranslationPrompt } = await import('./prompts.js');
 const { parseDiarizedSegmentsWithRecovery } = await import('./parsers.js');
 const {
   normalizeDetectedTranscriptLanguage, getOppositeTranscriptLanguage, normalizeKeytermsPrompt,
-  normalizeCustomSpelling, loadTranscriptionSettings, transcribeWithAssembly, translateTranscriptSegments,
+  normalizeCustomSpelling, loadTranscriptionSettings, transcribeWithAssembly, translateTranscriptSegments, transcribeOrReuseCheckpoint,
 } = await import('./pipeline/transcription.js');
 const { workflowFixture, summarizeBody } = await import('./test-support/workflow.js');
 
 const SUBMIT_URL = 'https://api.assemblyai.com/v2/transcript';
 const AUDIO_URL = 'https://audio.invalid/a.ogg';
 
-type DbCall = { table: string; op: string; payload?: unknown; filters: [string, unknown][] };
+type DbCall = { table: string; op: string; payload?: unknown; options?: unknown; filters: [string, unknown][] };
 type DbResult = { data?: unknown; error?: { message: string } | null };
 
 // Records the supabase query-builder chain per table without any network.
-function fakeDb(t: test.TestContext, results: Record<string, DbResult> = {}) {
+function fakeDb(t: test.TestContext, results: Record<string, DbResult> = {}, trace?: string[]) {
   const calls: DbCall[] = [];
   t.mock.method(supabase, 'from', (table: string) => {
     const call: DbCall = { table, op: '', filters: [] };
@@ -38,9 +38,13 @@ function fakeDb(t: test.TestContext, results: Record<string, DbResult> = {}) {
     const chain: any = {
       select: (cols: string) => { call.op ||= 'select'; call.payload = cols; return chain; },
       insert: (row: unknown) => { call.op = 'insert'; call.payload = row; return chain; },
+      upsert: (row: unknown, options: unknown) => { call.op = 'upsert'; call.payload = row; call.options = options; return chain; },
       eq: (column: string, value: unknown) => { call.filters.push([column, value]); return chain; },
-      maybeSingle: async () => result,
-      then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve(result).then(resolve, reject),
+      maybeSingle: async () => { trace?.push(`${table}.${call.op}`); return result; },
+      then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => {
+        trace?.push(`${table}.${call.op}`);
+        return Promise.resolve(result).then(resolve, reject);
+      },
     };
     return chain;
   });
@@ -51,11 +55,12 @@ type HttpCall = { url: string; method: string | undefined; headers: Record<strin
 type Reply = () => Response;
 
 // Scripted AssemblyAI boundary: one submit reply, then poll replies in order (last repeats).
-function fakeAssembly(t: test.TestContext, script: { submit?: Reply; polls: Reply[] }) {
+function fakeAssembly(t: test.TestContext, script: { submit?: Reply; polls: Reply[] }, trace?: string[]) {
   const calls: HttpCall[] = [];
   let poll = 0;
   t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    trace?.push(url === SUBMIT_URL ? 'assembly.submit' : 'assembly.poll');
     calls.push({ url, method: init?.method, headers: Object.fromEntries(new Headers(init?.headers).entries()), body: typeof init?.body === 'string' ? init.body : null });
     if (url === SUBMIT_URL) return script.submit ? script.submit() : Response.json({ id: 'tx-1' });
     if (url.startsWith(`${SUBMIT_URL}/`)) return script.polls[Math.min(poll++, script.polls.length - 1)]();
@@ -479,4 +484,63 @@ test('runner surfaces an AssemblyAI submit failure as a 500 with the provider me
   assert.deepEqual(r.body, { error: 'AssemblyAI transcript submit failed (400): {"error":"Fixture transcription failure"}' });
   assert.ok(!f.state.calls.some((c) => c.url.pathname.endsWith('/workflow_transcript_checkpoint') && c.method === 'POST'), 'no checkpoint save');
   assert.ok(!f.state.calls.some((c) => c.url.pathname.endsWith('/workflow_usage')), 'no usage row for a failed submit');
+});
+
+// Transcript stage called by the runner; S10 extends these scenarios with a persisted provider id.
+const stage = (language: 'en' | 'ko' = 'en') => transcribeOrReuseCheckpoint({ noteId: 'n1', userId: 'u1', downloadUrl: AUDIO_URL, language, settings: settings() });
+
+test('transcript stage: a checkpoint hit returns it without any provider call or re-save', async (t) => {
+  const log = t.mock.method(console, 'log', () => undefined);
+  const trace: string[] = [];
+  const saved = [{ speaker: 'Speaker 1', text: 'Saved.', start: 0, end: 2 }];
+  const db = fakeDb(t, { workflow_transcript_checkpoint: { data: { segments: saved, audio_duration_seconds: 2, detected_language: 'en' } } }, trace);
+  const http = fakeAssembly(t, { polls: [] }, trace);
+  assert.deepEqual(await stage(), { segments: saved, audioDurationSeconds: 2, detectedLanguage: 'en' });
+  assert.deepEqual(trace, ['workflow_transcript_checkpoint.select']);
+  assert.deepEqual(db[0].filters, [['note_id', 'n1'], ['user_id', 'u1']]);
+  assert.equal(http.calls.length, 0);
+  assert.deepEqual(log.mock.calls.map((c) => c.arguments[0]), ['Reusing persisted transcript checkpoint for note n1 (1 segments); skipping re-transcription.']);
+});
+
+test('transcript stage: a miss submits once, polls, records usage, then saves the checkpoint', async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  const trace: string[] = [];
+  const db = fakeDb(t, {}, trace);
+  const timer = fakeClock(t);
+  fakeAssembly(t, { polls: completedNow({ language_code: 'en', utterances: [{ speaker: 'A', text: 'Hi', start: 0, end: 1500 }] }) }, trace);
+  const outcome = await settle(timer, stage());
+  assert.ok(outcome.ok, outcome.ok ? '' : outcome.error.message);
+  const segments = [{ speaker: 'Speaker A', speakerKey: 'Speaker A', text: 'Hi', start: 0, end: 1.5 }];
+  assert.deepEqual(outcome.value, { segments, audioDurationSeconds: 1.5, detectedLanguage: 'en' });
+  assert.deepEqual(trace, ['workflow_transcript_checkpoint.select', 'assembly.submit', 'assembly.poll', 'workflow_usage.insert', 'workflow_transcript_checkpoint.upsert']);
+  const save = db.find((c) => c.op === 'upsert')!;
+  const row = save.payload as Record<string, unknown>;
+  assert.deepEqual([row.note_id, row.user_id, row.segments, row.audio_duration_seconds, row.detected_language], ['n1', 'u1', segments, 1.5, 'en']);
+  assert.deepEqual(save.options, { onConflict: 'note_id' });
+});
+
+test('transcript stage: no speech throws the localized 422 after usage and before any checkpoint save', async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  const trace: string[] = [];
+  fakeDb(t, {}, trace);
+  const timer = fakeClock(t);
+  fakeAssembly(t, { polls: completedNow({ text: '', utterances: [] }) }, trace);
+  const outcome = await settle(timer, stage('ko'));
+  assert.ok(!outcome.ok, 'a silent recording must reject');
+  assert.ok(outcome.error instanceof NoSpeechDetectedError, 'NoSpeechDetectedError');
+  assert.equal(outcome.error.message, noSpeechMessage('ko'));
+  assert.equal(getHttpStatus(outcome.error), 422);
+  assert.deepEqual(trace, ['workflow_transcript_checkpoint.select', 'assembly.submit', 'assembly.poll', 'workflow_usage.insert']);
+});
+
+test('transcript stage: a provider failure propagates and saves nothing', async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  const trace: string[] = [];
+  fakeDb(t, {}, trace);
+  const timer = fakeClock(t);
+  fakeAssembly(t, { polls: [() => Response.json({ status: 'error', error: 'Audio unreadable' })] }, trace);
+  const outcome = await settle(timer, stage());
+  assert.ok(!outcome.ok, 'provider failure must reject');
+  assert.equal(outcome.error.message, 'Audio unreadable');
+  assert.deepEqual(trace, ['workflow_transcript_checkpoint.select', 'assembly.submit', 'assembly.poll']);
 });
