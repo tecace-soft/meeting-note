@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { selectAudioReferencePage } from './notes/repository';
+import { selectAudioReferencePage } from './notes/audioReferencePage';
 
 /** Minimal note shape needed to decide whether a note still uses an audio file. */
 export interface NoteAudioRef {

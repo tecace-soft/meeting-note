@@ -36,6 +36,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
 - refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
 - refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
 - refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(insight): extract refresh and backfill at their existing dispatch positions
 - test(insight): freeze owner attribution, admin limits and failure aggregation
 - refactor(briefing): extract owner-scoped meeting briefing route
-- refactor(product-docs): extract routes with one bounded token cache
 
 ### Recent merges
 
