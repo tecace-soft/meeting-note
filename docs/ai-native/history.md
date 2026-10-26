@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
 - refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
 - refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
 - refactor(web): persistNoteDiarization writes through the note repository (T2-2)
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(ops): give incidents a single module without route dependencies
 - test(ops): freeze incident dedupe, caps and failure handling
 - refactor(issues): extract handlers and assign shared parser and link ownership
-- test(issues): freeze route, parser and deep-link contracts
 
 ### Recent merges
 
