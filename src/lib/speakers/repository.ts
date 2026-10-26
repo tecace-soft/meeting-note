@@ -24,7 +24,12 @@ export async function listSpeakers<T>(userId: string): Promise<T[]> {
 /** Saved speakers whose name is in the list. Returns the raw result because callers differ on error handling. */
 export function selectSpeakersByNames(userId: string, names: string[], columns: 'name, profile' | 'id, name, profile') {
   requireOwnerId(userId);
-  return supabase.from('speaker').select(columns).eq('user_id', userId).in('name', names);
+  const result: PromiseLike<{ data: unknown[] | null; error: { message: string } | null }> = supabase
+    .from('speaker')
+    .select(columns as string)
+    .eq('user_id', userId)
+    .in('name', names);
+  return result;
 }
 
 /** Speaker row id for an exact name, or null. Errors are ignored (best-effort background use). */
