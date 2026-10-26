@@ -40,6 +40,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): SummaryHistory reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): AccountSettings loads and saves speaker profiles through the speaker repository (T2-3)
 - refactor(web): accumulateSpeakerProfile reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): ensureSelfSpeakerRow reads and writes speakers through the speaker repository (T2-3)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - chore: restore generated docs/ai-native to main (not part of T1-9a)
 - refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
 - refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
-- test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 
 ### Recent merges
 
