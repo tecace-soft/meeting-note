@@ -1,4 +1,5 @@
 import { supabase } from '../../config/supabaseConfig';
+import { requireOwnerId } from '../requireOwnerId';
 
 // Reads retain their existing RLS visibility; this method only owns owner writes.
 export async function updateOwnedNote(input: {
@@ -26,14 +27,6 @@ export async function updateOwnedNote(input: {
 // PostgREST errors are thrown unchanged, zero-row handling stays with the caller
 // unless a method says otherwise) so the move changes no behavior.
 // ---------------------------------------------------------------------------
-
-/** Owner-scoped methods must never run without an owner id (a dropped filter would widen the write). */
-function requireOwnerId(userId: unknown): string {
-  if (typeof userId !== 'string' || !userId.trim()) {
-    throw new Error('Owner id is required for an owner-scoped note write.');
-  }
-  return userId;
-}
 
 export type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
 export type NoteSortKey = 'meeting_desc' | 'meeting_asc' | 'created_desc' | 'created_asc' | 'title_asc' | 'title_desc';
