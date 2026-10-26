@@ -28,6 +28,14 @@ export async function updateOwnedNote(input: {
 // unless a method says otherwise) so the move changes no behavior.
 // ---------------------------------------------------------------------------
 
+/** Owner-scoped methods must never run without an owner id (a dropped filter would widen the write). */
+function requireOwnerId(userId: unknown): string {
+  if (typeof userId !== 'string' || !userId.trim()) {
+    throw new Error('Owner id is required for an owner-scoped note write.');
+  }
+  return userId;
+}
+
 export type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
 export type NoteSortKey = 'meeting_desc' | 'meeting_asc' | 'created_desc' | 'created_asc' | 'title_asc' | 'title_desc';
 
@@ -122,6 +130,7 @@ export async function getNoteSharing(noteId: string): Promise<{ user_id?: string
 
 /** Owner-scoped share-list write. Unlike updateOwnedNote it does not confirm a changed row (unchanged from the modal's old behavior). */
 export async function setNoteSharedUsersAsOwner(input: { noteId: string; userId: string; sharedUsers: string[] }): Promise<void> {
+  requireOwnerId(input.userId);
   const { error } = await supabase
     .from('note')
     .update({ shared_users: input.sharedUsers })
@@ -142,12 +151,32 @@ export async function setNoteSharedUsers(input: { noteId: string; sharedUsers: s
  */
 export async function patchNoteReturningId(input: {
   noteId: string;
-  userId?: string;
   patch: NotePatch;
 }): Promise<{ id: string } | null> {
-  let query = supabase.from('note').update(input.patch).eq('id', input.noteId);
-  if (input.userId !== undefined) query = query.eq('user_id', input.userId);
-  const { data, error } = await query.select('id').maybeSingle();
+  const { data, error } = await supabase
+    .from('note')
+    .update(input.patch)
+    .eq('id', input.noteId)
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { id: string } | null) ?? null;
+}
+
+/** Owner-scoped variant of patchNoteReturningId. A missing or blank userId throws instead of dropping the owner filter. */
+export async function patchOwnedNoteReturningId(input: {
+  noteId: string;
+  userId: string;
+  patch: NotePatch;
+}): Promise<{ id: string } | null> {
+  const userId = requireOwnerId(input.userId);
+  const { data, error } = await supabase
+    .from('note')
+    .update(input.patch)
+    .eq('id', input.noteId)
+    .eq('user_id', userId)
+    .select('id')
+    .maybeSingle();
   if (error) throw error;
   return (data as { id: string } | null) ?? null;
 }
@@ -170,12 +199,14 @@ export async function saveNoteTranslations(input: {
 
 /** Owner-scoped delete that does not confirm a deleted row (Project page behavior). */
 export async function deleteOwnedNote(input: { noteId: string; userId: string }): Promise<void> {
+  requireOwnerId(input.userId);
   const { error } = await supabase.from('note').delete().eq('id', input.noteId).eq('user_id', input.userId);
   if (error) throw error;
 }
 
 /** Owner-scoped delete returning the deleted row id, or null when nothing was deleted (History page behavior). */
 export async function deleteOwnedNoteReturningId(input: { noteId: string; userId: string }): Promise<{ id: string } | null> {
+  requireOwnerId(input.userId);
   const { data, error } = await supabase
     .from('note')
     .delete()

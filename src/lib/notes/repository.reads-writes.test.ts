@@ -15,6 +15,7 @@ import {
   listProjectNotes,
   listVisibleNotes,
   patchNoteReturningId,
+  patchOwnedNoteReturningId,
   queryHistoryNotes,
   saveNoteTranslations,
   selectAudioReferencePage,
@@ -120,16 +121,16 @@ describe('note repository writes', () => {
     fixture.result = { error };
     await expect(setNoteSharedUsers({ noteId: 'n1', sharedUsers: [] })).rejects.toBe(error);
   });
-  it('patchNoteReturningId without userId is id-only and returns the row or null', async () => {
+  it('patchNoteReturningId is id-only and returns the row or null', async () => {
     fixture.result = { data: { id: 'n1' } };
     expect(await patchNoteReturningId({ noteId: 'n1', patch: { name: 'x' } })).toEqual({ id: 'n1' });
     expect(calls()).toEqual([['note', ['update', { name: 'x' }], ['eq', 'id', 'n1'], ['select', 'id'], ['maybeSingle']]]);
     fixture.result = { data: null };
     expect(await patchNoteReturningId({ noteId: 'n1', patch: { name: 'x' } })).toBeNull();
   });
-  it('patchNoteReturningId with userId adds the owner filter after the id filter', async () => {
+  it('patchOwnedNoteReturningId adds the owner filter after the id filter', async () => {
     fixture.result = { data: { id: 'n1' } };
-    await patchNoteReturningId({ noteId: 'n1', userId: 'o', patch: { summary_edit: 's' } });
+    await patchOwnedNoteReturningId({ noteId: 'n1', userId: 'o', patch: { summary_edit: 's' } });
     expect(calls()).toEqual([['note', ['update', { summary_edit: 's' }], ['eq', 'id', 'n1'], ['eq', 'user_id', 'o'], ['select', 'id'], ['maybeSingle']]]);
   });
   it('patchNoteReturningId throws the raw error', async () => {
@@ -158,4 +159,14 @@ describe('note repository writes', () => {
     fixture.result = { data: null };
     expect(await deleteOwnedNoteReturningId({ noteId: 'n1', userId: 'o' })).toBeNull();
   });
+  for (const userId of [undefined, '', '  ', null]) {
+    it(`owner-scoped methods reject a missing owner id (${String(userId)}) before querying`, async () => {
+      const id = userId as unknown as string;
+      await expect(patchOwnedNoteReturningId({ noteId: 'n1', userId: id, patch: { name: 'x' } })).rejects.toThrow(/Owner id is required/);
+      await expect(setNoteSharedUsersAsOwner({ noteId: 'n1', userId: id, sharedUsers: [] })).rejects.toThrow(/Owner id is required/);
+      await expect(deleteOwnedNote({ noteId: 'n1', userId: id })).rejects.toThrow(/Owner id is required/);
+      await expect(deleteOwnedNoteReturningId({ noteId: 'n1', userId: id })).rejects.toThrow(/Owner id is required/);
+      expect(fake().queries).toEqual([]);
+    });
+  }
 });

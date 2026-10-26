@@ -30,6 +30,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(decisions): point DEC-0001/0003 at the T1-9b job modules
 - docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
 - docs: update refactor plan progress through T1-8 (2026-10-26)
 
@@ -44,6 +45,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
 - refactor(web): AppSidebar reads notes through the note repository (T2-2)
 - test(web): pin note call-chain contracts before the T2-2 repository move
+- refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
+- refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
+- refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
+- test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
 - test(workflow-server): make the translation contract fail when the note write does not await the translation
 - test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
@@ -67,14 +72,11 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(insight): freeze owner attribution, admin limits and failure aggregation
 - refactor(briefing): extract owner-scoped meeting briefing route
 - refactor(product-docs): extract routes with one bounded token cache
-- test(briefing): freeze owner scope, bounded output and dependency failures
-- test(product-docs): freeze org gate, token cache and route contracts
-- refactor(ops): give incidents a single module without route dependencies
-- test(ops): freeze incident dedupe, caps and failure handling
-- refactor(issues): extract handlers and assign shared parser and link ownership
 
 ### Recent merges
 
+- Merge origin/main into refactor/t2-2-note-repository
+- Merge pull request #48 from tecace-soft/refactor/t1-9b-job-runner
 - Merge pull request #47 from tecace-soft/refactor/t1-10c-summarize-finalize
 - Merge pull request #46 from tecace-soft/refactor/t1-10b-transcription
 - Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
@@ -83,6 +85,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
 - Merge pull request #42 from tecace-soft/refactor/t1-8-regenerate-summary
 - Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
-- Merge pull request #40 from tecace-soft/refactor/t1-6-note-insight
-- Merge pull request #39 from tecace-soft/refactor/t1-5-meeting-briefing
 <!-- ai-native:auto:END -->

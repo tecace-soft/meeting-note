@@ -7,7 +7,7 @@ import { graphScopes } from '../config/msalConfig';
 import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import {
   deleteOwnedNoteReturningId,
-  patchNoteReturningId,
+  patchOwnedNoteReturningId,
   queryHistoryNotes,
   saveNoteTranslations,
 } from '../lib/notes/repository';
@@ -880,7 +880,7 @@ const SummaryHistory: React.FC = () => {
 
     try {
       setNoteListActionError(null);
-      const data = await patchNoteReturningId({ noteId: note.id, userId: user.id, patch: { name } });
+      const data = await patchOwnedNoteReturningId({ noteId: note.id, userId: user.id, patch: { name } });
       // 0 rows updated (e.g. a shared note you don't own): the write silently
       // no-ops under RLS, so surface it instead of faking success.
       if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
@@ -1765,7 +1765,7 @@ const SummaryHistory: React.FC = () => {
     setSavingNoteId(note.id);
     setNoteEditError(null);
     try {
-      const data = await patchNoteReturningId({ noteId: note.id, userId: user.id, patch: { summary_edit: noteEditDraft } });
+      const data = await patchOwnedNoteReturningId({ noteId: note.id, userId: user.id, patch: { summary_edit: noteEditDraft } });
       // 0 rows updated (e.g. a shared note you don't own): don't fake success.
       if (!data) throw new Error('Could not save your edit. You may not have permission to edit this note.');
 
@@ -1796,7 +1796,7 @@ const SummaryHistory: React.FC = () => {
     }
     try {
       setNoteListActionError(null);
-      const data = await patchNoteReturningId({ noteId, userId: user.id, patch: { name } });
+      const data = await patchOwnedNoteReturningId({ noteId, userId: user.id, patch: { name } });
       // 0 rows updated (e.g. a shared note you don't own): don't fake success.
       if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
       setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, name } : n)));
