@@ -25,7 +25,7 @@ paths:
   - workflow-server/src/routes/briefing.ts
   - workflow-server/src/routes/productDocs.ts
   - workflow-server/src/routes/issues.ts
-  - workflow-server/src/routes/summarizeJobs.ts
+  - workflow-server/src/routes/jobs.ts
 supersedes: []
 source: AGENTS.md "Identity trust", 커밋 af6635d (2026-10-19). 원 결정일은 이 커밋 기준.
 ---

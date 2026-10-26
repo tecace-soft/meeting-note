@@ -25,8 +25,8 @@ import { handleBriefingRequest } from './routes/briefing.js';
 import { handleBackfillInsightRequest, handleRefreshNoteInsightRequest } from './routes/insight.js';
 import { handleProjectChatRequest } from './routes/projectChat.js';
 import { handleRegenerateSummaryRequest } from './routes/regenerateSummary.js';
-import { handleSummarizeAudioRequest, handleSummarizeJobsRequest } from './routes/summarizeJobs.js';
-import { failOrphanedJobs } from './jobs/sweep.js';
+import { handleSummarizeAudioRequest, handleSummarizeJobsRequest } from './routes/jobs.js';
+import { failOrphanedJobs } from './jobs/orphanSweep.js';
 import { ORPHANED_JOB_SWEEP_INTERVAL_MS } from './jobs/store.js';
 
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).

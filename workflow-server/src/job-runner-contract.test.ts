@@ -25,7 +25,7 @@ const { noSpeechMessage } = await import('./pipeline/errors.js');
 const { parseSummarizeInput } = await import('./pipeline/inputs.js');
 const { workflowFixture, summarizeBody, USER, OTHER } = await import('./test-support/workflow.js');
 const { processSummarizeJob, completedJobResults } = await import('./jobs/runner.js');
-const { reconstructResultFromNote, failOrphanedJobs, MAX_ORPHAN_RECONCILE } = await import('./jobs/sweep.js');
+const { reconstructResultFromNote, failOrphanedJobs, MAX_ORPHAN_RECONCILE } = await import('./jobs/orphanSweep.js');
 const { server, startServer } = await import('./index.js');
 
 type Fixture = Awaited<ReturnType<typeof workflowFixture>>;
