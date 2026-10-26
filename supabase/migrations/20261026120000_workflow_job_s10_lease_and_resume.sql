@@ -56,7 +56,9 @@ create index if not exists workflow_job_active_lease_idx
   on public.workflow_job (lease_expires_at)
   where status in ('queued', 'processing');
 
--- Conditional claim. Returns the claimed row (one row) or no rows.
+-- Conditional claim. Returns the claimed row (one row) or no rows. The stored request
+-- (which can carry large base64 attachments) is returned only to a recover claim, which
+-- needs it to rebuild the pipeline input; a start claim already has the input.
 create or replace function public.workflow_job_claim(
   p_job_id uuid,
   p_owner text,
@@ -105,7 +107,8 @@ as $$
          )
        )
      )
-  returning j.id, j.user_id, j.note_id, j.status, j.stage, j.request,
+  returning j.id, j.user_id, j.note_id, j.status, j.stage,
+            case when p_mode = 'recover' then j.request end,
             j.execution_generation, j.attempt_count, j.assembly_transcript_id,
             j.transcript_submission_state, j.transcript_submission_count;
 $$;

@@ -110,7 +110,7 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     assert.equal(winners.length, 1, 'one winner');
     const { claim, owner } = winners[0]!;
     assert.deepEqual([claim.generation, claim.attempt, claim.submissionState, claim.transcriptId], [1, 1, 'none', null]);
-    assert.deepEqual(claim.request, { noteId: 'fixture' }, 'the claim returns the stored request for a resume');
+    assert.equal(claim.request, null, 'a start claim does not send the (possibly large) stored request back');
     const { rows } = await db.query<{ lease_owner: string; seconds: number }>(
       'select lease_owner, extract(epoch from lease_expires_at - clock_timestamp())::float8 as seconds from public.workflow_job where id = $1', [id]);
     assert.equal(rows[0]!.lease_owner, owner);
@@ -128,6 +128,7 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     const winners = await race(db, id, 'recover');
     assert.equal(winners.length, 1, 'one winner after expiry');
     assert.deepEqual([winners[0]!.claim.generation, winners[0]!.claim.attempt], [first!.claim.generation + 1, 2]);
+    assert.deepEqual(winners[0]!.claim.request, { noteId: 'fixture' }, 'a recover claim returns the stored request to rebuild the input');
     assert.equal((await race(db, id, 'recover')).length, 0, 'the new lease is live again');
   });
 
