@@ -37,6 +37,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): accumulateSpeakerProfile reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): ensureSelfSpeakerRow reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): share the owner id guard between repositories (T2-3)
 - test(web): pin speaker call-chain contracts before the T2-3 repository move
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
 - test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
-- test(regenerate): freeze prompt fallback and note-owner enrichment contracts
 
 ### Recent merges
 
