@@ -38,13 +38,13 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs: update refactor plan progress through T1-8 (2026-10-26)
 - docs: regenerate history after syncing s12 with main
 - docs: regenerate history after syncing s10 with main
 - docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
 - docs(S1): require read-only job preflight before deployment merges
-- docs(S12): design ordered shutdown and completed-job preservation
 
 **Other**
 

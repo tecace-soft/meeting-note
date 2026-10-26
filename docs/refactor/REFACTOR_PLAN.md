@@ -205,6 +205,7 @@ Codex는 코드를 수정하지 않고 마지막 절 "Codex 검토 요청"의 �
 | T1-6 | refresh-note-insight, admin/backfill-insight 라우트 | #40 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
 | T1-7 | project-chat 라우트와 SSE | #41 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
 | T1-8 | regenerate-summary 라우트와 prompt loader | #42 | main 반영, 배포 완료(최신 main 3f2ce23, 2026-10-26) |
+| T1-9a | job store, checkpoint, pipeline 타입, 오류, 입력을 index.ts에서 분리 (index.ts 2092줄에서 1815줄, 계약 테스트 11개) | #44 | main 반영 (최신 main 458816d) |
 
 ### 2.4 10/09 이후 새로 생긴 코드
 
