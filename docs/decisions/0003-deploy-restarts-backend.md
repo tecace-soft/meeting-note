@@ -21,5 +21,6 @@ source: AGENTS.md "Deploys restart the backend" (최초 추가 커밋 5c44c39, 2
 ---
 ## 맥락
 
-index.ts는 크지만 failOrphanedJobs와 작업 소유 표식이 이 파일에 있다.
+failOrphanedJobs는 jobs/orphanSweep.ts에, 작업 소유 표식(heartbeat로 갱신하는 updated_at)은 jobs/runner.ts와 jobs/store.ts에 있다(T1-9b 이후).
+이 결정은 DEC-0022(S10 자동 재개)로 대체됐다.
 작업 상태 처리 코드를 바꿀 때 sweep 동작이 유지되는지 확인한다.

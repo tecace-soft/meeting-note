@@ -30,6 +30,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
 - docs(decisions): point DEC-0001/0003 at the T1-9b job modules
 - docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
 - docs: update refactor plan progress through T1-8 (2026-10-26)
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(issues): freeze route, parser and deep-link contracts
 - test(docs): reject duplicate product-doc dependency paths
 - test(config): make async entrypoint checks one-shot on Node 22
-- test(routes): follow transcription-test ownership for the existing gate fixture
 
 ### Recent merges
 
