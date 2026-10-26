@@ -43,10 +43,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
-- docs(S1): require read-only job preflight before deployment merges
 
 **Other**
 
+- refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
 - refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
 - test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
