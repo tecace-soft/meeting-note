@@ -4,7 +4,7 @@
 // (checkpoint reuse, no-speech 422, checkpoint save order) before it leaves index.ts.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { TranscriptionSettings } from './index.js';
+import type { TranscriptionSettings } from './pipeline/transcription.js';
 // Service config must exist before the server modules read env at import time.
 process.env.SUPABASE_URL = 'https://supabase.invalid';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'synthetic-service-role';
@@ -19,7 +19,7 @@ const { parseDiarizedSegmentsWithRecovery } = await import('./parsers.js');
 const {
   normalizeDetectedTranscriptLanguage, getOppositeTranscriptLanguage, normalizeKeytermsPrompt,
   normalizeCustomSpelling, loadTranscriptionSettings, transcribeWithAssembly, translateTranscriptSegments,
-} = await import('./index.js');
+} = await import('./pipeline/transcription.js');
 const { workflowFixture, summarizeBody } = await import('./test-support/workflow.js');
 
 const SUBMIT_URL = 'https://api.assemblyai.com/v2/transcript';
