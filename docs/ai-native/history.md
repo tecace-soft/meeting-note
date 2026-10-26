@@ -29,8 +29,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(config): keep host binding opt-in through WORKFLOW_HOST
 - fix(http): retain direct org-gated identity import for product docs
 - fix(config): load dotenv before consumers and default local startup to loopback
-- fix(server): log the bound port and explain IPv4-only tests
-- fix(server): recognize symlinked entrypoints by real path
 
 **Performance**
 
@@ -42,12 +40,16 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs: regenerate history after syncing s12 with main
 - docs: regenerate history after syncing s10 with main
 - docs: regenerate history after syncing main a8c8b54
-- docs: regenerate history after merging main into test isolation
-- docs: regenerate history after merging main into note permissions
-- docs(S1): require read-only job preflight before deployment merges
 
 **Other**
 
+- refactor(workflow-server): move Android upload helpers to pipeline/androidUpload (T1-10a)
+- test(workflow-server): fix body typing in Android upload contract test
+- test(workflow-server): pin Android upload route contract before T1-10a move
+- chore: restore generated docs/ai-native to main (not part of T1-9a)
+- refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
+- refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
+- test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
 - test(regenerate): freeze prompt fallback and note-owner enrichment contracts
 - refactor(project-chat): extract JSON and SSE routes preserving note access filtering
@@ -73,11 +75,12 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(http): freeze shared HTTP and identity contracts before extraction
 - refactor(config): move dotenv loading and workflow env definitions
 - test(config): characterize env defaults and entrypoint dotenv paths
-- test(project): distinguish owned-note success from shared-note rejection
-- test(S12): reproduce shutdown failures in isolated signal children
 
 ### Recent merges
 
+- Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
+- Merge origin/main into docs/refactor-progress-2026-10-26; add T1-9a row
+- Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
 - Merge pull request #42 from tecace-soft/refactor/t1-8-regenerate-summary
 - Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
 - Merge pull request #40 from tecace-soft/refactor/t1-6-note-insight
@@ -85,7 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #38 from tecace-soft/refactor/t1-4-product-docs
 - merge: stack T1-8 on T1-7 preserving prompt loaders and route order
 - merge: stack T1-7 on T1-6 preserving project-chat and SSE routes
-- merge: stack T1-6 on T1-5 preserving insight dispatch positions
-- merge: stack T1-5 on T1-4 preserving cumulative route extraction
-- merge: align T1-4 with main b661dbb and preserve both extractions
 <!-- ai-native:auto:END -->
