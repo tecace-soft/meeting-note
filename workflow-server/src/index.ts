@@ -242,7 +242,7 @@ async function createAndroidRecordingJob(req: IncomingMessage, res: ServerRespon
   }
 }
 
-async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): Promise<void> {
+export async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): Promise<void> {
   // Keep updated_at fresh across long silent stages (e.g. the multi-minute
   // AssemblyAI poll) so a concurrent boot sweep never mistakes this live job
   // for an orphan.
@@ -306,7 +306,7 @@ async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): P
   }
 }
 
-const completedJobResults = new Map<string, SummarizeAudioResult>();
+export const completedJobResults = new Map<string, SummarizeAudioResult>();
 
 async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId: string): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
@@ -443,14 +443,14 @@ export const server = createServer((req, res) => {
 // overlapping instance during a zero-downtime deploy.
 // Cap how many stale jobs one sweep reconciles so a pathological backlog cannot
 // unbound the per-note existence query or the per-job recovery updates.
-const MAX_ORPHAN_RECONCILE = 200;
+export const MAX_ORPHAN_RECONCILE = 200;
 
 // FIX 1 (convergence): rebuild a job result from a note that was already
 // persisted. Lets a stranded job be recovered to 'completed' instead of 'failed',
 // so the client never retries (and never spawns a duplicate pipeline) for work
 // that already finished. Selected with '*' and read defensively so historical
 // schema drift (missing translation / duration columns) cannot break recovery.
-function reconstructResultFromNote(noteRow: Record<string, unknown>): SummarizeAudioResult {
+export function reconstructResultFromNote(noteRow: Record<string, unknown>): SummarizeAudioResult {
   const summaryTranslations = (noteRow.summary_translations ?? {}) as Record<'en' | 'ko', string>;
   const transcriptionTranslations = (noteRow.transcription_translations ?? {}) as Partial<Record<'en' | 'ko', string>>;
   const diarizationTranslations = (noteRow.diarization_translations ?? {}) as Partial<Record<'en' | 'ko', TranscriptSegment[]>>;
@@ -469,7 +469,7 @@ function reconstructResultFromNote(noteRow: Record<string, unknown>): SummarizeA
   };
 }
 
-async function failOrphanedJobs(): Promise<void> {
+export async function failOrphanedJobs(): Promise<void> {
   if (!env.supabaseUrl || !env.serviceRoleKey) return;
   const cutoff = new Date(Date.now() - ORPHANED_JOB_THRESHOLD_MS).toISOString();
   const { data, error } = await supabase

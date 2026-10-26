@@ -29,12 +29,9 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(config): keep host binding opt-in through WORKFLOW_HOST
 - fix(http): retain direct org-gated identity import for product docs
 
-**Performance**
-
-- perf(http): count request bytes without repeated buffer concatenation
-
 **Docs**
 
+- docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
 - docs: update refactor plan progress through T1-8 (2026-10-26)
 
 **Other**
