@@ -21,6 +21,8 @@ paths:
   - workflow-server/src/routes/projectChat.ts
   - workflow-server/src/ops/incidents.ts
   - workflow-server/src/routes/issues.ts
+  - workflow-server/src/pipeline/summarize.ts
+  - workflow-server/src/pipeline/attachments.ts
 supersedes: []
 source: docs/API_LESSONS.md (비용 정책, 모델 고정, bakeoff 2026-08-26), 커밋 4d0348f의 edge function lite-only 수정
 ---
