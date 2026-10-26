@@ -6,6 +6,12 @@ import { useLanguage } from '../context/LanguageContext';
 import { graphScopes } from '../config/msalConfig';
 import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
 import {
+  deleteOwnedNoteReturningId,
+  patchNoteReturningId,
+  queryHistoryNotes,
+  saveNoteTranslations,
+} from '../lib/notes/repository';
+import {
   ArrowsReload01,
   Calendar,
   Check,
@@ -709,49 +715,24 @@ const SummaryHistory: React.FC = () => {
           return;
         }
 
-        let query = supabase.from('note').select('*', { count: 'exact' });
-        const ownershipFilter = `user_id.eq.${user.id},shared_users.cs.{${user.id}}`;
-
-        if (chatId) {
-          query = query.eq('chat_id', chatId);
-        }
-
-        if (noteOwnershipFilter === 'mine') {
-          query = query.eq('user_id', user.id);
-        } else if (noteOwnershipFilter === 'shared') {
-          query = query.neq('user_id', user.id).filter('shared_users', 'cs', `{${user.id}}`);
-        } else {
-          query = query.or(ownershipFilter);
-        }
-
-        if (historyViewMode === 'calendar') {
-          const startIso = calendarWindow.start.toISOString();
-          const endIso = calendarWindow.endExclusive.toISOString();
-          query = query.or(
-            `and(meeting_at.gte.${startIso},meeting_at.lt.${endIso}),and(meeting_at.is.null,created_at.gte.${startIso},created_at.lt.${endIso})`
-          );
-        }
-
-        const orderedQuery =
-          noteSortKey === 'title_asc'
-            ? query.order('name', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false })
-            : noteSortKey === 'title_desc'
-              ? query.order('name', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
-              : noteSortKey === 'created_asc'
-                ? query.order('created_at', { ascending: true })
-                : noteSortKey === 'created_desc'
-                  ? query.order('created_at', { ascending: false })
-                  : noteSortKey === 'meeting_asc'
-                    ? query.order('meeting_at', { ascending: true, nullsFirst: false }).order('created_at', { ascending: true })
-                    : query.order('meeting_at', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false });
-
         const from = (effectivePage - 1) * NOTES_PAGE_SIZE;
         const to = from + NOTES_PAGE_SIZE - 1;
         const shouldFilterBySearch = Boolean(normalizedNoteSearchQuery);
 
-        const { data, error, count } = historyViewMode === 'calendar' || shouldFilterBySearch
-          ? await orderedQuery
-          : await orderedQuery.range(from, to);
+        const { data, error, count } = await queryHistoryNotes({
+          userId: user.id,
+          chatId,
+          ownership: noteOwnershipFilter,
+          calendarWindow:
+            historyViewMode === 'calendar'
+              ? {
+                  startIso: calendarWindow.start.toISOString(),
+                  endIso: calendarWindow.endExclusive.toISOString(),
+                }
+              : null,
+          sortKey: noteSortKey,
+          range: historyViewMode === 'calendar' || shouldFilterBySearch ? null : { from, to },
+        });
 
         if (cancelled) return;
         if (error) throw error;
@@ -899,14 +880,7 @@ const SummaryHistory: React.FC = () => {
 
     try {
       setNoteListActionError(null);
-      const { data, error } = await supabase
-        .from('note')
-        .update({ name })
-        .eq('id', note.id)
-        .eq('user_id', user.id)
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
+      const data = await patchNoteReturningId({ noteId: note.id, userId: user.id, patch: { name } });
       // 0 rows updated (e.g. a shared note you don't own): the write silently
       // no-ops under RLS, so surface it instead of faking success.
       if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
@@ -1398,20 +1372,14 @@ const SummaryHistory: React.FC = () => {
       return;
     }
     const nextTranslations = updateTranslationMap(note.diarization_translations, language, next);
-    const { data, error } = await supabase
-      .from('note')
-      .update({
-        diarization_translations: nextTranslations,
-        transcription_translations: {
-          ...(note.transcription_translations ?? {}),
-          [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
-        },
-      })
-      .eq('id', note.id)
-      .select('id')
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) throw new Error('Transcript translation save did not update the note.');
+    await saveNoteTranslations({
+      noteId: note.id,
+      diarizationTranslations: nextTranslations,
+      transcriptionTranslations: {
+        ...(note.transcription_translations ?? {}),
+        [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+      },
+    });
   };
 
   const updateDisplayedTranscript = (note: Note, language: TranscriptLanguage, next: TranscriptSegment[]) => {
@@ -1797,14 +1765,7 @@ const SummaryHistory: React.FC = () => {
     setSavingNoteId(note.id);
     setNoteEditError(null);
     try {
-      const { data, error } = await supabase
-        .from('note')
-        .update({ summary_edit: noteEditDraft })
-        .eq('id', note.id)
-        .eq('user_id', user.id)
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
+      const data = await patchNoteReturningId({ noteId: note.id, userId: user.id, patch: { summary_edit: noteEditDraft } });
       // 0 rows updated (e.g. a shared note you don't own): don't fake success.
       if (!data) throw new Error('Could not save your edit. You may not have permission to edit this note.');
 
@@ -1835,14 +1796,7 @@ const SummaryHistory: React.FC = () => {
     }
     try {
       setNoteListActionError(null);
-      const { data, error } = await supabase
-        .from('note')
-        .update({ name })
-        .eq('id', noteId)
-        .eq('user_id', user.id)
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
+      const data = await patchNoteReturningId({ noteId, userId: user.id, patch: { name } });
       // 0 rows updated (e.g. a shared note you don't own): don't fake success.
       if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
       setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, name } : n)));
@@ -1872,14 +1826,7 @@ const SummaryHistory: React.FC = () => {
         });
         if (removeShareError) throw removeShareError;
       } else {
-        const { data: deletedNote, error: deleteError } = await supabase
-          .from('note')
-          .delete()
-          .eq('id', deleteNoteTarget.id)
-          .eq('user_id', user.id)
-          .select('id')
-          .maybeSingle();
-        if (deleteError) throw deleteError;
+        const deletedNote = await deleteOwnedNoteReturningId({ noteId: deleteNoteTarget.id, userId: user.id });
         // 0 rows deleted (RLS denied / already gone): don't drop it from the
         // list and imply success — it would reappear on refresh.
         if (!deletedNote) throw new Error('Could not delete this note. Please refresh and try again.');

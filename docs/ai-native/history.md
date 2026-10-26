@@ -28,10 +28,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 - feat(web): add note repository read, patch and delete methods for T2-2 (unused)
 
-**Fixes**
-
-- fix(config): keep host binding opt-in through WORKFLOW_HOST
-
 **Docs**
 
 - docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
@@ -39,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
 - refactor(web): persistNoteDiarization writes through the note repository (T2-2)
 - refactor(web): audio reference check pages notes through the note repository (T2-2)
 - refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
