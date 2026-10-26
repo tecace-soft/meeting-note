@@ -21,6 +21,7 @@ paths:
   - workflow-server/src/routes/jobs.ts
   - workflow-server/src/pipeline/transcription.ts
   - workflow-server/src/pipeline/summarize.ts
+  - workflow-server/src/pipeline/usage.ts
   - workflow-server/src/index.ts
 supersedes:
   - DEC-0003
