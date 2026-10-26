@@ -39,6 +39,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
 - refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
 - refactor(web): AppSidebar reads notes through the note repository (T2-2)
 - test(web): pin note call-chain contracts before the T2-2 repository move
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(docs): reject duplicate product-doc dependency paths
 - test(config): make async entrypoint checks one-shot on Node 22
 - test(routes): follow transcription-test ownership for the existing gate fixture
-- refactor(routes): extract transcription-test engines and handler
 
 ### Recent merges
 

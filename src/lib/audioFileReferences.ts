@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { selectAudioReferencePage } from './notes/repository';
 
 /** Minimal note shape needed to decide whether a note still uses an audio file. */
 export interface NoteAudioRef {
@@ -89,14 +90,12 @@ export async function fetchReferencingNotes(
     let total: number | null = null;
     for (let page = 0; page < NOTE_REF_MAX_PAGES; page += 1) {
       const from = notes.length;
-      const { data, error, count } = await client
-        .from('note')
-        .select('id, name, audio_file, audio_file_id', { count: 'exact' })
-        .eq('user_id', userId)
-        .or('audio_file_id.not.is.null,audio_file.not.is.null')
-        .order('id', { ascending: true })
-        .range(from, from + NOTE_REF_PAGE_SIZE - 1)
-        .abortSignal(controller.signal);
+      const { data, error, count } = await selectAudioReferencePage(client, {
+        userId,
+        from,
+        to: from + NOTE_REF_PAGE_SIZE - 1,
+        signal: controller.signal,
+      });
       if (error) throw error;
       if (typeof count !== 'number') throw new Error('Reference check returned no exact count.');
       if (total !== null && count !== total) throw new Error('Note set changed during reference check.');
