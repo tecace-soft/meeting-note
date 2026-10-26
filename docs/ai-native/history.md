@@ -39,6 +39,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
 - refactor(web): AppSidebar reads notes through the note repository (T2-2)
 - test(web): pin note call-chain contracts before the T2-2 repository move
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(config): make async entrypoint checks one-shot on Node 22
 - test(routes): follow transcription-test ownership for the existing gate fixture
 - refactor(routes): extract transcription-test engines and handler
-- test(transcription): freeze model-test parser, engines and recovery contracts
 
 ### Recent merges
 
