@@ -25,7 +25,7 @@ import { handleBriefingRequest } from './routes/briefing.js';
 import { handleBackfillInsightRequest, handleRefreshNoteInsightRequest } from './routes/insight.js';
 import { handleProjectChatRequest } from './routes/projectChat.js';
 import { handleRegenerateSummaryRequest } from './routes/regenerateSummary.js';
-import { summarizeAudio, createSummarizeJob, createAndroidRecordingJob, getSummarizeJob } from './routes/summarizeJobs.js';
+import { handleSummarizeAudioRequest, handleSummarizeJobsRequest } from './routes/summarizeJobs.js';
 import { failOrphanedJobs } from './jobs/sweep.js';
 import { ORPHANED_JOB_SWEEP_INTERVAL_MS } from './jobs/store.js';
 
@@ -86,10 +86,7 @@ export const server = createServer((req, res) => {
       sendJson(res, 200, VERSION_INFO);
       return;
     }
-    if (req.method === 'POST' && req.url === '/summarize-audio') {
-      await summarizeAudio(req, res);
-      return;
-    }
+    if (await handleSummarizeAudioRequest(req, res)) return;
     if (await handleTranscriptionTestRequest(req, res)) return;
     if (await handleBackfillInsightRequest(req, res)) return;
     if (await handleRegenerateSummaryRequest(req, res)) return;
@@ -98,19 +95,7 @@ export const server = createServer((req, res) => {
     if (await handleProductDocsRequest(req, res, url)) return;
     if (await handleIssuesRequest(req, res, url)) return;
     if (await handleProjectChatRequest(req, res)) return;
-    if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {
-      await createSummarizeJob(req, res);
-      return;
-    }
-    if (req.method === 'POST' && req.url === '/android/recordings/jobs') {
-      await createAndroidRecordingJob(req, res);
-      return;
-    }
-    const jobMatch = url.pathname.match(/^\/summarize-audio\/jobs\/([^/]+)$/);
-    if (req.method === 'GET' && jobMatch?.[1]) {
-      await getSummarizeJob(req, res, decodeURIComponent(jobMatch[1]));
-      return;
-    }
+    if (await handleSummarizeJobsRequest(req, res, url)) return;
     sendJson(res, 404, { error: 'Not found' });
   })().catch((error) => {
     const message = errorMessage(error);

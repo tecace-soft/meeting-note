@@ -21,7 +21,7 @@ import { finalizeNoteMemory } from '../pipeline/finalize.js';
 import { type WorkflowJobRow } from '../jobs/store.js';
 import { processSummarizeJob, completedJobResults } from '../jobs/runner.js';
 
-export async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const input = parseSummarizeInput((await readBody(req, 110_000_000)) as SummarizeAudioRequest);
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
@@ -32,7 +32,7 @@ export async function summarizeAudio(req: IncomingMessage, res: ServerResponse):
   await finalizeNoteMemory(input, result.transcript);
 }
 
-export async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const input = parseSummarizeInput((await readBody(req, 110_000_000)) as SummarizeAudioRequest);
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
@@ -114,7 +114,7 @@ export async function createSummarizeJob(req: IncomingMessage, res: ServerRespon
   sendJson(res, 202, { jobId, status: 'queued', stage: 'queued', progress: 0 });
 }
 
-export async function createAndroidRecordingJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function createAndroidRecordingJob(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
     const upload = await parseAndroidMultipartUpload(req);
 
@@ -214,7 +214,7 @@ export async function createAndroidRecordingJob(req: IncomingMessage, res: Serve
   }
 }
 
-export async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId: string): Promise<void> {
+async function getSummarizeJob(req: IncomingMessage, res: ServerResponse, jobId: string): Promise<void> {
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   const { data, error } = await supabase
     .from('workflow_job')
@@ -239,4 +239,27 @@ export async function getSummarizeJob(req: IncomingMessage, res: ServerResponse,
     error: row.error,
   });
   if (row.status === 'completed') completedJobResults.delete(jobId);
+}
+
+export async function handleSummarizeAudioRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  if (req.method !== 'POST' || req.url !== '/summarize-audio') return false;
+  await summarizeAudio(req, res);
+  return true;
+}
+
+export async function handleSummarizeJobsRequest(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+  if (req.method === 'POST' && req.url === '/summarize-audio/jobs') {
+    await createSummarizeJob(req, res);
+    return true;
+  }
+  if (req.method === 'POST' && req.url === '/android/recordings/jobs') {
+    await createAndroidRecordingJob(req, res);
+    return true;
+  }
+  const jobMatch = url.pathname.match(/^\/summarize-audio\/jobs\/([^/]+)$/);
+  if (req.method === 'GET' && jobMatch?.[1]) {
+    await getSummarizeJob(req, res, decodeURIComponent(jobMatch[1]));
+    return true;
+  }
+  return false;
 }

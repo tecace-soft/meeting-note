@@ -35,6 +35,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
 - test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
 - test(workflow-server): make the translation contract fail when the note write does not await the translation
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(routes): extract transcription-test engines and handler
 - test(transcription): freeze model-test parser, engines and recovery contracts
 - refactor(pipeline): extract shared AI, usage, memory, speaker and recovery helpers
-- test(pipeline): characterize shared AI, usage, memory and parser contracts
 
 ### Recent merges
 
