@@ -488,6 +488,8 @@ test('runSummarizeAudio translates the transcript in parallel with the summary a
       order.push('translation-start');
       // Released by the summary call; the timeout only prevents a hang if the code were sequential.
       await Promise.race([translationGate, new Promise((resolve) => setTimeout(resolve, 500))]);
+      // Finish well after the summary so an unawaited translation would miss the note write.
+      await new Promise((resolve) => setTimeout(resolve, 100));
       order.push('translation-end');
       return { text: JSON.stringify({ segments: [{ speaker: 'Speaker A', text: '로드맵을 검토합시다.', start: 0, end: 2 }] }) };
     },

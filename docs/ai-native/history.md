@@ -28,7 +28,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 - fix(config): keep host binding opt-in through WORKFLOW_HOST
 - fix(http): retain direct org-gated identity import for product docs
-- fix(config): load dotenv before consumers and default local startup to loopback
 
 **Performance**
 
@@ -40,6 +39,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
 - test(workflow-server): add direct transcript-stage tests for transcribeOrReuseCheckpoint
 - refactor(workflow-server): split transcription into submit/poll/parse and a transcript stage (T1-10b)
 - refactor(workflow-server): move AssemblyAI transcription to pipeline/transcription (T1-10b)
