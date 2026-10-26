@@ -13,6 +13,9 @@ paths:
   - workflow-server/src/jobs/store.ts
   - workflow-server/src/index.ts
   - workflow-server/src/pipeline/summarize.ts
+  - workflow-server/src/jobs/runner.ts
+  - workflow-server/src/jobs/sweep.ts
+  - workflow-server/src/routes/summarizeJobs.ts
 supersedes: []
 source: AGENTS.md "Deploys restart the backend" (최초 추가 커밋 5c44c39, 2026-07-23)
 ---
