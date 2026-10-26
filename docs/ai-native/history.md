@@ -34,6 +34,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- ci: bound hung backend tests with a job timeout and a per-test timeout
 - test(workflow-server): bound the timer-driven runner and sweep retry contracts
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
@@ -68,7 +69,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(ops): freeze incident dedupe, caps and failure handling
 - refactor(issues): extract handlers and assign shared parser and link ownership
 - test(issues): freeze route, parser and deep-link contracts
-- test(docs): reject duplicate product-doc dependency paths
 
 ### Recent merges
 
