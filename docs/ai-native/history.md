@@ -26,6 +26,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(web): add speaker repository with owner-scoped methods for T2-3 (unused)
 - feat(web): add note repository read, patch and delete methods for T2-2 (unused)
 
 **Docs**
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
 - test(regenerate): freeze prompt fallback and note-owner enrichment contracts
 - refactor(project-chat): extract JSON and SSE routes preserving note access filtering
-- test(project-chat): freeze note visibility, numeric ids and SSE framing
 
 ### Recent merges
 
