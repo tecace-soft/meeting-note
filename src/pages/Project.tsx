@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../config/supabaseConfig';
-import { updateOwnedNote } from '../lib/notes/repository';
+import {
+  deleteOwnedNote,
+  listProjectNotes,
+  listVisibleNotes,
+  saveNoteTranslations,
+  updateOwnedNote,
+} from '../lib/notes/repository';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -355,14 +361,7 @@ const Project: React.FC = () => {
         if (pErr) throw pErr;
         setProject(pData as ProjectRow);
 
-        const { data: nData, error: nErr } = await supabase
-          .from('note')
-          .select('*')
-          .contains('projects', [projectIdFilterValue])
-          .order('created_at', { ascending: false });
-
-        if (nErr) throw nErr;
-        setNotes((nData as NoteRow[]) || []);
+        setNotes(await listProjectNotes<NoteRow>(projectIdFilterValue));
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'Failed to load project data.');
       } finally {
@@ -794,13 +793,7 @@ const Project: React.FC = () => {
     setAddNotesPickerLoading(true);
     setPickerNotes([]);
     try {
-      const { data, error } = await supabase
-        .from('note')
-        .select('*')
-        .or(`user_id.eq.${user.id},shared_users.cs.{${user.id}}`)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      setPickerNotes((data as NoteRow[]) || []);
+      setPickerNotes(await listVisibleNotes<NoteRow>(user.id));
     } catch (err: unknown) {
       setAddNotesModalError(err instanceof Error ? err.message : 'Failed to load notes');
     } finally {
@@ -896,12 +889,7 @@ const Project: React.FC = () => {
         });
         if (removeShareError) throw removeShareError;
       } else {
-        const { error: deleteError } = await supabase
-          .from('note')
-          .delete()
-          .eq('id', deleteNoteTarget.id)
-          .eq('user_id', user.id);
-        if (deleteError) throw deleteError;
+        await deleteOwnedNote({ noteId: deleteNoteTarget.id, userId: user.id });
 
         setProject((prev) =>
           prev
@@ -950,20 +938,14 @@ const Project: React.FC = () => {
       return;
     }
     const nextTranslations = updateTranslationMap(note.diarization_translations, language, next);
-    const { data, error } = await supabase
-      .from('note')
-      .update({
-        diarization_translations: nextTranslations,
-        transcription_translations: {
-          ...(note.transcription_translations ?? {}),
-          [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
-        },
-      })
-      .eq('id', note.id)
-      .select('id')
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) throw new Error('Transcript translation save did not update the note.');
+    await saveNoteTranslations({
+      noteId: note.id,
+      diarizationTranslations: nextTranslations,
+      transcriptionTranslations: {
+        ...(note.transcription_translations ?? {}),
+        [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
+      },
+    });
   };
 
   const updateDisplayedTranscript = (note: NoteRow, language: TranscriptLanguage, next: TranscriptSegment[]) => {

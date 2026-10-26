@@ -39,6 +39,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): persistNoteDiarization writes through the note repository (T2-2)
 - refactor(web): audio reference check pages notes through the note repository (T2-2)
 - refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
 - refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(issues): extract handlers and assign shared parser and link ownership
 - test(issues): freeze route, parser and deep-link contracts
 - test(docs): reject duplicate product-doc dependency paths
-- test(config): make async entrypoint checks one-shot on Node 22
 
 ### Recent merges
 
