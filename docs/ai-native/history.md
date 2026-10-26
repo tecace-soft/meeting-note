@@ -36,6 +36,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
 - refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
 - test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(docs): reject duplicate product-doc dependency paths
 - test(config): make async entrypoint checks one-shot on Node 22
 - test(routes): follow transcription-test ownership for the existing gate fixture
-- refactor(routes): extract transcription-test engines and handler
 
 ### Recent merges
 

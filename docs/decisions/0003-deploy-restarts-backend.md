@@ -1,7 +1,7 @@
 ---
 id: DEC-0003
 date: 2026-07-23
-status: active
+status: superseded
 question: 배포 시 백엔드 재시작으로 끊기는 진행 중 작업을 어떻게 다룰 것인가
 options:
   - 재시작 후 아무 처리 안 함(작업이 영구히 멈춘 채 남음)
