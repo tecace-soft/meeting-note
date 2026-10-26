@@ -29,6 +29,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(db): return the stored job request only to a recover claim
 - feat(workflow-server): claim, fence and resume summarize jobs across restarts (S10)
 - feat(db): add the S10 workflow_job lease, generation and submission schema
+- feat(web): add note repository read, patch and delete methods for T2-2 (unused)
 
 **Docs**
 
@@ -37,13 +38,23 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
 - docs(decisions): point DEC-0001/0003 at the T1-9b job modules
 - docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
-- docs: update refactor plan progress through T1-8 (2026-10-26)
 
 **Other**
 
+- refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
+- refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
 - test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
+- refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
+- refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
+- refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
+- refactor(web): persistNoteDiarization writes through the note repository (T2-2)
+- refactor(web): audio reference check pages notes through the note repository (T2-2)
+- refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
+- refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
 - ci: bound hung backend tests with a job timeout and a per-test timeout
+- refactor(web): AppSidebar reads notes through the note repository (T2-2)
 - test(workflow-server): bound the timer-driven runner and sweep retry contracts
+- test(web): pin note call-chain contracts before the T2-2 repository move
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
 - refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
@@ -61,28 +72,17 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): pin Android upload route contract before T1-10a move
 - chore: restore generated docs/ai-native to main (not part of T1-9a)
 - refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
-- refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
-- test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
-- refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
-- test(regenerate): freeze prompt fallback and note-owner enrichment contracts
-- refactor(project-chat): extract JSON and SSE routes preserving note access filtering
-- test(project-chat): freeze note visibility, numeric ids and SSE framing
-- refactor(insight): extract refresh and backfill at their existing dispatch positions
-- test(insight): freeze owner attribution, admin limits and failure aggregation
-- refactor(briefing): extract owner-scoped meeting briefing route
-- refactor(product-docs): extract routes with one bounded token cache
-- test(briefing): freeze owner scope, bounded output and dependency failures
 
 ### Recent merges
 
+- Merge origin/main into feature/s10-auto-resume
+- Merge pull request #49 from tecace-soft/refactor/t2-2-note-repository
+- Merge origin/main into refactor/t2-2-note-repository
+- Merge pull request #48 from tecace-soft/refactor/t1-9b-job-runner
+- Merge pull request #47 from tecace-soft/refactor/t1-10c-summarize-finalize
 - Merge pull request #46 from tecace-soft/refactor/t1-10b-transcription
 - Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
 - Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
 - Merge origin/main into docs/refactor-progress-2026-10-26; add T1-9a row
 - Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
-- Merge pull request #42 from tecace-soft/refactor/t1-8-regenerate-summary
-- Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
-- Merge pull request #40 from tecace-soft/refactor/t1-6-note-insight
-- Merge pull request #39 from tecace-soft/refactor/t1-5-meeting-briefing
-- Merge pull request #38 from tecace-soft/refactor/t1-4-product-docs
 <!-- ai-native:auto:END -->
