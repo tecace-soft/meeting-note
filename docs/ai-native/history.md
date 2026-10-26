@@ -37,10 +37,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 **Docs**
 
 - docs: update refactor plan progress through T1-8 (2026-10-26)
-- docs: regenerate history after syncing s12 with main
 
 **Other**
 
+- refactor(workflow-server): move AssemblyAI transcription to pipeline/transcription (T1-10b)
 - test(workflow-server): pin AssemblyAI transcription pipeline contracts before T1-10b move
 - test(workflow-server): add direct androidUpload helper tests
 - refactor(workflow-server): move Android upload helpers to pipeline/androidUpload (T1-10a)

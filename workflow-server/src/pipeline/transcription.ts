@@ -9,6 +9,8 @@ import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
 import { parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from '../parsers.js';
 import { buildTranscriptTranslationPrompt } from '../prompts.js';
 import { recordAssemblyUsage, recordGeminiUsage } from './usage.js';
+import { NoSpeechDetectedError, noSpeechMessage } from './errors.js';
+import { loadTranscriptCheckpoint, saveTranscriptCheckpoint } from '../jobs/store.js';
 
 export interface CustomSpellingRule {
   from: string[];
@@ -101,14 +103,15 @@ export async function loadTranscriptionSettings(): Promise<TranscriptionSettings
   };
 }
 
-export async function transcribeWithAssembly(input: {
-  downloadUrl: string;
-  noteId: string;
-  userId: string;
-  settings: TranscriptionSettings;
-}): Promise<{ segments: TranscriptSegment[]; latencyMs: number; audioDurationSeconds: number | null; detectedLanguage: 'en' | 'ko' | null }> {
-  if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
-  const startedAt = performance.now();
+export interface AssemblyTranscriptResult {
+  segments: TranscriptSegment[];
+  audioDurationSeconds: number | null;
+  detectedLanguage: 'en' | 'ko' | null;
+}
+
+// Submits one AssemblyAI transcript job and returns the provider id exactly as received.
+// S10 seam: the id becomes known here, so it can be persisted (fenced) before the first poll.
+async function submitAssemblyTranscript(input: { downloadUrl: string; settings: TranscriptionSettings }): Promise<string> {
   const submitBody: Record<string, unknown> = {
     audio_url: input.downloadUrl,
     speaker_labels: true,
@@ -145,7 +148,13 @@ export async function transcribeWithAssembly(input: {
   if (typeof created.id !== 'string' || !created.id.trim()) {
     throw new Error('AssemblyAI did not return a transcript id.');
   }
+  return created.id;
+}
 
+// Polls an existing transcript id until it completes, fails or `startedAt` (performance.now()
+// before submit) is 30 minutes old. Returns the completed transcript record.
+// S10 seam: a restarted job can call this with a persisted id instead of resubmitting.
+async function pollAssemblyTranscript(transcriptId: string, startedAt: number): Promise<Record<string, unknown>> {
   let transcript: Record<string, unknown> | null = null;
   const timeoutMs = 30 * 60 * 1000;
   // A single failed poll (network blip, 5xx, rate limit, truncated body) must
@@ -165,7 +174,7 @@ export async function transcribeWithAssembly(input: {
     let pollResponse: Response;
     let pollRaw: string;
     try {
-      pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(created.id)}`, {
+      pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(transcriptId)}`, {
         headers: { Authorization: env.assemblyAiApiKey },
       });
       pollRaw = await pollResponse.text();
@@ -210,12 +219,16 @@ export async function transcribeWithAssembly(input: {
     throw new Error('AssemblyAI transcription timed out.');
   }
   console.log('AssemblyAI transcript completed:', JSON.stringify({
-    transcriptId: created.id,
+    transcriptId,
     speechModelUsed: transcript.speech_model_used ?? null,
     languageCode: transcript.language_code ?? null,
     languageDetectionResults: transcript.language_detection_results ?? null,
   }));
+  return transcript;
+}
 
+// Maps a completed AssemblyAI transcript to diarized segments, audio duration and language.
+function parseAssemblyTranscript(transcript: Record<string, unknown>): AssemblyTranscriptResult {
   const utterances = Array.isArray(transcript.utterances) ? transcript.utterances : [];
   const utteranceDurationSeconds = utterances.reduce((maxEnd, utterance) => {
     const record = utterance && typeof utterance === 'object' && !Array.isArray(utterance)
@@ -264,17 +277,79 @@ export async function transcribeWithAssembly(input: {
         speakerKey: 'Unknown Speaker',
         text: typeof transcript.text === 'string' ? transcript.text.trim() : '',
       }].filter((segment) => segment.text);
+  return { segments, audioDurationSeconds, detectedLanguage: normalizeDetectedTranscriptLanguage(transcript.language_code) };
+}
 
+// Full paid transcription: submit, poll, parse, then record usage. Latency and the
+// 30 minute poll limit are both measured from before the submit request.
+export async function transcribeWithAssembly(input: {
+  downloadUrl: string;
+  noteId: string;
+  userId: string;
+  settings: TranscriptionSettings;
+}): Promise<AssemblyTranscriptResult & { latencyMs: number }> {
+  if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
+  const startedAt = performance.now();
+  const transcriptId = await submitAssemblyTranscript({ downloadUrl: input.downloadUrl, settings: input.settings });
+  const transcript = await pollAssemblyTranscript(transcriptId, startedAt);
+  const { segments, audioDurationSeconds, detectedLanguage } = parseAssemblyTranscript(transcript);
   const latencyMs = Math.round(performance.now() - startedAt);
   await recordAssemblyUsage({
     noteId: input.noteId,
     userId: input.userId,
     model: ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL,
     latencyMs,
-    transcriptId: created.id.trim(),
+    transcriptId: transcriptId.trim(),
     audioDurationSeconds: audioDurationSeconds ?? 0,
   });
-  return { segments, latencyMs, audioDurationSeconds, detectedLanguage: normalizeDetectedTranscriptLanguage(transcript.language_code) };
+  return { segments, latencyMs, audioDurationSeconds, detectedLanguage };
+}
+
+// Transcript stage of the summarize runner. The caller writes the 'transcribing audio'
+// job stage first; this owns every checkpoint read/write and provider call after it.
+// S10 seam: a persisted provider transcript id would be checked after the checkpoint miss
+// and polled instead of resubmitting.
+export async function transcribeOrReuseCheckpoint(input: {
+  noteId: string;
+  userId: string;
+  downloadUrl: string;
+  language: 'en' | 'ko';
+  settings: TranscriptionSettings;
+}): Promise<AssemblyTranscriptResult> {
+  // FIX 2: reuse a persisted transcript if a prior attempt for this noteId already
+  // paid AssemblyAI (summary failed, or the process restarted mid-job). Any miss
+  // falls through to a fresh transcription, so this is safe with or without the
+  // checkpoint table present.
+  const checkpoint = await loadTranscriptCheckpoint(input.noteId, input.userId);
+  if (checkpoint) {
+    console.log(`Reusing persisted transcript checkpoint for note ${input.noteId} (${checkpoint.segments.length} segments); skipping re-transcription.`);
+    return {
+      segments: checkpoint.segments,
+      audioDurationSeconds: checkpoint.audioDurationSeconds,
+      detectedLanguage: checkpoint.detectedLanguage,
+    };
+  }
+  const transcription = await transcribeWithAssembly({
+    downloadUrl: input.downloadUrl,
+    noteId: input.noteId,
+    userId: input.userId,
+    settings: input.settings,
+  });
+  const { segments, audioDurationSeconds, detectedLanguage } = transcription;
+  // A completed transcription with zero segments means the audio contained no
+  // detectable speech, not that the pipeline broke. Surface it as a clear,
+  // localized user message (and skip the ops incident in the job handler).
+  if (segments.length === 0) throw new NoSpeechDetectedError(noSpeechMessage(input.language));
+  // Persist the paid transcript BEFORE the Gemini summary so a summary failure
+  // or a restart from here on no longer discards it.
+  await saveTranscriptCheckpoint({
+    noteId: input.noteId,
+    userId: input.userId,
+    segments,
+    audioDurationSeconds,
+    detectedLanguage,
+  });
+  return { segments, audioDurationSeconds, detectedLanguage };
 }
 
 export async function translateTranscriptSegments(input: {

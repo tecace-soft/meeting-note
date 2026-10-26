@@ -43,10 +43,10 @@ import {
   createAndroidAudioFileRecord, isSupportedAndroidAudio, parseAndroidMultipartUpload, parseOptionalDate,
   sanitizeUploadFileName, uploadAndroidAudioToStorage,
 } from './pipeline/androidUpload.js';
-import { NoSpeechDetectedError, noSpeechMessage } from './pipeline/errors.js';
+import { NoSpeechDetectedError } from './pipeline/errors.js';
 import { parseSummarizeInput } from './pipeline/inputs.js';
-import { getOppositeTranscriptLanguage, loadTranscriptionSettings, transcribeWithAssembly, translateTranscriptSegments } from './pipeline/transcription.js';
-import { type WorkflowJobRow, updateWorkflowJob, loadTranscriptCheckpoint, saveTranscriptCheckpoint, deleteTranscriptCheckpoint, JOB_HEARTBEAT_INTERVAL_MS, ORPHANED_JOB_THRESHOLD_MS, ORPHANED_JOB_SWEEP_INTERVAL_MS } from './jobs/store.js';
+import { getOppositeTranscriptLanguage, loadTranscriptionSettings, transcribeOrReuseCheckpoint, translateTranscriptSegments } from './pipeline/transcription.js';
+import { type WorkflowJobRow, updateWorkflowJob, deleteTranscriptCheckpoint, JOB_HEARTBEAT_INTERVAL_MS, ORPHANED_JOB_THRESHOLD_MS, ORPHANED_JOB_SWEEP_INTERVAL_MS } from './jobs/store.js';
 
 
 
@@ -281,43 +281,13 @@ async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | nul
   console.log(`Processing audio ${input.fileName} with AssemblyAI ${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL} and no explicit language settings. Selected summary language: ${input.language}`);
 
   await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
-  // FIX 2: reuse a persisted transcript if a prior attempt for this noteId already
-  // paid AssemblyAI (summary failed, or the process restarted mid-job). Any miss
-  // falls through to a fresh transcription, so this is safe with or without the
-  // checkpoint table present.
-  const checkpoint = await loadTranscriptCheckpoint(input.noteId, input.userId);
-  let segments: TranscriptSegment[];
-  let audioDurationSeconds: number | null;
-  let detectedLanguage: 'en' | 'ko' | null;
-  if (checkpoint) {
-    console.log(`Reusing persisted transcript checkpoint for note ${input.noteId} (${checkpoint.segments.length} segments); skipping re-transcription.`);
-    segments = checkpoint.segments;
-    audioDurationSeconds = checkpoint.audioDurationSeconds;
-    detectedLanguage = checkpoint.detectedLanguage;
-  } else {
-    const transcription = await transcribeWithAssembly({
-      downloadUrl: input.downloadUrl,
-      noteId: input.noteId,
-      userId: input.userId,
-      settings: transcriptionSettings,
-    });
-    segments = transcription.segments;
-    audioDurationSeconds = transcription.audioDurationSeconds;
-    detectedLanguage = transcription.detectedLanguage;
-    // A completed transcription with zero segments means the audio contained no
-    // detectable speech, not that the pipeline broke. Surface it as a clear,
-    // localized user message (and skip the ops incident in the job handler).
-    if (segments.length === 0) throw new NoSpeechDetectedError(noSpeechMessage(input.language));
-    // Persist the paid transcript BEFORE the Gemini summary so a summary failure
-    // or a restart from here on no longer discards it.
-    await saveTranscriptCheckpoint({
-      noteId: input.noteId,
-      userId: input.userId,
-      segments,
-      audioDurationSeconds,
-      detectedLanguage,
-    });
-  }
+  const { segments, audioDurationSeconds, detectedLanguage } = await transcribeOrReuseCheckpoint({
+    noteId: input.noteId,
+    userId: input.userId,
+    downloadUrl: input.downloadUrl,
+    language: input.language,
+    settings: transcriptionSettings,
+  });
   const transcriptText = formatTranscriptText(segments, 'original');
   const translationLanguage = getOppositeTranscriptLanguage(detectedLanguage);
   const diarizationTranslations: Partial<Record<'en' | 'ko', TranscriptSegment[]>> = {};
