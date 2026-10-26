@@ -29,12 +29,9 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(config): keep host binding opt-in through WORKFLOW_HOST
 - fix(http): retain direct org-gated identity import for product docs
 
-**Performance**
-
-- perf(http): count request bytes without repeated buffer concatenation
-
 **Docs**
 
+- docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
 - docs: update refactor plan progress through T1-8 (2026-10-26)
 
 **Other**
@@ -78,6 +75,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 ### Recent merges
 
+- Merge pull request #47 from tecace-soft/refactor/t1-10c-summarize-finalize
 - Merge pull request #46 from tecace-soft/refactor/t1-10b-transcription
 - Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
 - Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
@@ -87,5 +85,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
 - Merge pull request #40 from tecace-soft/refactor/t1-6-note-insight
 - Merge pull request #39 from tecace-soft/refactor/t1-5-meeting-briefing
-- Merge pull request #38 from tecace-soft/refactor/t1-4-product-docs
 <!-- ai-native:auto:END -->
