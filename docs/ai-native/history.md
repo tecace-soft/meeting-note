@@ -24,68 +24,68 @@ For the per-commit detail of the most recent work, see the auto-region below; fo
 
 Last 40 non-merge commits, newest first, grouped by type.
 
-**Features**
-
-- feat(knowledge): collapse optional attendee confirmation in the AX-KH modal
-- feat(knowledge): add one-click AX-KH send from the meeting note
-- feat(docs): add structured decision records, advisory checker, and AX-KH node assembler
-- feat(recordings): sort Recent recordings by upload time on web and mobile
-
 **Fixes**
 
+- fix(config): keep host binding opt-in through WORKFLOW_HOST
+- fix(http): retain direct org-gated identity import for product docs
+- fix(config): load dotenv before consumers and default local startup to loopback
 - fix(server): log the bound port and explain IPv4-only tests
 - fix(server): recognize symlinked entrypoints by real path
-- fix(notes): require owner identity and a returned row before UI success
-- fix(gemini): use only lite models in every production path and guard model env overrides
-- fix(mobile): show the loading screen while restoring the session on cold start
-- fix(product-docs): hash doc bodies line-ending independently and check signatures locally
-- fix(admin): remove a departed teammate from hardcoded admin allowlists
-- fix(auth): trust only the Microsoft tenant, not mail domains, for app login and backend calls
-- fix(docs): make the product docs page scrollable inside the app shell
+
+**Performance**
+
+- perf(http): count request bytes without repeated buffer concatenation
 
 **Docs**
 
 - docs: regenerate history after syncing s12 with main
+- docs: regenerate history after syncing s10 with main
 - docs: regenerate history after syncing main a8c8b54
 - docs: regenerate history after merging main into test isolation
 - docs: regenerate history after merging main into note permissions
-- docs(S1): require read-only job preflight before deployment merges
-- docs(S12): design ordered shutdown and completed-job preservation
-- docs(notes): track extracted repository in decisions and product docs
-- docs(refactor): plan revision 3 with the second Codex review and Andrew's decisions
-- docs(refactor): record the 2026-10-21 direction decisions
-- docs(refactor): plan revision 2 around stability, simplification and automation
-- docs(refactor): consolidate the refactor plan into one canonical document
-- docs(handoffs): add refactor handoff for continuing work in a fresh session
-- docs(mobile): make keystore backup recommended, record accepted reinstall consequence
-- docs(product-docs): sign off 10 product docs and fix two inaccuracies
-- docs: correct login tenant and app registration ownership, refresh F2 admin list
-- docs(product-docs): refresh docs for tenant-only auth and one-click AX-KH send
-- docs(reviews): add 2026-09-29 ops stability technical review
 
 **Other**
 
+- refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
+- refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
+- test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
+- refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
+- test(regenerate): freeze prompt fallback and note-owner enrichment contracts
+- refactor(project-chat): extract JSON and SSE routes preserving note access filtering
+- test(project-chat): freeze note visibility, numeric ids and SSE framing
+- refactor(insight): extract refresh and backfill at their existing dispatch positions
+- test(insight): freeze owner attribution, admin limits and failure aggregation
+- refactor(briefing): extract owner-scoped meeting briefing route
+- refactor(product-docs): extract routes with one bounded token cache
+- test(briefing): freeze owner scope, bounded output and dependency failures
+- test(product-docs): freeze org gate, token cache and route contracts
+- refactor(ops): give incidents a single module without route dependencies
+- test(ops): freeze incident dedupe, caps and failure handling
+- refactor(issues): extract handlers and assign shared parser and link ownership
+- test(issues): freeze route, parser and deep-link contracts
+- test(docs): reject duplicate product-doc dependency paths
+- test(config): make async entrypoint checks one-shot on Node 22
+- test(routes): follow transcription-test ownership for the existing gate fixture
+- refactor(routes): extract transcription-test engines and handler
+- test(transcription): freeze model-test parser, engines and recovery contracts
+- refactor(pipeline): extract shared AI, usage, memory, speaker and recovery helpers
+- test(pipeline): characterize shared AI, usage, memory and parser contracts
+- refactor(http): extract shared HTTP, Microsoft identity wrappers and DB client
+- test(http): freeze shared HTTP and identity contracts before extraction
+- refactor(config): move dotenv loading and workflow env definitions
+- test(config): characterize env defaults and entrypoint dotenv paths
 - test(project): distinguish owned-note success from shared-note rejection
-- test(S12): reproduce shutdown failures in isolated signal children
-- refactor(notes): extract Project note writes without changing behavior
-- test(project): reproduce silent zero-row note update success
-- test(notes): add pinned PGlite note RLS contracts
-- test(server): enforce offline isolation and freeze workflow route contracts
-- refactor(server): make workflow startup explicit and disposable
-- test(server): never load the local .env or reach real services from tests
-- chore(mobile): release 0.1.2 signed with the existing key, add signer fingerprint check
-- test(mobile): make the sign-in widget test deterministic with a fake auth service
 
 ### Recent merges
 
-- merge: sync s12 design tests with main e91dc63
-- Merge pull request #26 from tecace-soft/refactor/t1-0a-test-isolation
-- merge: sync server test isolation with main a8c8b54
-- Merge pull request #27 from tecace-soft/refactor/t2-1-note-update-permissions
-- merge: sync server test isolation with main e5ec45c
-- merge: sync note update permissions with main e5ec45c
-- Merge pull request #30 from tecace-soft/refactor/s1-predeploy-runbook
-- Merge pull request #24: private meeting knowledge with verified MED fixes
-- Merge pull request #25: enable project-scoped RLS on chat and session
-- Merge branch 'main' into fix/supabase-upload-limit
+- Merge pull request #42 from tecace-soft/refactor/t1-8-regenerate-summary
+- Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
+- Merge pull request #40 from tecace-soft/refactor/t1-6-note-insight
+- Merge pull request #39 from tecace-soft/refactor/t1-5-meeting-briefing
+- Merge pull request #38 from tecace-soft/refactor/t1-4-product-docs
+- merge: stack T1-8 on T1-7 preserving prompt loaders and route order
+- merge: stack T1-7 on T1-6 preserving project-chat and SSE routes
+- merge: stack T1-6 on T1-5 preserving insight dispatch positions
+- merge: stack T1-5 on T1-4 preserving cumulative route extraction
+- merge: align T1-4 with main b661dbb and preserve both extractions
 <!-- ai-native:auto:END -->

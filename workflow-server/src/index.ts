@@ -6,7 +6,7 @@ import { callGeminiWithFallback, delay, type GeminiWorkflowCallResult } from './
 import { recordGeminiUsage, recordAssemblyUsage } from './pipeline/usage.js';
 import { getPersonalMemoryContext } from './pipeline/memoryContext.js';
 import { buildSpeakerContextFromSegments } from './pipeline/speakerContext.js';
-import { HttpError, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, requiredString, getBearerToken } from './http/shared.js';
+import { HttpError, sendJson, sendNoContent, readBody, getHttpStatus, errorMessage, getBearerToken } from './http/shared.js';
 import { getMicrosoftUserId } from './http/identity.js';
 import { supabase } from './db/supabaseClient.js';
 import { env, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL, TRANSLATION_ENABLED } from './config/env.js';
@@ -40,34 +40,15 @@ import { handleBackfillInsightRequest, handleRefreshNoteInsightRequest } from '.
 import { handleProjectChatRequest } from './routes/projectChat.js';
 import { handleRegenerateSummaryRequest } from './routes/regenerateSummary.js';
 import { loadSummaryPrompt, resolveSummaryPromptForAndroid } from './pipeline/promptLoaders.js';
+import type { SummarizeAudioRequest, SummaryAttachmentInput, SummarizeAudioInput, SummarizeAudioResult } from './pipeline/types.js';
+import { NoSpeechDetectedError, noSpeechMessage } from './pipeline/errors.js';
+import { parseSummarizeInput } from './pipeline/inputs.js';
+import { type WorkflowJobRow, updateWorkflowJob, loadTranscriptCheckpoint, saveTranscriptCheckpoint, deleteTranscriptCheckpoint, JOB_HEARTBEAT_INTERVAL_MS, ORPHANED_JOB_THRESHOLD_MS, ORPHANED_JOB_SWEEP_INTERVAL_MS } from './jobs/store.js';
 
 
 
 
 
-
-interface SummarizeAudioRequest {
-  downloadUrl?: unknown;
-  fileName?: unknown;
-  instructions?: unknown;
-  promptId?: unknown;
-  summaryRulesOverride?: unknown;
-  userId?: unknown;
-  userName?: unknown;
-  noteId?: unknown;
-  meetingAt?: unknown;
-  userTimeZone?: unknown;
-  fileId?: unknown;
-  speakerContext?: unknown;
-  attachments?: unknown;
-  language?: unknown;
-}
-
-interface SummaryAttachmentInput {
-  name: string;
-  mimeType: string;
-  dataBase64: string;
-}
 
 interface AndroidUploadFile {
   fieldName: string;
@@ -80,28 +61,6 @@ interface AndroidUploadFile {
 interface AndroidRecordingUpload {
   file: AndroidUploadFile;
   fields: Record<string, string>;
-}
-
-// Thrown when transcription succeeds but the audio held no detectable speech
-// (a recording left running in a silent room, or an interrupted capture whose
-// recovered audio is only ambient noise). This is a normal user outcome, not a
-// system failure: it must surface a clear, localized message and must NOT raise
-// an ops incident. 422 = the request was well-formed but the audio is
-// unprocessable, for the direct (non-job) summarize endpoint.
-class NoSpeechDetectedError extends HttpError {
-  constructor(message: string) {
-    super(422, message);
-    this.name = 'NoSpeechDetectedError';
-  }
-}
-
-// User-facing message for a no-speech recording, in the selected summary
-// language. Shown verbatim to the user (mobile processing screen, web job
-// poll), so it must read as guidance, never as an internal error string.
-function noSpeechMessage(language: 'en' | 'ko'): string {
-  return language === 'ko'
-    ? '녹음에서 음성을 찾지 못했어요. 말소리가 담긴 녹음으로 다시 시도해 주세요.'
-    : 'No speech was found in this recording. Please try again with audio that contains speech.';
 }
 
 const AUDIO_BUCKET = 'meeting-recordings';
@@ -149,40 +108,6 @@ const ASSEMBLYAI_AUDIO_EXTENSION_RE = new RegExp(
 );
 
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).
-
-const SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES = new Set([
-  'text/html',
-  'text/css',
-  'text/plain',
-  'text/xml',
-  'text/csv',
-  'text/rtf',
-  'text/javascript',
-  'application/json',
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/bmp',
-  'image/heic',
-  'image/heif',
-  'video/mp4',
-  'video/mpeg',
-  'video/quicktime',
-  'video/avi',
-  'video/x-flv',
-  'video/mpg',
-  'video/webm',
-  'video/wmv',
-  'video/3gpp',
-  'audio/wav',
-  'audio/mp3',
-  'audio/mpeg',
-  'audio/aiff',
-  'audio/aac',
-  'audio/ogg',
-  'audio/flac',
-]);
 
 interface CustomSpellingRule {
   from: string[];
@@ -325,58 +250,6 @@ function parseAndroidMultipartUpload(req: IncomingMessage): Promise<AndroidRecor
   });
 }
 
-function parseSummaryAttachments(value: unknown): SummaryAttachmentInput[] {
-  if (!Array.isArray(value)) return [];
-  const attachments: SummaryAttachmentInput[] = [];
-  let totalBytes = 0;
-
-  for (const item of value.slice(0, 10)) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-    const record = item as Record<string, unknown>;
-    const name = typeof record.name === 'string' && record.name.trim() ? record.name.trim().slice(0, 240) : 'attachment';
-    const mimeType = typeof record.mimeType === 'string' && record.mimeType.trim()
-      ? record.mimeType.trim()
-      : 'application/octet-stream';
-    if (!SUPPORTED_GEMINI_ATTACHMENT_MIME_TYPES.has(mimeType)) continue;
-    const dataBase64 = typeof record.dataBase64 === 'string' ? record.dataBase64.trim() : '';
-    if (!dataBase64 || !/^[A-Za-z0-9+/=]+$/.test(dataBase64)) continue;
-    const estimatedBytes = Math.floor((dataBase64.length * 3) / 4);
-    totalBytes += estimatedBytes;
-    if (estimatedBytes > 25 * 1024 * 1024 || totalBytes > 50 * 1024 * 1024) break;
-    attachments.push({ name, mimeType, dataBase64 });
-  }
-
-  return attachments;
-}
-
-function parseSummarizeInput(body: SummarizeAudioRequest): SummarizeAudioInput {
-  const meetingAt = typeof body.meetingAt === 'string' && body.meetingAt.trim()
-    ? new Date(body.meetingAt)
-    : null;
-  const userTimeZone = typeof body.userTimeZone === 'string' && body.userTimeZone.trim()
-    ? body.userTimeZone.trim()
-    : null;
-  return {
-    downloadUrl: requiredString(body, 'downloadUrl'),
-    fileName: requiredString(body, 'fileName'),
-    promptId: requiredString(body, 'promptId'),
-    summaryRulesOverride:
-      typeof body.summaryRulesOverride === 'string'
-        ? body.summaryRulesOverride
-        : undefined,
-    userId: requiredString(body, 'userId'),
-    userName: typeof body.userName === 'string' ? body.userName.trim() : '',
-    noteId: requiredString(body, 'noteId'),
-    meetingAt: meetingAt && !Number.isNaN(meetingAt.getTime()) ? meetingAt.toISOString() : null,
-    userTimeZone,
-    fileId: typeof body.fileId === 'string' && body.fileId.trim() ? body.fileId.trim() : null,
-    instructions: typeof body.instructions === 'string' ? body.instructions : '',
-    speakerContext: typeof body.speakerContext === 'string' ? body.speakerContext : '',
-    attachments: parseSummaryAttachments(body.attachments),
-    language: body.language === 'ko' ? 'ko' : 'en',
-  };
-}
-
 function inferMeetingStartAt(recordingEndedAt: string | null, durationSeconds: number | null): string | null {
   if (!recordingEndedAt) return null;
   const end = new Date(recordingEndedAt);
@@ -399,47 +272,6 @@ function getOppositeTranscriptLanguage(language: 'en' | 'ko' | null): 'en' | 'ko
   if (language === 'en') return 'ko';
   if (language === 'ko') return 'en';
   return null;
-}
-
-interface SummarizeAudioInput {
-  downloadUrl: string;
-  fileName: string;
-  instructions: string;
-  promptId: string;
-  summaryRulesOverride?: string;
-  userId: string;
-  userName: string;
-  noteId: string;
-  meetingAt: string | null;
-  userTimeZone: string | null;
-  fileId: string | null;
-  speakerContext: string;
-  attachments: SummaryAttachmentInput[];
-  language: 'en' | 'ko';
-}
-
-interface SummarizeAudioResult {
-  transcript: TranscriptSegment[];
-  summary: string;
-  summaryTranslations?: Record<'en' | 'ko', string>;
-  transcriptionLanguage?: 'en' | 'ko' | null;
-  transcriptionTranslations?: Partial<Record<'en' | 'ko', string>>;
-  diarizationTranslations?: Partial<Record<'en' | 'ko', TranscriptSegment[]>>;
-  title: string;
-  tags: string[];
-  audioDurationSeconds: number | null;
-  meetingStartAt: string | null;
-}
-
-interface WorkflowJobRow {
-  id: string;
-  user_id: string;
-  note_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  stage: string | null;
-  progress: number | null;
-  result: unknown;
-  error: string | null;
 }
 
 async function createAudioSignedUrl(storagePath: string): Promise<string> {
@@ -981,115 +813,6 @@ async function translateTranscriptSegments(input: {
     latencyMs: result.latencyMs,
   });
   return parsed.segments;
-}
-
-// While a job is running, bump its updated_at on this cadence so the boot-time
-// orphan sweep (failOrphanedJobs) can distinguish a live job on another
-// instance from one stranded by a crashed/redeployed process.
-const JOB_HEARTBEAT_INTERVAL_MS = 60_000;
-
-// A queued/processing job whose updated_at is older than this is considered
-// orphaned. Must exceed the heartbeat interval by a safe margin so a genuinely
-// live job (heartbeating every minute) is never swept.
-const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
-
-// How often to re-scan for orphans. A boot-only scan would miss a job orphaned
-// moments before boot (not yet past the staleness threshold), stranding it
-// forever; a periodic scan cleans it once it crosses the threshold.
-const ORPHANED_JOB_SWEEP_INTERVAL_MS = 2 * 60_000;
-
-async function updateWorkflowJob(jobId: string | null, patch: {
-  status?: WorkflowJobRow['status'];
-  stage?: string;
-  progress?: number;
-  result?: unknown;
-  error?: string | null;
-}, options?: { retries?: number }): Promise<boolean> {
-  if (!jobId) return false;
-  const retries = Math.max(0, options?.retries ?? 0);
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const { error } = await supabase.from('workflow_job').update({
-      ...patch,
-      updated_at: new Date().toISOString(),
-    }).eq('id', jobId);
-    if (!error) return true;
-    if (attempt < retries) {
-      await delay(Math.min(1000 * 2 ** attempt, 8000));
-      continue;
-    }
-    console.warn(`Could not update workflow job ${jobId}: ${error.message}`);
-  }
-  return false;
-}
-
-// FIX 2: transcribe -> summarize checkpoint. AssemblyAI transcription is the
-// slowest and most expensive step, and until the final note insert its output
-// lived only in a local variable. A summary failure or a process restart between
-// transcription and insert therefore discarded the already-paid transcript and
-// forced a full re-transcription on the next retry. The checkpoint persists the
-// diarized segments keyed by noteId AFTER transcription succeeds and BEFORE the
-// Gemini summary call, so a retry carrying the same noteId reuses them instead
-// of paying AssemblyAI again. Keyed by noteId (not jobId) so it survives across
-// job retries -- the mobile client reuses noteId when it retries. This is a
-// durable checkpoint on the existing job model, not a redesign of it.
-interface TranscriptCheckpoint {
-  segments: TranscriptSegment[];
-  audioDurationSeconds: number | null;
-  detectedLanguage: 'en' | 'ko' | null;
-}
-
-async function loadTranscriptCheckpoint(noteId: string, userId: string): Promise<TranscriptCheckpoint | null> {
-  const { data, error } = await supabase
-    .from('workflow_transcript_checkpoint')
-    .select('segments, audio_duration_seconds, detected_language')
-    .eq('note_id', noteId)
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (error) {
-    // Fail-soft: a missing table (migration not applied) or any read error must
-    // not break the pipeline. Fall back to a fresh transcription.
-    console.warn(`Could not load transcript checkpoint for note ${noteId}: ${error.message}`);
-    return null;
-  }
-  if (!data) return null;
-  const row = data as { segments: unknown; audio_duration_seconds: unknown; detected_language: unknown };
-  if (!Array.isArray(row.segments) || row.segments.length === 0) return null;
-  const detected = row.detected_language;
-  return {
-    segments: row.segments as TranscriptSegment[],
-    audioDurationSeconds: typeof row.audio_duration_seconds === 'number' ? row.audio_duration_seconds : null,
-    detectedLanguage: detected === 'en' || detected === 'ko' ? detected : null,
-  };
-}
-
-async function saveTranscriptCheckpoint(input: { noteId: string; userId: string } & TranscriptCheckpoint): Promise<void> {
-  const { error } = await supabase
-    .from('workflow_transcript_checkpoint')
-    .upsert({
-      note_id: input.noteId,
-      user_id: input.userId,
-      segments: input.segments,
-      audio_duration_seconds: input.audioDurationSeconds,
-      detected_language: input.detectedLanguage,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'note_id' });
-  if (error) {
-    // Best-effort: a checkpoint write failure must not fail an otherwise-healthy
-    // transcription. Worst case we re-transcribe on a retry (the pre-fix behavior).
-    console.warn(`Could not persist transcript checkpoint for note ${input.noteId}: ${error.message}`);
-  }
-}
-
-async function deleteTranscriptCheckpoint(noteId: string): Promise<void> {
-  const { error } = await supabase
-    .from('workflow_transcript_checkpoint')
-    .delete()
-    .eq('note_id', noteId);
-  if (error) {
-    // Best-effort cleanup; a leftover checkpoint is harmless (it is only read on a
-    // retry for the same noteId, which the persisted note already short-circuits).
-    console.warn(`Could not delete transcript checkpoint for note ${noteId}: ${error.message}`);
-  }
 }
 
 async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | null = null): Promise<SummarizeAudioResult> {
