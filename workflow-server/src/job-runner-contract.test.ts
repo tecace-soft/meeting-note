@@ -83,6 +83,9 @@ async function fixture(t: test.TestContext, override: Override = () => undefined
   // Restore the override before the fixture so fetch unwinds to the native function.
   t.after(async () => { intercept.mock.restore(); await f.close(); });
   f.state.existingJob = false;
+  // These contracts pin the pre-S10 runner, which is still what runs before the S10
+  // migration is applied (the claim RPC is missing). S10 runs: job-resume-contract.test.ts.
+  f.state.s10Schema = false;
   return f;
 }
 const isTable = (url: URL, table: string) => url.hostname === 'supabase.invalid' && url.pathname === `/rest/v1/${table}`;
@@ -682,12 +685,20 @@ test('startup sweeps once on listen, every two minutes after, and stops the sche
   });
   const interval = t.mock.method(globalThis, 'setInterval');
   const clear = t.mock.method(globalThis, 'clearInterval');
+  // Importing index.js (top of this file) scheduled nothing: no sweep has run and no sweep
+  // timer exists until startServer. test-isolation.test.ts spies before the import itself.
+  for (let i = 0; i < 5; i++) await turn();
+  assert.equal(scans.length, 0, 'no sweep before startServer');
+  assert.equal(interval.mock.callCount(), 0, 'no timer before startServer');
   const stop = startServer({ port: 0, host: '127.0.0.1', dispatcher: getGlobalDispatcher() });
   let stopped = false;
   t.after(async () => { if (!stopped) await stop(); });
   await once(server, 'listening');
   await until(() => scans.length === 1, 'the boot sweep');
-  assert.ok(scans[0]!.searchParams.get('updated_at')?.startsWith('lt.'), 'the boot sweep is the stale-job scan');
+  // S10 (DEC-0022): the boot sweep scans for expired leases and stale lease-less rows.
+  const scan = scans[0]!.searchParams;
+  assert.equal(scan.get('status'), 'in.(queued,processing)', 'the boot sweep scans only active jobs');
+  assert.match(scan.get('or') ?? '', /^\(lease_expires_at\.lt\."[^"]+",and\(lease_expires_at\.is\.null,updated_at\.lt\."[^"]+"\)\)$/, 'the boot sweep is the expired-lease or stale-heartbeat scan');
   const sweeps = interval.mock.calls.filter((c) => c.arguments[1] === 2 * 60_000);
   assert.equal(sweeps.length, 1, 'one periodic sweep schedule');
   (sweeps[0]!.arguments[0] as () => void)();

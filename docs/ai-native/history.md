@@ -38,6 +38,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
 - ci: bound hung backend tests with a job timeout and a per-test timeout
 - test(workflow-server): bound the timer-driven runner and sweep retry contracts
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(product-docs): freeze org gate, token cache and route contracts
 - refactor(ops): give incidents a single module without route dependencies
 - test(ops): freeze incident dedupe, caps and failure handling
-- refactor(issues): extract handlers and assign shared parser and link ownership
 
 ### Recent merges
 

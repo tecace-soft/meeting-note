@@ -8,9 +8,10 @@ import { callGeminiWithFallback, delay } from '../ai/geminiFallback.js';
 import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
 import { parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from '../parsers.js';
 import { buildTranscriptTranslationPrompt } from '../prompts.js';
-import { recordAssemblyUsage, recordGeminiUsage } from './usage.js';
-import { NoSpeechDetectedError, noSpeechMessage } from './errors.js';
-import { loadTranscriptCheckpoint, saveTranscriptCheckpoint } from '../jobs/store.js';
+import { recordAssemblyResubmission, recordAssemblyUsage, recordGeminiUsage } from './usage.js';
+import { AudioUnavailableError, NoSpeechDetectedError, noSpeechMessage } from './errors.js';
+import { loadTranscriptCheckpoint, saveTranscriptCheckpoint, updateWorkflowJob } from '../jobs/store.js';
+import { jobLeases, JobLeaseLostError, type JobExecution } from '../jobs/lease.js';
 
 export interface CustomSpellingRule {
   from: string[];
@@ -109,8 +110,18 @@ export interface AssemblyTranscriptResult {
   detectedLanguage: 'en' | 'ko' | null;
 }
 
+// AssemblyAI answered the submit request with an error status, so it did not accept the
+// job and nothing was charged. Other submit failures (network, unreadable body) leave
+// the outcome unknown. Same message as before; only the class tells them apart.
+export class AssemblySubmitRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AssemblySubmitRejectedError';
+  }
+}
+
 // Submits one AssemblyAI transcript job and returns the provider id exactly as received.
-// S10 seam: the id becomes known here, so it can be persisted (fenced) before the first poll.
+// S10: transcribeForJob persists the id (fenced) before the first poll.
 async function submitAssemblyTranscript(input: { downloadUrl: string; settings: TranscriptionSettings }): Promise<string> {
   const submitBody: Record<string, unknown> = {
     audio_url: input.downloadUrl,
@@ -142,7 +153,7 @@ async function submitAssemblyTranscript(input: { downloadUrl: string; settings: 
   });
   const createRaw = await createResponse.text();
   if (!createResponse.ok) {
-    throw new Error(`AssemblyAI transcript submit failed (${createResponse.status}): ${createRaw.slice(0, 800)}`);
+    throw new AssemblySubmitRejectedError(`AssemblyAI transcript submit failed (${createResponse.status}): ${createRaw.slice(0, 800)}`);
   }
   const created = JSON.parse(createRaw) as { id?: unknown };
   if (typeof created.id !== 'string' || !created.id.trim()) {
@@ -152,9 +163,9 @@ async function submitAssemblyTranscript(input: { downloadUrl: string; settings: 
 }
 
 // Polls an existing transcript id until it completes, fails or `startedAt` (performance.now()
-// before submit) is 30 minutes old. Returns the completed transcript record.
-// S10 seam: a restarted job can call this with a persisted id instead of resubmitting.
-async function pollAssemblyTranscript(transcriptId: string, startedAt: number): Promise<Record<string, unknown>> {
+// before submit, or before the resumed poll) is 30 minutes old. Returns the completed
+// transcript record. `assertOwned` (S10) throws once the job's lease is known to be lost.
+async function pollAssemblyTranscript(transcriptId: string, startedAt: number, assertOwned: () => void = () => undefined): Promise<Record<string, unknown>> {
   let transcript: Record<string, unknown> | null = null;
   const timeoutMs = 30 * 60 * 1000;
   // A single failed poll (network blip, 5xx, rate limit, truncated body) must
@@ -170,6 +181,7 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number): 
   let pollIntervalMs = 1000;
   while (performance.now() - startedAt < timeoutMs) {
     await delay(pollIntervalMs);
+    assertOwned();
     pollIntervalMs = 3000;
     let pollResponse: Response;
     let pollRaw: string;
@@ -292,29 +304,176 @@ export async function transcribeWithAssembly(input: {
   const startedAt = performance.now();
   const transcriptId = await submitAssemblyTranscript({ downloadUrl: input.downloadUrl, settings: input.settings });
   const transcript = await pollAssemblyTranscript(transcriptId, startedAt);
+  return finishAssemblyTranscript(transcript, { noteId: input.noteId, userId: input.userId, transcriptId, startedAt });
+}
+
+// Parses a completed transcript and records its usage row (latency from `startedAt`).
+async function finishAssemblyTranscript(transcript: Record<string, unknown>, input: {
+  noteId: string;
+  userId: string;
+  transcriptId: string;
+  startedAt: number;
+  usageMetadata?: Record<string, unknown>;
+}): Promise<AssemblyTranscriptResult & { latencyMs: number }> {
   const { segments, audioDurationSeconds, detectedLanguage } = parseAssemblyTranscript(transcript);
-  const latencyMs = Math.round(performance.now() - startedAt);
+  const latencyMs = Math.round(performance.now() - input.startedAt);
   await recordAssemblyUsage({
     noteId: input.noteId,
     userId: input.userId,
     model: ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL,
     latencyMs,
-    transcriptId: transcriptId.trim(),
+    transcriptId: input.transcriptId.trim(),
     audioDurationSeconds: audioDurationSeconds ?? 0,
+    ...(input.usageMetadata ? { metadata: input.usageMetadata } : {}),
   });
   return { segments, latencyMs, audioDurationSeconds, detectedLanguage };
 }
 
+export const AUDIO_PROBE_TIMEOUT_MS = 15_000;
+const AUDIO_PROBE_TRIES = 2;
+
+// S10 resume guard: before paying for a fresh submission of a recovered job, check that
+// the saved audio link still answers, so an expired link fails with a clear message
+// instead of an opaque provider download error. Probes only links on this project's
+// Supabase host (signed storage URLs). The server never fetches other client-supplied
+// hosts, which would let a resume make a server-side request to an arbitrary URL.
+export async function assertAudioReachable(downloadUrl: string, language: 'en' | 'ko'): Promise<void> {
+  let target: URL;
+  let storageHost: string;
+  try {
+    target = new URL(downloadUrl);
+    storageHost = new URL(env.supabaseUrl).host;
+  } catch {
+    return;
+  }
+  if (target.protocol !== 'https:' || target.host !== storageHost) return;
+  let problem = 'not checked';
+  for (let attempt = 1; attempt <= AUDIO_PROBE_TRIES; attempt += 1) {
+    try {
+      const response = await fetch(target, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS) });
+      await response.body?.cancel().catch(() => undefined);
+      if (response.ok) return;
+      problem = `HTTP ${response.status}`;
+      // A 4xx (expired or invalid signature, deleted object) does not heal on retry.
+      if (response.status < 500 && response.status !== 429) break;
+    } catch (error) {
+      problem = error instanceof Error ? error.message : String(error);
+    }
+  }
+  throw new AudioUnavailableError(language, problem);
+}
+
+// Marks the submission in flight before calling AssemblyAI. Lost lease: stop. Any other
+// failure: submit anyway (never strand the recording) and say so in the log.
+async function beginTranscriptSubmission(job: JobExecution): Promise<number | null> {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const { outcome, count } = await jobLeases.beginTranscriptSubmission(job);
+    if (outcome === 'ok') {
+      job.submissionState = 'submitting';
+      return count;
+    }
+    if (outcome === 'lost') {
+      job.lost = true;
+      throw new JobLeaseLostError(job.jobId, job.generation, 'the AssemblyAI submission marker');
+    }
+    if (attempt < 2) await delay(1000);
+  }
+  console.warn(`Workflow job ${job.jobId} could not mark its AssemblyAI submission as in flight; submitting anyway.`);
+  return null;
+}
+
+// Saves the provider id before the first poll, so a restart polls it instead of paying again.
+async function persistTranscriptId(job: JobExecution, transcriptId: string): Promise<void> {
+  try {
+    const saved = await updateWorkflowJob(job, { assembly_transcript_id: transcriptId, transcript_submission_state: 'submitted' }, { retries: 2 });
+    if (saved) {
+      job.transcriptId = transcriptId;
+      job.submissionState = 'submitted';
+      return;
+    }
+    console.warn(`Workflow job ${job.jobId} could not save AssemblyAI transcript ${transcriptId}; polling it anyway. A restart before completion resubmits and records it.`);
+  } catch (error) {
+    if (error instanceof JobLeaseLostError) {
+      // The new owner cannot learn this id, so it submits again; keep the paid id traceable.
+      console.warn(`${error.message} AssemblyAI had already accepted transcript ${transcriptId}; this execution stops and the new owner resubmits.`);
+    }
+    throw error;
+  }
+}
+
+// S10 transcription for an owned job execution: poll a saved provider id without
+// resubmitting; otherwise mark the submission in flight, record a resubmission when an
+// earlier one may have been charged (DEC-0022), submit, save the id, then poll.
+async function transcribeForJob(input: {
+  downloadUrl: string;
+  noteId: string;
+  userId: string;
+  language: 'en' | 'ko';
+  settings: TranscriptionSettings;
+  job: JobExecution;
+}): Promise<AssemblyTranscriptResult & { latencyMs: number }> {
+  if (!env.assemblyAiApiKey) throw new Error('ASSEMBLYAI_API_KEY is missing.');
+  const { job } = input;
+  const assertOwned = () => {
+    if (job.lost) throw new JobLeaseLostError(job.jobId, job.generation, 'the AssemblyAI poll');
+  };
+  const ids = { noteId: input.noteId, userId: input.userId };
+  if (job.transcriptId) {
+    const transcriptId = job.transcriptId;
+    console.log(`Workflow job ${job.jobId} resumes AssemblyAI transcript ${transcriptId} without resubmitting.`);
+    const startedAt = performance.now();
+    const transcript = await pollAssemblyTranscript(transcriptId, startedAt, assertOwned);
+    return finishAssemblyTranscript(transcript, { ...ids, transcriptId, startedAt, usageMetadata: { resumedPoll: true, jobId: job.jobId } });
+  }
+  if (job.resumed) await assertAudioReachable(input.downloadUrl, input.language);
+  const reason = job.submissionState === 'submitting'
+    ? 'submit-outcome-unknown' as const
+    : job.legacyUnknownSubmission ? 'pre-s10-run-outcome-unknown' as const : null;
+  const submissionCount = await beginTranscriptSubmission(job);
+  if (reason) {
+    await recordAssemblyResubmission({
+      ...ids,
+      model: ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL,
+      jobId: job.jobId,
+      executionGeneration: job.generation,
+      attempt: job.attempt,
+      submissionCount,
+      reason,
+    });
+  }
+  const startedAt = performance.now();
+  let transcriptId: string;
+  try {
+    transcriptId = await submitAssemblyTranscript({ downloadUrl: input.downloadUrl, settings: input.settings });
+  } catch (error) {
+    // A rejected submit was not accepted, so a later retry is not a resubmission.
+    if (error instanceof AssemblySubmitRejectedError) {
+      await updateWorkflowJob(job, { transcript_submission_state: 'none' }).catch(() => undefined);
+      job.submissionState = 'none';
+    }
+    throw error;
+  }
+  await persistTranscriptId(job, transcriptId);
+  const transcript = await pollAssemblyTranscript(transcriptId, startedAt, assertOwned);
+  return finishAssemblyTranscript(transcript, {
+    ...ids,
+    transcriptId,
+    startedAt,
+    ...(reason ? { usageMetadata: { resubmission: true, resubmissionReason: reason, jobId: job.jobId } } : {}),
+  });
+}
+
 // Transcript stage of the summarize runner. The caller writes the 'transcribing audio'
 // job stage first; this owns every checkpoint read/write and provider call after it.
-// S10 seam: a persisted provider transcript id would be checked after the checkpoint miss
-// and polled instead of resubmitting.
+// With an owned S10 job execution a checkpoint miss goes through transcribeForJob (a saved
+// provider id is polled, submissions are tracked); without one, the pre-S10 path.
 export async function transcribeOrReuseCheckpoint(input: {
   noteId: string;
   userId: string;
   downloadUrl: string;
   language: 'en' | 'ko';
   settings: TranscriptionSettings;
+  job?: JobExecution;
 }): Promise<AssemblyTranscriptResult> {
   // FIX 2: reuse a persisted transcript if a prior attempt for this noteId already
   // paid AssemblyAI (summary failed, or the process restarted mid-job). Any miss
@@ -329,12 +488,14 @@ export async function transcribeOrReuseCheckpoint(input: {
       detectedLanguage: checkpoint.detectedLanguage,
     };
   }
-  const transcription = await transcribeWithAssembly({
-    downloadUrl: input.downloadUrl,
-    noteId: input.noteId,
-    userId: input.userId,
-    settings: input.settings,
-  });
+  const transcription = input.job
+    ? await transcribeForJob({ ...input, job: input.job })
+    : await transcribeWithAssembly({
+      downloadUrl: input.downloadUrl,
+      noteId: input.noteId,
+      userId: input.userId,
+      settings: input.settings,
+    });
   const { segments, audioDurationSeconds, detectedLanguage } = transcription;
   // A completed transcription with zero segments means the audio contained no
   // detectable speech, not that the pipeline broke. Surface it as a clear,

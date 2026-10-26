@@ -25,11 +25,19 @@ test('index import preserves dispatcher and creates no listeners, intervals or s
   const events = ['unhandledRejection', 'uncaughtException', 'SIGTERM'] as const;
   const before = events.map((event) => process.listenerCount(event));
   const interval = t.mock.method(globalThis, 'setInterval');
+  const timeout = t.mock.method(globalThis, 'setTimeout');
+  const fetchSpy = t.mock.method(globalThis, 'fetch');
   const { server } = await import('./index.js');
+  // The job modules (orphan sweep, runner, S10 lease store) must not sweep or schedule on import.
+  await import('./jobs/orphanSweep.js');
+  await import('./jobs/runner.js');
+  await import('./jobs/lease.js');
   assert.equal(server.listening, false);
   assert.equal(getGlobalDispatcher(), dispatcher);
   assert.deepEqual(events.map((event) => process.listenerCount(event)), before);
-  assert.equal(interval.mock.callCount(), 0);
+  assert.equal(interval.mock.callCount(), 0, 'no interval (heartbeat or sweep) at import');
+  assert.equal(timeout.mock.callCount(), 0, 'no timeout at import');
+  assert.equal(fetchSpy.mock.callCount(), 0, 'no database or provider call (no sweep) at import');
 });
 
 test('temporary sentinel .env is never read by index or MCP imports', async () => {
