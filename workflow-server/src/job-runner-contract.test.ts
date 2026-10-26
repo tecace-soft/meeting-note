@@ -44,6 +44,15 @@ async function until(condition: () => boolean, label: string, ms = 5_000): Promi
   while (!condition() && Date.now() < deadline) await sleep(5);
   assert.ok(condition(), `timed out waiting for ${label}`);
 }
+// Awaits a promise driven by mocked timers without trusting it to settle: a regression
+// that leaves it pending fails after a bounded number of real event-loop turns.
+async function settledWithin<T>(promise: Promise<T>, label: string, turns = 200): Promise<T> {
+  let settled = false;
+  const tracked = promise.finally(() => { settled = true; });
+  for (let i = 0; i < turns && !settled; i++) await turn();
+  assert.ok(settled, `${label} did not settle within ${turns} event-loop turns`);
+  return tracked;
+}
 function deferred() {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => { release = resolve; });
@@ -408,7 +417,7 @@ test('runner no-speech: failed with the localized guidance, no error log and no 
   assert.equal(incidentQueries(f).length, 0, 'no ops incident for a silent recording');
 });
 
-test('runner terminal writes retry four times; a lost completed write still caches and enriches', async (t) => {
+test('runner terminal writes retry four times; a lost completed write still caches and enriches', { timeout: 30_000 }, async (t) => {
   const warn = t.mock.method(console, 'warn', () => undefined);
   const log = t.mock.method(console, 'log', () => undefined);
   t.mock.method(console, 'error', () => undefined);
@@ -425,7 +434,11 @@ test('runner terminal writes retry four times; a lost completed write still cach
   });
   completedJobResults.delete('job-lost');
   const run = processSummarizeJob('job-lost', input());
-  await firstCompleted.promise;
+  // Bounded: a regression that never reaches the completed write fails instead of hanging.
+  await Promise.race([
+    firstCompleted.promise,
+    run.then(() => { throw new Error('runner ended before the completed write'); }),
+  ]);
   for (let i = 0; i < 400 && completedAttempts < 5; i++) { await turn(); t.mock.timers.tick(8_000); }
   for (let i = 0; i < 20; i++) await turn();
   t.mock.timers.reset();
@@ -622,7 +635,7 @@ test('sweep skips the note lookup without note ids and fails everything when the
   assert.ok(!log.mock.calls.some((c) => String(c.arguments[0]).startsWith('Recovered')));
 });
 
-test('sweep fails a job whose recovery write fails after two retries, and reports a failed fail-write', async (t) => {
+test('sweep fails a job whose recovery write fails after two retries, and reports a failed fail-write', { timeout: 30_000 }, async (t) => {
   const { log, warn } = quietSweep(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const attempts: string[] = [];
@@ -637,7 +650,7 @@ test('sweep fails a job whose recovery write fails after two retries, and report
   let calls = fakeDb(t, handler);
   let sweep = failOrphanedJobs();
   for (let i = 0; i < 20; i++) { await turn(); t.mock.timers.tick(2_000); }
-  await sweep;
+  await settledWithin(sweep, 'the first sweep');
   assert.equal(attempts.length, 3, 'one write plus two retries');
   assert.deepEqual(jobUpdates(calls).at(-1)!.filters, [['in', 'id', ['j2', 'j1']]], 'the unrecovered job joins the failed list last');
   const recoveredLog = log.mock.calls.map((c) => c.arguments[0]);
@@ -648,7 +661,7 @@ test('sweep fails a job whose recovery write fails after two retries, and report
   calls = fakeDb(t, handler);
   sweep = failOrphanedJobs();
   for (let i = 0; i < 20; i++) { await turn(); t.mock.timers.tick(2_000); }
-  await sweep;
+  await settledWithin(sweep, 'the second sweep');
   t.mock.timers.reset();
   assert.deepEqual(recoveredLog, [
     'Recovered 1 orphaned workflow job(s) to completed from an existing note.',

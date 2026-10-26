@@ -30,6 +30,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
 - docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
 - docs(decisions): point DEC-0001/0003 at the T1-9b job modules
 - docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(issues): extract handlers and assign shared parser and link ownership
 - test(issues): freeze route, parser and deep-link contracts
 - test(docs): reject duplicate product-doc dependency paths
-- test(config): make async entrypoint checks one-shot on Node 22
 
 ### Recent merges
 
