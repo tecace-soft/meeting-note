@@ -56,6 +56,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(web): mount SummaryHistory and pin list, filter, pagination, edit, delete and modal flows (T2-4)
 - refactor(web): SummaryHistory uses the note repository's ownership and sort types
 - refactor(web): word the owner id guard message for reads and writes
 - refactor(web): make every speaker repository method async so owner id failures always reject
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
 - refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
 - refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
-- refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
 
 ### Recent merges
 

@@ -39,6 +39,8 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
+import type { Note } from './summaryHistory/types';
+import { noteMatchesSearch, normalizeTagList } from './summaryHistory/noteSearch';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
@@ -72,33 +74,6 @@ import { meetingKnowledgeUiEnabled } from '../services/meetingKnowledge';
 import NoteImageAttachments from '../components/NoteImageAttachments';
 
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
-
-interface Note {
-  id: string;
-  name?: string | null;
-  user_id: string;
-  user_name: string;
-  chat_id?: string | null;
-  projects?: Array<string | number> | null;
-  summary?: string;
-  summary_edit?: string | null;
-  summary_translations?: Record<string, string> | null;
-  transcription?: string | null;
-  transcription_language?: string | null;
-  transcription_translations?: Record<string, string> | null;
-  diarization?: unknown;
-  diarization_translations?: Partial<Record<'en' | 'ko', TranscriptSegment[]>> | null;
-  audio_file?: string | null;
-  audio_file_id?: string | null;
-  shared_users?: unknown;
-  /** String array or json/jsonb; Supabase may return a JSON string. */
-  tag?: unknown;
-  tags?: unknown;
-  /** Legacy column name; still read so diarized UI works until fully migrated. */
-  created_at?: string;
-  meeting_at?: string | null;
-  duration_seconds?: number | null;
-}
 
 
 const getNoteSharedUserIds = (note: Note): string[] => {
@@ -271,39 +246,6 @@ interface PositionedHourlyCalendarItem {
 }
 
 /** When totalPages > 5, compress middle with ellipses; otherwise list every page. */
-function normalizeTagList(raw: unknown): string[] {
-  if (raw == null) return [];
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (!s) return [];
-    if (s.startsWith('[') || s.startsWith('{')) {
-      try {
-        return normalizeTagList(JSON.parse(s) as unknown);
-      } catch {
-        return s.split(',').map((t) => t.trim()).filter(Boolean);
-      }
-    }
-    return s.split(',').map((t) => t.trim()).filter(Boolean);
-  }
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const item of raw) {
-    if (item == null) continue;
-    if (typeof item === 'string') {
-      const t = item.trim();
-      if (t) out.push(t);
-    } else if (typeof item === 'object') {
-      const o = item as Record<string, unknown>;
-      const label = o.label ?? o.name ?? o.value;
-      if (typeof label === 'string' && label.trim()) out.push(label.trim());
-    } else {
-      const t = String(item).trim();
-      if (t) out.push(t);
-    }
-  }
-  return out;
-}
-
 function getPaginationItems(totalPages: number, currentPage: number): (number | 'ellipsis')[] {
   if (totalPages <= 0) return [];
   if (totalPages <= 5) {
@@ -436,45 +378,6 @@ function compareNotesForSort(a: Note, b: Note, sortKey: NoteSortKey): number {
 function toProjectIdValue(id: string): string | number {
   const asNumber = Number(id);
   return Number.isNaN(asNumber) ? id : asNumber;
-}
-
-function textMatchesNeedle(value: string, needle: string): boolean {
-  const text = value.trim().toLocaleLowerCase();
-  return Boolean(text) && (text.includes(needle) || needle.includes(text));
-}
-
-function noteMatchesSearch(note: Note, query: string, currentUserSearchValues: string[]): boolean {
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle) return true;
-  const queryLooksLikeCurrentUser = currentUserSearchValues.some((value) => textMatchesNeedle(value, needle));
-
-  const searchableText = [
-    note.name,
-    note.summary,
-    note.summary_edit,
-    ...Object.values(note.summary_translations ?? {}),
-    ...normalizeTagList(note.tag),
-    ...normalizeTagList(note.tags),
-  ]
-    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
-    .join(' ')
-    .toLocaleLowerCase();
-  if (searchableText.includes(needle)) return true;
-
-  if (!queryLooksLikeCurrentUser && note.user_name?.trim().toLocaleLowerCase().includes(needle)) return true;
-
-  const speakers = normalizeTranscript(getNoteDiarizationRaw(note))
-    .map((segment) => segment.speaker.trim().toLocaleLowerCase())
-    .filter(Boolean);
-  if (speakers.some((speaker) => speaker.includes(needle))) return true;
-
-  const transcription = note.transcription || '';
-  return transcription
-    .split(/\r?\n/)
-    .some((line) => {
-      const [speakerPrefix] = line.split(':', 1);
-      return speakerPrefix?.trim().toLocaleLowerCase().includes(needle);
-    });
 }
 
 const SummaryHistory: React.FC = () => {
