@@ -10,6 +10,7 @@
     "versions": "node scripts/versions.cjs",
     "docs:ai-native": "node scripts/ai-native-docs/generate.mjs",
     "decisions:check": "node scripts/decisions/check.mjs",
+    "docs:ai-native:test": "node --test scripts/ai-native-docs/generate.test.mjs",
     "decisions:test": "node --test scripts/decisions/check.test.mjs",
     "axkh:node": "node scripts/axkh-node/assemble.mjs",
     "axkh:node:check": "node scripts/axkh-node/assemble.mjs --check",

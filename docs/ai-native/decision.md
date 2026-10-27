@@ -7,6 +7,13 @@ Structured, machine-checkable decision records now live in `docs/decisions/` (on
 Record new decisions there.
 The entry below is preserved as prose and is also recorded as DEC-0007.
 
+## 2026-10-27: history region removed (supplements the entry below, see DEC-0023)
+
+- **The hook now refreshes only the structure region; recent history comes from git.**
+  The generated history region differed on every branch and conflicted on every PR, and the structure tree read untracked local folders from disk.
+  The tree is now built from tracked files, the history region is gone, and AX-KH node assembly reads `git log` directly.
+  Decided by Andrew on 2026-10-27.
+
 ## 2026-10-08: AI-native documentation automation
 
 - **Layout: `docs/ai-native/` with `intro.md` (entry), `history.md`, `decision.md`.**

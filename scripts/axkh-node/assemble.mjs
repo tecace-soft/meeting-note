@@ -32,6 +32,8 @@ const OUT_BODY = `${OUT_DIR}/meeting-note-node.md`
 const OUT_META = `${OUT_DIR}/meeting-note-node.json`
 const MAX_DOCS = 20
 const GIT_TIMEOUT_MS = 15_000
+const MAX_SCAN_COMMITS = 500
+const DEFAULT_SCAN_COMMITS = 40
 const SLUG_PATTERN = /^[a-z0-9-]+$/
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const MODES = ['intro', 'summary']
@@ -55,7 +57,9 @@ export function validateConfig(c) {
       if (!MODES.includes(d?.mode)) errors.push(`bad mode for ${d?.slug}: ${d?.mode}`)
     }
   }
-  if (!isRelativeInside(c.history?.file)) errors.push('history.file must be a repo-relative path')
+  if (c.history?.scanCommits !== undefined && (!Number.isInteger(c.history.scanCommits) || c.history.scanCommits < 1 || c.history.scanCommits > MAX_SCAN_COMMITS)) {
+    errors.push(`history.scanCommits must be 1-${MAX_SCAN_COMMITS}`)
+  }
   if (!Array.isArray(c.history?.excludeCommitPrefixes)) errors.push('history.excludeCommitPrefixes must be a list')
   if (!isRelativeInside(c.story?.file)) errors.push('story.file must be a repo-relative path')
   if (!Number.isInteger(c.history?.maxCommits) || c.history.maxCommits < 1 || c.history.maxCommits > 50) errors.push('history.maxCommits must be 1-50')
@@ -94,15 +98,31 @@ function collectDecisions(root, config) {
 }
 
 /**
- * Assembles the body. Reads ONLY the files named by `config` (plus the manifest);
- * `asOf` and `commit` are injected for determinism.
+ * Newest-first non-merge commit subjects from git (HEAD of `root`), at most `count`.
+ * Throws a clear error when git is unavailable or `root` is not a repository.
  */
-export function assemble(root, config, { asOf, commit }) {
+export function readGitSubjects(root, count) {
+  try {
+    const shallow = execFileSync('git', ['rev-parse', '--is-shallow-repository'], { cwd: root, encoding: 'utf8', timeout: GIT_TIMEOUT_MS }).trim()
+    if (shallow === 'true') throw new Error('this is a shallow clone, the AX-KH node needs full history: fetch-depth 0')
+    const out =execFileSync('git', ['log', '-n', String(count), '--no-merges', '--pretty=format:%s'], { cwd: root, encoding: 'utf8', timeout: GIT_TIMEOUT_MS })
+    return out.split('\n').map((s) => s.trim()).filter(Boolean)
+  } catch (err) {
+    throw new Error(`cannot read recent commits from git (the AX-KH node needs a git checkout): ${err.message}`)
+  }
+}
+
+/**
+ * Assembles the body. Reads ONLY the files named by `config` (plus the manifest and git log).
+ * `asOf`, `commit` and optionally `commitSubjects` are injected for determinism and tests;
+ * when `commitSubjects` is omitted the subjects are read from git.
+ */
+export function assemble(root, config, { asOf, commit, commitSubjects }) {
   const problems = validateConfig(config)
   if (problems.length > 0) throw new Error(`invalid ${SOURCES_PATH}: ${problems.join('; ')}`)
   if (!DATE_PATTERN.test(asOf)) throw new Error('asOf must be YYYY-MM-DD')
   const docs = collectProductDocs(root, config)
-  const history = readText(root, config.history.file)
+  const subjects = commitSubjects ?? readGitSubjects(root, config.history.scanCommits ?? DEFAULT_SCAN_COMMITS)
   const story = readText(root, config.story.file)
   const dec = collectDecisions(root, config)
   const currentWork = readText(root, config.currentWork.file)
@@ -111,7 +131,7 @@ export function assemble(root, config, { asOf, commit }) {
     overview: docs.overview,
     systemSummaries: docs.systemSummaries,
     narrative: story.trim(),
-    commits: extractRecentCommits(history, config.history.maxCommits, config.history.excludeCommitPrefixes),
+    commits: extractRecentCommits(subjects, config.history.maxCommits, config.history.excludeCommitPrefixes),
     decisions: dec.picked,
     currentWork,
     sourceRevisions: [...docs.revisions, { name: '결정 기록', revision: dec.revision }, { name: '변천 파일', revision: config.story.file }, { name: '현재 진행 중 파일', revision: config.currentWork.file }],

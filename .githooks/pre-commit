@@ -1,6 +1,6 @@
 #!/bin/sh
-# AI-native docs: regenerate the structural regions and stage them so they
-# ride along with this commit. POSIX sh so it works under Git for Windows too.
+# AI-native docs: regenerate the structure region of intro.md and stage only that file so it
+# rides along with this commit. POSIX sh so it works under Git for Windows too.
 #
 # This must never block a commit: if node is missing or generation fails, we
 # warn and let the commit proceed. It runs no LLM and needs no API key.
@@ -18,5 +18,5 @@ node "$ROOT/scripts/ai-native-docs/generate.mjs" || {
   exit 0
 }
 
-git add "$ROOT/docs/ai-native" >/dev/null 2>&1 || true
+git add "$ROOT/docs/ai-native/intro.md" >/dev/null 2>&1 || true
 exit 0
