@@ -54,10 +54,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs: point the deploy-restart guidance and DEC-0003 at the S10 lease model
 - docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
 - docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
-- docs(decisions): point DEC-0001/0003 at the T1-9b job modules
 
 **Other**
 
+- test(workflow-server): pin router dispatch and startup side effects before T1-11
 - test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
 - test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
 - refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
