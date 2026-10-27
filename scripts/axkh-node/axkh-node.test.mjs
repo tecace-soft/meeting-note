@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { assemble, parseArgs, validateConfig, verifyPreviewHash } from './assemble.mjs'
+import { pathToFileURL } from 'node:url'
+import { assemble, parseArgs, readGitSubjects, validateConfig, verifyPreviewHash } from './assemble.mjs'
 import {
   buildBody,
   checkStale,
@@ -24,38 +26,23 @@ const CONFIG = {
     { slug: 'product-overview', mode: 'intro' },
     { slug: 'architecture', mode: 'summary' },
   ],
-  history: { file: 'docs/ai-native/history.md', maxCommits: 2, excludeCommitPrefixes: ['fix(security)', 'fix(auth)'] },
+  history: { maxCommits: 2, scanCommits: 40, excludeCommitPrefixes: ['fix(security)', 'fix(auth)'] },
   story: { file: 'docs/axkh-node/story.md' },
   decisions: { dir: 'docs/decisions', statuses: ['active'] },
   currentWork: { file: 'docs/axkh-node/current-work.md' },
   allowedUrlPrefixes: [],
 }
 
-const HISTORY = `# H
-
-## The story so far
-
-Narrative line.
-
-<!-- ai-native:auto:START section=history -->
-
-### Recent changes
-
-**Features**
-
-- feat: one
-- Merge pull request #1
-- feat: one
-- fix(security): hidden one
-- fix: two
-- fix(auth): hidden two
-- fix: three
-
-### Recent merges
-
-- feat: merged-only
-<!-- ai-native:auto:END -->
-`
+// Newest-first subjects as `git log --no-merges` would return them (merges and dupes included to exercise the filter).
+const SUBJECTS = [
+  'feat: one',
+  'Merge pull request #1',
+  'feat: one',
+  'fix(security): hidden one',
+  'fix: two',
+  'fix(auth): hidden two',
+  'fix: three',
+]
 
 function decision(n, status) {
   return `---
@@ -90,7 +77,6 @@ function makeRepo() {
   ] }))
   put(`${pd}/product-overview.md`, '---\ntitle: x\n---\n\n# T\n\nIntro text.\n\n## Secret section\n\nuser@example.com\n')
   put(`${pd}/architecture.md`, '# A\n\nSECRET_BODY_SHOULD_NOT_APPEAR\n')
-  put('docs/ai-native/history.md', HISTORY)
   put('docs/decisions/0001-a.md', decision(1, 'active'))
   put('docs/decisions/0002-b.md', decision(2, 'superseded'))
   put('docs/axkh-node/story.md', '한국어 서사.\n')
@@ -99,7 +85,7 @@ function makeRepo() {
   return root
 }
 
-const RUN = { asOf: '2026-10-19', commit: 'abc1234' }
+const RUN = { asOf: '2026-10-19', commit: 'abc1234', commitSubjects: SUBJECTS }
 
 test('assemble uses only allowlisted sources', () => {
   const { body, sources } = assemble(makeRepo(), CONFIG, RUN)
@@ -110,7 +96,8 @@ test('assemble uses only allowlisted sources', () => {
   assert.doesNotMatch(body, /Secret section|user@example\.com|SECRET_BODY_SHOULD_NOT_APPEAR|sk-abc/)
   assert.match(body, /- item one/)
   assert.match(body, /한국어 서사/)
-  assert.doesNotMatch(body, /hidden|Narrative line/)
+  assert.doesNotMatch(body, /hidden|Merge pull request/)
+  assert.match(body, /feat: one/)
   assert.match(body, /기준일\(asOf\): 2026-10-19/)
   assert.match(body, /저장소 커밋: abc1234/)
   assert.ok(sources.some((s) => s.name.includes('architecture') && s.revision === 'r2'))
@@ -123,11 +110,28 @@ test('assemble rejects invalid config and bad asOf', () => {
   assert.ok(validateConfig({ ...CONFIG, currentWork: { file: '../../etc/passwd' } }).length > 0)
 })
 
-test('history extraction: narrative, commits skip merges/dupes and honor max', () => {
-  assert.deepEqual(extractRecentCommits(HISTORY, 10), ['feat: one', 'fix(security): hidden one', 'fix: two', 'fix(auth): hidden two', 'fix: three'])
-  assert.deepEqual(extractRecentCommits(HISTORY, 2), ['feat: one', 'fix(security): hidden one'])
-  assert.deepEqual(extractRecentCommits(HISTORY, 10, ['fix(security)', 'fix(auth)']), ['feat: one', 'fix: two', 'fix: three'])
-  assert.deepEqual(extractRecentCommits(HISTORY, 10, ['fix:']), ['feat: one', 'fix(security): hidden one', 'fix(auth): hidden two'])
+test('commit extraction: skips merges/dupes, honors max and excluded prefixes', () => {
+  assert.deepEqual(extractRecentCommits(SUBJECTS, 10), ['feat: one', 'fix(security): hidden one', 'fix: two', 'fix(auth): hidden two', 'fix: three'])
+  assert.deepEqual(extractRecentCommits(SUBJECTS, 2), ['feat: one', 'fix(security): hidden one'])
+  assert.deepEqual(extractRecentCommits(SUBJECTS, 10, ['fix(security)', 'fix(auth)']), ['feat: one', 'fix: two', 'fix: three'])
+  assert.deepEqual(extractRecentCommits(SUBJECTS, 10, ['fix:']), ['feat: one', 'fix(security): hidden one', 'fix(auth): hidden two'])
+})
+
+test('same subjects give the same body hash; different subjects change it', () => {
+  const root = makeRepo()
+  assert.equal(assemble(root, CONFIG, RUN).bodyHash, assemble(root, CONFIG, RUN).bodyHash)
+  assert.notEqual(assemble(root, CONFIG, RUN).bodyHash, assemble(root, CONFIG, { ...RUN, commitSubjects: ['feat: other'] }).bodyHash)
+})
+
+test('without injected subjects, a non-git root fails with a clear error', () => {
+  const root = makeRepo()
+  assert.throws(() => assemble(root, CONFIG, { asOf: RUN.asOf, commit: RUN.commit }), /cannot read recent commits from git/)
+})
+
+test('config validation bounds scanCommits', () => {
+  assert.ok(validateConfig({ ...CONFIG, history: { ...CONFIG.history, scanCommits: 0 } }).length > 0)
+  assert.ok(validateConfig({ ...CONFIG, history: { ...CONFIG.history, scanCommits: 501 } }).length > 0)
+  assert.deepEqual(validateConfig({ ...CONFIG, history: { maxCommits: 2, excludeCommitPrefixes: [] } }), [])
 })
 
 test('extractIntro returns text between H1 and first H2', () => {
@@ -140,7 +144,7 @@ test('hash is stable for same inputs and ignores the metadata section', () => {
   const b = assemble(root, CONFIG, RUN)
   assert.equal(a.body, b.body)
   assert.equal(a.bodyHash, b.bodyHash)
-  const later = assemble(root, CONFIG, { asOf: '2026-11-01', commit: 'fff0000' })
+  const later = assemble(root, CONFIG, { ...RUN, asOf: '2026-11-01', commit: 'fff0000' })
   assert.equal(later.bodyHash, a.bodyHash)
   assert.notEqual(later.body, a.body)
   assert.ok(!hashedPart(a.body).includes('기준일'))
@@ -229,4 +233,65 @@ test('record hash check detects an edit made after the preview was built', () =>
   writeFileSync(join(root, 'docs/axkh-node/current-work.md'), '- item changed\n')
   const current = assemble(root, CONFIG, RUN)
   assert.match(verifyPreviewHash(preview.bodyHash, current.bodyHash), /mismatch/)
+})
+
+test('selection pins the retired generator order: window grouped by type, then excludes, then max', () => {
+  const window = [
+    'docs: d1',
+    'fix(auth): hidden',
+    'feat(x): f1',
+    'chore: c1',
+    'fix: x1',
+    'perf: p1',
+    'eval: e1',
+    'feat!: f2',
+    'wip no type',
+    'fix(core): x2',
+  ]
+  assert.deepEqual(extractRecentCommits(window, 50, ['fix(auth)']), [
+    'feat(x): f1', 'feat!: f2', 'fix: x1', 'fix(core): x2', 'perf: p1', 'eval: e1', 'docs: d1', 'chore: c1', 'wip no type',
+  ])
+  assert.deepEqual(extractRecentCommits(window, 3, ['fix(auth)']), ['feat(x): f1', 'feat!: f2', 'fix: x1'])
+})
+
+test('em and en dashes in subjects are normalized to commas', () => {
+  const dash = String.fromCharCode(0x2014)
+  const en = String.fromCharCode(0x2013)
+  assert.deepEqual(extractRecentCommits([`feat: a ${dash} b`, `fix: c${en}d`], 10), ['feat: a, b', 'fix: c, d'])
+})
+
+function git(cwd, ...args) {
+  return execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' })
+}
+
+test('readGitSubjects: real repo skips merges, and a shallow clone fails loudly', () => {
+  const base = mkdtempSync(join(tmpdir(), 'axkh-git-'))
+  try {
+    const src = join(base, 'src')
+    mkdirSync(src)
+    git(src, 'init', '-q', '-b', 'main')
+    const dash = String.fromCharCode(0x2014)
+    writeFileSync(join(src, 'a.txt'), '1')
+    git(src, 'add', 'a.txt')
+    git(src, 'commit', '-q', '-m', 'feat: first')
+    git(src, 'checkout', '-q', '-b', 'side')
+    writeFileSync(join(src, 'b.txt'), '2')
+    git(src, 'add', 'b.txt')
+    git(src, 'commit', '-q', '-m', `fix: side ${dash} dash`)
+    git(src, 'checkout', '-q', 'main')
+    writeFileSync(join(src, 'c.txt'), '3')
+    git(src, 'add', 'c.txt')
+    git(src, 'commit', '-q', '-m', 'docs: main work')
+    git(src, 'merge', '--no-ff', '-q', '-m', 'Merge branch side', 'side')
+
+    assert.deepEqual(readGitSubjects(src, 40), ['docs: main work', `fix: side ${dash} dash`, 'feat: first'])
+    assert.deepEqual(extractRecentCommits(readGitSubjects(src, 40), 10), ['feat: first', 'fix: side, dash', 'docs: main work'])
+    assert.deepEqual(readGitSubjects(src, 1), ['docs: main work'])
+
+    const shallow = join(base, 'shallow')
+    git(base, 'clone', '-q', '--depth', '1', pathToFileURL(src).href, shallow)
+    assert.throws(() => readGitSubjects(shallow, 40), /full history: fetch-depth 0/)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
 })

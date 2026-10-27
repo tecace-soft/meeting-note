@@ -27,7 +27,7 @@ Audio transcription + summarization app (record/upload → transcribe → summar
 - When a plan has open questions for an external stakeholder that do not block our side, build with the recommended defaults first and adjust later, instead of waiting for their answer.
 
 ## Docs
-- `docs/ai-native/`: AI-native entry doc (start at `intro.md`). Structure auto-syncs via a pre-commit hook; after a meaningful change run `/update-docs`. One-time per clone: `git config core.hooksPath .githooks`.
+- `docs/ai-native/`: AI-native entry doc (start at `intro.md`). The structure region auto-syncs via a pre-commit hook (recent history comes from git, not these docs); after a meaningful change run `/update-docs`. One-time per clone: `git config core.hooksPath .githooks`.
 - `docs/refactor/REFACTOR_PLAN.md`: canonical #14 refactor plan and status (supersedes the 2026-10-09 reviews and the 2026-10-20 handoff).
 - `DEV_NOTES.md` — feature history and schema.
 - `RELIABILITY_AUDIT_KO.md` / `_EN.md` — known reliability/error-handling issues and roadmap.

@@ -6,7 +6,7 @@ Refresh `docs/ai-native/` so it stays an accurate, current entry point for codin
 
 Do the following:
 
-1. Run the deterministic generator to sync the structural regions:
+1. Run the deterministic generator to sync the structural region (only the structure region is generated; recent history comes from git):
    `node scripts/ai-native-docs/generate.mjs` (or `npm run docs:ai-native`).
    This rewrites only the text between the `<!-- ai-native:auto:START ... -->` / `<!-- ai-native:auto:END -->` markers.
    Never hand-edit inside those regions.
@@ -18,6 +18,6 @@ Do the following:
    Keep it concise and accurate; do not invent structure, derive it from the repo.
 
 4. If this change involved a notable decision (a fork in approach, a trade-off, a scope call), prepend a dated entry to `docs/ai-native/decision.md` with a one-line reason each.
-   Add a condensed line to the prose section of `docs/ai-native/history.md` only for a genuinely high-level shift; routine commits are already captured in its auto-region.
+   Add a condensed line to the prose section of `docs/ai-native/history.md` only for a genuinely high-level shift; routine commits are not listed there, use `git log` for them.
 
 Rules: each sentence on its own line in these Markdown files; never use em-dashes; do not commit or push unless the user asks.
