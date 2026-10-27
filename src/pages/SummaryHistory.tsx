@@ -11,6 +11,8 @@ import {
   patchOwnedNoteReturningId,
   queryHistoryNotes,
   saveNoteTranslations,
+  type NoteOwnershipFilter,
+  type NoteSortKey,
 } from '../lib/notes/repository';
 import {
   ArrowsReload01,
@@ -210,8 +212,6 @@ const CALENDAR_EVENT_BOTTOM_INSET_PX = 6;
 const SHOW_OUTLOOK_CALENDAR_EVENTS = false;
 type HistoryViewMode = 'list' | 'calendar';
 type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
-type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
-type NoteSortKey = 'meeting_desc' | 'meeting_asc' | 'created_desc' | 'created_asc' | 'title_asc' | 'title_desc';
 type NoteDetailTab = 'summary' | 'transcription' | 'images';
 
 const NOTE_ACTION_MENU_WIDTH_PX = 190;

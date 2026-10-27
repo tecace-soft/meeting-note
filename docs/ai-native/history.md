@@ -56,6 +56,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): word the owner id guard message for reads and writes
 - refactor(web): make every speaker repository method async so owner id failures always reject
 - test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
 - test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
 - refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
 - refactor(web): persistNoteDiarization writes through the note repository (T2-2)
-- refactor(web): audio reference check pages notes through the note repository (T2-2)
 
 ### Recent merges
 
