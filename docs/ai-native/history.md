@@ -49,6 +49,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(ai-native): regenerate history after merging main
 - docs(refactor): add overload, begin/renew post-check and N1/usage-dedupe monitoring queries for S10
 - docs(refactor): add the reviewer's SQL Editor pre/post checks and post-deploy monitoring for S10
 - docs(ai-native): regenerate history after merging main
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
 - refactor(web): persistNoteDiarization writes through the note repository (T2-2)
 - refactor(web): audio reference check pages notes through the note repository (T2-2)
-- refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
 
 ### Recent merges
 

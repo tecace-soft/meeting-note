@@ -22,7 +22,7 @@ export async function listSpeakers<T>(userId: string): Promise<T[]> {
 }
 
 /** Saved speakers whose name is in the list. Returns the raw result because callers differ on error handling. */
-export function selectSpeakersByNames(userId: string, names: string[], columns: 'name, profile' | 'id, name, profile') {
+export async function selectSpeakersByNames(userId: string, names: string[], columns: 'name, profile' | 'id, name, profile') {
   requireOwnerId(userId);
   const result: PromiseLike<{ data: unknown[] | null; error: { message: string } | null }> = supabase
     .from('speaker')
@@ -168,7 +168,7 @@ export async function findSpeakersByEmail<T>(userId: string, email: string): Pro
 }
 
 /** Identity columns of all the user's speakers (self-row sync). Returns the raw result so the caller can log. */
-export function selectSpeakerIdentityRows(userId: string) {
+export async function selectSpeakerIdentityRows(userId: string) {
   requireOwnerId(userId);
   return supabase.from('speaker').select('id, name, email, microsoft_id').eq('user_id', userId);
 }
