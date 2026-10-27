@@ -284,6 +284,24 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     assert.equal((await race(db, id, 'recover')).length, 0, 'a terminated row is never claimed again');
   });
 
+  await t.test('over a cap but the note is already saved: a normal claim, never failed (the worker converges it to completed)', async () => {
+    for (const cap of ['attempts', 'claims'] as const) {
+      const noteId = `saved-note-${cap}`;
+      const id = await insertJob(db, { noteId, status: 'processing', stage: 'saving note', updatedAgo: '1 hour' });
+      await db.query(cap === 'attempts'
+        ? 'update public.workflow_job set attempt_count = $2, claim_count = $2 where id = $1'
+        : 'update public.workflow_job set claim_count = $2 where id = $1', [id, cap === 'attempts' ? MAX_JOB_EXECUTION_ATTEMPTS : MAX_JOB_CLAIMS]);
+      await db.query("insert into public.note (id, user_id) values ($1, 'fixture-user')", [noteId]);
+      const outcome = await service(() => store('converging-worker').claim(id, 'recover'));
+      assert.equal(outcome.kind, 'claimed', `${cap}: ${JSON.stringify(outcome)}`);
+      const r = await row(db, id);
+      assert.deepEqual([r.status, r.error], ['processing', null], `${cap}: a saved note is never failed`);
+      await db.query("update public.note set user_id = 'someone-else' where id = $1", [noteId]);
+      await expireLease(db, id);
+      assert.equal((await service(() => store('next-worker').claim(id, 'recover'))).kind, 'exhausted', `${cap}: another user's note does not count; the cap applies`);
+    }
+  });
+
   await t.test('claim committed but response lost, repeated: the job still terminates, bounded by the claim cap', async () => {
     const id = await insertJob(db, { status: 'processing', stage: 'transcribing audio', updatedAgo: '1 hour' });
     // The RPC runs and commits, then the client times out (large row, slow instance).

@@ -54,6 +54,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
 - refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
 - test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
 - test(workflow-server): make the translation contract fail when the note write does not await the translation
-- test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
 
 ### Recent merges
 

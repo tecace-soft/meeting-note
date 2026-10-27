@@ -51,6 +51,10 @@ where table_schema = 'public' and table_name = 'workflow_job'
   and column_name in ('user_id', 'note_id', 'status', 'stage', 'request', 'updated_at')
 order by array_position(array['user_id', 'note_id', 'status', 'stage', 'request', 'updated_at'], column_name::text);
 
+-- 1-6b. note.id와 note.user_id 타입. 둘 다 text여야 한다(인수 RPC가 note.id = workflow_job.note_id로 비교한다).
+select column_name, data_type from information_schema.columns
+where table_schema = 'public' and table_name = 'note' and column_name in ('id', 'user_id');
+
 -- 1-7. service_role이 RLS를 우회하는지(true여야 한다; RPC는 security invoker로 service_role 권한을 쓴다).
 select rolname, rolbypassrls from pg_roles where rolname = 'service_role';
 

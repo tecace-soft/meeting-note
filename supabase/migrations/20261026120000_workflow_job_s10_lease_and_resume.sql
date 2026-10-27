@@ -27,6 +27,12 @@
 --   (attempt_count) or its claims (claim_count) fails the row in the same statement
 --   and returns claim_outcome = 'exhausted'. A client that loses the response still
 --   leaves a terminated row, so no retry loop can keep a job processing forever.
+--   Exception: when the job's note already exists (the work finished, only the
+--   completed write was lost), the claim is a normal one, so the worker's note check
+--   converges the job to completed instead of failing a saved note (same owner, or a
+--   note without user_id, exactly as the worker's check). note.id is text,
+--   like workflow_job.note_id. The function runs as security invoker for service_role,
+--   which bypasses note RLS, so the existence check sees every note.
 -- * The claim never returns the (possibly large) request; a resuming worker reads it
 --   with workflow_job_load_request after its cheap checks passed.
 -- * Renewal, writes, request load, execution begin and submission-begin match (id,
@@ -106,10 +112,14 @@ as $$
          execution_generation = j.execution_generation + 1,
          claim_count = j.claim_count + 1,
          attempt_count = case when p_mode = 'start' then j.attempt_count + 1 else j.attempt_count end,
-         status = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims) then 'failed' else j.status end,
-         stage = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims) then 'failed' else j.stage end,
-         progress = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims) then 100 else j.progress end,
+         status = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims)
+           and not exists (select 1 from public.note n where n.id = j.note_id and (n.user_id is null or n.user_id = j.user_id)) then 'failed' else j.status end,
+         stage = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims)
+           and not exists (select 1 from public.note n where n.id = j.note_id and (n.user_id is null or n.user_id = j.user_id)) then 'failed' else j.stage end,
+         progress = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims)
+           and not exists (select 1 from public.note n where n.id = j.note_id and (n.user_id is null or n.user_id = j.user_id)) then 100 else j.progress end,
          error = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims)
+           and not exists (select 1 from public.note n where n.id = j.note_id and (n.user_id is null or n.user_id = j.user_id))
            then case when j.request ->> 'language' = 'ko' then p_exhausted_error_ko else p_exhausted_error_en end
            else j.error end,
          updated_at = clock_timestamp()
