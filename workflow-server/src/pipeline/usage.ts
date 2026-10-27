@@ -73,6 +73,26 @@ export async function recordAssemblyUsage(input: {
   }
 }
 
+export const USAGE_LOOKUP_TIMEOUT_MS = 10_000;
+
+// S10: whether a 'transcription' usage row for this AssemblyAI transcript id exists.
+// null when the lookup failed (callers then record: a duplicate beats a missing cost).
+export async function hasAssemblyUsage(transcriptId: string): Promise<boolean | null> {
+  const { data, error } = await supabase
+    .from('workflow_usage')
+    .select('id')
+    .eq('stage', 'transcription')
+    .eq('provider', 'assemblyai')
+    .eq('usage_metadata->>transcriptId', transcriptId)
+    .limit(1)
+    .abortSignal(AbortSignal.timeout(USAGE_LOOKUP_TIMEOUT_MS));
+  if (error) {
+    console.warn(`Could not check AssemblyAI usage for transcript ${transcriptId}; recording it: ${error.message}`);
+    return null;
+  }
+  return Array.isArray(data) && data.length > 0;
+}
+
 // S10 (DEC-0022): a recovered job is about to submit its audio to AssemblyAI again
 // although an earlier execution may already have been charged for it (the provider
 // accepted a submission whose id was never saved, or a pre-S10 run was cut off).

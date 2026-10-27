@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(jobs): the rollback fallback write only touches active rows (N3)
 - fix(jobs): one orphan sweep at a time so the resume cap holds (N2)
 - fix(db): never fail an over-cap job whose note is already saved (N1)
 - fix(jobs): fence the AssemblyAI usage record to the lease owner
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
 - refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
-- test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
 
 ### Recent merges
 

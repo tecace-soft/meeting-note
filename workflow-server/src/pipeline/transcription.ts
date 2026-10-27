@@ -8,7 +8,7 @@ import { callGeminiWithFallback, delay } from '../ai/geminiFallback.js';
 import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
 import { parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from '../parsers.js';
 import { buildTranscriptTranslationPrompt } from '../prompts.js';
-import { recordAssemblyResubmission, recordAssemblyUsage, recordGeminiUsage } from './usage.js';
+import { hasAssemblyUsage, recordAssemblyResubmission, recordAssemblyUsage, recordGeminiUsage } from './usage.js';
 import { AudioUnavailableError, NoSpeechDetectedError, noSpeechMessage } from './errors.js';
 import { loadTranscriptCheckpoint, saveTranscriptCheckpoint, updateWorkflowJob } from '../jobs/store.js';
 import { jobLeases, JobLeaseLostError, type JobExecution } from '../jobs/lease.js';
@@ -314,9 +314,15 @@ async function finishAssemblyTranscript(transcript: Record<string, unknown>, inp
   transcriptId: string;
   startedAt: number;
   usageMetadata?: Record<string, unknown>;
+  // S10: executions of one job can poll the same saved transcript id; record it once.
+  onlyIfUnrecorded?: boolean;
 }): Promise<AssemblyTranscriptResult & { latencyMs: number }> {
   const { segments, audioDurationSeconds, detectedLanguage } = parseAssemblyTranscript(transcript);
   const latencyMs = Math.round(performance.now() - input.startedAt);
+  if (input.onlyIfUnrecorded && await hasAssemblyUsage(input.transcriptId.trim()) === true) {
+    console.log(`AssemblyAI usage for transcript ${input.transcriptId.trim()} is already recorded; not recording it again.`);
+    return { segments, latencyMs, audioDurationSeconds, detectedLanguage };
+  }
   await recordAssemblyUsage({
     noteId: input.noteId,
     userId: input.userId,
@@ -424,8 +430,13 @@ async function transcribeForJob(input: {
     console.log(`Workflow job ${job.jobId} resumes AssemblyAI transcript ${transcriptId} without resubmitting.`);
     const startedAt = performance.now();
     const transcript = await pollAssemblyTranscript(transcriptId, startedAt, assertOwned);
-    await settleUsageOwnership(job, transcriptId);
-    return finishAssemblyTranscript(transcript, { ...ids, transcriptId, startedAt, usageMetadata: { resumedPoll: true, jobId: job.jobId } });
+    const ownership = await settleUsageOwnership(job, transcriptId);
+    const result = await finishAssemblyTranscript(transcript, {
+      ...ids, transcriptId, startedAt, onlyIfUnrecorded: true,
+      usageMetadata: { resumedPoll: true, jobId: job.jobId, ...ownership.metadata },
+    });
+    if (ownership.superseded) throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record');
+    return result;
   }
   if (job.resumed) await assertAudioReachable(input.downloadUrl, input.language);
   const reason = job.submissionState === 'submitting'
@@ -457,36 +468,40 @@ async function transcribeForJob(input: {
   }
   await persistTranscriptId(job, transcriptId);
   const transcript = await pollAssemblyTranscript(transcriptId, startedAt, assertOwned);
-  const superseded = await settleUsageOwnership(job, transcriptId);
+  const ownership = await settleUsageOwnership(job, transcriptId);
   const usageMetadata = {
     ...(reason ? { resubmission: true, resubmissionReason: reason } : {}),
-    ...(superseded ? { supersededExecution: true } : {}),
+    ...ownership.metadata,
   };
   const result = await finishAssemblyTranscript(transcript, {
     ...ids,
     transcriptId,
     startedAt,
+    onlyIfUnrecorded: true,
     ...(Object.keys(usageMetadata).length > 0 ? { usageMetadata: { ...usageMetadata, jobId: job.jobId } } : {}),
   });
-  if (superseded) throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record');
+  if (ownership.superseded) throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record');
   return result;
 }
 
-// Fenced usage: only the owner records a transcript's usage. Before recording, renew the
-// lease. If another execution owns the job and this transcript id is saved on the row,
-// the owner polls the same id and records it, so this execution stops without a row
-// (no double count). If the id was never saved, the owner cannot know it and will
-// submit again, so this paid transcript is recorded here, flagged supersededExecution,
-// and the caller stops after recording (returns true). An unknown renewal (DB error)
-// records normally: a missing cost row is worse than a rare duplicate.
-async function settleUsageOwnership(job: JobExecution, transcriptId: string): Promise<boolean> {
+// Fenced usage (N4). Before recording a transcript's usage, an owned execution renews its
+// lease. A superseded execution still records what it polled, flagged, and then stops:
+// - id never saved: the owner cannot know it and submits again, so this is a separate
+//   charge (supersededExecution);
+// - id saved: the owner normally polls and records the same id, but if the owner never
+//   gets that far (its claim is exhausted, or it dies) nobody would, so record it here too
+//   (leaseLostIdSaved). Every S10 usage write is record-once by transcript id
+//   (onlyIfUnrecorded), so whichever execution comes second skips it; a near-simultaneous
+//   pair can still both insert, which the monitoring query dedupes by transcript id.
+// An unknown renewal (DB error) records normally: a missing cost row is worse than a rare
+// duplicate.
+async function settleUsageOwnership(job: JobExecution, transcriptId: string): Promise<{ superseded: boolean; metadata: Record<string, unknown> }> {
   const outcome = job.lost ? 'lost' : await jobLeases.renew(job);
-  if (outcome !== 'lost') return false;
+  if (outcome !== 'lost') return { superseded: false, metadata: {} };
   job.lost = true;
-  if (job.transcriptId === transcriptId) {
-    throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record (the new owner records saved transcript ' + transcriptId + ')');
-  }
-  return true;
+  const saved = job.transcriptId === transcriptId;
+  console.warn(`Workflow job ${job.jobId} lost its lease after AssemblyAI finished transcript ${transcriptId} (${saved ? 'saved on the row' : 'never saved'}); recording its usage once and stopping.`);
+  return { superseded: true, metadata: saved ? { leaseLostIdSaved: true } : { supersededExecution: true } };
 }
 
 // Transcript stage of the summarize runner. The caller writes the 'transcribing audio'

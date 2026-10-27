@@ -217,29 +217,42 @@ test('a rollback during a run (RPCs gone) falls back to pre-S10 heartbeats and i
   completedJobResults.delete('rollback-job');
 });
 
-test('fenced usage: a superseded execution leaves a saved transcript to the owner and records an unsaved one, flagged', { timeout: 30_000 }, async (t) => {
+test('fenced usage: a superseded execution records what it polled once, flagged, then stops; usage is record-once by id', { timeout: 30_000 }, async (t) => {
   t.mock.method(console, 'log', () => undefined);
   const warn = t.mock.method(console, 'warn', () => undefined);
   let idWrite: 'ok' | 'error' = 'ok';
+  let renewAnswer = false;
+  let alreadyRecorded = false;
   const f = await fixture(t, noCheckpoint,
     // The lease is taken while AssemblyAI transcribes: the renewal before the usage row fails.
-    (url) => (isRpc(url, 'workflow_job_renew_lease') ? Response.json(false) : undefined),
+    (url) => (isRpc(url, 'workflow_job_renew_lease') ? Response.json(renewAnswer) : undefined),
     (url, _method, body) => (idWrite === 'error' && isRpc(url, 'workflow_job_write') && body.p_patch.assembly_transcript_id
-      ? Response.json({ message: 'write blip' }, { status: 503 }) : undefined));
-  const usageRows = () => f.state.calls.filter((c) => isTable(c.url, 'workflow_usage') && c.body?.stage === 'transcription');
+      ? Response.json({ message: 'write blip' }, { status: 503 }) : undefined),
+    (url, method) => (isTable(url, 'workflow_usage') && method === 'GET' ? Response.json(alreadyRecorded ? [{ id: 1 }] : []) : undefined));
+  const usageRows = () => f.state.calls.filter((c) => isTable(c.url, 'workflow_usage') && c.method === 'POST' && c.body?.stage === 'transcription');
+
+  // Saved id: if the new owner's claim is exhausted nobody else records it, so record it here.
   await processSummarizeJob('saved-id-job', input());
   await sleep(20);
-  assert.equal(usageRows().length, 0, 'the owner records the saved transcript; no double count');
+  assert.deepEqual(usageRows().map((c) => [c.body.usage_metadata.transcriptId, c.body.usage_metadata.leaseLostIdSaved]), [['fixture-transcript', true]]);
+  const lookup = f.state.calls.find((c) => isTable(c.url, 'workflow_usage') && c.method === 'GET')!;
+  assert.deepEqual([lookup.url.searchParams.get('stage'), lookup.url.searchParams.get('usage_metadata->>transcriptId')], ['eq.transcription', 'eq.fixture-transcript'], 'record-once looks the id up first');
   assert.ok(!terminal(f, 'saved-id-job'), 'the superseded execution writes no terminal status');
-  assert.ok(warn.mock.calls.some((c) => String(c.arguments[0]).includes('the new owner records saved transcript fixture-transcript')), 'the stop is logged');
+  assert.ok(warn.mock.calls.some((c) => String(c.arguments[0]).includes('lost its lease after AssemblyAI finished transcript fixture-transcript (saved on the row)')), 'the loss is logged');
 
+  // Unsaved id: a separate charge the owner cannot know about.
   f.reset(); idWrite = 'error';
   await processSummarizeJob('unsaved-id-job', input());
   await sleep(20);
-  const [row] = usageRows();
-  assert.ok(row, 'an unsaved transcript is a separate charge and is recorded');
-  assert.deepEqual([row!.body.usage_metadata.transcriptId, row!.body.usage_metadata.supersededExecution], ['fixture-transcript', true]);
+  assert.deepEqual(usageRows().map((c) => c.body.usage_metadata.supersededExecution), [true]);
   assert.ok(!terminal(f, 'unsaved-id-job'), 'and the execution still stops without a terminal write');
+
+  // The owner polling an id another execution already recorded does not record it twice.
+  f.reset(); idWrite = 'ok'; renewAnswer = true; alreadyRecorded = true;
+  await recoverAndSettle(f, claimRow({ jobId: 'owner-job', transcriptId: 'fixture-transcript', submissionState: 'submitted', submissionCount: 1 }));
+  assert.equal(usageRows().length, 0, 'record-once by transcript id');
+  assert.equal(terminal(f, 'owner-job')!.status, 'completed');
+  completedJobResults.delete('owner-job');
 });
 
 test('a lost lease at a stage write stops the run without a failure write, incident or enrichment', async (t) => {
