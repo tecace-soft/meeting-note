@@ -325,7 +325,7 @@ test('resume after an unknown submission outcome resubmits and records it before
   completedJobResults.delete('resumed-job');
 });
 
-test('resume of a pre-S10 row past input loading records a possible duplicate; a never-started row does not', async (t) => {
+test('resume past input loading without a submission marker records a possible duplicate; a never-started row does not', async (t) => {
   t.mock.method(console, 'log', () => undefined);
   t.mock.method(console, 'warn', () => undefined);
   const f = await fixture(t, noCheckpoint, noNote);
@@ -333,9 +333,14 @@ test('resume of a pre-S10 row past input loading records a possible duplicate; a
   const records = () => f.state.calls.filter((c) => isTable(c.url, 'workflow_usage') && c.body?.stage === 'transcription-resubmission');
   assert.deepEqual(records().map((c) => c.body.usage_metadata.reason), ['pre-s10-run-outcome-unknown']);
   await recoverAndSettle(f, claimRow({ jobId: 'queued-job', generation: 1, attempt: 1, stage: 'queued' }));
-  await recoverAndSettle(f, claimRow({ jobId: 's10-job', generation: 3, attempt: 2, stage: 'transcribing audio' }));
   assert.equal(records().length, 1, 'no record without a possible earlier charge');
-  for (const id of ['legacy-job', 'queued-job', 's10-job']) completedJobResults.delete(id);
+  // F7: an S10 run whose marker failed twice submitted anyway; the next recovery sees
+  // state 'none' past input loading at generation >= 2 and records it.
+  await recoverAndSettle(f, claimRow({ jobId: 's10-job', generation: 3, attempt: 2, stage: 'transcribing audio' }));
+  assert.deepEqual(records().map((c) => c.body.usage_metadata.reason), ['pre-s10-run-outcome-unknown', 'submit-marker-missing']);
+  await recoverAndSettle(f, claimRow({ jobId: 's10-loading-job', generation: 3, attempt: 2, stage: 'loading inputs' }));
+  assert.equal(records().length, 2, 'a run that never reached transcription cannot have submitted');
+  for (const id of ['legacy-job', 'queued-job', 's10-job', 's10-loading-job']) completedJobResults.delete(id);
 });
 
 test('resume with a checkpoint skips AssemblyAI entirely', async (t) => {

@@ -87,7 +87,7 @@ export async function recordAssemblyResubmission(input: {
   executionGeneration: number;
   attempt: number;
   submissionCount: number | null;
-  reason: 'submit-outcome-unknown' | 'pre-s10-run-outcome-unknown';
+  reason: 'submit-outcome-unknown' | 'pre-s10-run-outcome-unknown' | 'submit-marker-missing';
 }): Promise<void> {
   console.warn(`AssemblyAI resubmission for workflow job ${input.jobId} (note ${input.noteId}, attempt ${input.attempt}, reason ${input.reason}); an earlier submission may also have been charged.`);
   const { error } = await supabase.from('workflow_usage').insert({

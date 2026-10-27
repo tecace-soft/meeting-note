@@ -429,7 +429,7 @@ async function transcribeForJob(input: {
   if (job.resumed) await assertAudioReachable(input.downloadUrl, input.language);
   const reason = job.submissionState === 'submitting'
     ? 'submit-outcome-unknown' as const
-    : job.legacyUnknownSubmission ? 'pre-s10-run-outcome-unknown' as const : null;
+    : job.unknownPriorSubmission;
   const submissionCount = await beginTranscriptSubmission(job);
   if (reason) {
     await recordAssemblyResubmission({

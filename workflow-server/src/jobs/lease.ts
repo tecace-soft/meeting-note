@@ -60,9 +60,13 @@ export interface JobExecution {
   readonly generation: number;
   attempt: number;
   readonly resumed: boolean;
-  // True when a pre-S10 instance ran this row and may already have submitted it to
-  // AssemblyAI without recording that (it had no submission state to write).
-  readonly legacyUnknownSubmission: boolean;
+  // Why an earlier execution may have submitted this audio to AssemblyAI without a
+  // durable record of it, or null when it cannot have:
+  // - 'pre-s10-run-outcome-unknown': a pre-S10 instance ran the row (no state to write);
+  // - 'submit-marker-missing': an S10 run got past input loading but its submission
+  //   marker never landed (marking failed twice and it submitted anyway, or it died
+  //   between the stage write and the marker; the second case over-reports, cost 0).
+  readonly unknownPriorSubmission: 'pre-s10-run-outcome-unknown' | 'submit-marker-missing' | null;
   transcriptId: string | null;
   submissionState: TranscriptSubmissionState;
   lost: boolean;
@@ -111,10 +115,11 @@ export function executionFromClaim(claim: JobClaim, options: { resumed: boolean;
     generation: claim.generation,
     attempt: claim.attempt,
     resumed: options.resumed,
-    // Generation 1 on a recover claim means no S10 instance ever claimed the row. If it
-    // had progressed past input loading, the pre-S10 run may have paid AssemblyAI.
-    legacyUnknownSubmission: options.resumed && claim.generation === 1
-      && claim.submissionState === 'none' && !PRE_S10_STAGES.has(claim.stage ?? 'queued'),
+    // A resumed row past input loading with no submission state may have been submitted.
+    // Generation 1 on a recover claim means no S10 instance ever claimed the row.
+    unknownPriorSubmission: !options.resumed || claim.submissionState !== 'none' || PRE_S10_STAGES.has(claim.stage ?? 'queued')
+      ? null
+      : claim.generation === 1 ? 'pre-s10-run-outcome-unknown' : 'submit-marker-missing',
     transcriptId: claim.transcriptId,
     submissionState: claim.submissionState,
     lost: false,

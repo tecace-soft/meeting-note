@@ -140,10 +140,10 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     const winners = await race(db, stale, 'recover');
     assert.equal(winners.length, 1);
     const execution = executionFromClaim(winners[0]!.claim, { resumed: true, owner: winners[0]!.owner });
-    assert.equal(execution.legacyUnknownSubmission, true, 'a pre-S10 run past input loading may have paid AssemblyAI');
+    assert.equal(execution.unknownPriorSubmission, 'pre-s10-run-outcome-unknown', 'a pre-S10 run past input loading may have paid AssemblyAI');
     const queued = await insertJob(db, { updatedAgo: '6 minutes' });
     const [q] = await race(db, queued, 'recover', 1);
-    assert.equal(executionFromClaim(q!.claim, { resumed: true }).legacyUnknownSubmission, false, 'a never-started row cannot have submitted');
+    assert.equal(executionFromClaim(q!.claim, { resumed: true }).unknownPriorSubmission, null, 'a never-started row cannot have submitted');
   });
 
   await t.test('terminal rows are never claimed', async () => {

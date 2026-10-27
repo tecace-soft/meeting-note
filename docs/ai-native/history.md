@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(jobs): the pre-S10 fallback sweep re-checks staleness in its fail write (F6)
 - fix(jobs): fall back to pre-S10 heartbeats and writes when the S10 RPCs vanish mid-run (F5)
 - fix(jobs): retry a transient start-claim error before deferring to the sweep (F4)
 - fix(jobs): no ops incident for an expired audio link on resume; probe refuses redirects (F3, F9)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): add direct transcript-stage tests for transcribeOrReuseCheckpoint
 - refactor(workflow-server): split transcription into submit/poll/parse and a transcript stage (T1-10b)
 - refactor(workflow-server): move AssemblyAI transcription to pipeline/transcription (T1-10b)
-- test(workflow-server): pin AssemblyAI transcription pipeline contracts before T1-10b move
 
 ### Recent merges
 
