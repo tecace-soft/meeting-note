@@ -1,14 +1,15 @@
 // HTTP router: the request dispatch for the workflow-server (knowledge, then OPTIONS,
 // then MCP, then /health and /version, then the route modules in order, then 404) and
-// the error-to-status mapping for anything a handler throws. Building the server here
-// does not listen; process resources stay in index.ts startServer (T1-11).
+// the error-to-status mapping for anything a handler throws. It creates no server and
+// holds no process resources: index.ts mounts handleWorkflowRequest on its server and
+// startServer owns listen, timers and process listeners (T1-11).
 import { raiseIncident } from '../ops/incidents.js';
 import { handleIssuesRequest } from '../routes/issues.js';
 import { handleTranscriptionTestRequest, ASSEMBLYAI_CODE_SWITCHING_MODEL_LABEL } from '../routes/transcriptionTest.js';
 import { sendJson, sendNoContent, getHttpStatus, errorMessage } from './shared.js';
 import { supabase } from '../db/supabaseClient.js';
 import { env, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL } from '../config/env.js';
-import { createServer } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { PROJECT_CHAT_MODEL } from '../gemini-models.js';
 import { handleMcpRequest } from '../mcp/transports/http.js';
 import { clientGateMode, tenantGateMode } from '../microsoftIdentity.js';
@@ -40,7 +41,7 @@ const handleMeetingKnowledgeRequest = createMeetingKnowledgeHttpHandler(createMe
   rpc: (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(2_000)),
 }), process.env);
 
-export const server = createServer((req, res) => {
+export function handleWorkflowRequest(req: IncomingMessage, res: ServerResponse): void {
   void (async () => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     // New private routes own their CORS, credential checks and content-free errors.
@@ -106,4 +107,4 @@ export const server = createServer((req, res) => {
     }
     sendJson(res, status, { error: message });
   });
-});
+}

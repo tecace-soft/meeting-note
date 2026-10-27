@@ -327,3 +327,26 @@ test('startServer owns the boot sweep, the sweep interval and process listeners 
   assert.equal(server.listening, false, 'stop closes the server');
   assert.ok(!f.state.calls.some((call) => /outbox_claim|extraction_claim/.test(call.url.pathname)), 'knowledge workers stay off without their flags');
 });
+
+test('http/router exports a request listener that index mounts on the one server', { timeout: TEST_TIMEOUT_MS }, async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const { createServer } = await import('node:http');
+  const router = await import('./http/router.js');
+  const { server } = await import('./index.js');
+  assert.ok(!('server' in router), 'the router module creates no server of its own');
+  assert.deepEqual(server.listeners('request'), [router.handleWorkflowRequest], 'index mounts exactly the router listener');
+  // Mounted on a different server, the listener answers the same dispatch.
+  const other = createServer(router.handleWorkflowRequest);
+  other.listen(0, '127.0.0.1');
+  t.after(() => new Promise<void>((resolve) => other.close(() => resolve())));
+  await bounded(once(other, 'listening'), 'other listening');
+  const address = other.address();
+  assert.ok(address && typeof address !== 'string', 'other server has a port');
+  const base = `http://127.0.0.1:${address.port}`;
+  const version = await bounded(fetch(`${base}/version`), 'GET /version');
+  assert.equal(version.status, 200, '/version on the mounted listener');
+  assert.equal((await bounded(version.json(), 'version body') as { sha: string }).sha, SHA, 'the same VERSION_INFO');
+  const missing = await bounded(fetch(`${base}/unknown`), 'GET /unknown');
+  assert.equal(missing.status, 404, 'unknown path on the mounted listener');
+  assert.deepEqual(await bounded(missing.json(), 'missing body'), NOT_FOUND, 'host 404 body');
+});

@@ -1,8 +1,9 @@
 import './config/loadEnv.js';
 import { raiseIncident } from './ops/incidents.js';
-import { server } from './http/router.js';
+import { handleWorkflowRequest } from './http/router.js';
 import { supabase } from './db/supabaseClient.js';
 import { env, ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL } from './config/env.js';
+import { createServer } from 'node:http';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from 'undici';
@@ -16,7 +17,7 @@ import { startMeetingExtractionWorker } from './knowledge/extraction-worker.js';
 import { recoverOrphanedJobs } from './jobs/orphanSweep.js';
 import { ORPHANED_JOB_SWEEP_INTERVAL_MS } from './jobs/store.js';
 
-export { server };
+export const server = createServer(handleWorkflowRequest);
 
 // Importing this module only constructs the handler.
 // Production startup stays explicit so tests can own all process resources.

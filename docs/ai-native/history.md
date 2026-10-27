@@ -57,6 +57,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(workflow-server): move the HTTP router and VERSION_INFO to http/router.ts (T1-11)
 - test(workflow-server): pin router dispatch and startup side effects before T1-11
 - test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
 - test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): AppSidebar reads notes through the note repository (T2-2)
 - test(workflow-server): bound the timer-driven runner and sweep retry contracts
 - test(web): pin note call-chain contracts before the T2-2 repository move
-- refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 
 ### Recent merges
 
