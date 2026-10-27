@@ -5,8 +5,17 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
-import { supabase, getSupabaseAccessTokenForRequest } from '../config/supabaseConfig';
+import { getSupabaseAccessTokenForRequest } from '../config/supabaseConfig';
 import { getNoteSharing, setNoteSharedUsers } from '../lib/notes/repository';
+import {
+  deleteSpeaker,
+  findSpeakersByEmail,
+  findSpeakersByMicrosoftId,
+  insertContactSpeakerReturning,
+  insertSpeakerNameReturning,
+  listSpeakers,
+  updateSpeakerProfile,
+} from '../lib/speakers/repository';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import {
   anonymousLabelsInTranscript,
@@ -411,13 +420,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setSpeakersLoading(true);
     setSpeakersFetchError(null);
     try {
-      const { data, error } = await supabase
-        .from('speaker')
-        .select('id, name, profile, email, microsoft_id')
-        .eq('user_id', user.id)
-        .order('name', { ascending: true });
-      if (error) throw error;
-      const list = (data as DbSpeaker[]) ?? [];
+      const list = await listSpeakers<DbSpeaker>(user.id);
       setSavedSpeakers(list);
       return list;
     } catch (err: unknown) {
@@ -619,12 +622,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setProfileSaveError(null);
     try {
       const toSave = canonicalOntologyProfileString(profileDraft);
-      const { error } = await supabase
-        .from('speaker')
-        .update({ profile: toSave })
-        .eq('id', speakerProfileView.id)
-        .eq('user_id', user.id);
-      if (error) throw error;
+      await updateSpeakerProfile({ speakerId: speakerProfileView.id, userId: user.id, profile: toSave });
       setSpeakerProfileView((prev) => (prev ? { ...prev, profile: toSave } : prev));
       setSavedSpeakers((prev) =>
         prev.map((s) => (s.id === speakerProfileView.id ? { ...s, profile: toSave } : s))
@@ -649,12 +647,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     setSpeakerDeleteConfirmError(null);
     setDeletingSpeakerId(speakerId);
     try {
-      const { error } = await supabase
-        .from('speaker')
-        .delete()
-        .eq('id', speakerId)
-        .eq('user_id', user.id);
-      if (error) throw error;
+      await deleteSpeaker({ speakerId, userId: user.id });
       setSavedSpeakers((prev) => prev.filter((s) => s.id !== speakerId));
       if (pickedSpeakerId === speakerId) {
         setPickedSpeakerId(null);
@@ -702,11 +695,10 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     try {
       const exists = savedSpeakers.some((s) => s.name.toLowerCase() === chosenName.toLowerCase());
       if (!exists) {
-        const { data: inserted, error: insertError } = await supabase
-          .from('speaker')
-          .insert({ user_id: user.id, name: chosenName })
-          .select('id, name')
-          .single();
+        const { data: inserted, error: insertError } = await insertSpeakerNameReturning({
+          userId: user.id,
+          name: chosenName,
+        });
         if (insertError) {
           const msg = insertError.message?.toLowerCase() ?? '';
           if (!msg.includes('duplicate') && !msg.includes('unique')) {
@@ -778,37 +770,23 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
 
       let speakerRow = existing ?? null;
       if (!speakerRow) {
-        const { data, error } = await supabase
-          .from('speaker')
-          .insert({
-            user_id: user.id,
-            name: contact.displayName,
-            email: contact.email,
-            microsoft_id: contact.id,
-          })
-          .select('id, name, profile, email, microsoft_id')
-          .single();
+        const { data, error } = await insertContactSpeakerReturning({
+          userId: user.id,
+          name: contact.displayName,
+          email: contact.email,
+          microsoftId: contact.id,
+        });
 
         if (error) {
           const msg = error.message?.toLowerCase() ?? '';
           if (!msg.includes('duplicate') && !msg.includes('unique')) throw error;
 
-          const { data: microsoftRows, error: microsoftLookupError } = await supabase
-            .from('speaker')
-            .select('id, name, profile, email, microsoft_id')
-            .eq('user_id', user.id)
-            .eq('microsoft_id', contact.id);
-          if (microsoftLookupError) throw microsoftLookupError;
+          const microsoftRows = await findSpeakersByMicrosoftId<DbSpeaker>(user.id, contact.id);
 
-          speakerRow = ((microsoftRows ?? []) as DbSpeaker[])[0] ?? null;
+          speakerRow = microsoftRows[0] ?? null;
           if (!speakerRow) {
-            const { data: emailRows, error: emailLookupError } = await supabase
-              .from('speaker')
-              .select('id, name, profile, email, microsoft_id')
-              .eq('user_id', user.id)
-              .eq('email', contact.email);
-            if (emailLookupError) throw emailLookupError;
-            speakerRow = ((emailRows ?? []) as DbSpeaker[])[0] ?? null;
+            const emailRows = await findSpeakersByEmail<DbSpeaker>(user.id, contact.email);
+            speakerRow = emailRows[0] ?? null;
           }
         } else {
           speakerRow = data as DbSpeaker;

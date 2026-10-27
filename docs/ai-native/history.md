@@ -28,8 +28,8 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 - feat(db): return the stored job request only to a recover claim
 - feat(workflow-server): claim, fence and resume summarize jobs across restarts (S10)
+- feat(web): add speaker repository with owner-scoped methods for T2-3 (unused)
 - feat(db): add the S10 workflow_job lease, generation and submission schema
-- feat(web): add note repository read, patch and delete methods for T2-2 (unused)
 
 **Fixes**
 
@@ -45,20 +45,27 @@ Last 40 non-merge commits, newest first, grouped by type.
 - fix(jobs): no ops incident for an expired audio link on resume; probe refuses redirects (F3, F9)
 - fix(jobs): cap concurrently running resumed jobs per process (F2)
 - fix(jobs): enforce the S10 caps in SQL and stop returning the request from the claim (F1, F8)
+- fix(web): type speaker name lookup result so pages can cast the rows (T2-3)
 
 **Docs**
 
+- docs(refactor): add overload, begin/renew post-check and N1/usage-dedupe monitoring queries for S10
 - docs(refactor): add the reviewer's SQL Editor pre/post checks and post-deploy monitoring for S10
 - docs(ai-native): regenerate history after merging main
 - docs: point the deploy-restart guidance and DEC-0003 at the S10 lease model
-- docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
-- docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
-- docs(decisions): point DEC-0001/0003 at the T1-9b job modules
 
 **Other**
 
 - test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
 - test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
+- refactor(web): TranscriptDiarizedEditor reads and writes speakers through the speaker repository (T2-3)
+- refactor(web): TranscriptionSummary reads and writes speakers through the speaker repository (T2-3)
+- refactor(web): SummaryHistory reads and writes speakers through the speaker repository (T2-3)
+- refactor(web): AccountSettings loads and saves speaker profiles through the speaker repository (T2-3)
+- refactor(web): accumulateSpeakerProfile reads and writes speakers through the speaker repository (T2-3)
+- refactor(web): ensureSelfSpeakerRow reads and writes speakers through the speaker repository (T2-3)
+- refactor(web): share the owner id guard between repositories (T2-3)
+- test(web): pin speaker call-chain contracts before the T2-3 repository move
 - refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
 - test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
@@ -68,16 +75,11 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): persistNoteDiarization writes through the note repository (T2-2)
 - refactor(web): audio reference check pages notes through the note repository (T2-2)
 - refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
-- refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
-- ci: bound hung backend tests with a job timeout and a per-test timeout
-- refactor(web): AppSidebar reads notes through the note repository (T2-2)
-- test(workflow-server): bound the timer-driven runner and sweep retry contracts
-- test(web): pin note call-chain contracts before the T2-2 repository move
-- refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
-- refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
 
 ### Recent merges
 
+- Merge origin/main into refactor/t2-3-speaker-repository
+- Merge pull request #50 from tecace-soft/feature/s10-auto-resume
 - Merge origin/main into feature/s10-auto-resume
 - Merge pull request #49 from tecace-soft/refactor/t2-2-note-repository
 - Merge origin/main into refactor/t2-2-note-repository
@@ -86,6 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #46 from tecace-soft/refactor/t1-10b-transcription
 - Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
 - Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
-- Merge origin/main into docs/refactor-progress-2026-10-26; add T1-9a row
-- Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
 <!-- ai-native:auto:END -->

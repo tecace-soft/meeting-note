@@ -1,4 +1,5 @@
-import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
+import { findSpeakerIdByName, getSpeakerProfile, updateSpeakerProfile } from './speakers/repository';
 import { getSegmentText, type TranscriptSegment } from './transcriptSegments';
 import { canonicalOntologyProfileString, ontologyRichness, parseOntology } from './speakerOntology';
 import { isAnonymousSpeakerLabel, type IdentifyAuth } from './identifySpeakers';
@@ -58,24 +59,11 @@ export async function accumulateSpeakerProfile(params: {
   // Resolve the speaker row id (needed to save the merged profile back).
   let speakerId = params.speakerId;
   if (!speakerId) {
-    const { data } = await supabase
-      .from('speaker')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('name', name)
-      .limit(1)
-      .maybeSingle();
-    speakerId = (data as { id: string } | null)?.id ?? null;
+    speakerId = await findSpeakerIdByName(userId, name);
   }
   if (!speakerId) return null;
 
-  const { data: existingRow } = await supabase
-    .from('speaker')
-    .select('profile')
-    .eq('id', speakerId)
-    .eq('user_id', userId)
-    .maybeSingle();
-  const existingProfile = ((existingRow as { profile: string | null } | null)?.profile ?? '').trim() || null;
+  const existingProfile = ((await getSpeakerProfile({ speakerId, userId })) ?? '').trim() || null;
 
   const transcriptText = segments.map((s) => `${s.speaker}: ${getSegmentText(s, 'en')}`).join('\n\n');
 
@@ -101,12 +89,7 @@ export async function accumulateSpeakerProfile(params: {
     }
   }
 
-  const { error } = await supabase
-    .from('speaker')
-    .update({ profile: merged })
-    .eq('id', speakerId)
-    .eq('user_id', userId);
-  if (error) throw error;
+  await updateSpeakerProfile({ speakerId, userId, profile: merged });
 
   return merged;
 }
