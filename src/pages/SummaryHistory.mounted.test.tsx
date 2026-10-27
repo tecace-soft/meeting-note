@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   patchOwnedNoteReturningId: null as unknown as ReturnType<typeof vi.fn>,
   deleteOwnedNoteReturningId: null as unknown as ReturnType<typeof vi.fn>,
   saveNoteTranslations: null as unknown as ReturnType<typeof vi.fn>,
+  patchNoteReturningId: null as unknown as ReturnType<typeof vi.fn>,
   selectSpeakersByNames: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
@@ -53,7 +54,9 @@ vi.mock('../lib/notes/repository', async () => {
   h.patchOwnedNoteReturningId = vi.fn();
   h.deleteOwnedNoteReturningId = vi.fn();
   h.saveNoteTranslations = vi.fn();
+  h.patchNoteReturningId = vi.fn();
   return {
+    patchNoteReturningId: (...a: unknown[]) => h.patchNoteReturningId(...a),
     queryHistoryNotes: (...a: unknown[]) => h.queryHistoryNotes(...a),
     patchOwnedNoteReturningId: (...a: unknown[]) => h.patchOwnedNoteReturningId(...a),
     deleteOwnedNoteReturningId: (...a: unknown[]) => h.deleteOwnedNoteReturningId(...a),
@@ -73,11 +76,39 @@ vi.mock('../services/graphService', () => ({ getOutlookCalendarEvents: async () 
 vi.mock('../services/meetingKnowledge', () => ({ meetingKnowledgeUiEnabled: true }));
 vi.mock('../components/MeetingBriefing', () => ({ MeetingBriefing: () => null }));
 vi.mock('../components/NoteImageAttachments', () => ({ default: () => null }));
-vi.mock('../components/TranscriptDiarizedEditor', () => ({
-  default: () => null,
-  getTranscriptSpeakerFilters: () => [],
-  TranscriptSpeakerFilterControls: () => null,
-}));
+vi.mock('../components/TranscriptDiarizedEditor', async () => {
+  const { useState } = await import('react');
+  type Seg = { speaker: string; text: string };
+  const Editor = (p: {
+    noteId: string;
+    segments: Seg[];
+    onSegmentsChange: (next: Seg[]) => void;
+    onPersistSegments?: (next: Seg[]) => Promise<void>;
+  }) => {
+    const [persistError, setPersistError] = useState<string | null>(null);
+    return (
+      <div data-testid={`editor-${p.noteId}`}>
+        <span data-testid="editor-text">{p.segments.map((s) => s.text).join('|')}</span>
+        {persistError ? <span data-testid="editor-persist-error">{persistError}</span> : null}
+        <button
+          type="button"
+          onClick={() => {
+            const next = p.segments.map((s) => ({ ...s, text: `${s.text}!` }));
+            p.onSegmentsChange(next);
+            void p.onPersistSegments?.(next).catch((e: unknown) => setPersistError(e instanceof Error ? e.message : String(e)));
+          }}
+        >
+          edit-transcript
+        </button>
+      </div>
+    );
+  };
+  return {
+    default: Editor,
+    getTranscriptSpeakerFilters: () => [],
+    TranscriptSpeakerFilterControls: () => null,
+  };
+});
 vi.mock('../components/ShareNoteModal', () => ({
   default: (p: { isOpen: boolean; noteId: string | null }) => (p.isOpen ? <div data-testid="share-modal">{p.noteId}</div> : null),
 }));
@@ -141,6 +172,8 @@ beforeEach(() => {
   h.queryHistoryNotes.mockResolvedValue(ok([OWN, SHARED]));
   h.patchOwnedNoteReturningId.mockReset();
   h.deleteOwnedNoteReturningId.mockReset();
+  h.saveNoteTranslations.mockReset();
+  h.patchNoteReturningId.mockReset();
   h.selectSpeakersByNames.mockClear();
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -443,5 +476,134 @@ describe('SummaryHistory modals open with the right note', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(await screen.findByText('No diarized transcription found for this note.')).toBeInTheDocument();
     expect(h.selectSpeakersByNames).not.toHaveBeenCalled();
+  });
+});
+
+describe('SummaryHistory detail title edit', () => {
+  async function openDetail() {
+    await mountLoaded();
+    fireEvent.click(first('Alpha note'));
+    return (await screen.findAllByLabelText('Edit note title')).filter((el) => el.tagName === 'INPUT')[0];
+  }
+
+  it('saves a changed title on blur through the owner-scoped patch', async () => {
+    h.patchOwnedNoteReturningId.mockResolvedValue({ id: 'n1' });
+    const input = await openDetail();
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Alpha detail title' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.getAllByText('Alpha detail title').length).toBeGreaterThan(0));
+    expect(h.patchOwnedNoteReturningId).toHaveBeenCalledTimes(1);
+    expect(h.patchOwnedNoteReturningId).toHaveBeenCalledWith({ noteId: 'n1', userId: 'user-1', patch: { name: 'Alpha detail title' } });
+  });
+
+  it('does not write for an unchanged or empty title', async () => {
+    const input = await openDetail();
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.getAllByDisplayValue('Alpha note').length).toBeGreaterThan(0));
+    expect(h.patchOwnedNoteReturningId).not.toHaveBeenCalled();
+  });
+
+  it('Escape discards the draft without writing', async () => {
+    const input = await openDetail();
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Discard me' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(h.patchOwnedNoteReturningId).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryAllByDisplayValue('Discard me')).toHaveLength(0));
+  });
+
+  it('shows the permission error and keeps the old title when no row changed', async () => {
+    h.patchOwnedNoteReturningId.mockResolvedValue(null);
+    const input = await openDetail();
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Nope' } });
+    fireEvent.blur(input);
+    expect(await screen.findByText('Could not rename this note. You may not have permission to edit it.')).toBeInTheDocument();
+    expect(screen.queryAllByText('Nope')).toHaveLength(0);
+  });
+});
+
+describe('SummaryHistory row rename cancel', () => {
+  it('Escape leaves the title unchanged and does not write', async () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(() => {});
+    await mountLoaded();
+    await openMenuAndPick('Alpha note', 'renameNote');
+    const input = screen.getAllByDisplayValue('Alpha note')[0];
+    fireEvent.change(input, { target: { value: 'Discard' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(h.patchOwnedNoteReturningId).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryAllByDisplayValue('Discard')).toHaveLength(0));
+    expect(screen.getAllByText('Alpha note').length).toBeGreaterThan(0);
+    spy.mockRestore();
+  });
+});
+
+describe('SummaryHistory transcript edit', () => {
+  const SEGS = [{ speaker: 'Ann', text: 'hello', start: 0, end: 1 }];
+  const WITH_TX = { ...OWN, diarization: SEGS };
+  const WITH_KO = {
+    ...OWN,
+    diarization: SEGS,
+    diarization_translations: { ko: [{ speaker: 'Ann', text: 'annyeong', start: 0, end: 1 }] },
+    transcription_translations: { ko: 'Ann: annyeong' },
+  };
+  async function openTranscript(note: unknown) {
+    h.queryHistoryNotes.mockResolvedValue(ok([note]));
+    await mountLoaded();
+    fireEvent.click(first('Alpha note'));
+    fireEvent.click((await screen.findAllByRole('tab', { name: 'transcription' }))[0]);
+    return (await screen.findAllByTestId('editor-n1'))[0];
+  }
+
+  it('persists the original transcript through the note repository and updates the displayed segments', async () => {
+    h.patchNoteReturningId.mockResolvedValue({ id: 'n1' });
+    const editor = await openTranscript(WITH_TX);
+    fireEvent.click(within(editor).getByRole('button', { name: 'edit-transcript' }));
+    await waitFor(() => expect(screen.getAllByTestId('editor-text')[0]).toHaveTextContent('hello!'));
+    expect(h.patchNoteReturningId).toHaveBeenCalledWith({
+      noteId: 'n1',
+      patch: { diarization: [{ speaker: 'Ann', text: 'hello!', start: 0, end: 1 }] },
+    });
+    expect(h.saveNoteTranslations).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a zero-row diarization save to the editor as an error', async () => {
+    h.patchNoteReturningId.mockResolvedValue(null);
+    const editor = await openTranscript(WITH_TX);
+    fireEvent.click(within(editor).getByRole('button', { name: 'edit-transcript' }));
+    expect((await screen.findAllByTestId('editor-persist-error'))[0]).toHaveTextContent(
+      'Diarization save did not update the note. You may not have permission to edit this note.'
+    );
+  });
+
+  it('saves an edited translation through saveNoteTranslations with both translation columns', async () => {
+    h.saveNoteTranslations.mockResolvedValue(undefined);
+    await openTranscript(WITH_KO);
+    fireEvent.click((await screen.findAllByRole('radio', { name: '한국어' }))[0]);
+    const editor = (await screen.findAllByTestId('editor-n1'))[0];
+    expect(screen.getAllByTestId('editor-text')[0]).toHaveTextContent('annyeong');
+    fireEvent.click(within(editor).getByRole('button', { name: 'edit-transcript' }));
+    await waitFor(() => expect(h.saveNoteTranslations).toHaveBeenCalledTimes(1));
+    expect(h.saveNoteTranslations).toHaveBeenCalledWith({
+      noteId: 'n1',
+      diarizationTranslations: { ko: [{ speaker: 'Ann', text: 'annyeong!', start: 0, end: 1 }] },
+      transcriptionTranslations: { ko: 'Ann: annyeong!' },
+    });
+    expect(h.patchNoteReturningId).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getAllByTestId('editor-text')[0]).toHaveTextContent('annyeong!'));
+  });
+
+  it('shows a translation save failure to the editor', async () => {
+    h.saveNoteTranslations.mockRejectedValue(new Error('Transcript translation save did not update the note.'));
+    await openTranscript(WITH_KO);
+    fireEvent.click((await screen.findAllByRole('radio', { name: '한국어' }))[0]);
+    const editor = (await screen.findAllByTestId('editor-n1'))[0];
+    fireEvent.click(within(editor).getByRole('button', { name: 'edit-transcript' }));
+    expect((await screen.findAllByTestId('editor-persist-error'))[0]).toHaveTextContent('Transcript translation save did not update the note.');
   });
 });
