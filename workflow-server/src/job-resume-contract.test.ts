@@ -566,6 +566,46 @@ test('the sweep claims expired rows by database time and runs at most MAX_ACTIVE
   assert.equal(scan.url.searchParams.get('limit'), '200');
 });
 
+test('sweeps never overlap: a sweep that starts while one is running does nothing, and the guard always releases', { timeout: 30_000 }, async (t) => {
+  const log = t.mock.method(console, 'log', () => undefined);
+  t.mock.method(console, 'warn', () => undefined);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let failScan = false;
+  let loadsStarted = 0;
+  const f = await fixture(t, noCheckpoint, noNote,
+    (url) => {
+      if (!(isTable(url, 'workflow_job') && url.searchParams.has('or'))) return undefined;
+      return failScan ? Response.json({ message: 'scan blip' }, { status: 500 }) : Response.json([{ id: 'slow-orphan', lease_expires_at: null }, { id: 'second-orphan', lease_expires_at: null }]);
+    },
+    (url, _method, body) => (isRpc(url, 'workflow_job_claim') ? Response.json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'processing', stage: 'queued',
+      execution_generation: 2, attempt_count: 1, claim_count: 2, assembly_transcript_id: null, transcript_submission_state: 'none', transcript_submission_count: 0,
+      claim_outcome: 'claimed' }]) : undefined),
+    // The first request load hangs (a large request on a slow instance).
+    async (url) => {
+      if (isRpc(url, 'workflow_job_load_request')) { loadsStarted += 1; await held; }
+      return undefined;
+    });
+  const scans = () => f.state.calls.filter((c) => isTable(c.url, 'workflow_job') && c.url.searchParams.has('or')).length;
+  const first = recoverOrphanedJobs();
+  await until(() => loadsStarted === 1, 'the first sweep to block on the request load');
+  await recoverOrphanedJobs();
+  assert.equal(scans(), 1, 'the overlapping sweep did not scan');
+  assert.equal(rpcCalls(f, 'workflow_job_claim').length, 1, 'and claimed nothing');
+  assert.ok(log.mock.calls.some((c) => c.arguments[0] === 'An orphan sweep is still running; skipping this one.'), 'the skip is logged');
+  release();
+  await first;
+  await until(() => activeResumeCount() === 0, 'the resumed runs');
+  failScan = true;
+  await recoverOrphanedJobs();
+  failScan = false;
+  const before = scans();
+  await recoverOrphanedJobs();
+  assert.equal(scans(), before + 1, 'a sweep that ended (even after an error) releases the guard');
+  await until(() => activeResumeCount() === 0, 'the second wave');
+  for (const id of ['slow-orphan', 'second-orphan']) completedJobResults.delete(id);
+});
+
 test('the sweep falls back to the pre-S10 behavior when the S10 columns or RPCs are missing', async (t) => {
   t.mock.method(console, 'log', () => undefined);
   const warn = t.mock.method(console, 'warn', () => undefined);

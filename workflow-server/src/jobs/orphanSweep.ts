@@ -272,8 +272,26 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
 
 // Boot and periodic entry point. The candidate scan uses this process's clock only to
 // pick rows; the claim RPC re-checks expiry by database time and is the only authority.
+// One sweep at a time per process. A sweep can outlast the 2-minute interval (a request
+// load may take up to 120 s), and two overlapping sweeps would both pass the
+// MAX_ACTIVE_RESUMES check before either started its run.
+let sweepInFlight = false;
+
 export async function recoverOrphanedJobs(): Promise<void> {
   if (!env.supabaseUrl || !env.serviceRoleKey) return;
+  if (sweepInFlight) {
+    console.log('An orphan sweep is still running; skipping this one.');
+    return;
+  }
+  sweepInFlight = true;
+  try {
+    await sweepOnce();
+  } finally {
+    sweepInFlight = false;
+  }
+}
+
+async function sweepOnce(): Promise<void> {
   const now = Date.now();
   const leaseCutoff = new Date(now).toISOString();
   const heartbeatCutoff = new Date(now - ORPHANED_JOB_THRESHOLD_MS).toISOString();

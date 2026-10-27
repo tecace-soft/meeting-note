@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(db): never fail an over-cap job whose note is already saved (N1)
 - fix(jobs): fence the AssemblyAI usage record to the lease owner
 - fix(jobs): treat a missing submission marker past input loading as a possible resubmission (F7)
 - fix(jobs): the pre-S10 fallback sweep re-checks staleness in its fail write (F6)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
 - test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
-- test(workflow-server): make the translation contract fail when the note write does not await the translation
 
 ### Recent merges
 
