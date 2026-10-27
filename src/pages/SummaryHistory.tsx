@@ -39,6 +39,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
 import type { Note } from './summaryHistory/types';
+import { getLocalizedSummary, getNoteDisplayTitle } from './summaryHistory/noteDisplay';
 import { normalizeTagList } from './summaryHistory/noteSearch';
 import { NOTES_PAGE_SIZE, useNotesList, type HistoryViewMode } from './summaryHistory/useNotesList';
 import TranscriptDiarizedEditor, {
@@ -129,11 +130,6 @@ const NOTE_SUMMARY_TEXTAREA = `w-full resize-none ${NOTE_PANEL_SCROLL_CLASS} bor
 const RESULT_ACTION_BTN_CLASS =
   'result-action-btn flex min-h-[2.75rem] w-full min-w-0 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-start sm:px-4 sm:py-2';
 const RESULT_ACTION_BTN_LABEL_CLASS = 'hidden truncate sm:inline';
-
-function getLocalizedSummary(note: Note, language: 'en' | 'ko'): string {
-  const translated = note.summary_translations?.[language]?.trim();
-  return note.summary_edit?.trim() || translated || note.summary?.trim() || '';
-}
 
 interface GeneratedHistoryProfile {
   speakerId: string | null;
@@ -674,12 +670,6 @@ const SummaryHistory: React.FC = () => {
       hour: '2-digit',
       minute: '2-digit'
     });
-  };
-
-  const getNoteDisplayTitle = (note: Note): string => {
-    const n = note.name?.trim();
-    if (n) return n;
-    return 'Untitled note';
   };
 
   const startDetailTitleEdit = (note: Note, selectAll = false) => {
