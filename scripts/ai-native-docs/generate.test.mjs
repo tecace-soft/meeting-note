@@ -17,7 +17,7 @@ const FILES = [
 ];
 
 test('structure region lists tracked directories only, pruned and depth-bounded', () => {
-  const out = buildStructureRegion(FILES);
+  const out = buildStructureRegion(FILES).split('```text')[1].split('```')[0];
   assert.match(out, /├── src\//);
   assert.match(out, /workflow-server\//);
   assert.doesNotMatch(out, /node_modules|dist|\.github/);

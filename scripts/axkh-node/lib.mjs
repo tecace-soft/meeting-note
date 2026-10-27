@@ -98,22 +98,20 @@ export function extractIntro(docText) {
   return out.join('\n').trim()
 }
 
-/** Recent commit subjects from the "Recent changes" auto region, merge commits and excluded prefixes skipped. */
-export function extractRecentCommits(historyText, max, excludePrefixes = []) {
-  const t = historyText.replace(/\r\n/g, '\n')
-  const from = t.indexOf('### Recent changes')
-  if (from === -1) throw new Error('history.md: "Recent changes" not found')
-  const rest = t.slice(from)
-  const stop = rest.indexOf('### Recent merges')
-  const region = stop === -1 ? rest : rest.slice(0, stop)
+/**
+ * Recent commit subjects (newest first) from a list of git subjects: merge commits,
+ * duplicates and excluded prefixes are skipped, at most `max` are kept.
+ * The subjects come from `git log --no-merges` (see readGitSubjects in assemble.mjs).
+ */
+export function extractRecentCommits(subjects, max, excludePrefixes = []) {
   const seen = new Set()
   const commits = []
-  for (const line of region.split('\n')) {
-    const m = /^- (.+)$/.exec(line)
-    if (!m || m[1].startsWith('Merge') || seen.has(m[1])) continue
-    if (excludePrefixes.some((p) => m[1].startsWith(p))) continue
-    seen.add(m[1])
-    commits.push(m[1])
+  for (const raw of subjects) {
+    const subject = raw.replace(/\s*[—–]\s*/g, ', ').trim()
+    if (subject === '' || subject.startsWith('Merge') || seen.has(subject)) continue
+    if (excludePrefixes.some((p) => subject.startsWith(p))) continue
+    seen.add(subject)
+    commits.push(subject)
     if (commits.length >= max) break
   }
   return commits

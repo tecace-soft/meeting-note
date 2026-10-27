@@ -29,8 +29,8 @@
     }
   ],
   "history": {
-    "file": "docs/ai-native/history.md",
     "maxCommits": 12,
+    "scanCommits": 200,
     "excludeCommitPrefixes": [
       "fix(security)",
       "fix(auth)"
