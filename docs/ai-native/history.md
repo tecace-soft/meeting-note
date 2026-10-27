@@ -26,6 +26,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(web): add useNotesList hook with renderHook tests for loading, error, unmount and scope reset (T2-4, unused)
 - feat(db): return the stored job request only to a recover claim
 - feat(workflow-server): claim, fence and resume summarize jobs across restarts (S10)
 - feat(web): add speaker repository with owner-scoped methods for T2-3 (unused)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
 - test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
-- refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
 
 ### Recent merges
 
