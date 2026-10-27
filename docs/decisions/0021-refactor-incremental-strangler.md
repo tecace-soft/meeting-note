@@ -36,6 +36,8 @@ source: docs/reviews/2026-10-09-renovation-review.md Verdict, docs/refactor/REFA
 ## 맥락
 
 실행 계획과 진행 상태는 docs/refactor/REFACTOR_PLAN.md가 정본이다.
-index.ts에 새 라우트나 새 최상위 함수를 추가하지 않는다.
+새 라우트는 workflow-server/src/http/router.ts에 handle<Group>Request 한 줄로 연결하고, 진입점인 index.ts에는 새 라우트나 새 최상위 함수를 추가하지 않는다.
 이동 커밋은 오류 문구, 라우트 순서, 응답 형태를 바꾸지 않고, 동작 변경은 별도 커밋으로 한다.
+계획의 별도 server.ts(REFACTOR_PLAN.md 목표 구조)는 T1-11에서 의도적으로 만들지 않았다: createServer와 startServer는 index.ts에 남고 http/router.ts가 dispatch만 소유한다.
+테스트와 test-support(workflow.ts, signal-child.ts)가 server와 startServer를 index.js에서 가져오고 진입점 테스트가 index를 직접 실행하므로, server.ts가 없다는 것은 T1-11 미완료가 아니다.
 재설계 영역을 따로 지정하면 그 영역만 별도 결정으로 다룬다.
