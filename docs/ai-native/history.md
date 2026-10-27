@@ -31,6 +31,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(db): add the S10 workflow_job lease, generation and submission schema
 - feat(web): add note repository read, patch and delete methods for T2-2 (unused)
 
+**Fixes**
+
+- fix(jobs): enforce the S10 caps in SQL and stop returning the request from the claim (F1, F8)
+
 **Docs**
 
 - docs(ai-native): regenerate history after merging main
@@ -71,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(workflow-server): move Android upload helpers to pipeline/androidUpload (T1-10a)
 - test(workflow-server): fix body typing in Android upload contract test
 - test(workflow-server): pin Android upload route contract before T1-10a move
-- chore: restore generated docs/ai-native to main (not part of T1-9a)
 
 ### Recent merges
 

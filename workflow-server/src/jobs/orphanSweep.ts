@@ -145,9 +145,15 @@ export async function failOrphanedJobs(): Promise<void> {
 // S10 recovery (DEC-0022)
 // ---------------------------------------------------------------------------
 
-// Pipelines one sweep may start. A bounded loop, not a concurrency cap (S13): the rest
-// stay unclaimed and the next sweep (ORPHANED_JOB_SWEEP_INTERVAL_MS later) takes them.
-export const MAX_RESUMES_PER_SWEEP = 5;
+// Resumed pipelines this process runs at once. At the cap the sweep claims nothing more;
+// the rest stay unclaimed for a later sweep. Only resumes: the general concurrency cap for
+// new jobs is S12/S13. A resume holds its input (attachments included) in memory, and the
+// free instance is small, so this stays low.
+export const MAX_ACTIVE_RESUMES = 2;
+let activeResumes = 0;
+export function activeResumeCount(): number {
+  return activeResumes;
+}
 export const SWEEP_QUERY_TIMEOUT_MS = 15_000;
 export const RESUME_UNREADABLE_REQUEST_MESSAGE = 'Server restarted while this job was running and the saved job could not be resumed. Please try again.';
 
@@ -246,7 +252,10 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
     }
     execution.attempt = begun.attempt;
     console.log(`Resuming orphaned workflow job ${claim.jobId} (execution ${begun.attempt} of ${MAX_JOB_EXECUTION_ATTEMPTS}, claim ${claim.claimCount} of ${MAX_JOB_CLAIMS}, generation ${claim.generation}, stage ${claim.stage ?? 'unknown'}, transcript id ${claim.transcriptId ? 'saved' : 'not saved'}, submission ${claim.submissionState}).`);
-    void runOwnedJob(execution, input);
+    activeResumes += 1;
+    void runOwnedJob(execution, input).finally(() => {
+      activeResumes -= 1;
+    });
     return 'resumed';
   } catch (error) {
     if (error instanceof JobLeaseLostError) {
@@ -281,10 +290,9 @@ export async function recoverOrphanedJobs(): Promise<void> {
     return;
   }
   const rows = (data ?? []) as Array<{ id: string }>;
-  let started = 0;
   for (const [index, row] of rows.entries()) {
-    if (started >= MAX_RESUMES_PER_SWEEP) {
-      console.log(`Resumed ${started} orphaned workflow job(s) this sweep; ${rows.length - index} more wait for the next sweep.`);
+    if (activeResumes >= MAX_ACTIVE_RESUMES) {
+      console.log(`${activeResumes} resumed workflow job(s) are running (cap ${MAX_ACTIVE_RESUMES}); ${rows.length - index} orphan(s) wait for a later sweep unclaimed.`);
       return;
     }
     const outcome = await jobLeases.claim(row.id, 'recover');
@@ -304,6 +312,6 @@ export async function recoverOrphanedJobs(): Promise<void> {
       reportExhausted(outcome.claim);
       continue;
     }
-    if (await recoverClaimedJob(outcome.claim) === 'resumed') started += 1;
+    await recoverClaimedJob(outcome.claim);
   }
 }

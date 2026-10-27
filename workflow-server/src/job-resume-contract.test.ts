@@ -20,7 +20,7 @@ const { parseSummarizeInput } = await import('./pipeline/inputs.js');
 const { workflowFixture, summarizeBody, USER, OTHER } = await import('./test-support/workflow.js');
 const { processSummarizeJob, completedJobResults } = await import('./jobs/runner.js');
 const {
-  recoverClaimedJob, recoverOrphanedJobs, MAX_RESUMES_PER_SWEEP, RESUME_UNREADABLE_REQUEST_MESSAGE,
+  recoverClaimedJob, recoverOrphanedJobs, MAX_ACTIVE_RESUMES, activeResumeCount, RESUME_UNREADABLE_REQUEST_MESSAGE,
 } = await import('./jobs/orphanSweep.js');
 const { JOB_INSTANCE_ID, JOB_EXHAUSTED_ERROR } = await import('./jobs/lease.js');
 type JobClaim = import('./jobs/lease.js').JobClaim;
@@ -421,18 +421,34 @@ test('resume converges to completed from a persisted note of the same user; a lo
 // Sweep loop
 // ---------------------------------------------------------------------------
 
-test('the sweep claims expired rows by database time and starts at most MAX_RESUMES_PER_SWEEP runs', async (t) => {
+test('the sweep claims expired rows by database time and runs at most MAX_ACTIVE_RESUMES resumes at once', { timeout: 30_000 }, async (t) => {
   t.mock.method(console, 'log', () => undefined);
-  const ids = Array.from({ length: MAX_RESUMES_PER_SWEEP + 2 }, (_, i) => `orphan-${i}`);
+  const ids = Array.from({ length: MAX_ACTIVE_RESUMES + 2 }, (_, i) => `orphan-${i}`);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
   const f = await fixture(t, noCheckpoint, noNote,
     (url) => (isTable(url, 'workflow_job') && url.searchParams.has('or') ? Response.json(ids.map((id) => ({ id, lease_expires_at: null }))) : undefined),
     (url, _method, body) => (isRpc(url, 'workflow_job_claim') ? Response.json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'processing', stage: 'queued',
       execution_generation: 2, attempt_count: 1, claim_count: 2, assembly_transcript_id: null, transcript_submission_state: 'none', transcript_submission_count: 0,
-      claim_outcome: 'claimed' }]) : undefined));
+      claim_outcome: 'claimed' }]) : undefined),
+    // Hold every resumed run at its provider submit so the resumes stay active.
+    async (url, method) => {
+      if (url.hostname === 'api.assemblyai.com' && method === 'POST') await held;
+      return undefined;
+    });
+  assert.equal(MAX_ACTIVE_RESUMES, 2);
   await recoverOrphanedJobs();
-  const claims = rpcCalls(f, 'workflow_job_claim');
-  assert.deepEqual(claims.map((c) => [c.body.p_job_id, c.body.p_mode]), ids.slice(0, MAX_RESUMES_PER_SWEEP).map((id) => [id, 'recover']), 'the rest wait for the next sweep unclaimed');
-  await until(() => ids.slice(0, MAX_RESUMES_PER_SWEEP).every((id) => terminal(f, id)), 'the resumed runs');
+  const claimed = () => rpcCalls(f, 'workflow_job_claim').map((c) => c.body.p_job_id as string);
+  assert.deepEqual(claimed(), ids.slice(0, MAX_ACTIVE_RESUMES), 'the rest wait unclaimed');
+  assert.equal(activeResumeCount(), MAX_ACTIVE_RESUMES);
+  await recoverOrphanedJobs();
+  assert.deepEqual(claimed(), ids.slice(0, MAX_ACTIVE_RESUMES), 'a sweep at the cap claims nothing');
+  release();
+  await until(() => ids.slice(0, MAX_ACTIVE_RESUMES).every((id) => terminal(f, id)), 'the resumed runs');
+  await until(() => activeResumeCount() === 0, 'the slots to free');
+  await recoverOrphanedJobs();
+  assert.deepEqual(claimed().slice(MAX_ACTIVE_RESUMES), ids.slice(0, MAX_ACTIVE_RESUMES), 'freed slots take the next candidates (the scan fixture lists the same rows)');
+  await until(() => activeResumeCount() === 0, 'the second wave');
   for (const id of ids) completedJobResults.delete(id);
   const scan = f.state.calls.find((c) => isTable(c.url, 'workflow_job') && c.url.searchParams.has('or'))!;
   assert.equal(scan.url.searchParams.get('limit'), '200');
