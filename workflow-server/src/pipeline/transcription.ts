@@ -424,6 +424,7 @@ async function transcribeForJob(input: {
     console.log(`Workflow job ${job.jobId} resumes AssemblyAI transcript ${transcriptId} without resubmitting.`);
     const startedAt = performance.now();
     const transcript = await pollAssemblyTranscript(transcriptId, startedAt, assertOwned);
+    await settleUsageOwnership(job, transcriptId);
     return finishAssemblyTranscript(transcript, { ...ids, transcriptId, startedAt, usageMetadata: { resumedPoll: true, jobId: job.jobId } });
   }
   if (job.resumed) await assertAudioReachable(input.downloadUrl, input.language);
@@ -456,12 +457,36 @@ async function transcribeForJob(input: {
   }
   await persistTranscriptId(job, transcriptId);
   const transcript = await pollAssemblyTranscript(transcriptId, startedAt, assertOwned);
-  return finishAssemblyTranscript(transcript, {
+  const superseded = await settleUsageOwnership(job, transcriptId);
+  const usageMetadata = {
+    ...(reason ? { resubmission: true, resubmissionReason: reason } : {}),
+    ...(superseded ? { supersededExecution: true } : {}),
+  };
+  const result = await finishAssemblyTranscript(transcript, {
     ...ids,
     transcriptId,
     startedAt,
-    ...(reason ? { usageMetadata: { resubmission: true, resubmissionReason: reason, jobId: job.jobId } } : {}),
+    ...(Object.keys(usageMetadata).length > 0 ? { usageMetadata: { ...usageMetadata, jobId: job.jobId } } : {}),
   });
+  if (superseded) throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record');
+  return result;
+}
+
+// Fenced usage: only the owner records a transcript's usage. Before recording, renew the
+// lease. If another execution owns the job and this transcript id is saved on the row,
+// the owner polls the same id and records it, so this execution stops without a row
+// (no double count). If the id was never saved, the owner cannot know it and will
+// submit again, so this paid transcript is recorded here, flagged supersededExecution,
+// and the caller stops after recording (returns true). An unknown renewal (DB error)
+// records normally: a missing cost row is worse than a rare duplicate.
+async function settleUsageOwnership(job: JobExecution, transcriptId: string): Promise<boolean> {
+  const outcome = job.lost ? 'lost' : await jobLeases.renew(job);
+  if (outcome !== 'lost') return false;
+  job.lost = true;
+  if (job.transcriptId === transcriptId) {
+    throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record (the new owner records saved transcript ' + transcriptId + ')');
+  }
+  return true;
 }
 
 // Transcript stage of the summarize runner. The caller writes the 'transcribing audio'

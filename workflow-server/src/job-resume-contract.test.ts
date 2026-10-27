@@ -213,6 +213,31 @@ test('a rollback during a run (RPCs gone) falls back to pre-S10 heartbeats and i
   completedJobResults.delete('rollback-job');
 });
 
+test('fenced usage: a superseded execution leaves a saved transcript to the owner and records an unsaved one, flagged', { timeout: 30_000 }, async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  const warn = t.mock.method(console, 'warn', () => undefined);
+  let idWrite: 'ok' | 'error' = 'ok';
+  const f = await fixture(t, noCheckpoint,
+    // The lease is taken while AssemblyAI transcribes: the renewal before the usage row fails.
+    (url) => (isRpc(url, 'workflow_job_renew_lease') ? Response.json(false) : undefined),
+    (url, _method, body) => (idWrite === 'error' && isRpc(url, 'workflow_job_write') && body.p_patch.assembly_transcript_id
+      ? Response.json({ message: 'write blip' }, { status: 503 }) : undefined));
+  const usageRows = () => f.state.calls.filter((c) => isTable(c.url, 'workflow_usage') && c.body?.stage === 'transcription');
+  await processSummarizeJob('saved-id-job', input());
+  await sleep(20);
+  assert.equal(usageRows().length, 0, 'the owner records the saved transcript; no double count');
+  assert.ok(!terminal(f, 'saved-id-job'), 'the superseded execution writes no terminal status');
+  assert.ok(warn.mock.calls.some((c) => String(c.arguments[0]).includes('the new owner records saved transcript fixture-transcript')), 'the stop is logged');
+
+  f.reset(); idWrite = 'error';
+  await processSummarizeJob('unsaved-id-job', input());
+  await sleep(20);
+  const [row] = usageRows();
+  assert.ok(row, 'an unsaved transcript is a separate charge and is recorded');
+  assert.deepEqual([row!.body.usage_metadata.transcriptId, row!.body.usage_metadata.supersededExecution], ['fixture-transcript', true]);
+  assert.ok(!terminal(f, 'unsaved-id-job'), 'and the execution still stops without a terminal write');
+});
+
 test('a lost lease at a stage write stops the run without a failure write, incident or enrichment', async (t) => {
   const warn = t.mock.method(console, 'warn', () => undefined);
   const log = t.mock.method(console, 'log', () => undefined);
