@@ -9,8 +9,9 @@ import { insertSpeaker, selectSpeakersByNames, updateSpeakerProfileReturningId }
 import {
   deleteOwnedNoteReturningId,
   patchOwnedNoteReturningId,
-  queryHistoryNotes,
   saveNoteTranslations,
+  type NoteOwnershipFilter,
+  type NoteSortKey,
 } from '../lib/notes/repository';
 import {
   ArrowsReload01,
@@ -37,6 +38,9 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
+import type { Note } from './summaryHistory/types';
+import { normalizeTagList } from './summaryHistory/noteSearch';
+import { NOTES_PAGE_SIZE, useNotesList, type HistoryViewMode } from './summaryHistory/useNotesList';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
@@ -70,33 +74,6 @@ import { meetingKnowledgeUiEnabled } from '../services/meetingKnowledge';
 import NoteImageAttachments from '../components/NoteImageAttachments';
 
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
-
-interface Note {
-  id: string;
-  name?: string | null;
-  user_id: string;
-  user_name: string;
-  chat_id?: string | null;
-  projects?: Array<string | number> | null;
-  summary?: string;
-  summary_edit?: string | null;
-  summary_translations?: Record<string, string> | null;
-  transcription?: string | null;
-  transcription_language?: string | null;
-  transcription_translations?: Record<string, string> | null;
-  diarization?: unknown;
-  diarization_translations?: Partial<Record<'en' | 'ko', TranscriptSegment[]>> | null;
-  audio_file?: string | null;
-  audio_file_id?: string | null;
-  shared_users?: unknown;
-  /** String array or json/jsonb; Supabase may return a JSON string. */
-  tag?: unknown;
-  tags?: unknown;
-  /** Legacy column name; still read so diarized UI works until fully migrated. */
-  created_at?: string;
-  meeting_at?: string | null;
-  duration_seconds?: number | null;
-}
 
 
 const getNoteSharedUserIds = (note: Note): string[] => {
@@ -200,7 +177,6 @@ async function invokeGenerateProfile(
   return parsed;
 }
 
-const NOTES_PAGE_SIZE = 10;
 const CALENDAR_VISIBLE_START_HOUR = 8;
 const CALENDAR_VISIBLE_END_HOUR = 20;
 const CALENDAR_HOUR_HEIGHT_PX = 120;
@@ -208,10 +184,7 @@ const CALENDAR_EVENT_GAP_PX = 4;
 const CALENDAR_EVENT_TOP_INSET_PX = 2;
 const CALENDAR_EVENT_BOTTOM_INSET_PX = 6;
 const SHOW_OUTLOOK_CALENDAR_EVENTS = false;
-type HistoryViewMode = 'list' | 'calendar';
 type CalendarDisplayMode = 'daily' | 'weekly' | 'monthly';
-type NoteOwnershipFilter = 'all' | 'mine' | 'shared';
-type NoteSortKey = 'meeting_desc' | 'meeting_asc' | 'created_desc' | 'created_asc' | 'title_asc' | 'title_desc';
 type NoteDetailTab = 'summary' | 'transcription' | 'images';
 
 const NOTE_ACTION_MENU_WIDTH_PX = 190;
@@ -271,39 +244,6 @@ interface PositionedHourlyCalendarItem {
 }
 
 /** When totalPages > 5, compress middle with ellipses; otherwise list every page. */
-function normalizeTagList(raw: unknown): string[] {
-  if (raw == null) return [];
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (!s) return [];
-    if (s.startsWith('[') || s.startsWith('{')) {
-      try {
-        return normalizeTagList(JSON.parse(s) as unknown);
-      } catch {
-        return s.split(',').map((t) => t.trim()).filter(Boolean);
-      }
-    }
-    return s.split(',').map((t) => t.trim()).filter(Boolean);
-  }
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const item of raw) {
-    if (item == null) continue;
-    if (typeof item === 'string') {
-      const t = item.trim();
-      if (t) out.push(t);
-    } else if (typeof item === 'object') {
-      const o = item as Record<string, unknown>;
-      const label = o.label ?? o.name ?? o.value;
-      if (typeof label === 'string' && label.trim()) out.push(label.trim());
-    } else {
-      const t = String(item).trim();
-      if (t) out.push(t);
-    }
-  }
-  return out;
-}
-
 function getPaginationItems(totalPages: number, currentPage: number): (number | 'ellipsis')[] {
   if (totalPages <= 0) return [];
   if (totalPages <= 5) {
@@ -438,45 +378,6 @@ function toProjectIdValue(id: string): string | number {
   return Number.isNaN(asNumber) ? id : asNumber;
 }
 
-function textMatchesNeedle(value: string, needle: string): boolean {
-  const text = value.trim().toLocaleLowerCase();
-  return Boolean(text) && (text.includes(needle) || needle.includes(text));
-}
-
-function noteMatchesSearch(note: Note, query: string, currentUserSearchValues: string[]): boolean {
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle) return true;
-  const queryLooksLikeCurrentUser = currentUserSearchValues.some((value) => textMatchesNeedle(value, needle));
-
-  const searchableText = [
-    note.name,
-    note.summary,
-    note.summary_edit,
-    ...Object.values(note.summary_translations ?? {}),
-    ...normalizeTagList(note.tag),
-    ...normalizeTagList(note.tags),
-  ]
-    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
-    .join(' ')
-    .toLocaleLowerCase();
-  if (searchableText.includes(needle)) return true;
-
-  if (!queryLooksLikeCurrentUser && note.user_name?.trim().toLocaleLowerCase().includes(needle)) return true;
-
-  const speakers = normalizeTranscript(getNoteDiarizationRaw(note))
-    .map((segment) => segment.speaker.trim().toLocaleLowerCase())
-    .filter(Boolean);
-  if (speakers.some((speaker) => speaker.includes(needle))) return true;
-
-  const transcription = note.transcription || '';
-  return transcription
-    .split(/\r?\n/)
-    .some((line) => {
-      const [speakerPrefix] = line.split(':', 1);
-      return speakerPrefix?.trim().toLocaleLowerCase().includes(needle);
-    });
-}
-
 const SummaryHistory: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -489,14 +390,6 @@ const SummaryHistory: React.FC = () => {
   
   const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null);
   const [chatLoading, setChatLoading] = useState(true);
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [notesTotalCount, setNotesTotalCount] = useState(0);
-  const [notesPage, setNotesPage] = useState(1);
-  const [notesLoading, setNotesLoading] = useState(true);
-  // Distinguishes "the fetch failed" from "there are legitimately no notes":
-  // without this, a failed load renders the empty state and reads as data loss.
-  const [notesError, setNotesError] = useState<string | null>(null);
-  const [notesReloadNonce, setNotesReloadNonce] = useState(0);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
   const [historyViewMode, setHistoryViewMode] = useState<HistoryViewMode>('list');
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthStart(new Date()));
@@ -681,108 +574,36 @@ const SummaryHistory: React.FC = () => {
 
   const calendarWindow = useMemo(() => getCalendarWindow(calendarMonth), [calendarMonth]);
   const normalizedNoteSearchQuery = noteSearchQuery.trim();
-  const notesScopeKey = `${chatId ?? ''}|${user?.id ?? ''}|${historyViewMode}|${normalizedNoteSearchQuery}|${noteOwnershipFilter}|${noteSortKey}`;
-  const prevNotesScopeRef = useRef(notesScopeKey);
   const currentUserSearchValues = useMemo(() => {
     const values = [user?.displayName, user?.microsoftAccountName, user?.email, user?.email?.split('@')[0]];
     return values.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
   }, [user?.displayName, user?.email, user?.microsoftAccountName]);
 
+  const {
+    notes,
+    setNotes,
+    notesTotalCount,
+    setNotesTotalCount,
+    notesPage,
+    setNotesPage,
+    notesLoading,
+    notesError,
+    reloadNotes,
+  } = useNotesList({
+    userId: user?.id,
+    chatId,
+    viewMode: historyViewMode,
+    calendarWindow,
+    searchQuery: normalizedNoteSearchQuery,
+    currentUserSearchValues,
+    ownership: noteOwnershipFilter,
+    sortKey: noteSortKey,
+    onScopeReset: () => setExpandedNoteId(null),
+  });
+
   useEffect(() => {
     setExpandedNoteId(null);
   }, [notesPage]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadNotes = async () => {
-      try {
-        setNotesLoading(true);
-        setNotesError(null);
-
-        let effectivePage = notesPage;
-        if (prevNotesScopeRef.current !== notesScopeKey) {
-          prevNotesScopeRef.current = notesScopeKey;
-          effectivePage = 1;
-          setNotesPage(1);
-          setExpandedNoteId(null);
-        }
-
-        if (!user?.id) {
-          if (!cancelled) {
-            setNotes([]);
-            setNotesTotalCount(0);
-          }
-          return;
-        }
-
-        const from = (effectivePage - 1) * NOTES_PAGE_SIZE;
-        const to = from + NOTES_PAGE_SIZE - 1;
-        const shouldFilterBySearch = Boolean(normalizedNoteSearchQuery);
-
-        const { data, error, count } = await queryHistoryNotes({
-          userId: user.id,
-          chatId,
-          ownership: noteOwnershipFilter,
-          calendarWindow:
-            historyViewMode === 'calendar'
-              ? {
-                  startIso: calendarWindow.start.toISOString(),
-                  endIso: calendarWindow.endExclusive.toISOString(),
-                }
-              : null,
-          sortKey: noteSortKey,
-          range: historyViewMode === 'calendar' || shouldFilterBySearch ? null : { from, to },
-        });
-
-        if (cancelled) return;
-        if (error) throw error;
-        const loadedNotes = ((data as Note[]) || []);
-        const filteredNotes = shouldFilterBySearch
-          ? loadedNotes.filter((note) => noteMatchesSearch(note, normalizedNoteSearchQuery, currentUserSearchValues))
-          : loadedNotes;
-        setNotes(
-          historyViewMode === 'calendar'
-            ? filteredNotes
-            : shouldFilterBySearch
-              ? filteredNotes.slice(from, to + 1)
-              : filteredNotes
-        );
-        setNotesTotalCount(shouldFilterBySearch ? filteredNotes.length : typeof count === 'number' ? count : 0);
-      } catch (error) {
-        console.error('Error fetching notes:', error);
-        if (!cancelled) {
-          setNotes([]);
-          setNotesTotalCount(0);
-          setNotesError(
-            error instanceof Error
-              ? error.message
-              : 'Could not load your notes. Check your connection and try again.'
-          );
-        }
-      } finally {
-        if (!cancelled) setNotesLoading(false);
-      }
-    };
-
-    void loadNotes();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    notesScopeKey,
-    notesPage,
-    chatId,
-    user?.id,
-    historyViewMode,
-    calendarWindow.start,
-    calendarWindow.endExclusive,
-    currentUserSearchValues,
-    normalizedNoteSearchQuery,
-    noteOwnershipFilter,
-    noteSortKey,
-    notesReloadNonce,
-  ]);
 
   useEffect(() => {
     if (!isAuthenticated || historyViewMode !== 'calendar') {
@@ -2311,7 +2132,7 @@ const SummaryHistory: React.FC = () => {
                   </p>
                   <button
                     type="button"
-                    onClick={() => setNotesReloadNonce((n) => n + 1)}
+                    onClick={reloadNotes}
                     className="rounded-lg border px-4 py-2 text-sm font-medium"
                     style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
                   >

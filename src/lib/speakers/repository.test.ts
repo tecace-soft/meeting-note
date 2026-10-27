@@ -161,8 +161,8 @@ describe('speaker repository owner id guard', () => {
       await expect(insertContactSpeakerReturning({ userId: id, name: 'N', email: 'e', microsoftId: 'm' })).rejects.toThrow(/Owner id is required/);
       await expect(findSpeakersByMicrosoftId(id, 'm')).rejects.toThrow(/Owner id is required/);
       await expect(findSpeakersByEmail(id, 'e')).rejects.toThrow(/Owner id is required/);
-      expect(() => selectSpeakersByNames(id, [], 'name, profile')).toThrow(/Owner id is required/);
-      expect(() => selectSpeakerIdentityRows(id)).toThrow(/Owner id is required/);
+      await expect(selectSpeakersByNames(id, [], 'name, profile')).rejects.toThrow(/Owner id is required/);
+      await expect(selectSpeakerIdentityRows(id)).rejects.toThrow(/Owner id is required/);
       expect(fake().queries).toEqual([]);
     });
   }
