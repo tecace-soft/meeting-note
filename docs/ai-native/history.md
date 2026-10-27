@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(jobs): a superseded execution records a saved transcript's usage once instead of skipping it (N4)
 - fix(jobs): the rollback fallback write only touches active rows (N3)
 - fix(jobs): one orphan sweep at a time so the resume cap holds (N2)
 - fix(db): never fail an over-cap job whose note is already saved (N1)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(web): pin note call-chain contracts before the T2-2 repository move
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
-- refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
 
 ### Recent merges
 

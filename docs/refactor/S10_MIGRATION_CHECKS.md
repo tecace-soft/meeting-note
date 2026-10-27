@@ -23,10 +23,10 @@ from information_schema.columns
 where table_schema = 'public' and table_name = 'workflow_job'
 order by ordinal_position;
 
--- 1-2. S10 RPC가 아직 없어야 한다(0행).
-select p.proname
+-- 1-2. S10 RPC가 아직 없어야 한다(0행). 시그니처까지 보여 주므로 옛 overload가 남아 있으면 여기서 드러난다.
+select p.oid::regprocedure
 from pg_proc p
-where p.pronamespace = 'public'::regnamespace and p.proname like 'workflow_job\_%';
+where p.pronamespace = 'public'::regnamespace and p.proname like 'workflow\_job\_%';
 
 -- 1-3. RLS와 정책 기준선. relrowsecurity = true, 정책은 workflow_job_service_role_all 하나.
 select relrowsecurity from pg_class where oid = 'public.workflow_job'::regclass;
@@ -131,6 +131,9 @@ begin;
 select * from public.workflow_job_claim('00000000-0000-0000-0000-000000000000', 'post-check', 'recover', 300, 300, 3, 10, 'en', 'ko');
 select public.workflow_job_load_request('00000000-0000-0000-0000-000000000000', 'post-check', 1);
 select public.workflow_job_write('00000000-0000-0000-0000-000000000000', 'post-check', 1, '{"stage":"post-check"}'::jsonb);
+-- 아래 둘은 null과 false가 기대값이다.
+select public.workflow_job_begin_execution('00000000-0000-0000-0000-000000000000', 'post-check', 1, 3);
+select public.workflow_job_renew_lease('00000000-0000-0000-0000-000000000000', 'post-check', 1, 300);
 rollback;
 ```
 
@@ -177,13 +180,34 @@ from public.workflow_usage u
 where u.stage = 'transcription-resubmission' and u.created_at > now() - interval '7 days'
 order by u.created_at desc;
 
--- 5-4. 실행권을 잃은 실행이 따로 기록한 전사(supersededExecution 표식).
-select created_at, note_id, usage_metadata ->> 'transcriptId' as transcript_id
+-- 5-4. 실행권을 잃은 실행이 기록한 전사(supersededExecution: 저장되지 않은 별도 과금,
+--      leaseLostIdSaved: 저장된 id라 새 owner와 같은 전사일 수 있음).
+select created_at, note_id, usage_metadata ->> 'transcriptId' as transcript_id,
+       usage_metadata ? 'supersededExecution' as superseded, usage_metadata ? 'leaseLostIdSaved' as lease_lost_id_saved
 from public.workflow_usage
-where stage = 'transcription' and usage_metadata ? 'supersededExecution'
+where stage = 'transcription'
+  and (usage_metadata ? 'supersededExecution' or usage_metadata ? 'leaseLostIdSaved')
   and created_at > now() - interval '7 days'
 order by created_at desc;
+
+-- 5-5. 같은 transcript id로 transcription 행이 둘 이상인 경우(거의 동시에 기록한 드문 중복).
+-- 비용을 합산할 때는 transcript id별로 한 행만 센다.
+select usage_metadata ->> 'transcriptId' as transcript_id, count(*) as rows, sum(estimated_cost_usd) as summed_cost
+from public.workflow_usage
+where stage = 'transcription' and provider = 'assemblyai' and created_at > now() - interval '7 days'
+group by 1
+having count(*) > 1;
+
+-- 5-6. N1 회귀 감지: note가 저장됐는데 failed로 끝난 작업(0행이어야 한다).
+select j.id, j.note_id, j.attempt_count, j.claim_count, j.error, j.updated_at
+from public.workflow_job j
+where j.status = 'failed' and j.claim_count > 1 and j.updated_at > now() - interval '7 days'
+  and exists (select 1 from public.note n where n.id = j.note_id and (n.user_id is null or n.user_id = j.user_id))
+order by j.updated_at desc;
 ```
+
+5-5와 5-6은 0행이 정상이다.
+note 조회가 계속 실패하면 note가 있는 작업은 상한으로 끝나지 않고 lease 주기(5분)마다 다시 인수된다(5-1에서 claim_count가 계속 오르는 행으로 보인다).
 
 ## 6. 되돌리기
 
