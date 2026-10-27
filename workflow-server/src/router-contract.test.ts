@@ -16,17 +16,21 @@ const WORKFLOW_CORS = {
   'access-control-allow-headers': 'authorization, content-type', vary: 'Origin', 'content-type': 'application/json',
 };
 
+// Captured before any test spies on the globals, so the helpers' own timers are never counted.
+const nativeSetTimeout = globalThis.setTimeout;
+const nativeClearTimeout = globalThis.clearTimeout;
+
 function bounded<T>(promise: Promise<T>, label: string, ms = REQUEST_TIMEOUT_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms); });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  const timeout = new Promise<never>((_, reject) => { timer = nativeSetTimeout(() => reject(new Error(`${label} timed out`)), ms); });
+  return Promise.race([promise, timeout]).finally(() => nativeClearTimeout(timer));
 }
 
 async function until(condition: () => boolean, label: string, ms = 5_000): Promise<void> {
   const deadline = Date.now() + ms;
   while (!condition()) {
     if (Date.now() > deadline) throw new Error(`${label} did not happen within ${ms}ms`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => nativeSetTimeout(resolve, 10));
   }
 }
 
@@ -42,24 +46,42 @@ const fixtureEnv = {
   ALLOWED_MS_TENANT_IDS: '33333333-3333-4333-8333-333333333333',
 };
 
-test('importing the server module is inert: no listen, interval or process listener', { timeout: TEST_TIMEOUT_MS }, async (t) => {
+// Every test loads the server through this, so each one passes when run alone: whichever
+// test imports first fixes VERSION_INFO to SHA, and later calls reuse the cached module.
+async function importIndex() {
   Object.assign(process.env, fixtureEnv, { RENDER_GIT_COMMIT: SHA, RENDER_GIT_BRANCH: 'fixture-branch' });
+  try {
+    return await bounded(import('./index.js'), 'index import');
+  } finally {
+    delete process.env.RENDER_GIT_COMMIT;
+    delete process.env.RENDER_GIT_BRANCH;
+  }
+}
+
+test('importing the server module is inert: no listen, timer or process listener', { timeout: TEST_TIMEOUT_MS }, async (t) => {
   const intervals = t.mock.method(globalThis, 'setInterval');
+  const timeouts = t.mock.method(globalThis, 'setTimeout');
+  const signals = ['SIGTERM', 'SIGINT'] as const;
   const before = { rejection: process.listenerCount('unhandledRejection'), exception: process.listenerCount('uncaughtException') };
+  const signalsBefore = signals.map((signal) => process.listenerCount(signal));
   const dispatcher = getGlobalDispatcher();
-  const { server } = await bounded(import('./index.js'), 'index import');
+  const { server } = await importIndex();
   const intervalCalls = intervals.mock.callCount();
+  const timeoutCalls = timeouts.mock.callCount();
   intervals.mock.restore();
-  delete process.env.RENDER_GIT_COMMIT;
-  delete process.env.RENDER_GIT_BRANCH;
+  timeouts.mock.restore();
   assert.equal(server.listening, false, 'import must not listen');
-  assert.equal(intervalCalls, 0, 'import must not schedule the orphan sweep');
+  assert.equal(intervalCalls, 0, 'import must not schedule the orphan sweep or any interval');
+  assert.equal(timeoutCalls, 0, 'import must not schedule a timeout (worker polling starts in startServer)');
+  assert.deepEqual(signals.map((signal) => process.listenerCount(signal)), signalsBefore, 'import must not add SIGTERM or SIGINT listeners');
   assert.equal(process.listenerCount('unhandledRejection'), before.rejection, 'import must not add an unhandledRejection listener');
   assert.equal(process.listenerCount('uncaughtException'), before.exception, 'import must not add an uncaughtException listener');
   assert.equal(getGlobalDispatcher(), dispatcher, 'import must not replace the global dispatcher');
 });
 
 test('T1-11 router contract', { timeout: TEST_TIMEOUT_MS * 4 }, async (t) => {
+  // First, so config/env.ts loads with the fixture environment even when this test runs alone.
+  await importIndex();
   const logged = t.mock.method(console, 'error', () => undefined);
   t.mock.method(console, 'warn', () => undefined);
   const { workflowFixture, summarizeBody, regenerateBody } = await import('./test-support/workflow.js');
@@ -284,6 +306,7 @@ test('T1-11 router contract', { timeout: TEST_TIMEOUT_MS * 4 }, async (t) => {
 });
 
 test('startServer owns the boot sweep, the sweep interval and process listeners exactly once', { timeout: TEST_TIMEOUT_MS }, async (t) => {
+  const { server, startServer } = await importIndex();
   t.mock.method(console, 'log', () => undefined);
   t.mock.method(console, 'error', () => undefined);
   const { workflowFixture } = await import('./test-support/workflow.js');
@@ -291,7 +314,6 @@ test('startServer owns the boot sweep, the sweep interval and process listeners 
   const f = await bounded(workflowFixture(), 'fixture start');
   await bounded(new Promise<void>((resolve) => f.server.close(() => resolve())), 'fixture listener close');
   t.after(() => f.close());
-  const { server, startServer } = await import('./index.js');
   const scans = () => f.state.calls.filter((call) => call.url.pathname === '/rest/v1/workflow_job' && call.url.searchParams.has('or')).length;
   const before = { rejection: process.listenerCount('unhandledRejection'), exception: process.listenerCount('uncaughtException') };
   const dispatcher = getGlobalDispatcher();
@@ -331,8 +353,8 @@ test('startServer owns the boot sweep, the sweep interval and process listeners 
 test('http/router exports a request listener that index mounts on the one server', { timeout: TEST_TIMEOUT_MS }, async (t) => {
   t.mock.method(console, 'error', () => undefined);
   const { createServer } = await import('node:http');
+  const { server } = await importIndex();
   const router = await import('./http/router.js');
-  const { server } = await import('./index.js');
   assert.ok(!('server' in router), 'the router module creates no server of its own');
   assert.deepEqual(server.listeners('request'), [router.handleWorkflowRequest], 'index mounts exactly the router listener');
   // Mounted on a different server, the listener answers the same dispatch.
