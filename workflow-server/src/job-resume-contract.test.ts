@@ -210,6 +210,10 @@ test('a rollback during a run (RPCs gone) falls back to pre-S10 heartbeats and i
   const patches = f.state.calls.filter((c) => isTable(c.url, 'workflow_job') && c.method === 'PATCH').map((c) => c.body as Record<string, unknown>);
   assert.equal(patches.at(-1)!.status, 'completed', 'the completed write lands by id');
   assert.ok(patches.every((p) => !('assembly_transcript_id' in p) && !('transcript_submission_state' in p)), 'S10-only fields are dropped');
+  const statusWrites = f.state.calls.filter((c) => isTable(c.url, 'workflow_job') && c.method === 'PATCH' && Object.keys(c.body).some((k) => k !== 'updated_at'));
+  assert.ok(statusWrites.length > 0, 'the fallback wrote job fields by id');
+  assert.ok(statusWrites.every((c) => c.url.searchParams.get('status') === 'in.(queued,processing)'),
+    'a fallback write never overwrites a terminal row (an execution that lost its lease during the rollback window)');
   completedJobResults.delete('rollback-job');
 });
 

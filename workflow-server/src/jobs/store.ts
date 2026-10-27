@@ -47,16 +47,20 @@ export interface WorkflowJobPatch {
 // Returns true once written and false when every attempt failed (logged). For an owned
 // execution, a write that proves the lease is gone throws JobLeaseLostError instead,
 // so the caller stops without writing anything else.
-export async function updateWorkflowJob(job: JobRef, patch: WorkflowJobPatch, options?: { retries?: number }): Promise<boolean> {
+// `activeOnly` (pre-S10 writes of an owned execution after a rollback) adds an active-status
+// condition, so a write from an execution that lost its lease cannot overwrite a row that
+// already reached completed or failed.
+export async function updateWorkflowJob(job: JobRef, patch: WorkflowJobPatch, options?: { retries?: number; activeOnly?: boolean }): Promise<boolean> {
   if (!job) return false;
   if (typeof job !== 'string') return writeOwnedJob(job, patch, Math.max(0, options?.retries ?? 0));
   const jobId = job;
   const retries = Math.max(0, options?.retries ?? 0);
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const { error } = await supabase.from('workflow_job').update({
+    const update = supabase.from('workflow_job').update({
       ...patch,
       updated_at: new Date().toISOString(),
     }).eq('id', jobId);
+    const { error } = await (options?.activeOnly ? update.in('status', ['queued', 'processing']) : update);
     if (!error) return true;
     if (attempt < retries) {
       await delay(Math.min(1000 * 2 ** attempt, 8000));
@@ -93,7 +97,7 @@ async function writeOwnedJob(execution: JobExecution, patch: WorkflowJobPatch, r
       // S10-only fields have no column to land in and are dropped.
       const { assembly_transcript_id: _id, transcript_submission_state: _state, ...legacyPatch } = patch;
       if (Object.keys(legacyPatch).length === 0) return true;
-      return updateWorkflowJob(execution.jobId, legacyPatch, { retries });
+      return updateWorkflowJob(execution.jobId, legacyPatch, { retries, activeOnly: true });
     }
     if (attempt < retries) await delay(Math.min(1000 * 2 ** attempt, 8000));
   }

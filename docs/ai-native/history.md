@@ -52,10 +52,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
 - docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
 - docs(decisions): point DEC-0001/0003 at the T1-9b job modules
-- docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
 
 **Other**
 
+- test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
 - test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
 - refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
