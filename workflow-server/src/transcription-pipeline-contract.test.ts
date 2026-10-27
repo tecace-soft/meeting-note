@@ -436,6 +436,9 @@ test('runner without a checkpoint: stage write, lookup, submit, poll, usage, che
   t.mock.method(console, 'log', () => undefined);
   const f = await runnerFixture(t, { checkpoint: false, settingsRow: { speech_model: 'u3', keyterms_prompt: ['Fixture'], custom_spelling: [], summary_context: '' } });
   f.state.existingJob = false;
+  // Pins the pre-S10 order (still what runs before the S10 migration). The S10 order, with
+  // the submission marker and the saved id before the first poll, is in job-resume-contract.test.ts.
+  f.state.s10Schema = false;
   const submitted = await f.request('/summarize-audio/jobs', { body: summarizeBody });
   assert.equal(submitted.status, 202, submitted.text);
   const deadline = Date.now() + 5_000;

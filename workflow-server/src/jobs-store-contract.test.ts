@@ -52,7 +52,7 @@ test('heartbeat and orphan timing constants keep their relationship', () => {
 
 test('NoSpeechDetectedError is a 422 HttpError with localized guidance', () => {
   const error = new NoSpeechDetectedError(noSpeechMessage('ko'));
-  assert.ok(error instanceof HttpError); assert.ok(error instanceof Error);
+  assert.ok(error instanceof HttpError, 'an HttpError'); assert.ok(error instanceof Error, 'an Error');
   assert.equal(error.name, 'NoSpeechDetectedError'); assert.equal(error.status, 422);
   assert.equal(getHttpStatus(error), 422);
   assert.equal(noSpeechMessage('ko'), '녹음에서 음성을 찾지 못했어요. 말소리가 담긴 녹음으로 다시 시도해 주세요.');
@@ -180,6 +180,9 @@ async function runJob(t: test.TestContext, options: { status: 'completed' | 'fai
   });
   t.after(() => intercept.mock.restore());
   f.state.existingJob = false;
+  // Pins the pre-S10 id-only writes stamped with updated_at; S10 fenced writes are covered
+  // by job-resume-contract.test.ts and job-lease-sql.test.ts.
+  f.state.s10Schema = false;
   f.state.aiFailure = options.aiFailure ?? false;
   const submitted = await f.request('/summarize-audio/jobs', { body: summarizeBody });
   assert.equal(submitted.status, 202, submitted.text);
@@ -196,8 +199,8 @@ test('job success writes completed with the full result and clears the checkpoin
   const done = terminal.at(-1)!;
   assert.deepEqual([done.status, done.stage, done.progress, done.error], ['completed', 'completed', 100, null]);
   assert.equal((done.result as { summary: string }).summary, 'Fixture summary');
-  assert.ok(f.state.jobUpdates.every((p) => !('user_id' in p) && typeof p.updated_at === 'string'));
-  assert.ok(f.state.calls.some((c) => c.url.pathname.endsWith('/workflow_transcript_checkpoint') && c.method === 'DELETE'));
+  assert.ok(f.state.jobUpdates.every((p) => !('user_id' in p) && typeof p.updated_at === 'string'), 'every job write stamps updated_at and never rewrites user_id');
+  assert.ok(f.state.calls.some((c) => c.url.pathname.endsWith('/workflow_transcript_checkpoint') && c.method === 'DELETE'), 'the checkpoint is deleted after success');
 });
 
 test('job failure writes failed with the error message and keeps the checkpoint', async (t) => {
@@ -206,7 +209,7 @@ test('job failure writes failed with the error message and keeps the checkpoint'
   const failed = f.state.jobUpdates.find((p) => p.status === 'failed')!;
   assert.deepEqual([failed.stage, failed.progress], ['failed', 100]);
   assert.match(String(failed.error), /Fixture AI failure/);
-  assert.ok(!f.state.calls.some((c) => c.url.pathname.endsWith('/workflow_transcript_checkpoint') && c.method === 'DELETE'));
+  assert.ok(!f.state.calls.some((c) => c.url.pathname.endsWith('/workflow_transcript_checkpoint') && c.method === 'DELETE'), 'the checkpoint survives a failure');
 });
 
 test('a recording with no speech fails the job with the localized message and no failure log', async (t) => {
@@ -215,6 +218,6 @@ test('a recording with no speech fails the job with the localized message and no
   const f = await runJob(t, { status: 'failed', checkpoint: false, silentAudio: true });
   const failed = f.state.jobUpdates.find((p) => p.status === 'failed')!;
   assert.equal(failed.error, noSpeechMessage('en'));
-  assert.ok(log.mock.calls.some((c) => String(c.arguments[0]).includes('ended with no detectable speech')));
+  assert.ok(log.mock.calls.some((c) => String(c.arguments[0]).includes('ended with no detectable speech')), 'the no-speech outcome is logged');
   assert.equal(error.mock.callCount(), 0, 'no error log and no incident for a silent recording');
 });

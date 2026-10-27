@@ -1,7 +1,7 @@
 ---
 id: DEC-0003
 date: 2026-07-23
-status: active
+status: superseded
 question: 배포 시 백엔드 재시작으로 끊기는 진행 중 작업을 어떻게 다룰 것인가
 options:
   - 재시작 후 아무 처리 안 함(작업이 영구히 멈춘 채 남음)
@@ -21,5 +21,7 @@ source: AGENTS.md "Deploys restart the backend" (최초 추가 커밋 5c44c39, 2
 ---
 ## 맥락
 
-index.ts는 크지만 failOrphanedJobs와 작업 소유 표식이 이 파일에 있다.
+failOrphanedJobs는 jobs/orphanSweep.ts에 있고, S10 이후에는 S10 migration이 없을 때만 쓰는 대체 경로다.
+작업 소유 표식은 S10 이전에는 heartbeat로 갱신하는 updated_at(jobs/runner.ts, jobs/store.ts)이고, S10 이후에는 jobs/lease.ts의 lease와 실행 세대다.
+이 결정은 DEC-0022(S10 자동 재개)로 대체됐다.
 작업 상태 처리 코드를 바꿀 때 sweep 동작이 유지되는지 확인한다.

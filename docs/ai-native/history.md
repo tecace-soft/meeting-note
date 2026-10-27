@@ -26,17 +26,42 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Features**
 
+- feat(db): return the stored job request only to a recover claim
+- feat(workflow-server): claim, fence and resume summarize jobs across restarts (S10)
+- feat(db): add the S10 workflow_job lease, generation and submission schema
 - feat(web): add note repository read, patch and delete methods for T2-2 (unused)
+
+**Fixes**
+
+- fix(jobs): a superseded execution records a saved transcript's usage once instead of skipping it (N4)
+- fix(jobs): the rollback fallback write only touches active rows (N3)
+- fix(jobs): one orphan sweep at a time so the resume cap holds (N2)
+- fix(db): never fail an over-cap job whose note is already saved (N1)
+- fix(jobs): fence the AssemblyAI usage record to the lease owner
+- fix(jobs): treat a missing submission marker past input loading as a possible resubmission (F7)
+- fix(jobs): the pre-S10 fallback sweep re-checks staleness in its fail write (F6)
+- fix(jobs): fall back to pre-S10 heartbeats and writes when the S10 RPCs vanish mid-run (F5)
+- fix(jobs): retry a transient start-claim error before deferring to the sweep (F4)
+- fix(jobs): no ops incident for an expired audio link on resume; probe refuses redirects (F3, F9)
+- fix(jobs): cap concurrently running resumed jobs per process (F2)
+- fix(jobs): enforce the S10 caps in SQL and stop returning the request from the claim (F1, F8)
 
 **Docs**
 
+- docs(refactor): add the reviewer's SQL Editor pre/post checks and post-deploy monitoring for S10
+- docs(ai-native): regenerate history after merging main
+- docs: point the deploy-restart guidance and DEC-0003 at the S10 lease model
+- docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
+- docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
 - docs(decisions): point DEC-0001/0003 at the T1-9b job modules
-- docs(decisions): point DEC-0003/0005/0008/0013 at the T1-10c pipeline modules
-- docs: update refactor plan progress through T1-8 (2026-10-26)
 
 **Other**
 
+- test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
+- test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
+- refactor(web): keep audio reference paging free of the app supabase client import (T2-2)
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
+- test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
 - refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
 - refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
 - refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
@@ -44,37 +69,17 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): audio reference check pages notes through the note repository (T2-2)
 - refactor(web): TranscriptDiarizedEditor reads and updates note sharing through the note repository (T2-2)
 - refactor(web): ShareNoteModal saves the share list through the note repository (T2-2)
+- ci: bound hung backend tests with a job timeout and a per-test timeout
 - refactor(web): AppSidebar reads notes through the note repository (T2-2)
+- test(workflow-server): bound the timer-driven runner and sweep retry contracts
 - test(web): pin note call-chain contracts before the T2-2 repository move
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
 - refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
-- refactor(workflow-server): move job routes, summarize runner and orphan sweep out of index.ts (T1-9b)
-- test(workflow-server): pin job routes, runner and orphan sweep contracts before T1-9b move
-- refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
-- test(workflow-server): make the translation contract fail when the note write does not await the translation
-- test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
-- test(workflow-server): add direct transcript-stage tests for transcribeOrReuseCheckpoint
-- refactor(workflow-server): split transcription into submit/poll/parse and a transcript stage (T1-10b)
-- refactor(workflow-server): move AssemblyAI transcription to pipeline/transcription (T1-10b)
-- test(workflow-server): pin AssemblyAI transcription pipeline contracts before T1-10b move
-- test(workflow-server): add direct androidUpload helper tests
-- refactor(workflow-server): move Android upload helpers to pipeline/androidUpload (T1-10a)
-- test(workflow-server): fix body typing in Android upload contract test
-- test(workflow-server): pin Android upload route contract before T1-10a move
-- chore: restore generated docs/ai-native to main (not part of T1-9a)
-- refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
-- refactor(workflow-server): move shared job types, no-speech error and input parsing out of index.ts (T1-9a)
-- test(workflow-server): pin job store, checkpoint, input and no-speech contracts before T1-9a move
-- refactor(regenerate): extract route and shared prompt loaders preserving owner attribution
-- test(regenerate): freeze prompt fallback and note-owner enrichment contracts
-- refactor(project-chat): extract JSON and SSE routes preserving note access filtering
-- test(project-chat): freeze note visibility, numeric ids and SSE framing
-- refactor(insight): extract refresh and backfill at their existing dispatch positions
-- test(insight): freeze owner attribution, admin limits and failure aggregation
-- refactor(briefing): extract owner-scoped meeting briefing route
 
 ### Recent merges
 
+- Merge origin/main into feature/s10-auto-resume
+- Merge pull request #49 from tecace-soft/refactor/t2-2-note-repository
 - Merge origin/main into refactor/t2-2-note-repository
 - Merge pull request #48 from tecace-soft/refactor/t1-9b-job-runner
 - Merge pull request #47 from tecace-soft/refactor/t1-10c-summarize-finalize
@@ -83,6 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
 - Merge origin/main into docs/refactor-progress-2026-10-26; add T1-9a row
 - Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
-- Merge pull request #42 from tecace-soft/refactor/t1-8-regenerate-summary
-- Merge pull request #41 from tecace-soft/refactor/t1-7-project-chat
 <!-- ai-native:auto:END -->

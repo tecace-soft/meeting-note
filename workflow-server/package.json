@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --import ./src/test-setup.ts --test \"src/**/*.test.ts\"",
+    "test": "tsx --import ./src/test-setup.ts --test --test-timeout=120000 \"src/**/*.test.ts\"",
     "eval": "tsx eval/run.ts",
     "eval:gate": "tsx eval/gate.ts",
     "eval:stability": "tsx eval/stability.ts",
@@ -29,7 +29,8 @@
     "speaker:feedback": "tsx scripts/speaker-feedback-report.ts",
     "typecheck:eval": "tsc -p eval/tsconfig.json",
     "env:check": "node scripts/check-env.mjs",
-    "test:note-rls": "tsx --import ./src/test-setup.ts --test src/note-rls.test.ts"
+    "test:note-rls": "tsx --import ./src/test-setup.ts --test --test-timeout=120000 src/note-rls.test.ts",
+    "test:job-lease-sql": "tsx --import ./src/test-setup.ts --test --test-timeout=120000 src/job-lease-sql.test.ts"
   },
   "dependencies": {
     "@azure/msal-browser": "^3.28.1",

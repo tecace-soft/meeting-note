@@ -26,7 +26,7 @@ import { handleBackfillInsightRequest, handleRefreshNoteInsightRequest } from '.
 import { handleProjectChatRequest } from './routes/projectChat.js';
 import { handleRegenerateSummaryRequest } from './routes/regenerateSummary.js';
 import { handleSummarizeAudioRequest, handleSummarizeJobsRequest } from './routes/jobs.js';
-import { failOrphanedJobs } from './jobs/orphanSweep.js';
+import { recoverOrphanedJobs } from './jobs/orphanSweep.js';
 import { ORPHANED_JOB_SWEEP_INTERVAL_MS } from './jobs/store.js';
 
 // PROJECT_CHAT_MODEL is imported from gemini-models.ts (the central registry).
@@ -168,8 +168,8 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
     const port = address && typeof address !== 'string' ? address.port : options.port ?? env.port;
     console.log(`Meeting Note workflow server listening on :${port}`);
     console.log(`Workflow env: transcription=assemblyai:${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL}:no-language-settings, summary=${env.summaryModel}, headersTimeout=${env.fetchHeadersTimeoutMs}, bodyTimeout=${env.fetchBodyTimeoutMs}`);
-    void failOrphanedJobs();
-    sweepTimer = setInterval(() => void failOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
+    void recoverOrphanedJobs();
+    sweepTimer = setInterval(() => void recoverOrphanedJobs(), ORPHANED_JOB_SWEEP_INTERVAL_MS);
     // Existing transcription and MCP startup remain independent of this opt-in.
     if (process.env.MEETING_KNOWLEDGE_DELIVERY_ENABLED === 'true') {
       try {

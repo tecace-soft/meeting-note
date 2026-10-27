@@ -9,7 +9,7 @@ import { callGeminiWithFallback } from '../ai/geminiFallback.js';
 import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
 import { buildNoteName, formatMeetingDateForPrompt, parseSummary, formatTranscriptText, type TranscriptSegment } from '../parsers.js';
 import { buildSummaryPrompt } from '../prompts.js';
-import { updateWorkflowJob, deleteTranscriptCheckpoint } from '../jobs/store.js';
+import { updateWorkflowJob, deleteTranscriptCheckpoint, type JobRef } from '../jobs/store.js';
 import { recordGeminiUsage } from './usage.js';
 import { getPersonalMemoryContext } from './memoryContext.js';
 import { loadSummaryPrompt } from './promptLoaders.js';
@@ -99,23 +99,27 @@ export async function insertNote(input: {
   if (error) throw error;
 }
 
-export async function runSummarizeAudio(input: SummarizeAudioInput, jobId: string | null = null): Promise<SummarizeAudioResult> {
+// `job` is a pre-S10 job id (id-only writes), an owned S10 execution (every job write
+// fenced; a lost lease throws JobLeaseLostError at the next write), or null for the
+// synchronous route.
+export async function runSummarizeAudio(input: SummarizeAudioInput, job: JobRef = null): Promise<SummarizeAudioResult> {
   if (!env.supabaseUrl || !env.serviceRoleKey) throw new Error('Supabase service configuration is missing.');
   if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
   if (!env.assemblyAiApiKey) throw new Error('AssemblyAI API key is missing.');
 
-  await updateWorkflowJob(jobId, { status: 'processing', stage: 'loading inputs', progress: 10 });
+  await updateWorkflowJob(job, { status: 'processing', stage: 'loading inputs', progress: 10 });
   const summaryRules = input.summaryRulesOverride?.trim() || await loadSummaryPrompt(input.promptId, input.userId);
   const transcriptionSettings = await loadTranscriptionSettings();
   console.log(`Processing audio ${input.fileName} with AssemblyAI ${ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODEL_LABEL} and no explicit language settings. Selected summary language: ${input.language}`);
 
-  await updateWorkflowJob(jobId, { stage: 'transcribing audio', progress: 25 });
+  await updateWorkflowJob(job, { stage: 'transcribing audio', progress: 25 });
   const { segments, audioDurationSeconds, detectedLanguage } = await transcribeOrReuseCheckpoint({
     noteId: input.noteId,
     userId: input.userId,
     downloadUrl: input.downloadUrl,
     language: input.language,
     settings: transcriptionSettings,
+    ...(job && typeof job === 'object' ? { job } : {}),
   });
   const transcriptText = formatTranscriptText(segments, 'original');
   const translationLanguage = getOppositeTranscriptLanguage(detectedLanguage);
@@ -154,7 +158,7 @@ export async function runSummarizeAudio(input: SummarizeAudioInput, jobId: strin
   // connects this meeting to their ongoing work. Best-effort (never blocks the summary);
   // buildSummaryPrompt's GROUNDING RULES forbid it from adding facts absent from the transcript.
   const personalMemoryContext = await getPersonalMemoryContext(input.userId);
-  await updateWorkflowJob(jobId, { stage: 'generating summary', progress: 75 });
+  await updateWorkflowJob(job, { stage: 'generating summary', progress: 75 });
   const summaryRaw = await callGeminiWithFallback({
     stage: 'Summarization',
     model: env.summaryModel,
@@ -192,7 +196,7 @@ export async function runSummarizeAudio(input: SummarizeAudioInput, jobId: strin
   });
   const parsedSummary = parseSummary(summaryRaw.text);
   if (hasGeminiAttachments && !summaryHasAttachmentSection(parsedSummary.summary, input.language)) {
-    await updateWorkflowJob(jobId, { stage: 'generating attachment summary', progress: 82 });
+    await updateWorkflowJob(job, { stage: 'generating attachment summary', progress: 82 });
     try {
       const attachmentSectionRaw = await generateAttachmentSummarySection({
         attachmentParts,
@@ -226,7 +230,7 @@ export async function runSummarizeAudio(input: SummarizeAudioInput, jobId: strin
   if (TRANSLATION_ENABLED) {
     const alternateLanguage: 'en' | 'ko' = input.language === 'ko' ? 'en' : 'ko';
     const alternateTranscriptText = formatTranscriptText(segments, alternateLanguage);
-    await updateWorkflowJob(jobId, { stage: `generating ${alternateLanguage === 'ko' ? 'Korean' : 'English'} summary`, progress: 84 });
+    await updateWorkflowJob(job, { stage: `generating ${alternateLanguage === 'ko' ? 'Korean' : 'English'} summary`, progress: 84 });
     const alternateSummaryRaw = await callGeminiWithFallback({
       stage: `Summarization (${alternateLanguage})`,
       model: env.summaryModel,
@@ -268,7 +272,7 @@ export async function runSummarizeAudio(input: SummarizeAudioInput, jobId: strin
   // The transcript translation ran in parallel with the summary; make sure it has
   // landed (or failed best-effort) before we persist, since insertNote stores it.
   await translationPromise;
-  await updateWorkflowJob(jobId, { stage: 'saving note', progress: 92 });
+  await updateWorkflowJob(job, { stage: 'saving note', progress: 92 });
   const noteName = buildNoteName({
     title: parsedSummary.title,
     tags: parsedSummary.tags,

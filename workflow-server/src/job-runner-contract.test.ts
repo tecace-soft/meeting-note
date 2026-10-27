@@ -44,6 +44,15 @@ async function until(condition: () => boolean, label: string, ms = 5_000): Promi
   while (!condition() && Date.now() < deadline) await sleep(5);
   assert.ok(condition(), `timed out waiting for ${label}`);
 }
+// Awaits a promise driven by mocked timers without trusting it to settle: a regression
+// that leaves it pending fails after a bounded number of real event-loop turns.
+async function settledWithin<T>(promise: Promise<T>, label: string, turns = 200): Promise<T> {
+  let settled = false;
+  const tracked = promise.finally(() => { settled = true; });
+  for (let i = 0; i < turns && !settled; i++) await turn();
+  assert.ok(settled, `${label} did not settle within ${turns} event-loop turns`);
+  return tracked;
+}
 function deferred() {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => { release = resolve; });
@@ -74,6 +83,9 @@ async function fixture(t: test.TestContext, override: Override = () => undefined
   // Restore the override before the fixture so fetch unwinds to the native function.
   t.after(async () => { intercept.mock.restore(); await f.close(); });
   f.state.existingJob = false;
+  // These contracts pin the pre-S10 runner, which is still what runs before the S10
+  // migration is applied (the claim RPC is missing). S10 runs: job-resume-contract.test.ts.
+  f.state.s10Schema = false;
   return f;
 }
 const isTable = (url: URL, table: string) => url.hostname === 'supabase.invalid' && url.pathname === `/rest/v1/${table}`;
@@ -408,7 +420,7 @@ test('runner no-speech: failed with the localized guidance, no error log and no 
   assert.equal(incidentQueries(f).length, 0, 'no ops incident for a silent recording');
 });
 
-test('runner terminal writes retry four times; a lost completed write still caches and enriches', async (t) => {
+test('runner terminal writes retry four times; a lost completed write still caches and enriches', { timeout: 30_000 }, async (t) => {
   const warn = t.mock.method(console, 'warn', () => undefined);
   const log = t.mock.method(console, 'log', () => undefined);
   t.mock.method(console, 'error', () => undefined);
@@ -425,7 +437,11 @@ test('runner terminal writes retry four times; a lost completed write still cach
   });
   completedJobResults.delete('job-lost');
   const run = processSummarizeJob('job-lost', input());
-  await firstCompleted.promise;
+  // Bounded: a regression that never reaches the completed write fails instead of hanging.
+  await Promise.race([
+    firstCompleted.promise,
+    run.then(() => { throw new Error('runner ended before the completed write'); }),
+  ]);
   for (let i = 0; i < 400 && completedAttempts < 5; i++) { await turn(); t.mock.timers.tick(8_000); }
   for (let i = 0; i < 20; i++) await turn();
   t.mock.timers.reset();
@@ -507,6 +523,16 @@ const quietSweep = (t: test.TestContext) => ({
   warn: t.mock.method(console, 'warn', () => undefined),
 });
 const RESTART_MESSAGE = 'Server restarted while this job was running. Please try again.';
+// The pre-S10 fail write: id list, active status, and the scan's staleness cutoff again
+// (F6, so an old-instance sweep cannot overwrite a row another instance just claimed).
+// Returns the filters without the cutoff after checking the cutoff matches the scan's.
+function staleFailFilters(update: DbCall): unknown[][] {
+  const lt = update.filters.filter((f) => f[0] === 'lt');
+  assert.equal(lt.length, 1, 'one staleness re-check');
+  assert.equal(lt[0]![1], 'updated_at');
+  assert.ok(Number.isFinite(Date.parse(String(lt[0]![2]))), 'the cutoff is a timestamp');
+  return update.filters.filter((f) => f[0] !== 'lt');
+}
 
 test('reconstructResultFromNote rebuilds the job result from a note row and defaults drifted columns', () => {
   const diarization = [{ speaker: 'Speaker 1', text: 'Hi', start: 0, end: 1 }];
@@ -582,7 +608,8 @@ test('sweep recovers jobs whose note exists for the same user and fails the rest
   assert.equal(read!.columns, '*');
   assert.deepEqual(read!.filters, [['in', 'id', ['n1', 'n2', 'n3', 'n5']]], 'distinct non-null note ids');
   const updates = jobUpdates(calls);
-  assert.deepEqual(updates.map((u) => u.filters), [[['eq', 'id', 'j1']], [['eq', 'id', 'j5']], [['eq', 'id', 'j6']], [['in', 'id', ['j2', 'j3', 'j4']]]]);
+  assert.deepEqual(updates.slice(0, 3).map((u) => u.filters), [[['eq', 'id', 'j1']], [['eq', 'id', 'j5']], [['eq', 'id', 'j6']]]);
+  assert.deepEqual(staleFailFilters(updates[3]!), [['in', 'id', ['j2', 'j3', 'j4']], ['in', 'status', ['queued', 'processing']]], 'the fail write re-checks the row is still an active orphan');
   for (const [index, source] of [[0, notes[0]], [1, notes[2]], [2, notes[0]]] as const) {
     const patch = updates[index]!.payload as Record<string, unknown>;
     assert.deepEqual(withoutUpdatedAt(patch), { status: 'completed', stage: 'completed', progress: 100, result: reconstructResultFromNote(source), error: null });
@@ -606,7 +633,7 @@ test('sweep skips the note lookup without note ids and fails everything when the
   });
   await failOrphanedJobs();
   assert.equal(noteReads(calls).length, 0, 'no note query without note ids');
-  assert.deepEqual(jobUpdates(calls).map((u) => u.filters), [[['in', 'id', ['j1']]]]);
+  assert.deepEqual(jobUpdates(calls).map(staleFailFilters), [[['in', 'id', ['j1']], ['in', 'status', ['queued', 'processing']]]]);
 
   (supabase.from as unknown as { mock: { restore(): void } }).mock.restore();
   noteError = true;
@@ -618,11 +645,11 @@ test('sweep skips the note lookup without note ids and fails everything when the
   });
   await failOrphanedJobs();
   assert.ok(warn.mock.calls.some((c) => c.arguments[0] === 'Could not look up notes while reconciling orphaned jobs: note read denied'));
-  assert.deepEqual(jobUpdates(calls).map((u) => u.filters), [[['in', 'id', ['j1', 'j2']]]], 'fall back to failing all');
+  assert.deepEqual(jobUpdates(calls).map(staleFailFilters), [[['in', 'id', ['j1', 'j2']], ['in', 'status', ['queued', 'processing']]]], 'fall back to failing all');
   assert.ok(!log.mock.calls.some((c) => String(c.arguments[0]).startsWith('Recovered')));
 });
 
-test('sweep fails a job whose recovery write fails after two retries, and reports a failed fail-write', async (t) => {
+test('sweep fails a job whose recovery write fails after two retries, and reports a failed fail-write', { timeout: 30_000 }, async (t) => {
   const { log, warn } = quietSweep(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const attempts: string[] = [];
@@ -637,9 +664,9 @@ test('sweep fails a job whose recovery write fails after two retries, and report
   let calls = fakeDb(t, handler);
   let sweep = failOrphanedJobs();
   for (let i = 0; i < 20; i++) { await turn(); t.mock.timers.tick(2_000); }
-  await sweep;
+  await settledWithin(sweep, 'the first sweep');
   assert.equal(attempts.length, 3, 'one write plus two retries');
-  assert.deepEqual(jobUpdates(calls).at(-1)!.filters, [['in', 'id', ['j2', 'j1']]], 'the unrecovered job joins the failed list last');
+  assert.deepEqual(staleFailFilters(jobUpdates(calls).at(-1)!), [['in', 'id', ['j2', 'j1']], ['in', 'status', ['queued', 'processing']]], 'the unrecovered job joins the failed list last');
   const recoveredLog = log.mock.calls.map((c) => c.arguments[0]);
 
   (supabase.from as unknown as { mock: { restore(): void } }).mock.restore();
@@ -648,7 +675,7 @@ test('sweep fails a job whose recovery write fails after two retries, and report
   calls = fakeDb(t, handler);
   sweep = failOrphanedJobs();
   for (let i = 0; i < 20; i++) { await turn(); t.mock.timers.tick(2_000); }
-  await sweep;
+  await settledWithin(sweep, 'the second sweep');
   t.mock.timers.reset();
   assert.deepEqual(recoveredLog, [
     'Recovered 1 orphaned workflow job(s) to completed from an existing note.',
@@ -669,12 +696,20 @@ test('startup sweeps once on listen, every two minutes after, and stops the sche
   });
   const interval = t.mock.method(globalThis, 'setInterval');
   const clear = t.mock.method(globalThis, 'clearInterval');
+  // Importing index.js (top of this file) scheduled nothing: no sweep has run and no sweep
+  // timer exists until startServer. test-isolation.test.ts spies before the import itself.
+  for (let i = 0; i < 5; i++) await turn();
+  assert.equal(scans.length, 0, 'no sweep before startServer');
+  assert.equal(interval.mock.callCount(), 0, 'no timer before startServer');
   const stop = startServer({ port: 0, host: '127.0.0.1', dispatcher: getGlobalDispatcher() });
   let stopped = false;
   t.after(async () => { if (!stopped) await stop(); });
   await once(server, 'listening');
   await until(() => scans.length === 1, 'the boot sweep');
-  assert.ok(scans[0]!.searchParams.get('updated_at')?.startsWith('lt.'), 'the boot sweep is the stale-job scan');
+  // S10 (DEC-0022): the boot sweep scans for expired leases and stale lease-less rows.
+  const scan = scans[0]!.searchParams;
+  assert.equal(scan.get('status'), 'in.(queued,processing)', 'the boot sweep scans only active jobs');
+  assert.match(scan.get('or') ?? '', /^\(lease_expires_at\.lt\."[^"]+",and\(lease_expires_at\.is\.null,updated_at\.lt\."[^"]+"\)\)$/, 'the boot sweep is the expired-lease or stale-heartbeat scan');
   const sweeps = interval.mock.calls.filter((c) => c.arguments[1] === 2 * 60_000);
   assert.equal(sweeps.length, 1, 'one periodic sweep schedule');
   (sweeps[0]!.arguments[0] as () => void)();

@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient.js';
 import { delay } from '../ai/geminiFallback.js';
 import type { TranscriptSegment } from '../parsers.js';
+import { jobLeases, JobLeaseLostError, type JobExecution, type JobWritePatch, type TranscriptSubmissionState } from './lease.js';
 
 export interface WorkflowJobRow {
   id: string;
@@ -13,14 +14,15 @@ export interface WorkflowJobRow {
   error: string | null;
 }
 
-// While a job is running, bump its updated_at on this cadence so the boot-time
-// orphan sweep (failOrphanedJobs) can distinguish a live job on another
+// While a job is running, renew its lease (S10) or, before the S10 migration, bump its
+// updated_at on this cadence so the orphan sweep can distinguish a live job on another
 // instance from one stranded by a crashed/redeployed process.
 export const JOB_HEARTBEAT_INTERVAL_MS = 60_000;
 
-// A queued/processing job whose updated_at is older than this is considered
-// orphaned. Must exceed the heartbeat interval by a safe margin so a genuinely
-// live job (heartbeating every minute) is never swept.
+// A queued/processing job without a lease whose updated_at is older than this is
+// considered orphaned. Must exceed the heartbeat interval by a safe margin so a
+// genuinely live job (heartbeating every minute) is never swept. Same span as the S10
+// lease (JOB_LEASE_SECONDS) and the pre-S10 staleness rule (LEGACY_STALE_SECONDS).
 export const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
 
 // How often to re-scan for orphans. A boot-only scan would miss a job orphaned
@@ -28,20 +30,37 @@ export const ORPHANED_JOB_THRESHOLD_MS = 5 * 60_000;
 // forever; a periodic scan cleans it once it crosses the threshold.
 export const ORPHANED_JOB_SWEEP_INTERVAL_MS = 2 * 60_000;
 
-export async function updateWorkflowJob(jobId: string | null, patch: {
+// A job the pipeline writes to: a plain id (pre-S10, id-only writes), an owned S10
+// execution (fenced writes), or null (the synchronous route, no job row).
+export type JobRef = string | JobExecution | null;
+
+export interface WorkflowJobPatch {
   status?: WorkflowJobRow['status'];
   stage?: string;
   progress?: number;
   result?: unknown;
   error?: string | null;
-}, options?: { retries?: number }): Promise<boolean> {
-  if (!jobId) return false;
+  assembly_transcript_id?: string | null;
+  transcript_submission_state?: TranscriptSubmissionState;
+}
+
+// Returns true once written and false when every attempt failed (logged). For an owned
+// execution, a write that proves the lease is gone throws JobLeaseLostError instead,
+// so the caller stops without writing anything else.
+// `activeOnly` (pre-S10 writes of an owned execution after a rollback) adds an active-status
+// condition, so a write from an execution that lost its lease cannot overwrite a row that
+// already reached completed or failed.
+export async function updateWorkflowJob(job: JobRef, patch: WorkflowJobPatch, options?: { retries?: number; activeOnly?: boolean }): Promise<boolean> {
+  if (!job) return false;
+  if (typeof job !== 'string') return writeOwnedJob(job, patch, Math.max(0, options?.retries ?? 0));
+  const jobId = job;
   const retries = Math.max(0, options?.retries ?? 0);
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const { error } = await supabase.from('workflow_job').update({
+    const update = supabase.from('workflow_job').update({
       ...patch,
       updated_at: new Date().toISOString(),
     }).eq('id', jobId);
+    const { error } = await (options?.activeOnly ? update.in('status', ['queued', 'processing']) : update);
     if (!error) return true;
     if (attempt < retries) {
       await delay(Math.min(1000 * 2 ** attempt, 8000));
@@ -49,6 +68,40 @@ export async function updateWorkflowJob(jobId: string | null, patch: {
     }
     console.warn(`Could not update workflow job ${jobId}: ${error.message}`);
   }
+  return false;
+}
+
+function describePatch(patch: WorkflowJobPatch): string {
+  if (patch.status) return `the ${patch.status} write`;
+  if (patch.stage) return `the '${patch.stage}' stage write`;
+  if (patch.assembly_transcript_id !== undefined || patch.transcript_submission_state) return 'the transcript submission write';
+  return 'a job write';
+}
+
+async function writeOwnedJob(execution: JobExecution, patch: WorkflowJobPatch, retries: number): Promise<boolean> {
+  const during = describePatch(patch);
+  if (execution.lost) throw new JobLeaseLostError(execution.jobId, execution.generation, during);
+  if (patch.status === 'queued') throw new Error('An owned workflow job is never written back to queued.');
+  const fencedPatch = patch as JobWritePatch;
+  let outcome = 'error';
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    outcome = await jobLeases.write(execution, fencedPatch);
+    if (outcome === 'ok') return true;
+    if (outcome === 'lost') {
+      execution.lost = true;
+      throw new JobLeaseLostError(execution.jobId, execution.generation, during);
+    }
+    if (outcome === 'unsupported') {
+      // The S10 RPCs are gone (migration rolled back while this code runs): fencing is
+      // impossible, so write like pre-S10 code, by id, keeping the job visible and fresh.
+      // S10-only fields have no column to land in and are dropped.
+      const { assembly_transcript_id: _id, transcript_submission_state: _state, ...legacyPatch } = patch;
+      if (Object.keys(legacyPatch).length === 0) return true;
+      return updateWorkflowJob(execution.jobId, legacyPatch, { retries, activeOnly: true });
+    }
+    if (attempt < retries) await delay(Math.min(1000 * 2 ** attempt, 8000));
+  }
+  console.warn(`Could not update workflow job ${execution.jobId}: fenced write ${outcome} for ${during}.`);
   return false;
 }
 
