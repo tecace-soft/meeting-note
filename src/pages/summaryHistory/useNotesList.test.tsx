@@ -189,3 +189,48 @@ describe('useNotesList scope, paging and modes', () => {
     expect(result.current.notesTotalCount).toBe(24);
   });
 });
+
+describe('useNotesList local mutations during an in-flight fetch', () => {
+  it('does not let a stale list response overwrite a local delete: it refetches instead', async () => {
+    const stale = deferred<Result>();
+    h.query.mockReturnValueOnce(stale.promise);
+    h.query.mockResolvedValueOnce(ok([B], 1));
+    const { result } = renderHook(() => useNotesList(base()));
+    expect(result.current.notesLoading).toBe(true);
+    // A local mutation lands (for example a delete confirmed while the list was reloading) ...
+    act(() => {
+      result.current.setNotes([B] as never);
+      result.current.setNotesTotalCount(1);
+    });
+    // ... and then the older response, which still contains the deleted note, arrives.
+    await act(async () => stale.resolve(ok([A, B], 2)));
+    await waitFor(() => expect(result.current.notesLoading).toBe(false));
+    expect(h.query).toHaveBeenCalledTimes(2);
+    expect(result.current.notes).toEqual([B]);
+    expect(result.current.notesTotalCount).toBe(1);
+  });
+
+  it('keeps showing loading, not the stale list, until the refetch lands', async () => {
+    const stale = deferred<Result>();
+    const fresh = deferred<Result>();
+    h.query.mockReturnValueOnce(stale.promise);
+    h.query.mockReturnValueOnce(fresh.promise);
+    const { result } = renderHook(() => useNotesList(base()));
+    act(() => result.current.setNotes([B] as never));
+    await act(async () => stale.resolve(ok([A, B], 2)));
+    expect(result.current.notesLoading).toBe(true);
+    expect(result.current.notes).not.toEqual([A, B]);
+    await act(async () => fresh.resolve(ok([B], 1)));
+    await waitFor(() => expect(result.current.notesLoading).toBe(false));
+    expect(result.current.notes).toEqual([B]);
+  });
+
+  it('a local mutation with no fetch in flight does not trigger a refetch', async () => {
+    const { result } = renderHook(() => useNotesList(base()));
+    await waitFor(() => expect(result.current.notesLoading).toBe(false));
+    const calls = h.query.mock.calls.length;
+    act(() => result.current.setNotes((prev) => prev.filter((n) => n.id !== 'a')));
+    expect(h.query.mock.calls.length).toBe(calls);
+    expect(result.current.notes).toEqual([B]);
+  });
+});
