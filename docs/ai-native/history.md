@@ -29,7 +29,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - feat(db): return the stored job request only to a recover claim
 - feat(workflow-server): claim, fence and resume summarize jobs across restarts (S10)
 - feat(web): add speaker repository with owner-scoped methods for T2-3 (unused)
-- feat(db): add the S10 workflow_job lease, generation and submission schema
 
 **Fixes**
 
@@ -57,6 +56,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): make every speaker repository method async so owner id failures always reject
 - test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
 - test(workflow-server): pin the documented RPC post-check (invoker, empty search_path, ACL) on PGlite
 - refactor(web): TranscriptDiarizedEditor reads and writes speakers through the speaker repository (T2-3)
