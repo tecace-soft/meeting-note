@@ -17,6 +17,8 @@ jobs:
   backend:
     name: backend (workflow-server tests)
     runs-on: ubuntu-latest
+    # Fail a hung suite instead of holding the runner for the 6 hour default.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,7 +39,9 @@ jobs:
         run: npm run build
 
       # npm ci uses the exact devDependency and lockfile version of PGlite.
-      - name: Test (includes offline note RLS contracts)
+      # npm test runs every src/**/*.test.ts, including both PGlite SQL harnesses
+      # (note RLS and the S10 workflow_job claim/lease contention contracts, A17).
+      - name: Test (includes offline note RLS and S10 job lease SQL contracts)
         working-directory: workflow-server
         run: npm test
 

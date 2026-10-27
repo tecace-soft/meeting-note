@@ -40,6 +40,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): TranscriptDiarizedEditor reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): TranscriptionSummary reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): SummaryHistory reads and writes speakers through the speaker repository (T2-3)
 - refactor(web): AccountSettings loads and saves speaker profiles through the speaker repository (T2-3)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): fix body typing in Android upload contract test
 - test(workflow-server): pin Android upload route contract before T1-10a move
 - chore: restore generated docs/ai-native to main (not part of T1-9a)
-- refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
 
 ### Recent merges
 

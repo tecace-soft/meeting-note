@@ -26,6 +26,11 @@ export async function workflowFixture() {
     noteOwner: USER, projectOwner: USER, emptyNotes: false, existingJob: true,
     jobStatus: 'processing', jobUpdates: [] as Record<string, unknown>[],
     calls: [] as { url: URL; method: string; body: any }[],
+    // S10 (DEC-0022): true emulates the applied migration (claim, renew, fenced write and
+    // submission RPCs); false answers them like PostgREST before the migration.
+    s10Schema: true,
+    // What workflow_job_load_request answers for a resumed job (the stored request).
+    jobRequest: { ...summarizeBody } as unknown,
   };
   const nativeFetch = globalThis.fetch;
   const mocked = mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -51,6 +56,23 @@ export async function workflowFixture() {
     if (url.pathname.includes('/storage/v1/object/sign/')) return json({ signedURL: '/object/fixture' });
     if (url.pathname.includes('/storage/')) return json({ Key: 'fixture' });
     const table = url.pathname.split('/').pop();
+    if (url.pathname.startsWith('/rest/v1/rpc/workflow_job_')) {
+      if (!state.s10Schema) return json({ code: 'PGRST202', message: `Could not find the function public.${table} in the schema cache` }, 404);
+      if (table === 'workflow_job_claim') {
+        return json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'queued', stage: 'queued',
+          execution_generation: 1, attempt_count: 1, claim_count: 1, assembly_transcript_id: null, transcript_submission_state: 'none',
+          transcript_submission_count: 0, claim_outcome: 'claimed' }]);
+      }
+      if (table === 'workflow_job_load_request') return json(state.jobRequest);
+      if (table === 'workflow_job_begin_execution') return json(2);
+      if (table === 'workflow_job_write') {
+        state.jobUpdates.push(body.p_patch);
+        if (body.p_patch.status) state.jobStatus = body.p_patch.status;
+        return json(true);
+      }
+      if (table === 'workflow_job_begin_transcript_submission') return json(1);
+      return json(true);
+    }
     if (table === 'workflow_job' && method === 'PATCH') {
       state.jobUpdates.push(body);
       if (body.status) state.jobStatus = body.status;
@@ -59,7 +81,7 @@ export async function workflowFixture() {
     if (method !== 'GET') return json(table === 'workflow_job' ? { id: 'fixture-job' } : []);
     if (url.pathname.includes('/rpc/')) return json([]);
     if (table === 'workflow_job') {
-      if (url.searchParams.has('lt') || url.searchParams.has('updated_at') || !state.existingJob) return json(null);
+      if (url.searchParams.has('lt') || url.searchParams.has('updated_at') || url.searchParams.has('or') || !state.existingJob) return json(null);
       return json({ id: 'fixture-job', user_id: USER, note_id: 'fixture-note', status: state.jobStatus, stage: state.jobStatus, progress: 25, result: null, error: null });
     }
     if (table === 'workflow_transcript_checkpoint') return json({ segments, audio_duration_seconds: 1, detected_language: null });
@@ -101,7 +123,7 @@ export async function workflowFixture() {
       mocked.mock.restore();
     },
     reset() {
-      Object.assign(state, { caller: USER, tenant: TENANT, graphStatus: 200, dbFailure: false, aiFailure: false, noteOwner: USER, projectOwner: USER, emptyNotes: false, existingJob: true, jobStatus: 'processing' });
+      Object.assign(state, { caller: USER, tenant: TENANT, graphStatus: 200, dbFailure: false, aiFailure: false, noteOwner: USER, projectOwner: USER, emptyNotes: false, existingJob: true, jobStatus: 'processing', s10Schema: true, jobRequest: { ...summarizeBody } });
       state.calls.length = 0;
       state.jobUpdates.length = 0;
     },
