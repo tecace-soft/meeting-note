@@ -56,6 +56,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): move the Note type and note search helpers out of SummaryHistory (T2-4)
 - test(web): mount SummaryHistory and pin list, filter, pagination, edit, delete and modal flows (T2-4)
 - refactor(web): SummaryHistory uses the note repository's ownership and sort types
 - refactor(web): word the owner id guard message for reads and writes
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): make owner scoping mandatory in note repository owner methods (T2-2)
 - test(workflow-server): add the S10 job lease store and its PGlite contention harness (A17)
 - refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
-- refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
 
 ### Recent merges
 
