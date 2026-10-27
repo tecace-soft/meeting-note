@@ -9,14 +9,44 @@ import { AudioUnavailableError, NoSpeechDetectedError } from '../pipeline/errors
 import { runSummarizeAudio } from '../pipeline/summarize.js';
 import { finalizeNoteMemory } from '../pipeline/finalize.js';
 import { updateWorkflowJob, JOB_HEARTBEAT_INTERVAL_MS, type JobRef } from './store.js';
-import { executionFromClaim, jobLeases, JobLeaseLostError, type JobExecution } from './lease.js';
+import { executionFromClaim, jobLeases, JobLeaseLostError, type ClaimOutcome, type JobExecution } from './lease.js';
+import { delay } from '../ai/geminiFallback.js';
 
 export const completedJobResults = new Map<string, SummarizeAudioResult>();
+
+// A transient start-claim error is retried this many times in total, with a short
+// linear backoff, before the job is left to the orphan sweep.
+export const START_CLAIM_TRIES = 3;
+export const START_CLAIM_BACKOFF_MS = 500;
+
+// Retries a transient start-claim error. When an earlier try may have committed (its
+// response was lost), a later try sees the row as already claimed; a fenced renewal as
+// this process at generation 1 proves whether that claim was ours.
+async function claimForStart(jobId: string, input: SummarizeAudioInput): Promise<ClaimOutcome> {
+  let outcome = await jobLeases.claim(jobId, 'start');
+  let uncertain = false;
+  for (let attempt = 1; attempt < START_CLAIM_TRIES && outcome.kind === 'error'; attempt += 1) {
+    uncertain = true;
+    console.warn(`Could not claim workflow job ${jobId} (${outcome.message}); retrying (${attempt + 1}/${START_CLAIM_TRIES}).`);
+    await delay(START_CLAIM_BACKOFF_MS * attempt);
+    outcome = await jobLeases.claim(jobId, 'start');
+  }
+  if (outcome.kind !== 'not-claimable' || !uncertain) return outcome;
+  const claim = {
+    jobId, userId: input.userId, noteId: input.noteId, status: 'queued', stage: 'queued', generation: 1, attempt: 1, claimCount: 1,
+    transcriptId: null, submissionState: 'none' as const, submissionCount: 0,
+  };
+  const probe = await jobLeases.renew(executionFromClaim(claim, { resumed: false }));
+  if (probe !== 'ok') return outcome;
+  console.log(`Workflow job ${jobId}: an earlier start claim whose response was lost belongs to this process; running it.`);
+  return { kind: 'claimed', claim };
+}
 
 // Starts a freshly inserted job. With the S10 schema the run is owned (claimed lease,
 // fenced writes); before the migration it runs exactly as before S10.
 export async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): Promise<void> {
-  const outcome = await jobLeases.claim(jobId, 'start');
+  const outcome = await claimForStart(jobId, input);
+  if (outcome.kind === 'exhausted') return;
   if (outcome.kind === 'unsupported') {
     await runJob(jobId, input);
     return;

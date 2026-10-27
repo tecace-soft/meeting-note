@@ -146,6 +146,44 @@ test('claim outcomes: an owned row is not started twice, and an unknown claim le
   assert.ok(!f.state.calls.some((c) => c.url.hostname === 'api.assemblyai.com'), 'no provider call');
 });
 
+test('a transient start-claim error is retried; a lost response is recognized as this process\'s own claim', { timeout: 30_000 }, async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  const warn = t.mock.method(console, 'warn', () => undefined);
+  let script: Array<'error' | 'ok' | 'taken'> = ['error', 'ok'];
+  let renewAnswer = true;
+  const f = await fixture(t, noCheckpoint,
+    (url, _method, body) => {
+      if (!isRpc(url, 'workflow_job_claim')) return undefined;
+      const step = script.shift() ?? 'ok';
+      if (step === 'error') return Response.json({ message: 'claim blip' }, { status: 503 });
+      if (step === 'taken') return Response.json([]);
+      return Response.json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'queued', stage: 'queued', execution_generation: 1,
+        attempt_count: 1, claim_count: 1, assembly_transcript_id: null, transcript_submission_state: 'none', transcript_submission_count: 0, claim_outcome: 'claimed' }]);
+    },
+    (url) => (isRpc(url, 'workflow_job_renew_lease') ? Response.json(renewAnswer) : undefined));
+  await processSummarizeJob('retry-job', input());
+  assert.equal(rpcCalls(f, 'workflow_job_claim').length, 2, 'one retry after the blip');
+  assert.equal(terminal(f, 'retry-job')!.status, 'completed', 'the retried claim runs the job');
+  assert.ok(warn.mock.calls.some((c) => c.arguments[0] === 'Could not claim workflow job retry-job (claim blip); retrying (2/3).'), 'the retry is logged');
+
+  // The first try committed but its response was lost; the retry sees the row as taken.
+  f.reset(); script = ['error', 'taken'];
+  await processSummarizeJob('lost-response-job', input());
+  const [probe] = rpcCalls(f, 'workflow_job_renew_lease');
+  assert.deepEqual(probe!.body, { p_job_id: 'lost-response-job', p_owner: JOB_INSTANCE_ID, p_generation: 1, p_lease_seconds: 300 }, 'ownership is proven by a fenced renewal');
+  assert.equal(terminal(f, 'lost-response-job')!.status, 'completed', 'its own committed claim runs');
+
+  f.reset(); script = ['error', 'taken']; renewAnswer = false;
+  await processSummarizeJob('someone-elses-job', input());
+  assert.equal(writes(f, 'someone-elses-job').length, 0, 'a claim that was not ours never runs here');
+
+  f.reset(); script = ['error', 'error', 'error'];
+  await processSummarizeJob('deferred-job', input());
+  assert.equal(rpcCalls(f, 'workflow_job_claim').length, 3, 'bounded to three tries');
+  assert.equal(writes(f, 'deferred-job').length, 0, 'then the sweep owns it');
+  for (const id of ['retry-job', 'lost-response-job']) completedJobResults.delete(id);
+});
+
 test('a lost lease at a stage write stops the run without a failure write, incident or enrichment', async (t) => {
   const warn = t.mock.method(console, 'warn', () => undefined);
   const log = t.mock.method(console, 'log', () => undefined);
