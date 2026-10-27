@@ -33,7 +33,7 @@ const OUT_META = `${OUT_DIR}/meeting-note-node.json`
 const MAX_DOCS = 20
 const GIT_TIMEOUT_MS = 15_000
 const MAX_SCAN_COMMITS = 500
-const DEFAULT_SCAN_COMMITS = 200
+const DEFAULT_SCAN_COMMITS = 40
 const SLUG_PATTERN = /^[a-z0-9-]+$/
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const MODES = ['intro', 'summary']
@@ -103,7 +103,9 @@ function collectDecisions(root, config) {
  */
 export function readGitSubjects(root, count) {
   try {
-    const out = execFileSync('git', ['log', '-n', String(count), '--no-merges', '--pretty=format:%s'], { cwd: root, encoding: 'utf8', timeout: GIT_TIMEOUT_MS })
+    const shallow = execFileSync('git', ['rev-parse', '--is-shallow-repository'], { cwd: root, encoding: 'utf8', timeout: GIT_TIMEOUT_MS }).trim()
+    if (shallow === 'true') throw new Error('this is a shallow clone, the AX-KH node needs full history: fetch-depth 0')
+    const out =execFileSync('git', ['log', '-n', String(count), '--no-merges', '--pretty=format:%s'], { cwd: root, encoding: 'utf8', timeout: GIT_TIMEOUT_MS })
     return out.split('\n').map((s) => s.trim()).filter(Boolean)
   } catch (err) {
     throw new Error(`cannot read recent commits from git (the AX-KH node needs a git checkout): ${err.message}`)

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { assemble, parseArgs, validateConfig, verifyPreviewHash } from './assemble.mjs'
+import { pathToFileURL } from 'node:url'
+import { assemble, parseArgs, readGitSubjects, validateConfig, verifyPreviewHash } from './assemble.mjs'
 import {
   buildBody,
   checkStale,
@@ -24,7 +26,7 @@ const CONFIG = {
     { slug: 'product-overview', mode: 'intro' },
     { slug: 'architecture', mode: 'summary' },
   ],
-  history: { maxCommits: 2, scanCommits: 50, excludeCommitPrefixes: ['fix(security)', 'fix(auth)'] },
+  history: { maxCommits: 2, scanCommits: 40, excludeCommitPrefixes: ['fix(security)', 'fix(auth)'] },
   story: { file: 'docs/axkh-node/story.md' },
   decisions: { dir: 'docs/decisions', statuses: ['active'] },
   currentWork: { file: 'docs/axkh-node/current-work.md' },
@@ -231,4 +233,65 @@ test('record hash check detects an edit made after the preview was built', () =>
   writeFileSync(join(root, 'docs/axkh-node/current-work.md'), '- item changed\n')
   const current = assemble(root, CONFIG, RUN)
   assert.match(verifyPreviewHash(preview.bodyHash, current.bodyHash), /mismatch/)
+})
+
+test('selection pins the retired generator order: window grouped by type, then excludes, then max', () => {
+  const window = [
+    'docs: d1',
+    'fix(auth): hidden',
+    'feat(x): f1',
+    'chore: c1',
+    'fix: x1',
+    'perf: p1',
+    'eval: e1',
+    'feat!: f2',
+    'wip no type',
+    'fix(core): x2',
+  ]
+  assert.deepEqual(extractRecentCommits(window, 50, ['fix(auth)']), [
+    'feat(x): f1', 'feat!: f2', 'fix: x1', 'fix(core): x2', 'perf: p1', 'eval: e1', 'docs: d1', 'chore: c1', 'wip no type',
+  ])
+  assert.deepEqual(extractRecentCommits(window, 3, ['fix(auth)']), ['feat(x): f1', 'feat!: f2', 'fix: x1'])
+})
+
+test('em and en dashes in subjects are normalized to commas', () => {
+  const dash = String.fromCharCode(0x2014)
+  const en = String.fromCharCode(0x2013)
+  assert.deepEqual(extractRecentCommits([`feat: a ${dash} b`, `fix: c${en}d`], 10), ['feat: a, b', 'fix: c, d'])
+})
+
+function git(cwd, ...args) {
+  return execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' })
+}
+
+test('readGitSubjects: real repo skips merges, and a shallow clone fails loudly', () => {
+  const base = mkdtempSync(join(tmpdir(), 'axkh-git-'))
+  try {
+    const src = join(base, 'src')
+    mkdirSync(src)
+    git(src, 'init', '-q', '-b', 'main')
+    const dash = String.fromCharCode(0x2014)
+    writeFileSync(join(src, 'a.txt'), '1')
+    git(src, 'add', 'a.txt')
+    git(src, 'commit', '-q', '-m', 'feat: first')
+    git(src, 'checkout', '-q', '-b', 'side')
+    writeFileSync(join(src, 'b.txt'), '2')
+    git(src, 'add', 'b.txt')
+    git(src, 'commit', '-q', '-m', `fix: side ${dash} dash`)
+    git(src, 'checkout', '-q', 'main')
+    writeFileSync(join(src, 'c.txt'), '3')
+    git(src, 'add', 'c.txt')
+    git(src, 'commit', '-q', '-m', 'docs: main work')
+    git(src, 'merge', '--no-ff', '-q', '-m', 'Merge branch side', 'side')
+
+    assert.deepEqual(readGitSubjects(src, 40), ['docs: main work', `fix: side ${dash} dash`, 'feat: first'])
+    assert.deepEqual(extractRecentCommits(readGitSubjects(src, 40), 10), ['feat: first', 'fix: side, dash', 'docs: main work'])
+    assert.deepEqual(readGitSubjects(src, 1), ['docs: main work'])
+
+    const shallow = join(base, 'shallow')
+    git(base, 'clone', '-q', '--depth', '1', pathToFileURL(src).href, shallow)
+    assert.throws(() => readGitSubjects(shallow, 40), /full history: fetch-depth 0/)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
 })

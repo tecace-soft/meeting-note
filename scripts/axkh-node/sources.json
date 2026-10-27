@@ -30,7 +30,7 @@
   ],
   "history": {
     "maxCommits": 12,
-    "scanCommits": 200,
+    "scanCommits": 40,
     "excludeCommitPrefixes": [
       "fix(security)",
       "fix(auth)"

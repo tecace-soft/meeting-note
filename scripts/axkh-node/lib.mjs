@@ -98,17 +98,33 @@ export function extractIntro(docText) {
   return out.join('\n').trim()
 }
 
+// Same buckets and order the retired history.md generator used (DEC-0023 keeps the AX-KH
+// selection identical): commits are grouped by conventional-commit type, newest first within a group.
+export const TYPE_BUCKETS = ['feat', 'fix', 'perf', 'eval', 'docs', 'other']
+
+// em dash and en dash (git %s collapses whitespace to single spaces, so plain spaces suffice)
+const DASH_PATTERN = new RegExp(' *[' + String.fromCharCode(0x2014, 0x2013) + '] *', 'g')
+
+/** Classify "type(scope): subject" into a bucket key. */
+export function bucketOf(subject) {
+  const m = /^([a-z]+)(\([^)]*\))?!?:/.exec(subject)
+  const type = m ? m[1] : 'other'
+  return TYPE_BUCKETS.includes(type) ? type : 'other'
+}
+
 /**
- * Recent commit subjects (newest first) from a list of git subjects: merge commits,
- * duplicates and excluded prefixes are skipped, at most `max` are kept.
- * The subjects come from `git log --no-merges` (see readGitSubjects in assemble.mjs).
+ * Recent commit subjects from a window of newest-first non-merge git subjects.
+ * Dashes are normalized, the window is grouped by type (TYPE_BUCKETS order), then merge-looking
+ * subjects, duplicates and excluded prefixes are skipped and at most `max` are kept.
+ * The window comes from `git log --no-merges` (see readGitSubjects in assemble.mjs).
  */
 export function extractRecentCommits(subjects, max, excludePrefixes = []) {
+  const cleaned = subjects.map((raw) => raw.replace(DASH_PATTERN, ', ').trim()).filter(Boolean)
+  const grouped = TYPE_BUCKETS.flatMap((key) => cleaned.filter((s) => bucketOf(s) === key))
   const seen = new Set()
   const commits = []
-  for (const raw of subjects) {
-    const subject = raw.replace(/\s*[—–]\s*/g, ', ').trim()
-    if (subject === '' || subject.startsWith('Merge') || seen.has(subject)) continue
+  for (const subject of grouped) {
+    if (subject.startsWith('Merge') || seen.has(subject)) continue
     if (excludePrefixes.some((p) => subject.startsWith(p))) continue
     seen.add(subject)
     commits.push(subject)
