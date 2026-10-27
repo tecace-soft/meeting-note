@@ -56,6 +56,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Other**
 
+- refactor(web): SummaryHistory uses the note repository's ownership and sort types
 - refactor(web): word the owner id guard message for reads and writes
 - refactor(web): make every speaker repository method async so owner id failures always reject
 - test(workflow-server): bound the overlapping-sweep check so a missing guard fails fast (N2)
@@ -74,10 +75,11 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(web): TranscriptionSummary saves note edits through the note repository (T2-2)
 - refactor(web): SummaryHistory lists, edits and deletes notes through the note repository (T2-2)
 - refactor(web): Project page reads, deletes and saves translations through the note repository (T2-2)
-- refactor(web): persistNoteDiarization writes through the note repository (T2-2)
 
 ### Recent merges
 
+- Merge remote-tracking branch 'origin/main' into refactor/t2-4-note-list-prep
+- Merge pull request #51 from tecace-soft/refactor/t2-3-speaker-repository
 - Merge origin/main into refactor/t2-3-speaker-repository
 - Merge pull request #50 from tecace-soft/feature/s10-auto-resume
 - Merge origin/main into feature/s10-auto-resume
@@ -86,6 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #48 from tecace-soft/refactor/t1-9b-job-runner
 - Merge pull request #47 from tecace-soft/refactor/t1-10c-summarize-finalize
 - Merge pull request #46 from tecace-soft/refactor/t1-10b-transcription
-- Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
-- Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
 <!-- ai-native:auto:END -->
