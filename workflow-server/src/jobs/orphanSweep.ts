@@ -133,7 +133,11 @@ export async function failOrphanedJobs(): Promise<void> {
       error: 'Server restarted while this job was running. Please try again.',
       updated_at: new Date().toISOString(),
     })
-    .in('id', failedIds);
+    .in('id', failedIds)
+    // Re-check staleness in the same UPDATE: a row that finished, or that another
+    // instance claimed or heartbeated since the scan, is no longer an orphan.
+    .in('status', ['queued', 'processing'])
+    .lt('updated_at', cutoff);
   if (updateError) {
     console.warn(`Could not fail ${failedIds.length} orphaned workflow job(s): ${updateError.message}`);
     return;

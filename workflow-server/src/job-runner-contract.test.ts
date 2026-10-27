@@ -523,6 +523,16 @@ const quietSweep = (t: test.TestContext) => ({
   warn: t.mock.method(console, 'warn', () => undefined),
 });
 const RESTART_MESSAGE = 'Server restarted while this job was running. Please try again.';
+// The pre-S10 fail write: id list, active status, and the scan's staleness cutoff again
+// (F6, so an old-instance sweep cannot overwrite a row another instance just claimed).
+// Returns the filters without the cutoff after checking the cutoff matches the scan's.
+function staleFailFilters(update: DbCall): unknown[][] {
+  const lt = update.filters.filter((f) => f[0] === 'lt');
+  assert.equal(lt.length, 1, 'one staleness re-check');
+  assert.equal(lt[0]![1], 'updated_at');
+  assert.ok(Number.isFinite(Date.parse(String(lt[0]![2]))), 'the cutoff is a timestamp');
+  return update.filters.filter((f) => f[0] !== 'lt');
+}
 
 test('reconstructResultFromNote rebuilds the job result from a note row and defaults drifted columns', () => {
   const diarization = [{ speaker: 'Speaker 1', text: 'Hi', start: 0, end: 1 }];
@@ -598,7 +608,8 @@ test('sweep recovers jobs whose note exists for the same user and fails the rest
   assert.equal(read!.columns, '*');
   assert.deepEqual(read!.filters, [['in', 'id', ['n1', 'n2', 'n3', 'n5']]], 'distinct non-null note ids');
   const updates = jobUpdates(calls);
-  assert.deepEqual(updates.map((u) => u.filters), [[['eq', 'id', 'j1']], [['eq', 'id', 'j5']], [['eq', 'id', 'j6']], [['in', 'id', ['j2', 'j3', 'j4']]]]);
+  assert.deepEqual(updates.slice(0, 3).map((u) => u.filters), [[['eq', 'id', 'j1']], [['eq', 'id', 'j5']], [['eq', 'id', 'j6']]]);
+  assert.deepEqual(staleFailFilters(updates[3]!), [['in', 'id', ['j2', 'j3', 'j4']], ['in', 'status', ['queued', 'processing']]], 'the fail write re-checks the row is still an active orphan');
   for (const [index, source] of [[0, notes[0]], [1, notes[2]], [2, notes[0]]] as const) {
     const patch = updates[index]!.payload as Record<string, unknown>;
     assert.deepEqual(withoutUpdatedAt(patch), { status: 'completed', stage: 'completed', progress: 100, result: reconstructResultFromNote(source), error: null });
@@ -622,7 +633,7 @@ test('sweep skips the note lookup without note ids and fails everything when the
   });
   await failOrphanedJobs();
   assert.equal(noteReads(calls).length, 0, 'no note query without note ids');
-  assert.deepEqual(jobUpdates(calls).map((u) => u.filters), [[['in', 'id', ['j1']]]]);
+  assert.deepEqual(jobUpdates(calls).map(staleFailFilters), [[['in', 'id', ['j1']], ['in', 'status', ['queued', 'processing']]]]);
 
   (supabase.from as unknown as { mock: { restore(): void } }).mock.restore();
   noteError = true;
@@ -634,7 +645,7 @@ test('sweep skips the note lookup without note ids and fails everything when the
   });
   await failOrphanedJobs();
   assert.ok(warn.mock.calls.some((c) => c.arguments[0] === 'Could not look up notes while reconciling orphaned jobs: note read denied'));
-  assert.deepEqual(jobUpdates(calls).map((u) => u.filters), [[['in', 'id', ['j1', 'j2']]]], 'fall back to failing all');
+  assert.deepEqual(jobUpdates(calls).map(staleFailFilters), [[['in', 'id', ['j1', 'j2']], ['in', 'status', ['queued', 'processing']]]], 'fall back to failing all');
   assert.ok(!log.mock.calls.some((c) => String(c.arguments[0]).startsWith('Recovered')));
 });
 
@@ -655,7 +666,7 @@ test('sweep fails a job whose recovery write fails after two retries, and report
   for (let i = 0; i < 20; i++) { await turn(); t.mock.timers.tick(2_000); }
   await settledWithin(sweep, 'the first sweep');
   assert.equal(attempts.length, 3, 'one write plus two retries');
-  assert.deepEqual(jobUpdates(calls).at(-1)!.filters, [['in', 'id', ['j2', 'j1']]], 'the unrecovered job joins the failed list last');
+  assert.deepEqual(staleFailFilters(jobUpdates(calls).at(-1)!), [['in', 'id', ['j2', 'j1']], ['in', 'status', ['queued', 'processing']]], 'the unrecovered job joins the failed list last');
   const recoveredLog = log.mock.calls.map((c) => c.arguments[0]);
 
   (supabase.from as unknown as { mock: { restore(): void } }).mock.restore();
