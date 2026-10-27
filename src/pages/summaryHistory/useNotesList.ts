@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { queryHistoryNotes, type NoteOwnershipFilter, type NoteSortKey } from '../../lib/notes/repository';
 import { noteMatchesSearch } from './noteSearch';
 import type { Note } from './types';
@@ -42,8 +42,8 @@ export function useNotesList(options: UseNotesListOptions) {
   const onScopeResetRef = useRef(options.onScopeReset);
   onScopeResetRef.current = options.onScopeReset;
 
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [notesTotalCount, setNotesTotalCount] = useState(0);
+  const [notes, setNotesRaw] = useState<Note[]>([]);
+  const [notesTotalCount, setNotesTotalCountRaw] = useState(0);
   const [notesPage, setNotesPage] = useState(1);
   const [notesLoading, setNotesLoading] = useState(true);
   // Distinguishes "the fetch failed" from "there are legitimately no notes":
@@ -51,13 +51,28 @@ export function useNotesList(options: UseNotesListOptions) {
   const [notesError, setNotesError] = useState<string | null>(null);
   const [notesReloadNonce, setNotesReloadNonce] = useState(0);
 
+  // Local edits (delete, rename, share, transcript edits) change the list the page shows. A list fetch that
+  // started before such an edit would otherwise resolve afterwards and overwrite it with stale rows, so every
+  // local edit is counted and a fetch that sees the count change refetches instead of applying its result.
+  const localMutationsRef = useRef(0);
+  const setNotes: Dispatch<SetStateAction<Note[]>> = useCallback((value) => {
+    localMutationsRef.current += 1;
+    setNotesRaw(value);
+  }, []);
+  const setNotesTotalCount: Dispatch<SetStateAction<number>> = useCallback((value) => {
+    localMutationsRef.current += 1;
+    setNotesTotalCountRaw(value);
+  }, []);
+
   const notesScopeKey = `${chatId ?? ''}|${userId ?? ''}|${viewMode}|${searchQuery}|${ownership}|${sortKey}`;
   const prevNotesScopeRef = useRef(notesScopeKey);
 
   useEffect(() => {
     let cancelled = false;
+    let refetching = false;
 
     const loadNotes = async () => {
+      const mutationsAtStart = localMutationsRef.current;
       try {
         setNotesLoading(true);
         setNotesError(null);
@@ -72,8 +87,8 @@ export function useNotesList(options: UseNotesListOptions) {
 
         if (!userId) {
           if (!cancelled) {
-            setNotes([]);
-            setNotesTotalCount(0);
+            setNotesRaw([]);
+            setNotesTotalCountRaw(0);
           }
           return;
         }
@@ -98,24 +113,30 @@ export function useNotesList(options: UseNotesListOptions) {
         });
 
         if (cancelled) return;
+        if (localMutationsRef.current !== mutationsAtStart) {
+          // The list changed locally while this request was in flight: its rows may predate the edit.
+          refetching = true;
+          setNotesReloadNonce((n) => n + 1);
+          return;
+        }
         if (error) throw error;
         const loadedNotes = (data as Note[]) || [];
         const filteredNotes = shouldFilterBySearch
           ? loadedNotes.filter((note) => noteMatchesSearch(note, searchQuery, currentUserSearchValues))
           : loadedNotes;
-        setNotes(
+        setNotesRaw(
           viewMode === 'calendar'
             ? filteredNotes
             : shouldFilterBySearch
               ? filteredNotes.slice(from, to + 1)
               : filteredNotes
         );
-        setNotesTotalCount(shouldFilterBySearch ? filteredNotes.length : typeof count === 'number' ? count : 0);
+        setNotesTotalCountRaw(shouldFilterBySearch ? filteredNotes.length : typeof count === 'number' ? count : 0);
       } catch (error) {
         console.error('Error fetching notes:', error);
         if (!cancelled) {
-          setNotes([]);
-          setNotesTotalCount(0);
+          setNotesRaw([]);
+          setNotesTotalCountRaw(0);
           setNotesError(
             error instanceof Error
               ? error.message
@@ -123,7 +144,7 @@ export function useNotesList(options: UseNotesListOptions) {
           );
         }
       } finally {
-        if (!cancelled) setNotesLoading(false);
+        if (!cancelled && !refetching) setNotesLoading(false);
       }
     };
 
