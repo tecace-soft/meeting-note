@@ -48,6 +48,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(refactor): add overload, begin/renew post-check and N1/usage-dedupe monitoring queries for S10
 - docs(refactor): add the reviewer's SQL Editor pre/post checks and post-deploy monitoring for S10
 - docs(ai-native): regenerate history after merging main
 - docs: point the deploy-restart guidance and DEC-0003 at the S10 lease model
@@ -74,10 +75,10 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): bound the timer-driven runner and sweep retry contracts
 - test(web): pin note call-chain contracts before the T2-2 repository move
 - refactor(workflow-server): use the plan's module names jobs/orphanSweep.ts and routes/jobs.ts
-- refactor(workflow-server): dispatch summarize job routes through handle*Request one-liners
 
 ### Recent merges
 
+- Merge pull request #50 from tecace-soft/feature/s10-auto-resume
 - Merge origin/main into feature/s10-auto-resume
 - Merge pull request #49 from tecace-soft/refactor/t2-2-note-repository
 - Merge origin/main into refactor/t2-2-note-repository
@@ -87,5 +88,4 @@ Last 40 non-merge commits, newest first, grouped by type.
 - Merge pull request #45 from tecace-soft/refactor/t1-10a-android-upload
 - Merge pull request #43 from tecace-soft/docs/refactor-progress-2026-10-26
 - Merge origin/main into docs/refactor-progress-2026-10-26; add T1-9a row
-- Merge pull request #44 from tecace-soft/refactor/t1-9a-job-store
 <!-- ai-native:auto:END -->
