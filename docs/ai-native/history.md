@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(jobs): cap concurrently running resumed jobs per process (F2)
 - fix(jobs): enforce the S10 caps in SQL and stop returning the request from the claim (F1, F8)
 
 **Docs**
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): add direct androidUpload helper tests
 - refactor(workflow-server): move Android upload helpers to pipeline/androidUpload (T1-10a)
 - test(workflow-server): fix body typing in Android upload contract test
-- test(workflow-server): pin Android upload route contract before T1-10a move
 
 ### Recent merges
 

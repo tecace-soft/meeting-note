@@ -296,12 +296,27 @@ test('resume probes a storage link before resubmitting and fails clearly when it
   assert.equal(f.state.calls.filter((c) => c.url.pathname.endsWith('/a.ogg')).length, 1, 'a 4xx is not retried');
   const probe = f.state.calls.find((c) => c.url.pathname.endsWith('/a.ogg'))!;
   assert.equal(probe.method, 'GET');
+  await sleep(30);
+  assert.ok(!f.state.calls.some((c) => isTable(c.url, 'feedback_issues')), 'an expired link is a user outcome, not an ops incident');
 
   f.reset(); probeStatus = 206;
   await recoverAndSettle(f, claimRow({ jobId: 'reachable-job', request }));
   assert.equal(terminal(f, 'reachable-job')!.status, 'completed', 'a reachable link resumes');
   assert.equal(assemblySubmits(f)[0]!.body.audio_url, storageUrl);
   completedJobResults.delete('reachable-job');
+});
+
+test('the audio probe refuses redirects and treats a refused redirect as unreachable', async (t) => {
+  const { assertAudioReachable } = await import('./pipeline/transcription.js');
+  const inits: RequestInit[] = [];
+  t.mock.method(globalThis, 'fetch', async (_input: FetchInput, init?: RequestInit) => {
+    inits.push(init ?? {});
+    throw new TypeError('fetch failed: unexpected redirect');
+  });
+  await assert.rejects(assertAudioReachable('https://supabase.invalid/storage/v1/object/sign/a.ogg?token=t', 'en'),
+    (error: Error & { detail?: string }) => error.name === 'AudioUnavailableError' && String(error.detail).includes('unexpected redirect'));
+  assert.equal(inits.length, 2, 'a network-level failure is retried once');
+  assert.ok(inits.every((init) => init.redirect === 'error'), 'never follow a redirect off the storage host');
 });
 
 test('resume never probes a link outside the project storage host', async (t) => {

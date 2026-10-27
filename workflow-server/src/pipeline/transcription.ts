@@ -350,7 +350,8 @@ export async function assertAudioReachable(downloadUrl: string, language: 'en' |
   let problem = 'not checked';
   for (let attempt = 1; attempt <= AUDIO_PROBE_TRIES; attempt += 1) {
     try {
-      const response = await fetch(target, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS) });
+      // redirect: 'error' keeps the probe on the storage host even if it answers with a redirect.
+      const response = await fetch(target, { headers: { Range: 'bytes=0-0' }, redirect: 'error', signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS) });
       await response.body?.cancel().catch(() => undefined);
       if (response.ok) return;
       problem = `HTTP ${response.status}`;

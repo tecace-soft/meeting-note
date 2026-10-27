@@ -5,7 +5,7 @@
 // jobs/lease and ops modules only (never index.ts or routes).
 import { raiseIncident } from '../ops/incidents.js';
 import type { SummarizeAudioInput, SummarizeAudioResult } from '../pipeline/types.js';
-import { NoSpeechDetectedError } from '../pipeline/errors.js';
+import { AudioUnavailableError, NoSpeechDetectedError } from '../pipeline/errors.js';
 import { runSummarizeAudio } from '../pipeline/summarize.js';
 import { finalizeNoteMemory } from '../pipeline/finalize.js';
 import { updateWorkflowJob, JOB_HEARTBEAT_INTERVAL_MS, type JobRef } from './store.js';
@@ -115,6 +115,10 @@ async function runJob(job: string | JobExecution, input: SummarizeAudioInput): P
     // an error or raise an ops incident (that would be pure noise).
     if (error instanceof NoSpeechDetectedError) {
       console.log(`Workflow job ${jobId} ended with no detectable speech in the audio; surfacing to the user without an incident.`);
+    } else if (error instanceof AudioUnavailableError) {
+      // An expired signed link on a resume is an expected outcome (the user restarts the
+      // summary, which signs a new link). Re-signing web links is a separate task (#23).
+      console.warn(`Workflow job ${jobId} could not be resumed because its audio link no longer answers (${error.detail}); surfacing to the user without an incident.`);
     } else {
       console.error(`Workflow job ${jobId} failed:`, error);
       void raiseIncident({
