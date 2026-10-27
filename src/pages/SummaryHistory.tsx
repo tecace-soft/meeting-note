@@ -8,8 +8,6 @@ import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE
 import { insertSpeaker, selectSpeakersByNames, updateSpeakerProfileReturningId } from '../lib/speakers/repository';
 import {
   deleteOwnedNoteReturningId,
-  patchOwnedNoteReturningId,
-  saveNoteTranslations,
   type NoteOwnershipFilter,
   type NoteSortKey,
 } from '../lib/notes/repository';
@@ -42,6 +40,7 @@ import type { Note } from './summaryHistory/types';
 import { getLocalizedSummary, getNoteDisplayTitle } from './summaryHistory/noteDisplay';
 import { normalizeTagList } from './summaryHistory/noteSearch';
 import { NOTES_PAGE_SIZE, useNotesList, type HistoryViewMode } from './summaryHistory/useNotesList';
+import { useNoteEditing } from './summaryHistory/useNoteEditing';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
@@ -52,7 +51,6 @@ import {
   getSegmentText,
   hasUsableDiarization,
   normalizeTranscript,
-  persistNoteDiarization,
   type TranscriptLanguage,
   type TranscriptSegment,
 } from '../lib/transcriptSegments';
@@ -61,7 +59,6 @@ import {
   getDisplayTranscriptSegments,
   getDisplayTranscriptText,
   getTranscriptLanguageLabel,
-  updateTranslationMap,
 } from '../lib/transcriptTranslationDisplay';
 import { canonicalOntologyProfileString } from '../lib/speakerOntology';
 import { isNonPersonSpeakerName } from '../lib/identifySpeakers';
@@ -405,11 +402,6 @@ const SummaryHistory: React.FC = () => {
   const playbackStopAtRef = useRef<number | null>(null);
   const [segmentPlayback, setSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
   const [playbackLoadingSegment, setPlaybackLoadingSegment] = useState<{ noteId: string; segmentIndex: number } | null>(null);
-
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [noteEditDraft, setNoteEditDraft] = useState('');
-  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
-  const [noteEditError, setNoteEditError] = useState<string | null>(null);
   /** Mobile + desktop each render a menu anchor for the open note; click-outside checks both. */
   const noteMenuAnchorsRef = useRef<{ mobile: HTMLDivElement | null; desktop: HTMLDivElement | null }>({
     mobile: null,
@@ -422,11 +414,6 @@ const SummaryHistory: React.FC = () => {
     placement: 'above' | 'below';
     maxHeight: number;
   } | null>(null);
-  const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
-  const [renameNoteDraft, setRenameNoteDraft] = useState('');
-  const detailTitleInputRef = useRef<HTMLInputElement | null>(null);
-  const [editingDetailTitleNoteId, setEditingDetailTitleNoteId] = useState<string | null>(null);
-  const [detailTitleDraft, setDetailTitleDraft] = useState('');
   const [deleteNoteTarget, setDeleteNoteTarget] = useState<Note | null>(null);
   const [isDeleteNoteOpen, setIsDeleteNoteOpen] = useState(false);
   const [deletingNote, setDeletingNote] = useState(false);
@@ -597,6 +584,38 @@ const SummaryHistory: React.FC = () => {
     onScopeReset: () => setExpandedNoteId(null),
   });
 
+  const {
+    editingNoteId,
+    setEditingNoteId,
+    noteEditDraft,
+    setNoteEditDraft,
+    savingNoteId,
+    noteEditError,
+    renamingNoteId,
+    setRenamingNoteId,
+    renameNoteDraft,
+    setRenameNoteDraft,
+    detailTitleInputRef,
+    editingDetailTitleNoteId,
+    setEditingDetailTitleNoteId,
+    detailTitleDraft,
+    setDetailTitleDraft,
+    startDetailTitleEdit,
+    saveDetailTitleEdit,
+    startNoteEdit: handleStartNoteEdit,
+    saveNoteEdit: handleSaveNoteEdit,
+    startRenameNote: handleStartRenameNote,
+    saveRenameNote: handleSaveRenameNote,
+    persistDisplayedTranscript,
+    updateDisplayedTranscript,
+  } = useNoteEditing({
+    userId: user?.id,
+    appLanguage,
+    setNotes,
+    setActionError: setNoteListActionError,
+    closeNoteMenu: () => setOpenNoteMenuId(null),
+  });
+
   useEffect(() => {
     setExpandedNoteId(null);
   }, [notesPage]);
@@ -670,39 +689,6 @@ const SummaryHistory: React.FC = () => {
       hour: '2-digit',
       minute: '2-digit'
     });
-  };
-
-  const startDetailTitleEdit = (note: Note, selectAll = false) => {
-    setEditingDetailTitleNoteId(note.id);
-    setDetailTitleDraft(getNoteDisplayTitle(note));
-    window.requestAnimationFrame(() => {
-      detailTitleInputRef.current?.focus();
-      if (selectAll) detailTitleInputRef.current?.select();
-    });
-  };
-
-  const saveDetailTitleEdit = async (note: Note) => {
-    if (editingDetailTitleNoteId !== note.id || !user?.id) return;
-    const name = detailTitleDraft.trim();
-    if (!name || name === getNoteDisplayTitle(note)) {
-      setEditingDetailTitleNoteId(null);
-      setDetailTitleDraft('');
-      return;
-    }
-
-    try {
-      setNoteListActionError(null);
-      const data = await patchOwnedNoteReturningId({ noteId: note.id, userId: user.id, patch: { name } });
-      // 0 rows updated (e.g. a shared note you don't own): the write silently
-      // no-ops under RLS, so surface it instead of faking success.
-      if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
-      setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, name } : n)));
-    } catch (err: unknown) {
-      setNoteListActionError(err instanceof Error ? err.message : 'Failed to rename note');
-    } finally {
-      setEditingDetailTitleNoteId(null);
-      setDetailTitleDraft('');
-    }
   };
 
   const getNoteTags = (note: Note): string[] => {
@@ -1178,39 +1164,6 @@ const SummaryHistory: React.FC = () => {
     return getAvailableTranscriptLanguages(note).includes(selected) ? selected : 'original';
   };
 
-  const persistDisplayedTranscript = async (note: Note, language: TranscriptLanguage, next: TranscriptSegment[]) => {
-    if (language === 'original') {
-      await persistNoteDiarization(note.id, next);
-      return;
-    }
-    const nextTranslations = updateTranslationMap(note.diarization_translations, language, next);
-    await saveNoteTranslations({
-      noteId: note.id,
-      diarizationTranslations: nextTranslations,
-      transcriptionTranslations: {
-        ...(note.transcription_translations ?? {}),
-        [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
-      },
-    });
-  };
-
-  const updateDisplayedTranscript = (note: Note, language: TranscriptLanguage, next: TranscriptSegment[]) => {
-    setNotes((prev) =>
-      prev.map((item) => {
-        if (item.id !== note.id) return item;
-        if (language === 'original') return { ...item, diarization: next };
-        return {
-          ...item,
-          diarization_translations: updateTranslationMap(item.diarization_translations, language, next),
-          transcription_translations: {
-            ...(item.transcription_translations ?? {}),
-            [language]: next.map((segment) => `${segment.speaker}: ${segment.text}`).join('\n\n'),
-          },
-        };
-      })
-    );
-  };
-
   const renderTranscriptLanguageToggle = (note: Note) => {
     const languages = getAvailableTranscriptLanguages(note);
     if (languages.length <= 1) return null;
@@ -1563,59 +1516,6 @@ const SummaryHistory: React.FC = () => {
       setSegmentPlayback(null);
     } finally {
       setPlaybackLoadingSegment(null);
-    }
-  };
-
-  const handleStartNoteEdit = (note: Note) => {
-    setEditingNoteId(note.id);
-    setNoteEditDraft(getLocalizedSummary(note, appLanguage));
-    setNoteEditError(null);
-  };
-
-  const handleSaveNoteEdit = async (note: Note) => {
-    if (!user?.id) return;
-    setSavingNoteId(note.id);
-    setNoteEditError(null);
-    try {
-      const data = await patchOwnedNoteReturningId({ noteId: note.id, userId: user.id, patch: { summary_edit: noteEditDraft } });
-      // 0 rows updated (e.g. a shared note you don't own): don't fake success.
-      if (!data) throw new Error('Could not save your edit. You may not have permission to edit this note.');
-
-      setNotes((prev) =>
-        prev.map((n) => (n.id === note.id ? { ...n, summary_edit: noteEditDraft } : n))
-      );
-      setEditingNoteId(null);
-    } catch (err: unknown) {
-      setNoteEditError(err instanceof Error ? err.message : 'Failed to save note edit');
-    } finally {
-      setSavingNoteId(null);
-    }
-  };
-
-  const handleStartRenameNote = (note: Note) => {
-    setOpenNoteMenuId(null);
-    setNoteListActionError(null);
-    setRenamingNoteId(note.id);
-    setRenameNoteDraft(note.name?.trim() || '');
-  };
-
-  const handleSaveRenameNote = async (noteId: string) => {
-    if (!user?.id) return;
-    const name = renameNoteDraft.trim();
-    if (!name) {
-      setNoteListActionError('Note name is required.');
-      return;
-    }
-    try {
-      setNoteListActionError(null);
-      const data = await patchOwnedNoteReturningId({ noteId, userId: user.id, patch: { name } });
-      // 0 rows updated (e.g. a shared note you don't own): don't fake success.
-      if (!data) throw new Error('Could not rename this note. You may not have permission to edit it.');
-      setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, name } : n)));
-      setRenamingNoteId(null);
-      setRenameNoteDraft('');
-    } catch (err: unknown) {
-      setNoteListActionError(err instanceof Error ? err.message : 'Failed to rename note');
     }
   };
 
