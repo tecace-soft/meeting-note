@@ -44,6 +44,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(refactor): add the reviewer's SQL Editor pre/post checks and post-deploy monitoring for S10
 - docs(ai-native): regenerate history after merging main
 - docs: point the deploy-restart guidance and DEC-0003 at the S10 lease model
 - docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(workflow-server): move summarize, finalize and ingest speaker naming to pipeline modules (T1-10c)
 - test(workflow-server): make the translation contract fail when the note write does not await the translation
 - test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
-- test(workflow-server): add direct transcript-stage tests for transcribeOrReuseCheckpoint
 
 ### Recent merges
 

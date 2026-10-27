@@ -304,6 +304,19 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     assert.equal(rounds, MAX_JOB_CLAIMS + 1, `claims ${MAX_JOB_CLAIMS} times, the next one fails it (took ${rounds})`);
   });
 
+  await t.test('the six RPCs match the documented post-check: invoker, empty search_path, no PUBLIC/anon/authenticated ACL', async () => {
+    const { rows } = await db.query<{ proname: string; acl: string[]; config: string[] | null; prosecdef: boolean }>(
+      "select proname, proacl::text[] as acl, proconfig as config, prosecdef from pg_proc where pronamespace = 'public'::regnamespace and proname like 'workflow\\_job\\_%' order by proname");
+    assert.deepEqual(rows.map((r) => r.proname), ['workflow_job_begin_execution', 'workflow_job_begin_transcript_submission', 'workflow_job_claim',
+      'workflow_job_load_request', 'workflow_job_renew_lease', 'workflow_job_write']);
+    for (const r of rows) {
+      assert.equal(r.prosecdef, false, `${r.proname} is security invoker`);
+      assert.deepEqual(r.config, ['search_path=""'], `${r.proname} pins an empty search_path`);
+      assert.ok(r.acl.some((entry) => entry.startsWith('service_role=X')), `${r.proname} grants service_role: ${r.acl.join(' ')}`);
+      assert.ok(!r.acl.some((entry) => entry.startsWith('=') || entry.startsWith('anon=') || entry.startsWith('authenticated=')), `${r.proname} ACL has no PUBLIC/anon/authenticated: ${r.acl.join(' ')}`);
+    }
+  });
+
   await t.test('the RPCs and the table stay closed to anon and authenticated', async () => {
     const id = await insertJob(db);
     for (const role of ['anon', 'authenticated']) {
