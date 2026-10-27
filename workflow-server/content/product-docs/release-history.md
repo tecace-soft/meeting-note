@@ -13,7 +13,7 @@ source_of_truth: "repo code; manual verification 2026-10-13"
 
 주요 변경을 최신순으로 정리한다.
 이것은 `main` git 히스토리에서 뽑은 사람이 읽는 다이제스트이지, 커밋별 전체 로그가 아니다.
-정확한 커밋별 목록은 레포의 `git log`와 GitHub 병합 이력에서 볼 수 있다.
+정확한 커밋별 목록은 레포의 `docs/ai-native/history.md`에 있고, 그쪽은 `git log`에서 자동 동기화된다.
 
 ## 버전 관리
 

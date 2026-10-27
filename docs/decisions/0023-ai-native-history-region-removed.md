@@ -24,3 +24,5 @@ source: 2026-10-27 Andrew 결정(history 영역 제거와 git 직접 읽기 승�
 DEC-0007의 훅 방식(결정적 생성기, pre-commit, 마커 영역)은 그대로 유효하다.
 이 결정은 그중 history 영역 생성만 철회하고, structure 영역의 입력을 추적 파일로 바꾼다.
 그래서 DEC-0007은 대체하지 않고 보완한다.
+
+제품 문서 release-history의 "history.md가 자동 동기화된다"는 문장은 아직 고치지 않았다. Andrew의 docs:verify 일괄 정리 때 함께 고친다(본문 수정은 검증 해시를 깨뜨린다).
