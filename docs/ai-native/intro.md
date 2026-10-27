@@ -37,7 +37,7 @@ Project의 요약 편집과 이름 변경은 `src/lib/notes/repository.ts`의 �
 
 ### Repository structure
 
-Directories only, to depth 2; generated / vendor directories (node_modules, dist, build, coverage, .dart_tool, and similar) are pruned.
+Tracked directories only, to depth 2; generated / vendor directories (node_modules, dist, build, coverage, .dart_tool, and similar) are pruned.
 
 ```text
 .
