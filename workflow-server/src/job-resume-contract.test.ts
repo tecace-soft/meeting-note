@@ -589,7 +589,8 @@ test('sweeps never overlap: a sweep that starts while one is running does nothin
   const scans = () => f.state.calls.filter((c) => isTable(c.url, 'workflow_job') && c.url.searchParams.has('or')).length;
   const first = recoverOrphanedJobs();
   await until(() => loadsStarted === 1, 'the first sweep to block on the request load');
-  await recoverOrphanedJobs();
+  // Bounded: without the guard the second sweep would block on its own request load.
+  await Promise.race([recoverOrphanedJobs(), sleep(2_000)]);
   assert.equal(scans(), 1, 'the overlapping sweep did not scan');
   assert.equal(rpcCalls(f, 'workflow_job_claim').length, 1, 'and claimed nothing');
   assert.ok(log.mock.calls.some((c) => c.arguments[0] === 'An orphan sweep is still running; skipping this one.'), 'the skip is logged');
