@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { graphScopes } from '../config/msalConfig';
 import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
+import { insertSpeaker, selectSpeakersByNames, updateSpeakerProfileReturningId } from '../lib/speakers/repository';
 import {
   deleteOwnedNoteReturningId,
   patchOwnedNoteReturningId,
@@ -1949,8 +1950,7 @@ const SummaryHistory: React.FC = () => {
       const token = await getAccessToken();
       if (!token) throw new Error('Could not acquire Microsoft access token.');
       const uniqueSpeakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
-      const { data: speakerRows } = await supabase
-        .from('speaker').select('name, profile').eq('user_id', user.id).in('name', uniqueSpeakers);
+      const { data: speakerRows } = await selectSpeakersByNames(user.id, uniqueSpeakers, 'name, profile');
 
       const speakerProfiles = ((speakerRows ?? []) as { name: string; profile: string | null }[])
         .filter((s) => s.profile)
@@ -2014,8 +2014,7 @@ const SummaryHistory: React.FC = () => {
       const segments: TranscriptSegment[] = hasUsableDiarization(diarRaw) ? normalizeTranscript(diarRaw) : [];
       if (segments.length === 0) throw new Error('No diarized transcription found for this note.');
       const uniqueSpeakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
-      const { data: speakerRows, error: speakerErr } = await supabase
-        .from('speaker').select('id, name, profile').eq('user_id', user!.id).in('name', uniqueSpeakers);
+      const { data: speakerRows, error: speakerErr } = await selectSpeakersByNames(user!.id, uniqueSpeakers, 'id, name, profile');
       if (speakerErr) throw speakerErr;
       const speakerMap = new Map<string, { id: string; profile: string | null }>();
       ((speakerRows ?? []) as { id: string; name: string; profile: string | null }[]).forEach((s) => {
@@ -2064,12 +2063,11 @@ const SummaryHistory: React.FC = () => {
     try {
       const toSave = canonicalOntologyProfileString(profile.draft);
       if (profile.speakerId) {
-        const { data, error } = await supabase.from('speaker').update({ profile: toSave }).eq('id', profile.speakerId).eq('user_id', user.id).select('id').maybeSingle();
-        if (error) throw error;
+        const data = await updateSpeakerProfileReturningId({ speakerId: profile.speakerId, userId: user.id, profile: toSave });
         // 0 rows updated (RLS denied / row gone): don't mark it saved.
         if (!data) throw new Error('Could not save the speaker profile. Please refresh and try again.');
       } else {
-        const { error } = await supabase.from('speaker').insert({ user_id: user.id, name: speakerName, profile: toSave });
+        const { error } = await insertSpeaker({ userId: user.id, name: speakerName, profile: toSave });
         if (error) throw error;
       }
       setGeneratedProfiles((prev) =>

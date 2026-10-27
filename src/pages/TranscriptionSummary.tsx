@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../components/ConfirmDialog';
 import { patchNoteReturningId, saveNoteTranslations } from '../lib/notes/repository';
+import { insertSpeaker, selectSpeakersByNames, updateSpeakerProfileReturningId } from '../lib/speakers/repository';
 import {
   supabase,
   AUDIO_BUCKET,
@@ -1591,11 +1592,11 @@ const TranscriptionSummary: React.FC = () => {
     try {
       const uniqueSpeakers = [...new Set(summaryResult.transcript.map((s) => s.speaker).filter(Boolean))];
 
-      const { data: speakerRows, error: speakerErr } = await supabase
-        .from('speaker')
-        .select('id, name, profile')
-        .eq('user_id', user.id)
-        .in('name', uniqueSpeakers);
+      const { data: speakerRows, error: speakerErr } = await selectSpeakersByNames(
+        user.id,
+        uniqueSpeakers,
+        'id, name, profile'
+      );
 
       if (speakerErr) throw speakerErr;
 
@@ -1664,20 +1665,15 @@ const TranscriptionSummary: React.FC = () => {
     try {
       const toSave = canonicalOntologyProfileString(profile.draft);
       if (profile.speakerId) {
-        const { data, error } = await supabase
-          .from('speaker')
-          .update({ profile: toSave })
-          .eq('id', profile.speakerId)
-          .eq('user_id', user.id)
-          .select('id')
-          .maybeSingle();
-        if (error) throw error;
+        const data = await updateSpeakerProfileReturningId({
+          speakerId: profile.speakerId,
+          userId: user.id,
+          profile: toSave,
+        });
         // 0 rows updated (RLS denied / row gone): don't mark it saved.
         if (!data) throw new Error('Could not save the speaker profile. Please refresh and try again.');
       } else {
-        const { error } = await supabase
-          .from('speaker')
-          .insert({ user_id: user.id, name: speakerName, profile: toSave });
+        const { error } = await insertSpeaker({ userId: user.id, name: speakerName, profile: toSave });
         if (error) throw error;
       }
       setGeneratedProfiles((prev) =>
@@ -1734,11 +1730,7 @@ const TranscriptionSummary: React.FC = () => {
       const token = await getAccessToken();
       if (!token) throw new Error('Could not acquire Microsoft access token.');
       const uniqueSpeakers = [...new Set(summaryResult.transcript.map((s) => s.speaker).filter(Boolean))];
-      const { data: speakerRows } = await supabase
-        .from('speaker')
-        .select('name, profile')
-        .eq('user_id', user.id)
-        .in('name', uniqueSpeakers);
+      const { data: speakerRows } = await selectSpeakersByNames(user.id, uniqueSpeakers, 'name, profile');
 
       const speakerProfiles = ((speakerRows ?? []) as { name: string; profile: string | null }[])
         .filter((s) => s.profile)

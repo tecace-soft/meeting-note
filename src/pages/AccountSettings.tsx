@@ -17,6 +17,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { SpeakerOntologyView } from '../components/SpeakerOntologyView';
 import { UserMemoryView } from '../components/UserMemoryView';
 import { supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
+import { listSpeakers, updateSpeakerProfile } from '../lib/speakers/repository';
 import { findBestSpeakerRowForMsAccount } from '../lib/matchSpeakerIdentity';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { DEFAULT_SUMMARY_PROMPT_NAME } from '../constants/defaultSummaryPrompt';
@@ -329,14 +330,9 @@ const AccountSettings: React.FC = () => {
     const load = async () => {
       setSpeakersLoad({ status: 'loading' });
       try {
-        const { data, error } = await supabase
-          .from('speaker')
-          .select('id, name, profile, email, microsoft_id')
-          .eq('user_id', user.id)
-          .order('name', { ascending: true });
+        const rows = await listSpeakers<SpeakerRow>(user.id);
         if (cancelled) return;
-        if (error) throw error;
-        setSpeakersLoad({ status: 'ready', rows: (data ?? []) as SpeakerRow[] });
+        setSpeakersLoad({ status: 'ready', rows });
       } catch (err: unknown) {
         if (!cancelled) {
           setSpeakersLoad({
@@ -439,12 +435,7 @@ const AccountSettings: React.FC = () => {
     setSpeakerProfileSaveError(null);
     try {
       const toSave = canonicalOntologyProfileString(speakerProfileDraft);
-      const { error } = await supabase
-        .from('speaker')
-        .update({ profile: toSave })
-        .eq('id', matchedSelf.id)
-        .eq('user_id', user.id);
-      if (error) throw error;
+      await updateSpeakerProfile({ speakerId: matchedSelf.id, userId: user.id, profile: toSave });
       setSpeakersLoad((prev) => {
         if (prev.status !== 'ready') return prev;
         return {
@@ -469,8 +460,7 @@ const AccountSettings: React.FC = () => {
     try {
       const toSave = canonicalOntologyProfileString(otherSpeakerDraft);
       const id = otherSpeakerEditingId;
-      const { error } = await supabase.from('speaker').update({ profile: toSave }).eq('id', id).eq('user_id', user.id);
-      if (error) throw error;
+      await updateSpeakerProfile({ speakerId: id, userId: user.id, profile: toSave });
       setSpeakersLoad((prev) => {
         if (prev.status !== 'ready') return prev;
         return {
