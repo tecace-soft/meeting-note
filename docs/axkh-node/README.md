@@ -12,7 +12,7 @@ CI 자동 게시는 없다.
 - 소스 allowlist: `scripts/axkh-node/sources.json` (여기에 없는 파일은 읽지 않는다).
 - 수기 관리 "현재 진행 중" 목록: `docs/axkh-node/current-work.md`.
 - 수기 관리 "변천" 서사: `docs/axkh-node/story.md`.
-- 최근 커밋 목록은 `docs/ai-native/history.md`의 자동 영역에서 가져오며, `sources.json`의 `excludeCommitPrefixes`로 제외할 유형(fix(security), fix(auth))을 정한다.
+- 최근 커밋 목록은 `git log --no-merges`에서 직접 읽으며(`maxCommits`, `scanCommits`), `sources.json`의 `excludeCommitPrefixes`로 제외할 유형(fix(security), fix(auth))을 정한다.
 - 게시 상태(추적됨): `docs/axkh-node/published.json`.
 - 미리보기 출력(gitignore): `.axkh/meeting-note-node.md`, `.axkh/meeting-note-node.json`.
 - 제목은 `Meeting Note 현황`으로 고정한다. 같은 제목이어야 같은 문서가 갱신되고 이전 본문이 이력으로 남는다.
