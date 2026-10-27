@@ -10,7 +10,8 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import {
-  createJobLeaseStore, executionFromClaim, JOB_LEASE_SECONDS, type JobClaim, type JobLeaseRpc,
+  createJobLeaseStore, executionFromClaim, JOB_EXHAUSTED_ERROR, JOB_LEASE_SECONDS, MAX_JOB_CLAIMS, MAX_JOB_EXECUTION_ATTEMPTS,
+  type JobClaim, type JobLeaseRpc,
 } from './jobs/lease.js';
 
 const CHAIN = [
@@ -64,12 +65,12 @@ async function asRole<T>(db: PGlite, role: string, run: () => Promise<T>): Promi
   try { return await run(); } finally { await db.exec('reset role'); }
 }
 
-async function insertJob(db: PGlite, fields: { status?: string; stage?: string; noteId?: string; updatedAgo?: string } = {}): Promise<string> {
+async function insertJob(db: PGlite, fields: { status?: string; stage?: string; noteId?: string; updatedAgo?: string; language?: string } = {}): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
     `insert into public.workflow_job (user_id, note_id, type, status, stage, progress, request, updated_at)
-     values ('fixture-user', $1, 'summarize_audio', $2, $3, 0, '{"noteId":"fixture"}'::jsonb, now() - $4::interval)
+     values ('fixture-user', $1, 'summarize_audio', $2, $3, 0, jsonb_build_object('noteId', 'fixture', 'language', $5::text), now() - $4::interval)
      returning id`,
-    [fields.noteId ?? `note-${Math.random().toString(36).slice(2)}`, fields.status ?? 'queued', fields.stage ?? 'queued', fields.updatedAgo ?? '0 seconds'],
+    [fields.noteId ?? `note-${Math.random().toString(36).slice(2)}`, fields.status ?? 'queued', fields.stage ?? 'queued', fields.updatedAgo ?? '0 seconds', fields.language ?? 'en'],
   );
   return rows[0]!.id;
 }
@@ -84,6 +85,7 @@ async function race(db: PGlite, id: string, mode: 'start' | 'recover', workers =
   ));
   const winners = outcomes.flatMap((outcome, index) => (outcome.kind === 'claimed' ? [{ owner: `worker-${index}`, claim: outcome.claim }] : []));
   for (const outcome of outcomes) assert.ok(outcome.kind === 'claimed' || outcome.kind === 'not-claimable', `unexpected claim outcome ${JSON.stringify(outcome)}`);
+  assert.ok(winners.length <= 1, `at most one winner, got ${winners.length}`);
   return winners;
 }
 
@@ -110,7 +112,6 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     assert.equal(winners.length, 1, 'one winner');
     const { claim, owner } = winners[0]!;
     assert.deepEqual([claim.generation, claim.attempt, claim.submissionState, claim.transcriptId], [1, 1, 'none', null]);
-    assert.equal(claim.request, null, 'a start claim does not send the (possibly large) stored request back');
     const { rows } = await db.query<{ lease_owner: string; seconds: number }>(
       'select lease_owner, extract(epoch from lease_expires_at - clock_timestamp())::float8 as seconds from public.workflow_job where id = $1', [id]);
     assert.equal(rows[0]!.lease_owner, owner);
@@ -127,8 +128,8 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     await expireLease(db, id);
     const winners = await race(db, id, 'recover');
     assert.equal(winners.length, 1, 'one winner after expiry');
-    assert.deepEqual([winners[0]!.claim.generation, winners[0]!.claim.attempt], [first!.claim.generation + 1, 2]);
-    assert.deepEqual(winners[0]!.claim.request, { noteId: 'fixture' }, 'a recover claim returns the stored request to rebuild the input');
+    assert.deepEqual([winners[0]!.claim.generation, winners[0]!.claim.attempt, winners[0]!.claim.claimCount], [first!.claim.generation + 1, 1, 2],
+      'a recover claim counts a claim, not an execution');
     assert.equal((await race(db, id, 'recover')).length, 0, 'the new lease is live again');
   });
 
@@ -229,7 +230,78 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     });
     await expireLease(db, id);
     const [third] = await race(db, id, 'recover', 1);
-    assert.deepEqual([third!.claim.submissionState, third!.claim.transcriptId, third!.claim.submissionCount, third!.claim.attempt], ['submitted', 'provider-id', 2, 3]);
+    assert.deepEqual([third!.claim.submissionState, third!.claim.transcriptId, third!.claim.submissionCount, third!.claim.claimCount], ['submitted', 'provider-id', 2, 3]);
+  });
+
+  await t.test('the claim never returns the stored request; the fenced load does, only to the current owner', async () => {
+    const id = await insertJob(db);
+    const { rows } = await asRole(db, 'service_role', () => db.query<Record<string, unknown>>(
+      `select * from public.workflow_job_claim($1, 'raw-worker', 'start', 300, 300, 3, 10, 'en', 'ko')`, [id]));
+    assert.equal(rows.length, 1, 'claimed');
+    assert.ok(!('request' in rows[0]!), `no request column in the claim result: ${Object.keys(rows[0]!).join(',')}`);
+    const owner = executionFromClaim({ jobId: id, userId: 'fixture-user', noteId: null, status: 'queued', stage: 'queued', generation: 1, attempt: 1, claimCount: 1,
+      transcriptId: null, submissionState: 'none', submissionCount: 0 }, { resumed: true, owner: 'raw-worker' });
+    await service(async () => {
+      assert.deepEqual(await store('raw-worker').loadRequest(owner), { outcome: 'ok', request: { noteId: 'fixture', language: 'en' } });
+      assert.deepEqual(await store('other').loadRequest({ ...owner, owner: 'other' }), { outcome: 'lost', request: null }, 'another owner reads nothing');
+      assert.deepEqual(await store('raw-worker').loadRequest({ ...owner, generation: 0 }), { outcome: 'lost', request: null }, 'a stale generation reads nothing');
+    });
+  });
+
+  await t.test('begin execution counts started runs, is fenced, and stops at the cap', async () => {
+    const id = await insertJob(db);
+    const [w] = await race(db, id, 'start', 1);
+    const execution = executionFromClaim(w!.claim, { resumed: true, owner: w!.owner });
+    await service(async () => {
+      const s = store(w!.owner);
+      assert.deepEqual(await s.beginExecution(execution), { outcome: 'ok', attempt: 2 });
+      assert.deepEqual(await s.beginExecution(execution), { outcome: 'ok', attempt: 3 });
+      assert.deepEqual(await s.beginExecution(execution), { outcome: 'lost', attempt: null }, `never past ${MAX_JOB_EXECUTION_ATTEMPTS}`);
+      assert.deepEqual(await store('other').beginExecution({ ...execution, owner: 'other' }), { outcome: 'lost', attempt: null }, 'fenced');
+    });
+    assert.equal((await row(db, id)).attempt_count, MAX_JOB_EXECUTION_ATTEMPTS);
+  });
+
+  await t.test('SQL cap: a recover claim after the last execution fails the row atomically with the localized error', async () => {
+    const id = await insertJob(db, { language: 'ko', stage: 'transcribing audio' });
+    const [w] = await race(db, id, 'start', 1);
+    let execution = executionFromClaim(w!.claim, { resumed: false, owner: w!.owner });
+    for (let run = 2; run <= MAX_JOB_EXECUTION_ATTEMPTS; run += 1) {
+      await expireLease(db, id);
+      const [r] = await race(db, id, 'recover', 1);
+      execution = executionFromClaim(r!.claim, { resumed: true, owner: r!.owner });
+      await service(async () => assert.deepEqual(await store(r!.owner).beginExecution(execution), { outcome: 'ok', attempt: run }));
+    }
+    await expireLease(db, id);
+    const outcome = await service(() => store('next-worker').claim(id, 'recover'));
+    assert.equal(outcome.kind, 'exhausted', JSON.stringify(outcome));
+    const r = await row(db, id);
+    assert.deepEqual([r.status, r.stage, r.progress, r.error, r.lease_owner], ['failed', 'failed', 100, JOB_EXHAUSTED_ERROR.ko, 'next-worker']);
+    await service(async () => {
+      assert.equal(await store(execution.owner).write(execution, { status: 'completed', stage: 'completed' }), 'lost', 'the previous owner is fenced out');
+    });
+    await expireLease(db, id);
+    assert.equal((await race(db, id, 'recover')).length, 0, 'a terminated row is never claimed again');
+  });
+
+  await t.test('claim committed but response lost, repeated: the job still terminates, bounded by the claim cap', async () => {
+    const id = await insertJob(db, { status: 'processing', stage: 'transcribing audio', updatedAgo: '1 hour' });
+    // The RPC runs and commits, then the client times out (large row, slow instance).
+    const lossy: JobLeaseRpc = async (name, args, timeoutMs) => {
+      await pgliteRpc(db)(name, args, timeoutMs);
+      return { data: null, error: { message: 'This operation was aborted' } };
+    };
+    const s = createJobLeaseStore(lossy, 'unlucky-worker');
+    let rounds = 0;
+    while (rounds < MAX_JOB_CLAIMS + 5 && (await row(db, id)).status !== 'failed') {
+      const outcome = await asRole(db, 'service_role', () => s.claim(id, 'recover'));
+      assert.equal(outcome.kind, 'error', 'every response is lost');
+      await expireLease(db, id);
+      rounds += 1;
+    }
+    const r = await row(db, id);
+    assert.deepEqual([r.status, r.error, r.attempt_count], ['failed', JOB_EXHAUSTED_ERROR.en, 0], 'terminated without ever running');
+    assert.equal(rounds, MAX_JOB_CLAIMS + 1, `claims ${MAX_JOB_CLAIMS} times, the next one fails it (took ${rounds})`);
   });
 
   await t.test('the RPCs and the table stay closed to anon and authenticated', async () => {
@@ -237,7 +309,9 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
     for (const role of ['anon', 'authenticated']) {
       await asRole(db, role, async () => {
         for (const statement of [
-          `select * from public.workflow_job_claim('${id}', 'x', 'start', 60, 60)`,
+          `select * from public.workflow_job_claim('${id}', 'x', 'start', 60, 60, 3, 10, 'en', 'ko')`,
+          `select public.workflow_job_load_request('${id}', 'x', 1)`,
+          `select public.workflow_job_begin_execution('${id}', 'x', 1, 3)`,
           `select public.workflow_job_renew_lease('${id}', 'x', 1, 60)`,
           `select public.workflow_job_write('${id}', 'x', 1, '{}'::jsonb)`,
           `select public.workflow_job_begin_transcript_submission('${id}', 'x', 1)`,
@@ -262,7 +336,7 @@ test('S10 lease store reports unsupported before the migration so callers keep p
   await asRole(db, 'service_role', async () => {
     const outcome = await s.claim(id, 'start');
     assert.equal(outcome.kind, 'unsupported', JSON.stringify(outcome));
-    const execution = executionFromClaim({ jobId: id, userId: 'u', noteId: null, status: 'queued', stage: 'queued', request: null, generation: 1, attempt: 1,
+    const execution = executionFromClaim({ jobId: id, userId: 'u', noteId: null, status: 'queued', stage: 'queued', generation: 1, attempt: 1, claimCount: 1,
       transcriptId: null, submissionState: 'none', submissionCount: 0 } satisfies JobClaim, { resumed: false, owner: 'worker' });
     assert.equal(await s.renew(execution), 'unsupported');
     assert.equal(await s.write(execution, { stage: 'x' }), 'unsupported');

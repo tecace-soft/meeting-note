@@ -32,9 +32,9 @@ async function bootStaleJob(options: { leaseExpiresAt?: string; transcriptId?: s
       f.state.calls.push({ url, method, body: JSON.parse(String(init?.body ?? 'null')) });
       if (Date.parse(leaseExpiresAt) > Date.now()) return Response.json([]);
       return Response.json([{ id: 'fixture-job', user_id: USER, note_id: 'fixture-note', status: 'processing', stage: 'transcribing audio',
-        request: { ...summarizeBody }, execution_generation: 2, attempt_count: 2,
+        execution_generation: 2, attempt_count: 1, claim_count: 2,
         assembly_transcript_id: options.transcriptId ?? null, transcript_submission_state: options.transcriptId ? 'submitted' : 'none',
-        transcript_submission_count: options.transcriptId ? 1 : 0 }]);
+        transcript_submission_count: options.transcriptId ? 1 : 0, claim_outcome: 'claimed' }]);
     }
     if (url.hostname === 'supabase.invalid' && url.pathname.endsWith('/workflow_transcript_checkpoint') && !options.checkpoint && method === 'GET') return Response.json(null);
     // No note was persisted before the restart.

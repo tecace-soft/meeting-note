@@ -1,7 +1,8 @@
 // Orphan sweep: reconciles queued/processing jobs left by a crash or redeploy. With the
 // S10 schema (DEC-0022) recoverOrphanedJobs claims each job whose lease expired by
-// database time and either converges it to 'completed' from a persisted note, fails it
-// past the attempt cap, or resumes it through the runner. Before the migration it falls
+// database time (the claim itself fails a job past its execution or claim cap) and
+// either converges it to 'completed' from a persisted note or resumes it through the
+// runner. Before the migration it falls
 // back to failOrphanedJobs (the pre-S10 behavior: recover from a note, fail the rest).
 // Started by startServer on boot and on an interval; nothing runs at import time.
 // Imports config, db, ops, pipeline input helpers and the jobs modules (never routes).
@@ -14,8 +15,8 @@ import { parseSummarizeInput } from '../pipeline/inputs.js';
 import { createAudioSignedUrl } from '../pipeline/androidUpload.js';
 import { updateWorkflowJob, ORPHANED_JOB_THRESHOLD_MS } from './store.js';
 import {
-  executionFromClaim, isMissingS10Schema, jobLeases, JobLeaseLostError, MAX_JOB_EXECUTION_ATTEMPTS,
-  type JobClaim, type JobExecution,
+  executionFromClaim, isMissingS10Schema, jobLeases, JobLeaseLostError, JOB_EXHAUSTED_ERROR, MAX_JOB_CLAIMS,
+  MAX_JOB_EXECUTION_ATTEMPTS, type JobClaim, type JobExecution,
 } from './lease.js';
 import { runOwnedJob } from './runner.js';
 
@@ -148,15 +149,13 @@ export async function failOrphanedJobs(): Promise<void> {
 // stay unclaimed and the next sweep (ORPHANED_JOB_SWEEP_INTERVAL_MS later) takes them.
 export const MAX_RESUMES_PER_SWEEP = 5;
 export const SWEEP_QUERY_TIMEOUT_MS = 15_000;
-export const RESUME_ATTEMPTS_EXHAUSTED_MESSAGE = `The server restarted ${MAX_JOB_EXECUTION_ATTEMPTS} times while this recording was processing, so it was stopped. Your recording is still saved; please start the summary again.`;
 export const RESUME_UNREADABLE_REQUEST_MESSAGE = 'Server restarted while this job was running and the saved job could not be resumed. Please try again.';
 
 export type RecoveryOutcome = 'completed' | 'failed' | 'resumed' | 'deferred' | 'lost';
 
-// Rebuilds the pipeline input from the claimed row's stored request. Returns null when it
-// is unusable or names another user or note than the row (never run foreign input).
-export async function resumeInputFromClaim(claim: JobClaim): Promise<SummarizeAudioInput | null> {
-  const request = claim.request;
+// Rebuilds the pipeline input from the job's stored request. Returns null when it is
+// unusable or names another user or note than the row (never run foreign input).
+export async function resumeInputFromRequest(claim: JobClaim, request: unknown): Promise<SummarizeAudioInput | null> {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
   let input: SummarizeAudioInput;
   try {
@@ -181,11 +180,25 @@ export async function resumeInputFromClaim(claim: JobClaim): Promise<SummarizeAu
 async function failClaimed(execution: JobExecution, message: string): Promise<RecoveryOutcome> {
   const written = await updateWorkflowJob(execution, { status: 'failed', stage: 'failed', progress: 100, error: message }, { retries: 2 });
   if (written) console.log(`Marked orphaned workflow job ${execution.jobId} as failed: ${message}`);
+  // A failed write defers: the lease expires and the next claim (bounded by the SQL claim
+  // cap) tries again. No execution was started, so no attempt was used.
   return written ? 'failed' : 'deferred';
 }
 
-// Decides the outcome of one claimed orphan. Every write is fenced by the claim, so a
-// concurrent sweep or a late original owner can never both act on it.
+// The claim RPC already failed the row in SQL (executions or claims used up). Only report it.
+function reportExhausted(claim: JobClaim): void {
+  console.warn(`Workflow job ${claim.jobId} stopped after ${claim.attempt} execution(s) and ${claim.claimCount} claim(s); the claim marked it failed.`);
+  void raiseIncident({
+    title: 'Workflow job stopped after repeated interruptions',
+    error: new Error(JOB_EXHAUSTED_ERROR.en),
+    context: { jobId: claim.jobId, noteId: claim.noteId, userId: claim.userId, attempt: claim.attempt, claims: claim.claimCount, stage: claim.stage },
+  });
+}
+
+// Decides the outcome of one claimed orphan. Every read and write is fenced by the claim,
+// so a concurrent sweep or a late original owner can never both act on it. Order: the
+// cheap note check, then the (possibly large) request read, then the execution count,
+// so a deferral never uses an execution attempt (only a claim, which SQL bounds).
 export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcome> {
   const execution = executionFromClaim(claim, { resumed: true });
   try {
@@ -217,18 +230,22 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
         return written ? 'completed' : 'deferred';
       }
     }
-    // Power of Ten rule 1: a job that keeps dying with the process cannot loop forever.
-    if (claim.attempt > MAX_JOB_EXECUTION_ATTEMPTS) {
-      void raiseIncident({
-        title: 'Workflow job exceeded its resume attempts',
-        error: new Error(RESUME_ATTEMPTS_EXHAUSTED_MESSAGE),
-        context: { jobId: claim.jobId, noteId: claim.noteId, userId: claim.userId, attempt: claim.attempt, stage: claim.stage },
-      });
-      return await failClaimed(execution, RESUME_ATTEMPTS_EXHAUSTED_MESSAGE);
+    const loaded = await jobLeases.loadRequest(execution);
+    if (loaded.outcome === 'lost') throw new JobLeaseLostError(claim.jobId, claim.generation, 'the request load');
+    if (loaded.outcome !== 'ok') {
+      console.warn(`Could not load the stored request of orphaned workflow job ${claim.jobId} (${loaded.outcome}); a later sweep retries.`);
+      return 'deferred';
     }
-    const input = await resumeInputFromClaim(claim);
+    const input = await resumeInputFromRequest(claim, loaded.request);
     if (!input) return await failClaimed(execution, RESUME_UNREADABLE_REQUEST_MESSAGE);
-    console.log(`Resuming orphaned workflow job ${claim.jobId} (attempt ${claim.attempt} of ${MAX_JOB_EXECUTION_ATTEMPTS}, generation ${claim.generation}, stage ${claim.stage ?? 'unknown'}, transcript id ${claim.transcriptId ? 'saved' : 'not saved'}, submission ${claim.submissionState}).`);
+    const begun = await jobLeases.beginExecution(execution);
+    if (begun.outcome === 'lost') throw new JobLeaseLostError(claim.jobId, claim.generation, 'the execution start');
+    if (begun.outcome !== 'ok' || begun.attempt === null) {
+      console.warn(`Could not count the resumed execution of workflow job ${claim.jobId} (${begun.outcome}); a later sweep retries.`);
+      return 'deferred';
+    }
+    execution.attempt = begun.attempt;
+    console.log(`Resuming orphaned workflow job ${claim.jobId} (execution ${begun.attempt} of ${MAX_JOB_EXECUTION_ATTEMPTS}, claim ${claim.claimCount} of ${MAX_JOB_CLAIMS}, generation ${claim.generation}, stage ${claim.stage ?? 'unknown'}, transcript id ${claim.transcriptId ? 'saved' : 'not saved'}, submission ${claim.submissionState}).`);
     void runOwnedJob(execution, input);
     return 'resumed';
   } catch (error) {
@@ -283,6 +300,10 @@ export async function recoverOrphanedJobs(): Promise<void> {
       continue;
     }
     if (outcome.kind === 'not-claimable') continue;
+    if (outcome.kind === 'exhausted') {
+      reportExhausted(outcome.claim);
+      continue;
+    }
     if (await recoverClaimedJob(outcome.claim) === 'resumed') started += 1;
   }
 }

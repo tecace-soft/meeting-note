@@ -29,6 +29,8 @@ export async function workflowFixture() {
     // S10 (DEC-0022): true emulates the applied migration (claim, renew, fenced write and
     // submission RPCs); false answers them like PostgREST before the migration.
     s10Schema: true,
+    // What workflow_job_load_request answers for a resumed job (the stored request).
+    jobRequest: { ...summarizeBody } as unknown,
   };
   const nativeFetch = globalThis.fetch;
   const mocked = mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -57,9 +59,12 @@ export async function workflowFixture() {
     if (url.pathname.startsWith('/rest/v1/rpc/workflow_job_')) {
       if (!state.s10Schema) return json({ code: 'PGRST202', message: `Could not find the function public.${table} in the schema cache` }, 404);
       if (table === 'workflow_job_claim') {
-        return json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'queued', stage: 'queued', request: null,
-          execution_generation: 1, attempt_count: 1, assembly_transcript_id: null, transcript_submission_state: 'none', transcript_submission_count: 0 }]);
+        return json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'queued', stage: 'queued',
+          execution_generation: 1, attempt_count: 1, claim_count: 1, assembly_transcript_id: null, transcript_submission_state: 'none',
+          transcript_submission_count: 0, claim_outcome: 'claimed' }]);
       }
+      if (table === 'workflow_job_load_request') return json(state.jobRequest);
+      if (table === 'workflow_job_begin_execution') return json(2);
       if (table === 'workflow_job_write') {
         state.jobUpdates.push(body.p_patch);
         if (body.p_patch.status) state.jobStatus = body.p_patch.status;
@@ -118,7 +123,7 @@ export async function workflowFixture() {
       mocked.mock.restore();
     },
     reset() {
-      Object.assign(state, { caller: USER, tenant: TENANT, graphStatus: 200, dbFailure: false, aiFailure: false, noteOwner: USER, projectOwner: USER, emptyNotes: false, existingJob: true, jobStatus: 'processing', s10Schema: true });
+      Object.assign(state, { caller: USER, tenant: TENANT, graphStatus: 200, dbFailure: false, aiFailure: false, noteOwner: USER, projectOwner: USER, emptyNotes: false, existingJob: true, jobStatus: 'processing', s10Schema: true, jobRequest: { ...summarizeBody } });
       state.calls.length = 0;
       state.jobUpdates.length = 0;
     },

@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Docs**
 
+- docs(ai-native): regenerate history after merging main
 - docs: point the deploy-restart guidance and DEC-0003 at the S10 lease model
 - docs(decisions): point DEC-0003 context at jobs/orphanSweep.ts and jobs/runner.ts
 - docs(decisions): record DEC-0022 S10 auto-resume and supersede DEC-0003
@@ -71,7 +72,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): fix body typing in Android upload contract test
 - test(workflow-server): pin Android upload route contract before T1-10a move
 - chore: restore generated docs/ai-native to main (not part of T1-9a)
-- refactor(workflow-server): move job state persistence and transcript checkpoint to jobs/store.ts (T1-9a)
 
 ### Recent merges
 

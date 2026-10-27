@@ -1,8 +1,8 @@
-// S10 job ownership (DEC-0022): conditional claim, lease renewal, fenced writes and the
-// AssemblyAI submission-begin marker, all through the RPCs in
-// supabase/migrations/20261026120000_workflow_job_s10_lease_and_resume.sql. Expiry is
-// judged by database time inside those RPCs, never by this process's clock.
-// Imports db only; the store, runner and orphan sweep build on it.
+// S10 job ownership (DEC-0022): conditional claim, lease renewal, fenced writes, the fenced
+// request load and execution begin, and the AssemblyAI submission-begin marker, all
+// through the RPCs in supabase/migrations/20261026120000_workflow_job_s10_lease_and_resume.sql.
+// Expiry and the attempt/claim caps are judged inside those RPCs by database time and
+// row state, never by this process. Imports db only; store, runner and sweep build on it.
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { supabase } from '../db/supabaseClient.js';
@@ -13,11 +13,24 @@ export const JOB_LEASE_SECONDS = 5 * 60;
 // A pre-S10 row has no lease; it is recoverable only once its updated_at heartbeat is
 // this stale, exactly like the pre-S10 orphan sweep.
 export const LEGACY_STALE_SECONDS = 5 * 60;
-// Executions per job, counting the first run. A job that crashes the process every time
-// (a poison job) is failed on the claim after this many, so it cannot loop forever.
+// Executions that actually started, counting the first run. A job that crashes the
+// process every time (a poison job) is failed by the next recover claim, in SQL.
 export const MAX_JOB_EXECUTION_ATTEMPTS = 3;
+// Claims of any kind, including recoveries that deferred without running (note lookup
+// error, lost response, failed write). Bounds every deferred loop, also in SQL.
+export const MAX_JOB_CLAIMS = 10;
 // Every lease RPC is bounded; a hung database call must not hold a job or a sweep.
 export const JOB_LEASE_RPC_TIMEOUT_MS = 10_000;
+// The stored request can carry tens of MB of base64 attachments, so its read gets more
+// time on a slow instance. It is read only, so a timeout costs nothing but a retry.
+export const JOB_REQUEST_LOAD_TIMEOUT_MS = 120_000;
+
+// Written by the claim RPC, in the request's language, when a recover claim finds the
+// caps used up. The recording itself is untouched.
+export const JOB_EXHAUSTED_ERROR = {
+  en: 'The server was interrupted repeatedly while processing this recording, so processing stopped. Your recording is still saved; please start the summary again.',
+  ko: '이 녹음을 처리하는 동안 서버가 여러 번 중단되어 처리를 멈췄어요. 녹음은 그대로 남아 있으니 요약을 다시 시작해 주세요.',
+} as const;
 
 // Identifies this process as a lease owner. Readable in logs, unique per boot.
 export const JOB_INSTANCE_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
@@ -31,9 +44,9 @@ export interface JobClaim {
   noteId: string | null;
   status: string;
   stage: string | null;
-  request: unknown;
   generation: number;
   attempt: number;
+  claimCount: number;
   transcriptId: string | null;
   submissionState: TranscriptSubmissionState;
   submissionCount: number;
@@ -45,7 +58,7 @@ export interface JobExecution {
   readonly jobId: string;
   readonly owner: string;
   readonly generation: number;
-  readonly attempt: number;
+  attempt: number;
   readonly resumed: boolean;
   // True when a pre-S10 instance ran this row and may already have submitted it to
   // AssemblyAI without recording that (it had no submission state to write).
@@ -73,10 +86,11 @@ export type JobWritePatch = {
 };
 
 type RpcError = { code?: string; message: string };
-export type JobLeaseRpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: RpcError | null }>;
+export type JobLeaseRpc = (name: string, args: Record<string, unknown>, timeoutMs: number) => PromiseLike<{ data: unknown; error: RpcError | null }>;
 
 export type ClaimOutcome =
   | { kind: 'claimed'; claim: JobClaim }
+  | { kind: 'exhausted'; claim: JobClaim }
   | { kind: 'not-claimable' }
   | { kind: 'unsupported'; message: string }
   | { kind: 'error'; message: string };
@@ -107,31 +121,35 @@ export function executionFromClaim(claim: JobClaim, options: { resumed: boolean;
   };
 }
 
-function parseClaimRow(row: unknown): JobClaim | null {
+function parseClaimRow(row: unknown): { claim: JobClaim; exhausted: boolean } | null {
   if (!row || typeof row !== 'object') return null;
   const r = row as Record<string, unknown>;
   if (typeof r.id !== 'string' || typeof r.user_id !== 'string') return null;
   if (typeof r.execution_generation !== 'number' || typeof r.attempt_count !== 'number') return null;
+  if (r.claim_outcome !== 'claimed' && r.claim_outcome !== 'exhausted') return null;
   const state = r.transcript_submission_state;
   return {
-    jobId: r.id,
-    userId: r.user_id,
-    noteId: typeof r.note_id === 'string' ? r.note_id : null,
-    status: typeof r.status === 'string' ? r.status : '',
-    stage: typeof r.stage === 'string' ? r.stage : null,
-    request: r.request ?? null,
-    generation: r.execution_generation,
-    attempt: r.attempt_count,
-    transcriptId: typeof r.assembly_transcript_id === 'string' && r.assembly_transcript_id.trim() ? r.assembly_transcript_id : null,
-    submissionState: state === 'submitting' || state === 'submitted' ? state : 'none',
-    submissionCount: typeof r.transcript_submission_count === 'number' ? r.transcript_submission_count : 0,
+    exhausted: r.claim_outcome === 'exhausted',
+    claim: {
+      jobId: r.id,
+      userId: r.user_id,
+      noteId: typeof r.note_id === 'string' ? r.note_id : null,
+      status: typeof r.status === 'string' ? r.status : '',
+      stage: typeof r.stage === 'string' ? r.stage : null,
+      generation: r.execution_generation,
+      attempt: r.attempt_count,
+      claimCount: typeof r.claim_count === 'number' ? r.claim_count : 0,
+      transcriptId: typeof r.assembly_transcript_id === 'string' && r.assembly_transcript_id.trim() ? r.assembly_transcript_id : null,
+      submissionState: state === 'submitting' || state === 'submitted' ? state : 'none',
+      submissionCount: typeof r.transcript_submission_count === 'number' ? r.transcript_submission_count : 0,
+    },
   };
 }
 
 export function createJobLeaseStore(rpc: JobLeaseRpc, owner: string = JOB_INSTANCE_ID) {
-  async function call(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: RpcError | null }> {
+  async function call(name: string, args: Record<string, unknown>, timeoutMs = JOB_LEASE_RPC_TIMEOUT_MS): Promise<{ data: unknown; error: RpcError | null }> {
     try {
-      return await rpc(name, args);
+      return await rpc(name, args, timeoutMs);
     } catch (error) {
       // A timeout or network failure is an unknown outcome, never proof of ownership.
       return { data: null, error: { message: error instanceof Error ? error.message : String(error) } };
@@ -142,6 +160,7 @@ export function createJobLeaseStore(rpc: JobLeaseRpc, owner: string = JOB_INSTAN
     if (error) return isMissingS10Schema(error) ? 'unsupported' : 'error';
     return ok ? 'ok' : 'lost';
   }
+  const fence = (execution: JobExecution) => ({ p_job_id: execution.jobId, p_owner: execution.owner, p_generation: execution.generation });
   return {
     owner,
     async claim(jobId: string, mode: ClaimMode): Promise<ClaimOutcome> {
@@ -151,39 +170,40 @@ export function createJobLeaseStore(rpc: JobLeaseRpc, owner: string = JOB_INSTAN
         p_mode: mode,
         p_lease_seconds: JOB_LEASE_SECONDS,
         p_legacy_stale_seconds: LEGACY_STALE_SECONDS,
+        p_max_attempts: MAX_JOB_EXECUTION_ATTEMPTS,
+        p_max_claims: MAX_JOB_CLAIMS,
+        p_exhausted_error_en: JOB_EXHAUSTED_ERROR.en,
+        p_exhausted_error_ko: JOB_EXHAUSTED_ERROR.ko,
       });
       if (error) return isMissingS10Schema(error) ? { kind: 'unsupported', message: error.message } : { kind: 'error', message: error.message };
       const rows = Array.isArray(data) ? data : data ? [data] : [];
       if (rows.length === 0) return { kind: 'not-claimable' };
-      const claim = parseClaimRow(rows[0]);
-      if (!claim) return { kind: 'error', message: 'workflow_job_claim returned an unexpected row shape.' };
-      return { kind: 'claimed', claim };
+      const parsed = parseClaimRow(rows[0]);
+      if (!parsed) return { kind: 'error', message: 'workflow_job_claim returned an unexpected row shape.' };
+      return parsed.exhausted ? { kind: 'exhausted', claim: parsed.claim } : { kind: 'claimed', claim: parsed.claim };
     },
     async renew(execution: JobExecution): Promise<FencedOutcome> {
-      const { data, error } = await call('workflow_job_renew_lease', {
-        p_job_id: execution.jobId,
-        p_owner: execution.owner,
-        p_generation: execution.generation,
-        p_lease_seconds: JOB_LEASE_SECONDS,
-      });
+      const { data, error } = await call('workflow_job_renew_lease', { ...fence(execution), p_lease_seconds: JOB_LEASE_SECONDS });
       return fenced(error, data === true);
     },
     async write(execution: JobExecution, patch: JobWritePatch): Promise<FencedOutcome> {
-      const { data, error } = await call('workflow_job_write', {
-        p_job_id: execution.jobId,
-        p_owner: execution.owner,
-        p_generation: execution.generation,
-        p_patch: patch,
-      });
+      const { data, error } = await call('workflow_job_write', { ...fence(execution), p_patch: patch });
       return fenced(error, data === true);
+    },
+    // The stored request, read only after a resume's cheap checks passed.
+    async loadRequest(execution: JobExecution): Promise<{ outcome: FencedOutcome; request: unknown }> {
+      const { data, error } = await call('workflow_job_load_request', fence(execution), JOB_REQUEST_LOAD_TIMEOUT_MS);
+      return { outcome: fenced(error, data !== null && data !== undefined), request: data ?? null };
+    },
+    // Counts a resumed execution as started; returns the new attempt count.
+    async beginExecution(execution: JobExecution): Promise<{ outcome: FencedOutcome; attempt: number | null }> {
+      const { data, error } = await call('workflow_job_begin_execution', { ...fence(execution), p_max_attempts: MAX_JOB_EXECUTION_ATTEMPTS });
+      const attempt = typeof data === 'number' ? data : null;
+      return { outcome: fenced(error, attempt !== null), attempt };
     },
     // Returns the new submission count, or the fenced outcome when it could not be marked.
     async beginTranscriptSubmission(execution: JobExecution): Promise<{ outcome: FencedOutcome; count: number | null }> {
-      const { data, error } = await call('workflow_job_begin_transcript_submission', {
-        p_job_id: execution.jobId,
-        p_owner: execution.owner,
-        p_generation: execution.generation,
-      });
+      const { data, error } = await call('workflow_job_begin_transcript_submission', fence(execution));
       const count = typeof data === 'number' ? data : null;
       return { outcome: fenced(error, count !== null), count };
     },
@@ -193,5 +213,5 @@ export function createJobLeaseStore(rpc: JobLeaseRpc, owner: string = JOB_INSTAN
 export type JobLeaseStore = ReturnType<typeof createJobLeaseStore>;
 
 export const jobLeases: JobLeaseStore = createJobLeaseStore(
-  (name, args) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(JOB_LEASE_RPC_TIMEOUT_MS)),
+  (name, args, timeoutMs) => supabase.rpc(name, args).abortSignal(AbortSignal.timeout(timeoutMs)),
 );

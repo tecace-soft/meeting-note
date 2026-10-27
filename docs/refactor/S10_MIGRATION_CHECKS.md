@@ -53,23 +53,23 @@ group by status;
 ## 3. 적용 후 점검 (읽기 전용, 마지막 블록만 rollback으로 끝나는 시험 호출)
 
 ```sql
--- 3-1. 새 열 7개와 기본값.
+-- 3-1. 새 열 8개와 기본값.
 select column_name, data_type, column_default, is_nullable
 from information_schema.columns
 where table_schema = 'public' and table_name = 'workflow_job'
-  and column_name in ('lease_owner', 'lease_expires_at', 'execution_generation', 'attempt_count',
+  and column_name in ('lease_owner', 'lease_expires_at', 'execution_generation', 'attempt_count', 'claim_count',
                       'assembly_transcript_id', 'transcript_submission_state', 'transcript_submission_count')
 order by column_name;
 
 -- 3-2. 기존 행이 모두 기본값을 받았는지(defaulted = total).
-select count(*) filter (where execution_generation = 0 and attempt_count = 0
+select count(*) filter (where execution_generation = 0 and attempt_count = 0 and claim_count = 0
                           and transcript_submission_state = 'none'
                           and transcript_submission_count = 0
                           and lease_owner is null and lease_expires_at is null) as defaulted,
        count(*) as total
 from public.workflow_job;
 
--- 3-3. RPC 4개와 실행 권한: anon과 authenticated는 false, service_role은 true.
+-- 3-3. RPC 6개와 실행 권한: anon과 authenticated는 false, service_role은 true.
 select p.proname,
        has_function_privilege('anon', p.oid, 'execute') as anon,
        has_function_privilege('authenticated', p.oid, 'execute') as authenticated,
@@ -92,7 +92,8 @@ where schemaname = 'public' and tablename = 'workflow_job' and indexname = 'work
 
 -- 3-6. 없는 job id로 인수를 시험한다. 0행이어야 하고 rollback으로 끝나므로 아무것도 바뀌지 않는다.
 begin;
-select * from public.workflow_job_claim('00000000-0000-0000-0000-000000000000', 'post-check', 'recover', 300, 300);
+select * from public.workflow_job_claim('00000000-0000-0000-0000-000000000000', 'post-check', 'recover', 300, 300, 3, 10, 'en', 'ko');
+select public.workflow_job_load_request('00000000-0000-0000-0000-000000000000', 'post-check', 1);
 select public.workflow_job_write('00000000-0000-0000-0000-000000000000', 'post-check', 1, '{"stage":"post-check"}'::jsonb);
 rollback;
 ```
@@ -103,7 +104,7 @@ rollback;
 - 웹 업로드 1건을 요약까지 끝낸 뒤 다음을 확인한다.
 
 ```sql
-select id, status, execution_generation, attempt_count, lease_owner is not null as leased,
+select id, status, execution_generation, attempt_count, claim_count, lease_owner is not null as leased,
        assembly_transcript_id is not null as has_transcript_id,
        transcript_submission_state, transcript_submission_count
 from public.workflow_job
@@ -111,7 +112,7 @@ order by created_at desc
 limit 5;
 ```
 
-기대값은 `completed`, generation 1, attempt 1, leased true, has_transcript_id true, `submitted`, count 1이다(transcript checkpoint를 재사용한 재시도는 id 없이 `none`, 0).
+기대값은 `completed`, generation 1, attempt 1, claim 1, leased true, has_transcript_id true, `submitted`, count 1이다(transcript checkpoint를 재사용한 재시도는 id 없이 `none`, 0).
 
 ## 5. 되돌리기
 
@@ -123,13 +124,16 @@ begin;
 drop function if exists public.workflow_job_begin_transcript_submission(uuid, text, integer);
 drop function if exists public.workflow_job_write(uuid, text, integer, jsonb);
 drop function if exists public.workflow_job_renew_lease(uuid, text, integer, integer);
-drop function if exists public.workflow_job_claim(uuid, text, text, integer, integer);
+drop function if exists public.workflow_job_begin_execution(uuid, text, integer, integer);
+drop function if exists public.workflow_job_load_request(uuid, text, integer);
+drop function if exists public.workflow_job_claim(uuid, text, text, integer, integer, integer, integer, text, text);
 drop index if exists public.workflow_job_active_lease_idx;
 alter table public.workflow_job drop constraint if exists workflow_job_s10_state_check;
 alter table public.workflow_job
   drop column if exists transcript_submission_count,
   drop column if exists transcript_submission_state,
   drop column if exists assembly_transcript_id,
+  drop column if exists claim_count,
   drop column if exists attempt_count,
   drop column if exists execution_generation,
   drop column if exists lease_expires_at,

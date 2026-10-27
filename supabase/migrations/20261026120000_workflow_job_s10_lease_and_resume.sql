@@ -19,10 +19,19 @@
 -- * workflow_job_claim('start') takes a freshly inserted, never-claimed row.
 -- * workflow_job_claim('recover') takes a non-terminal row whose lease expired by
 --   DATABASE time, or a pre-S10 row (no lease) whose updated_at heartbeat is stale.
--- * Every claim increments execution_generation and attempt_count; only the one
---   UPDATE that matched receives the new generation.
--- * Renewal, writes and submission-begin match (id, lease_owner, generation) and a
---   non-terminal status, so a worker that lost its lease writes nothing.
+-- * Every claim increments execution_generation and claim_count; only the one
+--   UPDATE that matched receives the new generation. attempt_count counts
+--   executions that actually started (a start claim, or workflow_job_begin_execution
+--   after a recover claim loaded the request).
+-- * The caps live in SQL: a recover claim on a row that already used its executions
+--   (attempt_count) or its claims (claim_count) fails the row in the same statement
+--   and returns claim_outcome = 'exhausted'. A client that loses the response still
+--   leaves a terminated row, so no retry loop can keep a job processing forever.
+-- * The claim never returns the (possibly large) request; a resuming worker reads it
+--   with workflow_job_load_request after its cheap checks passed.
+-- * Renewal, writes, request load, execution begin and submission-begin match (id,
+--   lease_owner, generation) and a non-terminal status, so a worker that lost its
+--   lease reads and writes nothing.
 
 begin;
 
@@ -31,6 +40,7 @@ alter table public.workflow_job
   add column if not exists lease_expires_at timestamptz,
   add column if not exists execution_generation integer not null default 0,
   add column if not exists attempt_count integer not null default 0,
+  add column if not exists claim_count integer not null default 0,
   add column if not exists assembly_transcript_id text,
   add column if not exists transcript_submission_state text not null default 'none',
   add column if not exists transcript_submission_count integer not null default 0;
@@ -45,6 +55,7 @@ begin
     alter table public.workflow_job add constraint workflow_job_s10_state_check check (
       execution_generation >= 0
       and attempt_count >= 0
+      and claim_count >= 0
       and transcript_submission_count >= 0
       and transcript_submission_state in ('none', 'submitting', 'submitted')
     );
@@ -56,27 +67,33 @@ create index if not exists workflow_job_active_lease_idx
   on public.workflow_job (lease_expires_at)
   where status in ('queued', 'processing');
 
--- Conditional claim. Returns the claimed row (one row) or no rows. The stored request
--- (which can carry large base64 attachments) is returned only to a recover claim, which
--- needs it to rebuild the pipeline input; a start claim already has the input.
+-- Conditional claim. Returns one row (claim_outcome 'claimed', or 'exhausted' when a
+-- recover claim found the caps used up and failed the row atomically) or no rows.
+-- The exhausted error is localized from the stored request's language without
+-- sending the request anywhere.
 create or replace function public.workflow_job_claim(
   p_job_id uuid,
   p_owner text,
   p_mode text,
   p_lease_seconds integer,
-  p_legacy_stale_seconds integer
+  p_legacy_stale_seconds integer,
+  p_max_attempts integer,
+  p_max_claims integer,
+  p_exhausted_error_en text,
+  p_exhausted_error_ko text
 ) returns table (
   id uuid,
   user_id text,
   note_id text,
   status text,
   stage text,
-  request jsonb,
   execution_generation integer,
   attempt_count integer,
+  claim_count integer,
   assembly_transcript_id text,
   transcript_submission_state text,
-  transcript_submission_count integer
+  transcript_submission_count integer,
+  claim_outcome text
 )
 language sql
 volatile
@@ -87,12 +104,24 @@ as $$
      set lease_owner = p_owner,
          lease_expires_at = clock_timestamp() + make_interval(secs => p_lease_seconds),
          execution_generation = j.execution_generation + 1,
-         attempt_count = j.attempt_count + 1,
+         claim_count = j.claim_count + 1,
+         attempt_count = case when p_mode = 'start' then j.attempt_count + 1 else j.attempt_count end,
+         status = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims) then 'failed' else j.status end,
+         stage = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims) then 'failed' else j.stage end,
+         progress = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims) then 100 else j.progress end,
+         error = case when p_mode = 'recover' and (j.attempt_count >= p_max_attempts or j.claim_count >= p_max_claims)
+           then case when j.request ->> 'language' = 'ko' then p_exhausted_error_ko else p_exhausted_error_en end
+           else j.error end,
          updated_at = clock_timestamp()
    where j.id = p_job_id
      and length(btrim(coalesce(p_owner, ''))) > 0
+     and p_mode in ('start', 'recover')
      and p_lease_seconds between 1 and 3600
      and p_legacy_stale_seconds between 1 and 86400
+     and p_max_attempts between 1 and 100
+     and p_max_claims between p_max_attempts and 1000
+     and length(btrim(coalesce(p_exhausted_error_en, ''))) > 0
+     and length(btrim(coalesce(p_exhausted_error_ko, ''))) > 0
      and j.status in ('queued', 'processing')
      and (
        (p_mode = 'start' and j.execution_generation = 0 and j.lease_owner is null)
@@ -108,9 +137,53 @@ as $$
        )
      )
   returning j.id, j.user_id, j.note_id, j.status, j.stage,
-            case when p_mode = 'recover' then j.request end,
-            j.execution_generation, j.attempt_count, j.assembly_transcript_id,
-            j.transcript_submission_state, j.transcript_submission_count;
+            j.execution_generation, j.attempt_count, j.claim_count, j.assembly_transcript_id,
+            j.transcript_submission_state, j.transcript_submission_count,
+            case when j.status = 'failed' then 'exhausted' else 'claimed' end;
+$$;
+
+-- The stored request for the current owner and generation of an active job, or null
+-- when the caller lost the lease. Read only: a lost response costs nothing but time.
+create or replace function public.workflow_job_load_request(
+  p_job_id uuid,
+  p_owner text,
+  p_generation integer
+) returns jsonb
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select j.request
+    from public.workflow_job j
+   where j.id = p_job_id
+     and j.lease_owner = p_owner
+     and j.execution_generation = p_generation
+     and j.status in ('queued', 'processing');
+$$;
+
+-- Counts the start of a resumed execution. Returns the new attempt_count, or null when
+-- the caller lost the lease, the job is terminal or its executions are used up.
+create or replace function public.workflow_job_begin_execution(
+  p_job_id uuid,
+  p_owner text,
+  p_generation integer,
+  p_max_attempts integer
+) returns integer
+language sql
+volatile
+security invoker
+set search_path = ''
+as $$
+  update public.workflow_job j
+     set attempt_count = j.attempt_count + 1,
+         updated_at = clock_timestamp()
+   where j.id = p_job_id
+     and j.lease_owner = p_owner
+     and j.execution_generation = p_generation
+     and j.status in ('queued', 'processing')
+     and j.attempt_count < p_max_attempts
+  returning j.attempt_count;
 $$;
 
 -- Heartbeat: extends the lease of the current owner and generation only.
@@ -215,11 +288,15 @@ $$;
 
 -- Backend-only, like the table: no anon/authenticated access (RLS and the table
 -- grants already deny them; revoking EXECUTE keeps the RPC surface closed too).
-revoke all on function public.workflow_job_claim(uuid, text, text, integer, integer) from public, anon, authenticated;
+revoke all on function public.workflow_job_claim(uuid, text, text, integer, integer, integer, integer, text, text) from public, anon, authenticated;
+revoke all on function public.workflow_job_load_request(uuid, text, integer) from public, anon, authenticated;
+revoke all on function public.workflow_job_begin_execution(uuid, text, integer, integer) from public, anon, authenticated;
 revoke all on function public.workflow_job_renew_lease(uuid, text, integer, integer) from public, anon, authenticated;
 revoke all on function public.workflow_job_write(uuid, text, integer, jsonb) from public, anon, authenticated;
 revoke all on function public.workflow_job_begin_transcript_submission(uuid, text, integer) from public, anon, authenticated;
-grant execute on function public.workflow_job_claim(uuid, text, text, integer, integer) to service_role;
+grant execute on function public.workflow_job_claim(uuid, text, text, integer, integer, integer, integer, text, text) to service_role;
+grant execute on function public.workflow_job_load_request(uuid, text, integer) to service_role;
+grant execute on function public.workflow_job_begin_execution(uuid, text, integer, integer) to service_role;
 grant execute on function public.workflow_job_renew_lease(uuid, text, integer, integer) to service_role;
 grant execute on function public.workflow_job_write(uuid, text, integer, jsonb) to service_role;
 grant execute on function public.workflow_job_begin_transcript_submission(uuid, text, integer) to service_role;

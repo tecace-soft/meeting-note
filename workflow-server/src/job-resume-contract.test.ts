@@ -1,7 +1,7 @@
 // S10 runner and orphan-sweep contracts (DEC-0022) with the S10 schema present: fenced
 // stage writes, lease heartbeat, lease loss, the AssemblyAI submission marker and saved id,
 // resubmission recording, resume of claimed orphans (checkpoint, saved id, unreachable
-// audio, Android re-sign, unreadable request, attempt cap, persisted note) and the sweep's
+// audio, Android re-sign, unreadable request, SQL exhaustion, deferrals, persisted note) and the sweep's
 // bounded loop and pre-S10 fallbacks. The pre-S10 runner and sweep stay pinned in
 // job-runner-contract.test.ts; the SQL rules run on PGlite in job-lease-sql.test.ts.
 // Offline only: fetch is faked, nothing reads .env.
@@ -20,9 +20,9 @@ const { parseSummarizeInput } = await import('./pipeline/inputs.js');
 const { workflowFixture, summarizeBody, USER, OTHER } = await import('./test-support/workflow.js');
 const { processSummarizeJob, completedJobResults } = await import('./jobs/runner.js');
 const {
-  recoverClaimedJob, recoverOrphanedJobs, MAX_RESUMES_PER_SWEEP, RESUME_ATTEMPTS_EXHAUSTED_MESSAGE, RESUME_UNREADABLE_REQUEST_MESSAGE,
+  recoverClaimedJob, recoverOrphanedJobs, MAX_RESUMES_PER_SWEEP, RESUME_UNREADABLE_REQUEST_MESSAGE,
 } = await import('./jobs/orphanSweep.js');
-const { MAX_JOB_EXECUTION_ATTEMPTS, JOB_INSTANCE_ID } = await import('./jobs/lease.js');
+const { JOB_INSTANCE_ID, JOB_EXHAUSTED_ERROR } = await import('./jobs/lease.js');
 type JobClaim = import('./jobs/lease.js').JobClaim;
 
 type Fixture = Awaited<ReturnType<typeof workflowFixture>>;
@@ -79,14 +79,18 @@ const indexOf = (f: Fixture, predicate: (c: Fixture['state']['calls'][number]) =
 const terminal = (f: Fixture, jobId: string) => writes(f, jobId).find((p) => p.status === 'completed' || p.status === 'failed');
 const input = () => parseSummarizeInput({ ...summarizeBody });
 
-function claimRow(overrides: Partial<JobClaim> = {}): JobClaim {
+// A claimed row plus the request workflow_job_load_request answers for it.
+type ClaimFixture = Partial<JobClaim> & { request?: unknown };
+function claimRow(overrides: ClaimFixture = {}): JobClaim & { request: unknown } {
   return {
     jobId: 'resumed-job', userId: USER, noteId: 'fixture-note', status: 'processing', stage: 'transcribing audio',
-    request: { ...summarizeBody }, generation: 2, attempt: 2, transcriptId: null, submissionState: 'none', submissionCount: 0,
+    request: { ...summarizeBody }, generation: 2, attempt: 1, claimCount: 2, transcriptId: null, submissionState: 'none', submissionCount: 0,
     ...overrides,
   };
 }
-async function recoverAndSettle(f: Fixture, claim: JobClaim) {
+async function recoverAndSettle(f: Fixture, row: JobClaim & { request: unknown }) {
+  const { request, ...claim } = row;
+  f.state.jobRequest = request;
   const outcome = await recoverClaimedJob(claim);
   if (outcome === 'resumed') await until(() => Boolean(terminal(f, claim.jobId)), `job ${claim.jobId} to finish`);
   await sleep(20);
@@ -102,7 +106,8 @@ test('a fresh owned run: start claim, fenced stages, submission marker, id saved
   const f = await fixture(t, noCheckpoint);
   await processSummarizeJob('job-owned', input());
   const [claim] = rpcCalls(f, 'workflow_job_claim');
-  assert.deepEqual(claim!.body, { p_job_id: 'job-owned', p_owner: JOB_INSTANCE_ID, p_mode: 'start', p_lease_seconds: 300, p_legacy_stale_seconds: 300 });
+  assert.deepEqual(claim!.body, { p_job_id: 'job-owned', p_owner: JOB_INSTANCE_ID, p_mode: 'start', p_lease_seconds: 300, p_legacy_stale_seconds: 300,
+    p_max_attempts: 3, p_max_claims: 10, p_exhausted_error_en: JOB_EXHAUSTED_ERROR.en, p_exhausted_error_ko: JOB_EXHAUSTED_ERROR.ko });
   const patches = writes(f, 'job-owned');
   assert.deepEqual(patches.slice(0, 2), [
     { status: 'processing', stage: 'loading inputs', progress: 10 },
@@ -323,7 +328,7 @@ test('resume of an Android recording signs a fresh link from the stored object p
 test('resume fails an unreadable or foreign stored request instead of running it', async (t) => {
   t.mock.method(console, 'log', () => undefined);
   const f = await fixture(t, noNote);
-  for (const [jobId, request] of [['no-request', null], ['blank-request', { userId: USER }], ['foreign-request', { ...summarizeBody, userId: OTHER }],
+  for (const [jobId, request] of [['array-request', []], ['blank-request', { userId: USER }], ['foreign-request', { ...summarizeBody, userId: OTHER }],
     ['other-note', { ...summarizeBody, noteId: 'other-note' }]] as const) {
     assert.equal(await recoverAndSettle(f, claimRow({ jobId, request })), 'failed', jobId);
     assert.deepEqual([terminal(f, jobId)!.status, terminal(f, jobId)!.error], ['failed', RESUME_UNREADABLE_REQUEST_MESSAGE], jobId);
@@ -331,19 +336,61 @@ test('resume fails an unreadable or foreign stored request instead of running it
   assert.ok(!f.state.calls.some((c) => c.url.hostname === 'api.assemblyai.com' || c.url.hostname === 'generativelanguage.googleapis.com'), 'nothing ran');
 });
 
-test('resume past the attempt cap fails the job with an incident instead of running it again', async (t) => {
+test('an exhausted claim (failed in SQL) is only reported: no request load, execution or write', async (t) => {
   t.mock.method(console, 'log', () => undefined);
-  t.mock.method(console, 'error', () => undefined);
-  const f = await fixture(t, noNote);
-  assert.equal(MAX_JOB_EXECUTION_ATTEMPTS, 3);
-  assert.equal(await recoverAndSettle(f, claimRow({ attempt: MAX_JOB_EXECUTION_ATTEMPTS + 1 })), 'failed');
-  assert.deepEqual(terminal(f, 'resumed-job'), { status: 'failed', stage: 'failed', progress: 100, error: RESUME_ATTEMPTS_EXHAUSTED_MESSAGE });
-  assert.ok(!f.state.calls.some((c) => c.url.hostname === 'api.assemblyai.com'), 'a poison job does not run again');
-  assert.equal(writes(f, 'resumed-job').length, 1, 'only the failure is written (the Gemini call here is the F9 incident triage)');
+  const warn = t.mock.method(console, 'warn', () => undefined);
+  const f = await fixture(t,
+    (url) => (isTable(url, 'workflow_job') && url.searchParams.has('or') ? Response.json([{ id: 'poison-job', lease_expires_at: null }]) : undefined),
+    (url, _method, body) => (isRpc(url, 'workflow_job_claim') ? Response.json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'failed', stage: 'failed',
+      execution_generation: 5, attempt_count: 3, claim_count: 5, assembly_transcript_id: null, transcript_submission_state: 'none', transcript_submission_count: 0,
+      claim_outcome: 'exhausted' }]) : undefined));
+  await recoverOrphanedJobs();
+  const [claim] = rpcCalls(f, 'workflow_job_claim');
+  assert.deepEqual([claim!.body.p_max_attempts, claim!.body.p_max_claims, claim!.body.p_exhausted_error_en, claim!.body.p_exhausted_error_ko],
+    [3, 10, JOB_EXHAUSTED_ERROR.en, JOB_EXHAUSTED_ERROR.ko], 'the caps and the localized error travel to SQL');
+  for (const name of ['workflow_job_load_request', 'workflow_job_begin_execution', 'workflow_job_write']) assert.equal(rpcCalls(f, name).length, 0, `${name} is not called`);
+  assert.ok(!f.state.calls.some((c) => c.url.hostname === 'api.assemblyai.com' || isTable(c.url, 'note')), 'a poison job does not run again');
+  assert.ok(warn.mock.calls.some((c) => c.arguments[0] === 'Workflow job poison-job stopped after 3 execution(s) and 5 claim(s); the claim marked it failed.'), 'the stop is logged');
   await until(() => f.state.calls.some((c) => isTable(c.url, 'feedback_issues')), 'the incident');
-  f.reset();
-  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'last-try', attempt: MAX_JOB_EXECUTION_ATTEMPTS })), 'resumed', 'the last allowed attempt still runs');
-  completedJobResults.delete('last-try');
+});
+
+test('resume order: note check, then the request load, then the execution count; deferrals use no execution', async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  const warn = t.mock.method(console, 'warn', () => undefined);
+  let load: 'ok' | 'timeout' | 'lost' = 'timeout';
+  let begin: 'ok' | 'error' | 'lost' = 'ok';
+  const f = await fixture(t, noCheckpoint, noNote,
+    (url) => {
+      if (!isRpc(url, 'workflow_job_load_request') || load === 'ok') return undefined;
+      return load === 'lost' ? Response.json(null) : Response.json({ message: 'canceling statement due to statement timeout' }, { status: 500 });
+    },
+    (url) => {
+      if (!isRpc(url, 'workflow_job_begin_execution') || begin === 'ok') return undefined;
+      return begin === 'lost' ? Response.json(null) : Response.json({ message: 'begin blip' }, { status: 500 });
+    });
+  assert.equal(await recoverAndSettle(f, claimRow()), 'deferred', 'a request load timeout defers');
+  assert.equal(rpcCalls(f, 'workflow_job_begin_execution').length, 0, 'a deferral before the run uses no execution attempt');
+  assert.ok(warn.mock.calls.some((c) => String(c.arguments[0]).startsWith('Could not load the stored request of orphaned workflow job resumed-job (error)')), 'the deferral is logged');
+  f.reset(); load = 'lost';
+  assert.equal(await recoverAndSettle(f, claimRow()), 'lost', 'a lost lease at the load stops');
+  f.reset(); load = 'ok'; begin = 'error';
+  assert.equal(await recoverAndSettle(f, claimRow()), 'deferred', 'an uncounted execution does not run');
+  f.reset(); begin = 'lost';
+  assert.equal(await recoverAndSettle(f, claimRow()), 'lost');
+  assert.ok(!f.state.calls.some((c) => c.url.hostname === 'api.assemblyai.com' || c.url.hostname === 'generativelanguage.googleapis.com'), 'nothing ran in any of these');
+  assert.equal(rpcCalls(f, 'workflow_job_write').length, 0, 'and nothing was written');
+  f.reset(); begin = 'ok';
+  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'ordered-job' })), 'resumed');
+  const order = [
+    indexOf(f, (c) => isTable(c.url, 'note') && c.url.searchParams.get('id') === 'eq.fixture-note'),
+    indexOf(f, (c) => isRpc(c.url, 'workflow_job_load_request')),
+    indexOf(f, (c) => isRpc(c.url, 'workflow_job_begin_execution')),
+    indexOf(f, (c) => isRpc(c.url, 'workflow_job_write')),
+  ];
+  assert.ok(order.every((at) => at >= 0), JSON.stringify(order));
+  assert.deepEqual([...order].sort((a, b) => a - b), order, `note, load, begin, then the run: ${JSON.stringify(order)}`);
+  assert.deepEqual(rpcCalls(f, 'workflow_job_load_request')[0]!.body, { p_job_id: 'ordered-job', p_owner: JOB_INSTANCE_ID, p_generation: 2 }, 'the load is fenced');
+  completedJobResults.delete('ordered-job');
 });
 
 test('resume converges to completed from a persisted note of the same user; a lookup error defers', async (t) => {
@@ -360,9 +407,11 @@ test('resume converges to completed from a persisted note of the same user; a lo
   const done = terminal(f, 'resumed-job')!;
   assert.deepEqual([done.status, (done.result as { summary: string }).summary], ['completed', 'Saved summary']);
   assert.ok(!f.state.calls.some((c) => c.url.hostname === 'api.assemblyai.com' || c.url.hostname === 'generativelanguage.googleapis.com'), 'finished work is not rerun');
+  assert.equal(rpcCalls(f, 'workflow_job_load_request').length, 0, 'finished work never loads the stored request');
   f.reset(); noteMode = 'error';
   assert.equal(await recoverAndSettle(f, claimRow()), 'deferred');
   assert.equal(rpcCalls(f, 'workflow_job_write').length, 0, 'unknown note state: neither rerun nor fail');
+  assert.equal(rpcCalls(f, 'workflow_job_begin_execution').length, 0, 'a note lookup deferral uses no execution attempt');
   f.reset(); noteMode = 'foreign';
   assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'foreign-note-job' })), 'resumed', 'another user\'s note never completes this job');
   completedJobResults.delete('foreign-note-job');
@@ -378,7 +427,8 @@ test('the sweep claims expired rows by database time and starts at most MAX_RESU
   const f = await fixture(t, noCheckpoint, noNote,
     (url) => (isTable(url, 'workflow_job') && url.searchParams.has('or') ? Response.json(ids.map((id) => ({ id, lease_expires_at: null }))) : undefined),
     (url, _method, body) => (isRpc(url, 'workflow_job_claim') ? Response.json([{ id: body.p_job_id, user_id: USER, note_id: 'fixture-note', status: 'processing', stage: 'queued',
-      request: { ...summarizeBody }, execution_generation: 2, attempt_count: 2, assembly_transcript_id: null, transcript_submission_state: 'none', transcript_submission_count: 0 }]) : undefined));
+      execution_generation: 2, attempt_count: 1, claim_count: 2, assembly_transcript_id: null, transcript_submission_state: 'none', transcript_submission_count: 0,
+      claim_outcome: 'claimed' }]) : undefined));
   await recoverOrphanedJobs();
   const claims = rpcCalls(f, 'workflow_job_claim');
   assert.deepEqual(claims.map((c) => [c.body.p_job_id, c.body.p_mode]), ids.slice(0, MAX_RESUMES_PER_SWEEP).map((id) => [id, 'recover']), 'the rest wait for the next sweep unclaimed');
