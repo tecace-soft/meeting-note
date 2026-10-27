@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(jobs): fence the AssemblyAI usage record to the lease owner
 - fix(jobs): treat a missing submission marker past input loading as a possible resubmission (F7)
 - fix(jobs): the pre-S10 fallback sweep re-checks staleness in its fail write (F6)
 - fix(jobs): fall back to pre-S10 heartbeats and writes when the S10 RPCs vanish mid-run (F5)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - test(workflow-server): make the translation contract fail when the note write does not await the translation
 - test(workflow-server): pin summarize, finalize and ingest speaker contracts before T1-10c move
 - test(workflow-server): add direct transcript-stage tests for transcribeOrReuseCheckpoint
-- refactor(workflow-server): split transcription into submit/poll/parse and a transcript stage (T1-10b)
 
 ### Recent merges
 

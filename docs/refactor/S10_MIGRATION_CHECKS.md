@@ -42,7 +42,31 @@ select status, count(*) as jobs, max(updated_at) as last_heartbeat
 from public.workflow_job
 where status in ('queued', 'processing')
 group by status;
+
+-- 1-6. RPC가 기대하는 기존 열 타입. 순서대로 text, text, text, text, jsonb, timestamptz여야 한다
+-- (user_id, note_id, status, stage, request, updated_at). 다르면 적용하지 말고 멈춘다.
+select column_name, data_type, udt_name
+from information_schema.columns
+where table_schema = 'public' and table_name = 'workflow_job'
+  and column_name in ('user_id', 'note_id', 'status', 'stage', 'request', 'updated_at')
+order by array_position(array['user_id', 'note_id', 'status', 'stage', 'request', 'updated_at'], column_name::text);
+
+-- 1-7. service_role이 RLS를 우회하는지(true여야 한다; RPC는 security invoker로 service_role 권한을 쓴다).
+select rolname, rolbypassrls from pg_roles where rolname = 'service_role';
+
+-- 1-8. 기존 제약(S10이 추가하는 workflow_job_s10_state_check는 아직 없어야 한다).
+select conname, contype, pg_get_constraintdef(oid) as definition
+from pg_constraint
+where conrelid = 'public.workflow_job'::regclass
+order by conname;
+
+-- 1-9. 상태별 행 수와 가장 큰 request 크기(bytes). 큰 request는 재개 시 별도 읽기(120초 제한)로만 가져온다.
+select status, count(*) as jobs, max(pg_column_size(request)) as max_request_bytes
+from public.workflow_job
+group by status;
 ```
+
+1-2는 0행이어야 한다(`workflow\_job\_%` 함수가 하나도 없음).
 
 ## 2. 적용
 
@@ -90,7 +114,15 @@ where conrelid = 'public.workflow_job'::regclass and conname = 'workflow_job_s10
 select indexname from pg_indexes
 where schemaname = 'public' and tablename = 'workflow_job' and indexname = 'workflow_job_active_lease_idx';
 
--- 3-6. 없는 job id로 인수를 시험한다. 0행이어야 하고 rollback으로 끝나므로 아무것도 바뀌지 않는다.
+-- 3-6. 새 RPC의 ACL과 설정. 기대값:
+--   proacl에 PUBLIC(=X/...), anon, authenticated 항목이 없고 service_role=X 와 소유자만 있다;
+--   proconfig = {search_path=""}; prosecdef = false(security invoker).
+select p.proname, p.proacl, p.proconfig, p.prosecdef
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace and p.proname like 'workflow\_job\_%'
+order by p.proname;
+
+-- 3-7. 없는 job id로 인수를 시험한다. 0행이어야 하고 rollback으로 끝나므로 아무것도 바뀌지 않는다.
 begin;
 select * from public.workflow_job_claim('00000000-0000-0000-0000-000000000000', 'post-check', 'recover', 300, 300, 3, 10, 'en', 'ko');
 select public.workflow_job_load_request('00000000-0000-0000-0000-000000000000', 'post-check', 1);
@@ -114,7 +146,42 @@ limit 5;
 
 기대값은 `completed`, generation 1, attempt 1, claim 1, leased true, has_transcript_id true, `submitted`, count 1이다(transcript checkpoint를 재사용한 재시도는 id 없이 `none`, 0).
 
-## 5. 되돌리기
+## 5. 배포 뒤 며칠 동안의 모니터링 (읽기 전용)
+
+하루에 한두 번 실행한다.
+`expired = true`인 행이 sweep 한두 주기(2~7분) 넘게 남아 있거나, attempt_count나 claim_count가 상한(3, 10)에 가까운 행이 반복해서 보이면 로그와 함께 살펴본다.
+
+```sql
+-- 5-1. 진행 중 작업의 실행권 상태.
+select id, status, stage, attempt_count, claim_count, execution_generation,
+       lease_owner, lease_expires_at, lease_expires_at < now() as expired,
+       transcript_submission_state, transcript_submission_count, updated_at
+from public.workflow_job
+where status in ('queued', 'processing')
+order by updated_at;
+
+-- 5-2. 반복 중단으로 멈춘 작업(SQL 상한이 failed로 바꾼 행).
+select id, note_id, attempt_count, claim_count, error, updated_at
+from public.workflow_job
+where status = 'failed' and claim_count > 1 and updated_at > now() - interval '7 days'
+order by updated_at desc;
+
+-- 5-3. 최근 재제출 기록(비용 0과 표식, 같은 note의 transcription 행 duration으로 비용을 계산한다).
+select u.created_at, u.note_id, u.usage_metadata ->> 'reason' as reason,
+       u.usage_metadata ->> 'jobId' as job_id, u.usage_metadata ->> 'attempt' as attempt
+from public.workflow_usage u
+where u.stage = 'transcription-resubmission' and u.created_at > now() - interval '7 days'
+order by u.created_at desc;
+
+-- 5-4. 실행권을 잃은 실행이 따로 기록한 전사(supersededExecution 표식).
+select created_at, note_id, usage_metadata ->> 'transcriptId' as transcript_id
+from public.workflow_usage
+where stage = 'transcription' and usage_metadata ? 'supersededExecution'
+  and created_at > now() - interval '7 days'
+order by created_at desc;
+```
+
+## 6. 되돌리기
 
 먼저 S10 이전 코드로 되돌리거나 S10 코드를 그대로 둔다(RPC가 없어지면 S10 이전 동작으로 내려간다).
 열을 지우면 진행 중 작업의 저장된 전사 id가 사라지므로 그 작업은 복구 시 다시 제출된다.
