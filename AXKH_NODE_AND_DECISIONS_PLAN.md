@@ -50,7 +50,7 @@ Hansoo는 10/20부터 10/30까지 출장이므로, 그 전에 확인할 질문�
   `mutate`는 `p_expected_access_revision` 불일치 시 `ACCESS_REVISION_CONFLICT`를 던지고, `enable`은 이미 켜져 있으면 `changed=false`라 revision을 올리지 않는다.
 - 모바일에는 knowledge 코드가 없다(이 플랜 범위 밖).
 - 문서 체계: `docs/ai-native/decision.md`는 산문 항목 1개뿐이다(확인됨).
-  `docs/ai-native/history.md`는 `scripts/ai-native-docs/generate.mjs`가 `.githooks/pre-commit`에서 생성한다.
+  `docs/ai-native/history.md`는 더 이상 자동 생성되지 않는다(DEC-0023). 훅은 `intro.md`의 구조 영역만 갱신하고 최근 이력은 git에서 읽는다.
   제품 문서는 `workflow-server/content/product-docs/manifest.json`(`depends_on`, `verified_body_hash`)과 `workflow-server/scripts/product-docs/{verify,generate,check,shared}.ts`로 관리한다.
   CI는 `.github/workflows/product-docs-check.yml`과 `ci.yml`이다.
 - 계약 파일(`contract.ts` 등)은 AXKH 저장소와 byte-identical이어야 하므로 이 플랜은 계약 변경을 하지 않는다.

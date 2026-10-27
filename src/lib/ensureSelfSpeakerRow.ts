@@ -1,4 +1,4 @@
-import { supabase } from '../config/supabaseConfig';
+import { insertSpeaker, selectSpeakerIdentityRows, updateSpeakerFields } from './speakers/repository';
 import {
   deriveSelfSpeakerNameFromMsDisplayName,
   findBestSpeakerRowForMsAccount,
@@ -19,10 +19,7 @@ export async function ensureSelfSpeakerRowForUser(
   const normalizedMicrosoftId = microsoftId?.trim() || null;
   const normalizedMicrosoftEmail = microsoftEmail?.trim() || null;
 
-  const { data: rows, error } = await supabase
-    .from('speaker')
-    .select('id, name, email, microsoft_id')
-    .eq('user_id', userId);
+  const { data: rows, error } = await selectSpeakerIdentityRows(userId);
 
   if (error) {
     console.error('ensureSelfSpeakerRow: failed to load speakers', error);
@@ -43,11 +40,7 @@ export async function ensureSelfSpeakerRowForUser(
 
     if (Object.keys(patch).length === 0) return;
 
-    const { error: updateError } = await supabase
-      .from('speaker')
-      .update(patch)
-      .eq('id', existing.id)
-      .eq('user_id', userId);
+    const { error: updateError } = await updateSpeakerFields({ speakerId: existing.id, userId, patch });
 
     if (updateError) {
       console.error('ensureSelfSpeakerRow: update failed', updateError);
@@ -55,11 +48,11 @@ export async function ensureSelfSpeakerRowForUser(
     return;
   }
 
-  const { error: insertError } = await supabase.from('speaker').insert({
-    user_id: userId,
+  const { error: insertError } = await insertSpeaker({
+    userId,
     name: derivedName,
     email: normalizedMicrosoftEmail,
-    microsoft_id: normalizedMicrosoftId,
+    microsoftId: normalizedMicrosoftId,
   });
 
   if (!insertError) return;
