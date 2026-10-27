@@ -258,7 +258,9 @@ describe('SummaryHistory pagination', () => {
     await waitFor(() => expect(lastArgs().range).toEqual({ from: 10, to: 19 }));
   });
 
-  it('resets to page 1 in a single query when the filter scope changes (cancel-and-reset)', async () => {
+  // The scope change issues a page-1 query immediately (the effect resets the page it uses), then the page
+  // state update re-runs the effect and issues a second page-1 query; the first response is discarded.
+  it('resets to page 1 when the filter scope changes: two page-1 queries, never the new filter on page 2', async () => {
     await mountLoaded();
     fireEvent.click(screen.getByRole('button', { name: 'Page 2' }));
     await waitFor(() => expect(lastArgs().range).toEqual({ from: 10, to: 19 }));
@@ -269,6 +271,7 @@ describe('SummaryHistory pagination', () => {
     await screen.findByText('Page 1 of 3');
     const after = allArgs().slice(before);
     expect(after.some((a) => a.ownership === 'mine' && a.range?.from === 10)).toBe(false);
+    expect(after.filter((a) => a.ownership === 'mine' && a.range?.from === 0)).toHaveLength(2);
     expect(after[after.length - 1].range).toEqual({ from: 0, to: 9 });
   });
 
@@ -303,10 +306,15 @@ async function openMenuAndPick(noteTitle: string, item: string) {
 }
 
 describe('SummaryHistory rename', () => {
+  let focusSpy: ReturnType<typeof vi.spyOn> | null = null;
   // The row renders a mobile and a desktop input that both autoFocus; in a browser only the visible one
   // can take focus, so neutralise focus() to avoid a jsdom-only blur-save from the hidden copy.
   beforeEach(() => {
-    vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(() => {});
+    focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    focusSpy?.mockRestore();
+    focusSpy = null;
   });
 
   it('renames through the owner-scoped patch and shows the new title', async () => {
