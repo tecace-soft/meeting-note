@@ -81,8 +81,14 @@ function buildDirTree(files) {
   return root;
 }
 
+/** Plain code-point order, so the tree is identical on every machine and locale. */
+function compareCodePoints(a, b) {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
 function sortedNames(node) {
-  return [...node.keys()].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  return [...node.keys()].sort(compareCodePoints);
 }
 
 /** Recursive, depth- and width-bounded directory tree as markdown lines. */
