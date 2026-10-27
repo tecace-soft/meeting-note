@@ -20,4 +20,6 @@ source: RENDER_CONSOLIDATION_DESIGN.md "0. Status update (2026-09-01)", "Option 
 
 mcp-server 브랜치 파이프라인은 폐기됐다.
 MCP 변경도 이제 백엔드를 재시작한다(DEC-0003 참고).
-MCP를 연결하는 dispatch는 workflow-server/src/http/router.ts에 있고, 실제 순서는 knowledge 경로, OPTIONS, handleMcpRequest, 호스트 라우트 순이다(위 "가장 먼저"는 호스트 라우트보다 먼저라는 뜻; router-contract.test.ts가 이 순서를 고정한다).
+MCP를 연결하는 dispatch는 workflow-server/src/http/router.ts에 있고, 코드 순서는 knowledge 경로, OPTIONS, handleMcpRequest, 호스트 라우트다(위 "가장 먼저"는 호스트 라우트보다 먼저라는 뜻).
+router-contract.test.ts는 knowledge, OPTIONS, MCP의 순서와, MCP가 자기 경로만 답하고 /health, /version, /admin/backfill-insight는 호스트로 넘긴다는 점을 고정한다.
+MCP 경로와 호스트 라우트가 함께 맞는 경로는 지금 없으므로 MCP와 호스트 라우트 사이의 순서는 테스트로 관찰되지 않는다.
