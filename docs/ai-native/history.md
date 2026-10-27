@@ -33,6 +33,7 @@ Last 40 non-merge commits, newest first, grouped by type.
 
 **Fixes**
 
+- fix(jobs): retry a transient start-claim error before deferring to the sweep (F4)
 - fix(jobs): no ops incident for an expired audio link on resume; probe refuses redirects (F3, F9)
 - fix(jobs): cap concurrently running resumed jobs per process (F2)
 - fix(jobs): enforce the S10 caps in SQL and stop returning the request from the claim (F1, F8)
@@ -74,7 +75,6 @@ Last 40 non-merge commits, newest first, grouped by type.
 - refactor(workflow-server): move AssemblyAI transcription to pipeline/transcription (T1-10b)
 - test(workflow-server): pin AssemblyAI transcription pipeline contracts before T1-10b move
 - test(workflow-server): add direct androidUpload helper tests
-- refactor(workflow-server): move Android upload helpers to pipeline/androidUpload (T1-10a)
 
 ### Recent merges
 

@@ -83,6 +83,12 @@ async function heartbeat(job: string | JobExecution): Promise<void> {
     job.lost = true;
     return;
   }
+  if (outcome === 'unsupported') {
+    // Rolled back while running: keep the pre-S10 heartbeat (updated_at) so the pre-S10
+    // fallback sweep does not fail this live job as stale.
+    await updateWorkflowJob(job.jobId, {});
+    return;
+  }
   console.warn(`Could not renew the lease of workflow job ${job.jobId} (${outcome}); retrying at the next heartbeat.`);
 }
 

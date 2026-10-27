@@ -118,6 +118,16 @@ limit 5;
 
 먼저 S10 이전 코드로 되돌리거나 S10 코드를 그대로 둔다(RPC가 없어지면 S10 이전 동작으로 내려간다).
 열을 지우면 진행 중 작업의 저장된 전사 id가 사라지므로 그 작업은 복구 시 다시 제출된다.
+**되돌리기는 진행 중 작업이 0건일 때만 실행한다.**
+아래 쿼리가 0을 돌려줄 때까지 기다린다(배포 직후라면 sweep 한 주기, 약 2분 뒤 다시 확인).
+
+```sql
+select count(*) as active_jobs
+from public.workflow_job
+where status in ('queued', 'processing');
+```
+
+S10 코드가 배포된 채로 되돌리면, 실행 중이던 작업은 heartbeat와 상태 쓰기를 S10 이전 방식(id 기준, updated_at 갱신)으로 바꿔 이어간다.
 
 ```sql
 begin;

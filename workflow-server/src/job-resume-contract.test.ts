@@ -184,6 +184,35 @@ test('a transient start-claim error is retried; a lost response is recognized as
   for (const id of ['retry-job', 'lost-response-job']) completedJobResults.delete(id);
 });
 
+test('a rollback during a run (RPCs gone) falls back to pre-S10 heartbeats and id-only writes', { timeout: 30_000 }, async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  let rolledBack = false;
+  let polls = 0;
+  const gone = () => Response.json({ code: 'PGRST202', message: 'Could not find the function in the schema cache' }, { status: 404 });
+  const f = await fixture(t, noCheckpoint,
+    (url) => (rolledBack && (isRpc(url, 'workflow_job_renew_lease') || isRpc(url, 'workflow_job_write')) ? gone() : undefined),
+    (url, method) => {
+      if (url.hostname !== 'api.assemblyai.com' || method !== 'GET') return undefined;
+      polls += 1;
+      return polls < 3 ? Response.json({ id: 'fixture-transcript', status: 'processing' }) : undefined;
+    });
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const run = processSummarizeJob('rollback-job', input());
+  await until(() => polls >= 1, 'the first poll');
+  rolledBack = true;
+  t.mock.timers.tick(60_000);
+  await until(() => f.state.calls.some((c) => isTable(c.url, 'workflow_job') && c.method === 'PATCH'), 'the pre-S10 heartbeat');
+  const heartbeat = f.state.calls.find((c) => isTable(c.url, 'workflow_job') && c.method === 'PATCH')!;
+  assert.equal(heartbeat.url.searchParams.get('id'), 'eq.rollback-job');
+  assert.deepEqual(Object.keys(heartbeat.body), ['updated_at'], 'an empty patch only bumps updated_at');
+  await Promise.race([run, sleep(15_000).then(() => { throw new Error('the run did not finish after the rollback'); })]);
+  t.mock.timers.reset();
+  const patches = f.state.calls.filter((c) => isTable(c.url, 'workflow_job') && c.method === 'PATCH').map((c) => c.body as Record<string, unknown>);
+  assert.equal(patches.at(-1)!.status, 'completed', 'the completed write lands by id');
+  assert.ok(patches.every((p) => !('assembly_transcript_id' in p) && !('transcript_submission_state' in p)), 'S10-only fields are dropped');
+  completedJobResults.delete('rollback-job');
+});
+
 test('a lost lease at a stage write stops the run without a failure write, incident or enrichment', async (t) => {
   const warn = t.mock.method(console, 'warn', () => undefined);
   const log = t.mock.method(console, 'log', () => undefined);

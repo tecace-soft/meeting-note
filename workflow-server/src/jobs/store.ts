@@ -87,6 +87,14 @@ async function writeOwnedJob(execution: JobExecution, patch: WorkflowJobPatch, r
       execution.lost = true;
       throw new JobLeaseLostError(execution.jobId, execution.generation, during);
     }
+    if (outcome === 'unsupported') {
+      // The S10 RPCs are gone (migration rolled back while this code runs): fencing is
+      // impossible, so write like pre-S10 code, by id, keeping the job visible and fresh.
+      // S10-only fields have no column to land in and are dropped.
+      const { assembly_transcript_id: _id, transcript_submission_state: _state, ...legacyPatch } = patch;
+      if (Object.keys(legacyPatch).length === 0) return true;
+      return updateWorkflowJob(execution.jobId, legacyPatch, { retries });
+    }
     if (attempt < retries) await delay(Math.min(1000 * 2 ** attempt, 8000));
   }
   console.warn(`Could not update workflow job ${execution.jobId}: fenced write ${outcome} for ${during}.`);
