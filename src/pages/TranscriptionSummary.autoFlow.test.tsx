@@ -184,10 +184,12 @@ function baseRecorder(overrides: Record<string, unknown> = {}) {
 type FetchCall = { url: string; method: string; body: Record<string, unknown> | null };
 let fetchCalls: FetchCall[] = [];
 let regenerateResponses: Array<() => Response> = [];
+let submitRecordAtPost: string | null = null;
 
 function installFetch() {
   fetchCalls = [];
   regenerateResponses = [];
+  submitRecordAtPost = null;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -195,6 +197,7 @@ function installFetch() {
       const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null;
       fetchCalls.push({ url: input, method, body });
       if (input.endsWith('/summarize-audio/jobs') && method === 'POST') {
+        submitRecordAtPost = window.localStorage.getItem('meeting-note:summary-submit');
         return Response.json({ jobId: 'job-1', status: 'queued' }, { status: 202 });
       }
       if (input.includes('/summarize-audio/jobs/')) {
@@ -335,5 +338,123 @@ describe('TranscriptionSummary speaker suggestions and name-aware refresh (U9)',
     await screen.findByText('Andrew and Hansoo agreed.');
     expect(regenerateCalls()).toHaveLength(1);
     expect(submitCalls()).toHaveLength(0);
+  });
+});
+
+describe('TranscriptionSummary automatic summary after recording or choosing a file (U1)', () => {
+  const blob = new Blob(['audio-bytes'], { type: 'audio/webm' });
+  const finishedRecording = (seconds: number) => ({
+    isRecording: false,
+    recordedBlob: blob,
+    recordedAudioUrl: 'blob:recording',
+    recordingTime: seconds,
+  });
+
+  // Renders a page whose recorder is recording; stopping it yields `seconds` of audio.
+  function renderRecording(seconds: number) {
+    h.recorder = baseRecorder({ isRecording: true, recordingTime: seconds });
+    const view = renderPage();
+    (h.recorder.stopRecording as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      h.recorder = { ...h.recorder, ...finishedRecording(seconds) };
+    });
+    const rerender = () =>
+      view.rerender(
+        <MemoryRouter initialEntries={['/transcription-summary']}>
+          <TranscriptionSummary />
+        </MemoryRouter>
+      );
+    return { ...view, rerenderPage: rerender };
+  }
+
+  async function stopRecording(view: ReturnType<typeof renderRecording>) {
+    await act(async () => {
+      fireEvent.click(screen.getByText('recordingClickToStop'));
+    });
+    view.rerenderPage();
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it('starts upload and summary after the grace countdown, with the note id stored before the POST', async () => {
+    const view = renderRecording(30);
+    await stopRecording(view);
+    expect(await screen.findByText('autoSummaryStartsIn')).toBeInTheDocument();
+    expect(h.upload).not.toHaveBeenCalled();
+    await advance(5100);
+    await waitFor(() => expect(submitCalls()).toHaveLength(1));
+    expect(h.upload).toHaveBeenCalledTimes(1);
+    const posted = submitCalls()[0].body!;
+    const stored = JSON.parse(submitRecordAtPost ?? 'null') as { noteId: string; userId: string } | null;
+    expect(stored).toMatchObject({ noteId: posted.noteId, userId: 'user-1' });
+    await screen.findByText('Generic summary about Speaker A.');
+    // Cleared after the note exists, so summarizing the same file again on purpose makes a new note.
+    expect(window.localStorage.getItem('meeting-note:summary-submit')).toBeNull();
+  });
+
+  it('cancel during the countdown sends nothing and keeps the recording', async () => {
+    const view = renderRecording(30);
+    await stopRecording(view);
+    await screen.findByText('autoSummaryStartsIn');
+    fireEvent.click(screen.getByRole('button', { name: 'cancel' }));
+    await advance(6000);
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(submitCalls()).toHaveLength(0);
+    expect(screen.getByText('recordingComplete')).toBeInTheDocument();
+  });
+
+  it('does not start automatically for a very short recording', async () => {
+    const view = renderRecording(3);
+    await stopRecording(view);
+    await screen.findByText('shortRecordingNoAutoSummary');
+    expect(screen.queryByText('autoSummaryStartsIn')).not.toBeInTheDocument();
+    await advance(6000);
+    expect(submitCalls()).toHaveLength(0);
+  });
+
+  it('a recovered recording waits for the user', async () => {
+    h.recorder = baseRecorder(finishedRecording(600));
+    renderPage();
+    await screen.findByText('recordingComplete');
+    await advance(6000);
+    expect(screen.queryByText('autoSummaryStartsIn')).not.toBeInTheDocument();
+    expect(submitCalls()).toHaveLength(0);
+  });
+
+  it('a stop from the floating widget starts the countdown on arrival', async () => {
+    h.recorder = baseRecorder(finishedRecording(600));
+    renderPage({ autoSummarize: true });
+    expect(await screen.findByText('autoSummaryStartsIn')).toBeInTheDocument();
+  });
+
+  it('a recent recording that already has a note links to it instead of resubmitting', async () => {
+    h.recent = [
+      { id: 'file-9', name: 'old.webm', bucket: 'meeting-recordings', storage_path: 'old.webm', public_url: '', size_bytes: 10 },
+    ];
+    h.fetchReferencingNotes.mockResolvedValue([{ id: 'note-9', name: 'Old note', audio_file: null, audio_file_id: 'file-9' }]);
+    renderPage();
+    fireEvent.click(await screen.findByText('old.webm'));
+    await screen.findByText(/recordingHasNote/);
+    expect(screen.getByRole('button', { name: 'openNote' })).toBeInTheDocument();
+    await advance(6000);
+    expect(screen.queryByText('autoSummaryStartsIn')).not.toBeInTheDocument();
+    expect(submitCalls()).toHaveLength(0);
+    h.recent = [];
+  });
+
+  it('a recent recording without a note starts after the countdown', async () => {
+    h.recent = [
+      { id: 'file-8', name: 'fresh.webm', bucket: 'meeting-recordings', storage_path: 'fresh.webm', public_url: '', size_bytes: 10 },
+    ];
+    renderPage();
+    fireEvent.click(await screen.findByText('fresh.webm'));
+    await screen.findByText('autoSummaryStartsIn');
+    await advance(5100);
+    await waitFor(() => expect(submitCalls()).toHaveLength(1));
+    expect(submitCalls()[0].body!.fileId).toBe('file-8');
+    h.recent = [];
   });
 });
