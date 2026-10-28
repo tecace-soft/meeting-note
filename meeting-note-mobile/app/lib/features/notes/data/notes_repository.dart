@@ -28,10 +28,12 @@ final notesListProvider = FutureProvider<List<MeetingNote>>(
 );
 
 final noteProvider = FutureProvider.family<MeetingNote, String>(
-    (ref, id) => ref.watch(notesRepositoryProvider).get(id));
+  (ref, id) => ref.watch(notesRepositoryProvider).get(id),
+);
 
 final promptsProvider = FutureProvider<List<SummaryPrompt>>(
-    (ref) => ref.watch(notesRepositoryProvider).prompts());
+  (ref) => ref.watch(notesRepositoryProvider).prompts(),
+);
 
 const _defaultSummaryPromptName = 'Default';
 
@@ -40,35 +42,39 @@ const _defaultSummaryPromptName = 'Default';
 /// notes when Supabase cannot be reached.
 class NotesRepository {
   NotesRepository(this._dio)
-      : _supabase = createAppDio(BaseOptions(
-            baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
+    : _supabase = createAppDio(
+        BaseOptions(
+          baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
         ),
-        _supabaseRoot = createAppDio(BaseOptions(
-            baseUrl: supabaseUrl.replaceAll(RegExp(r'/$'), ''),
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-            sendTimeout: const Duration(minutes: 5),
-          ),
+      ),
+      _supabaseRoot = createAppDio(
+        BaseOptions(
+          baseUrl: supabaseUrl.replaceAll(RegExp(r'/$'), ''),
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+          sendTimeout: const Duration(minutes: 5),
         ),
-        _workflow = createAppDio(BaseOptions(
-            baseUrl: workflowApiUrl.replaceAll(RegExp(r'/$'), ''),
-            // 60s connect: the free-tier backend spins down after ~15 min idle
-            // and a cold start can take up to ~60s; a shorter timeout surfaces
-            // as a spurious "could not reach" on the first request.
-            connectTimeout: const Duration(seconds: 60),
-            receiveTimeout: const Duration(minutes: 2),
-            sendTimeout: const Duration(minutes: 5),
-          ),
-        ) {
+      ),
+      _workflow = createAppDio(
+        BaseOptions(
+          baseUrl: workflowApiUrl.replaceAll(RegExp(r'/$'), ''),
+          // 60s connect: the free-tier backend spins down after ~15 min idle
+          // and a cold start can take up to ~60s; a shorter timeout surfaces
+          // as a spurious "could not reach" on the first request.
+          connectTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(minutes: 2),
+          sendTimeout: const Duration(minutes: 5),
+        ),
+      ) {
     final session = MobileSupabaseSession();
     final retry = session.retryOnUnauthorizedInterceptor();
     _supabase.interceptors.add(retry);
     _supabaseRoot.interceptors.add(retry);
-    _workflow.interceptors
-        .add(session.retryOnWorkflowUnauthorizedInterceptor());
+    _workflow.interceptors.add(
+      session.retryOnWorkflowUnauthorizedInterceptor(),
+    );
   }
 
   final Dio _dio; // ignore: unused_field
@@ -107,8 +113,7 @@ class NotesRepository {
     NoteOwnershipFilter ownership = NoteOwnershipFilter.all,
     NoteSortKey sort = NoteSortKey.meetingDesc,
     int limit = 50,
-  }) =>
-      list(query: query, ownership: ownership, sort: sort, limit: limit);
+  }) => list(query: query, ownership: ownership, sort: sort, limit: limit);
 
   Future<List<MeetingNote>> list({
     String? query,
@@ -163,15 +168,19 @@ class NotesRepository {
         .toList();
     if (ownership == NoteOwnershipFilter.all) {
       notes = notes
-          .where((note) =>
-              note.ownerId == userId || note.sharedUserIds.contains(userId))
+          .where(
+            (note) =>
+                note.ownerId == userId || note.sharedUserIds.contains(userId),
+          )
           .toList();
     } else if (ownership == NoteOwnershipFilter.mine) {
       notes = notes.where((note) => note.ownerId == userId).toList();
     } else {
       notes = notes
-          .where((note) =>
-              note.ownerId != userId && note.sharedUserIds.contains(userId))
+          .where(
+            (note) =>
+                note.ownerId != userId && note.sharedUserIds.contains(userId),
+          )
           .toList();
     }
     notes = _filter(notes, query);
@@ -183,11 +192,7 @@ class NotesRepository {
     final auth = await MobileSupabaseSession().auth();
     final response = await _supabase.get<List<dynamic>>(
       '/note',
-      queryParameters: {
-        'select': '*',
-        'id': 'eq.$id',
-        'limit': 1,
-      },
+      queryParameters: {'select': '*', 'id': 'eq.$id', 'limit': 1},
       options: Options(headers: _supabaseHeaders(auth.token)),
     );
     final rows = response.data?.whereType<Map>().toList() ?? const [];
@@ -245,8 +250,9 @@ class NotesRepository {
     String? userName,
     List<String> attachmentPaths = const [],
   }) async {
-    final microsoftToken =
-        await _storage.read(key: AuthTokenStore.accessTokenKey);
+    final microsoftToken = await _storage.read(
+      key: AuthTokenStore.accessTokenKey,
+    );
     final auth = await MobileSupabaseSession().auth();
     final appLanguage =
         await _storage.read(key: 'settings_app_language') == 'ko' ? 'ko' : 'en';
@@ -254,15 +260,17 @@ class NotesRepository {
       throw StateError('Sign in with Microsoft before generating a summary.');
     }
     try {
-      final resolvedNoteId =
-          (noteId != null && noteId.trim().isNotEmpty) ? noteId.trim() : _uuidV4();
+      final resolvedNoteId = (noteId != null && noteId.trim().isNotEmpty)
+          ? noteId.trim()
+          : _uuidV4();
       final audio = await _prepareAudioForWorkflow(
         audioPath: audioPath,
         title: title,
         userId: auth.userId,
         supabaseToken: auth.token,
-        preassignedFileId:
-            (fileId != null && fileId.trim().isNotEmpty) ? fileId.trim() : null,
+        preassignedFileId: (fileId != null && fileId.trim().isNotEmpty)
+            ? fileId.trim()
+            : null,
       );
       final prompt = await _resolvePromptId(promptId);
       final attachments = await _workflowAttachments(attachmentPaths);
@@ -452,7 +460,8 @@ class NotesRepository {
       );
       return _PreparedAudio(
         downloadUrl: signedUrl,
-        fileName: storageRef.name ??
+        fileName:
+            storageRef.name ??
             _fileName(storageRef.storagePath, fallback: '$title.m4a'),
         fileId: storageRef.fileId,
         recordedAt: storageRef.recordedAt,
@@ -796,18 +805,16 @@ class NotesRepository {
     final auth = await MobileSupabaseSession().auth();
     await _supabase.post<void>(
       '/rpc/add_accessible_note_to_project',
-      data: {
-        'p_note_id': noteId,
-        'p_project_id': projectId,
-      },
+      data: {'p_note_id': noteId, 'p_project_id': projectId},
       options: Options(headers: _supabaseJsonHeaders(auth.token)),
     );
     await _cache.delete(_notesCacheKey(auth.userId));
   }
 
   Future<String> regenerateSummary(MeetingNote note) async {
-    final microsoftToken =
-        await _storage.read(key: AuthTokenStore.accessTokenKey);
+    final microsoftToken = await _storage.read(
+      key: AuthTokenStore.accessTokenKey,
+    );
     final auth = await MobileSupabaseSession().auth();
     if (microsoftToken == null || microsoftToken.isEmpty) {
       throw StateError('Sign in with Microsoft before regenerating a summary.');
@@ -851,16 +858,19 @@ class NotesRepository {
       '/regenerate-summary',
       data: {
         'noteId': note.id,
-        'diarization':
-            note.transcript.map((segment) => segment.toJson()).toList(),
+        'diarization': note.transcript
+            .map((segment) => segment.toJson())
+            .toList(),
         'previousSummary': note.displaySummary,
         'speakerProfiles': speakerProfiles,
         'instructions': '',
       },
-      options: Options(headers: {
-        'content-type': 'application/json',
-        'authorization': 'Bearer $microsoftToken',
-      }),
+      options: Options(
+        headers: {
+          'content-type': 'application/json',
+          'authorization': 'Bearer $microsoftToken',
+        },
+      ),
     );
     final summary = _stringValue(response.data?['summary']);
     if (summary == null) throw StateError('No summary returned from webhook.');
@@ -913,12 +923,14 @@ class NotesRepository {
         transcriptText: transcriptText,
         existingProfile: record?.profile,
       );
-      profiles.add(GeneratedSpeakerProfile(
-        speakerId: record?.id,
-        speakerName: speakerName,
-        profile: profile,
-        isNew: record?.profile?.trim().isNotEmpty != true,
-      ));
+      profiles.add(
+        GeneratedSpeakerProfile(
+          speakerId: record?.id,
+          speakerName: speakerName,
+          profile: profile,
+          isNew: record?.profile?.trim().isNotEmpty != true,
+        ),
+      );
     }
     return profiles;
   }
@@ -1020,27 +1032,33 @@ class NotesRepository {
     final token = await _storage.read(key: AuthTokenStore.accessTokenKey);
     if (token == null || token.isEmpty) {
       throw StateError(
-          'Microsoft access token is not available. Sign in again.');
+        'Microsoft access token is not available. Sign in again.',
+      );
     }
 
-    final graph = createAppDio(BaseOptions(
-      connectTimeout: const Duration(seconds: 20),
-      receiveTimeout: const Duration(seconds: 30),
-    ));
+    final graph = createAppDio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 30),
+      ),
+    );
     var requestUrl =
         'https://graph.microsoft.com/v1.0/users?\$select=id,displayName,mail,userPrincipalName&\$top=999';
     final contacts = <TecAceContact>[];
     while (requestUrl.isNotEmpty) {
       final response = await graph.get<Map<String, dynamic>>(
         requestUrl,
-        options: Options(headers: {
-          'authorization': 'Bearer $token',
-          'accept': 'application/json',
-        }),
+        options: Options(
+          headers: {
+            'authorization': 'Bearer $token',
+            'accept': 'application/json',
+          },
+        ),
       );
-      for (final item in response.data?['value'] is List
-          ? response.data!['value'] as List
-          : const []) {
+      for (final item
+          in response.data?['value'] is List
+              ? response.data!['value'] as List
+              : const []) {
         if (item is! Map) continue;
         final contact = TecAceContact.fromJson(item.cast<String, dynamic>());
         if (contact != null && contact.belongsToTecAce) contacts.add(contact);
@@ -1132,12 +1150,14 @@ class NotesRepository {
     final saved = await savedSpeakers();
     final roster = saved
         .where((speaker) => speaker.name.trim().isNotEmpty)
-        .map((speaker) => {
-              // speaker.id must be a STRING for the edge function's roster parsing.
-              'speakerId': speaker.id,
-              'name': speaker.name,
-              'summary': speaker.profile ?? '',
-            })
+        .map(
+          (speaker) => {
+            // speaker.id must be a STRING for the edge function's roster parsing.
+            'speakerId': speaker.id,
+            'name': speaker.name,
+            'summary': speaker.profile ?? '',
+          },
+        )
         .toList();
     // Send the ORIGINAL-language transcript: name mentions / honorifics are the strongest
     // identity signals and are weakened by translation.
@@ -1175,12 +1195,9 @@ class NotesRepository {
     final response = await _supabase.patch<List<dynamic>>(
       '/note',
       data: {
-        'diarization': segments.map((segment) => segment.toJson()).toList()
+        'diarization': segments.map((segment) => segment.toJson()).toList(),
       },
-      queryParameters: {
-        'id': 'eq.$noteId',
-        'select': 'id',
-      },
+      queryParameters: {'id': 'eq.$noteId', 'select': 'id'},
       options: Options(headers: _supabaseInsertHeaders(auth.token)),
     );
     if ((response.data ?? const []).isEmpty) {
@@ -1200,15 +1217,19 @@ class NotesRepository {
   Future<void> _refreshNoteInsight(String noteId) async {
     try {
       if (workflowApiUrl.trim().isEmpty) return;
-      final microsoftToken = await _storage.read(key: AuthTokenStore.accessTokenKey);
+      final microsoftToken = await _storage.read(
+        key: AuthTokenStore.accessTokenKey,
+      );
       if (microsoftToken == null || microsoftToken.isEmpty) return;
       await _workflow.post<void>(
         '/refresh-note-insight',
         data: {'noteId': noteId},
-        options: Options(headers: {
-          'content-type': 'application/json',
-          'authorization': 'Bearer $microsoftToken',
-        }),
+        options: Options(
+          headers: {
+            'content-type': 'application/json',
+            'authorization': 'Bearer $microsoftToken',
+          },
+        ),
       );
     } catch (_) {
       // best-effort: never disrupt the editor over an index refresh.
@@ -1293,13 +1314,16 @@ class NotesRepository {
         // skip an attachment whose signed URL fails rather than failing the whole list
       }
       if (url == null) continue;
-      out.add(NoteAttachment(
-        id: id,
-        name: _stringValue(row['name']) ?? 'attachment',
-        mimeType: _stringValue(row['mime_type']) ?? 'application/octet-stream',
-        sizeBytes: _intValue(row['size_bytes']) ?? 0,
-        url: url,
-      ));
+      out.add(
+        NoteAttachment(
+          id: id,
+          name: _stringValue(row['name']) ?? 'attachment',
+          mimeType:
+              _stringValue(row['mime_type']) ?? 'application/octet-stream',
+          sizeBytes: _intValue(row['size_bytes']) ?? 0,
+          url: url,
+        ),
+      );
     }
     return out;
   }
@@ -1326,8 +1350,11 @@ class NotesRepository {
     await _cache.delete(_notesCacheKey(auth.userId));
   }
 
-  Future<String> exportToOneDrive(String noteId,
-      {String format = 'docx', String content = 'summary'}) async {
+  Future<String> exportToOneDrive(
+    String noteId, {
+    String format = 'docx',
+    String content = 'summary',
+  }) async {
     // TODO: POST /notes/{id}/export → webUrl
     await Future.delayed(const Duration(seconds: 1));
     return 'https://onedrive.live.com/...';
@@ -1467,10 +1494,7 @@ class _PreparedAudio {
 }
 
 class _ResolvedPrompt {
-  const _ResolvedPrompt({
-    required this.promptId,
-    this.summaryRulesOverride,
-  });
+  const _ResolvedPrompt({required this.promptId, this.summaryRulesOverride});
 
   final String promptId;
   final String? summaryRulesOverride;
@@ -1520,44 +1544,47 @@ enum NoteSortKey {
 }
 
 Map<String, String> _supabaseHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-      'prefer': 'return=minimal',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+  'prefer': 'return=minimal',
+};
 
 Map<String, String> _supabaseJsonHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+};
 
 Map<String, String> _supabaseInsertHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-      'prefer': 'return=representation',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+  'prefer': 'return=representation',
+};
 
 /// Insert-or-skip on a primary-key conflict (ON CONFLICT DO NOTHING). Used so a
 /// createNote retry does not duplicate the file row. Deliberately not
 /// merge-duplicates: skipping needs only insert permission, whereas a merge
 /// would run an UPDATE and depend on a row-level update policy.
 Map<String, String> _supabaseUpsertHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-      'prefer': 'resolution=ignore-duplicates,return=representation',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+  'prefer': 'resolution=ignore-duplicates,return=representation',
+};
 
 /// True when a Supabase Storage upload failed only because the object already
 /// exists (the createNote retry re-uploaded the same path).
 bool _isStorageDuplicateError(DioException error) {
   if (error.response?.statusCode == 409) return true;
   final data = error.response?.data;
-  final text = (data is Map ? (data['error'] ?? data['message'] ?? data['statusCode']) : data)
-      ?.toString()
-      .toLowerCase();
+  final text =
+      (data is Map
+              ? (data['error'] ?? data['message'] ?? data['statusCode'])
+              : data)
+          ?.toString()
+          .toLowerCase();
   if (text == null) return false;
   return text.contains('duplicate') ||
       text.contains('already exists') ||
@@ -1589,12 +1616,15 @@ Future<String> _localAudioPath(String audioPath, String title) async {
   }
 
   final dir = await getTemporaryDirectory();
-  final targetName =
-      _fileName(Uri.parse(audioPath).path, fallback: '$title.m4a');
+  final targetName = _fileName(
+    Uri.parse(audioPath).path,
+    fallback: '$title.m4a',
+  );
   final target = File('${dir.path}${Platform.pathSeparator}$targetName');
   // Timeouts required: a stalled/huge remote file must not hang the create-note
   // flow forever. A bare Dio() has no connect/receive timeout.
-  final downloadDio = createAppDio(BaseOptions(
+  final downloadDio = createAppDio(
+    BaseOptions(
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(minutes: 5),
     ),
@@ -1897,7 +1927,10 @@ class NoteAttachment {
 bool isAnonymousSpeakerLabel(String label) {
   final trimmed = label.trim();
   if (trimmed.isEmpty) return false;
-  return RegExp(r'^(speaker|transcript|unknown)\b', caseSensitive: false).hasMatch(trimmed) ||
+  return RegExp(
+        r'^(speaker|transcript|unknown)\b',
+        caseSensitive: false,
+      ).hasMatch(trimmed) ||
       RegExp(r'^speaker\s*#?\s*\d+$', caseSensitive: false).hasMatch(trimmed);
 }
 
@@ -1907,7 +1940,10 @@ List<String> anonymousLabelsInTranscript(List<TranscriptSegment> segments) {
   final out = <String>[];
   for (final segment in segments) {
     final label = segment.speaker?.trim();
-    if (label == null || label.isEmpty || !isAnonymousSpeakerLabel(label) || seen.contains(label)) {
+    if (label == null ||
+        label.isEmpty ||
+        !isAnonymousSpeakerLabel(label) ||
+        seen.contains(label)) {
       continue;
     }
     seen.add(label);
@@ -1939,7 +1975,7 @@ String? _errorText(Object? value) {
       'detail',
       'details',
       'hint',
-      'code'
+      'code',
     ]) {
       final text = _stringValue(value[key]);
       if (text != null && text != '[object Object]') {
@@ -1974,13 +2010,13 @@ Object? _tryJsonDecode(String value) {
 }
 
 String _orderParam(NoteSortKey sort) => switch (sort) {
-      NoteSortKey.titleAsc => 'name.asc.nullslast,created_at.desc',
-      NoteSortKey.titleDesc => 'name.desc.nullslast,created_at.desc',
-      NoteSortKey.createdAsc => 'created_at.asc',
-      NoteSortKey.createdDesc => 'created_at.desc',
-      NoteSortKey.meetingAsc => 'meeting_at.asc.nullslast,created_at.asc',
-      NoteSortKey.meetingDesc => 'meeting_at.desc.nullslast,created_at.desc',
-    };
+  NoteSortKey.titleAsc => 'name.asc.nullslast,created_at.desc',
+  NoteSortKey.titleDesc => 'name.desc.nullslast,created_at.desc',
+  NoteSortKey.createdAsc => 'created_at.asc',
+  NoteSortKey.createdDesc => 'created_at.desc',
+  NoteSortKey.meetingAsc => 'meeting_at.asc.nullslast,created_at.asc',
+  NoteSortKey.meetingDesc => 'meeting_at.desc.nullslast,created_at.desc',
+};
 
 List<MeetingNote> _filter(List<MeetingNote> notes, String? query) {
   final needle = query?.trim().toLowerCase();

@@ -10,8 +10,9 @@ import 'package:meeting_note_mobile/features/notes/models/meeting_note.dart';
 import 'package:meeting_note_mobile/features/notes/ui/summary_screen.dart';
 
 void main() {
-  testWidgets('note load failure shows friendly text and retry works',
-      (tester) async {
+  testWidgets('note load failure shows friendly text and retry works', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(900, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -36,8 +37,9 @@ void main() {
               throw DioException(
                 requestOptions: RequestOptions(path: '/note'),
                 type: DioExceptionType.unknown,
-                error:
-                    const SocketException('Software caused connection abort'),
+                error: const SocketException(
+                  'Software caused connection abort',
+                ),
               );
             }
             return note;
@@ -52,8 +54,10 @@ void main() {
     // friendly message. Release behavior (no raw text) is covered by the
     // showDetails: false mapper test.
     expect(find.textContaining(friendly), findsOneWidget);
-    expect(friendlyErrorMessage(StateError('x'), (k) => k, showDetails: false),
-        isNot(contains('StateError')));
+    expect(
+      friendlyErrorMessage(StateError('x'), (k) => k, showDetails: false),
+      isNot(contains('StateError')),
+    );
     expect(find.text('Try again'), findsOneWidget);
 
     await tester.tap(find.text('Try again'));

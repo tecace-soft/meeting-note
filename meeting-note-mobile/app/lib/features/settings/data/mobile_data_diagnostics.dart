@@ -9,26 +9,31 @@ import '../../../core/network/dio_factory.dart';
 
 class MobileDataDiagnostics {
   MobileDataDiagnostics()
-      : _supabase = createAppDio(BaseOptions(
-            baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
-        );
+    : _supabase = createAppDio(
+        BaseOptions(
+          baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
 
   final Dio _supabase;
   static const _storage = FlutterSecureStorage();
 
   Future<MobileDataDiagnosticSnapshot> load() async {
-    final microsoftUserId =
-        await _storage.read(key: AuthTokenStore.microsoftUserIdKey);
-    final storedSupabaseUserId =
-        await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    final microsoftAccessToken =
-        await _storage.read(key: AuthTokenStore.accessTokenKey);
+    final microsoftUserId = await _storage.read(
+      key: AuthTokenStore.microsoftUserIdKey,
+    );
+    final storedSupabaseUserId = await _storage.read(
+      key: AuthTokenStore.supabaseUserIdKey,
+    );
+    final microsoftAccessToken = await _storage.read(
+      key: AuthTokenStore.accessTokenKey,
+    );
     final idToken = await _storage.read(key: AuthTokenStore.idTokenKey);
-    final supabaseToken =
-        await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
+    final supabaseToken = await _storage.read(
+      key: AuthTokenStore.supabaseAccessTokenKey,
+    );
 
     final accessClaims = _jwtClaims(microsoftAccessToken);
     final idClaims = _jwtClaims(idToken);
@@ -78,17 +83,12 @@ class MobileDataDiagnostics {
             'select': 'id',
             'or': '(user_id.eq.$id,shared_users.cs.{$id})',
           },
-        ))
-            .length;
+        )).length;
         speakerMatches[id] = (await _getRows(
           token: token,
           path: '/speaker',
-          queryParameters: {
-            'select': 'id',
-            'user_id': 'eq.$id',
-          },
-        ))
-            .length;
+          queryParameters: {'select': 'id', 'user_id': 'eq.$id'},
+        )).length;
       }
     }
 
@@ -102,10 +102,12 @@ class MobileDataDiagnostics {
       supabaseJwtSub: _stringClaim(supabaseClaims, 'sub'),
       visibleProjectCount: rawProjects.length,
       visibleSpeakerCount: rawSpeakers.length,
-      firstVisibleProjectUserId:
-          rawProjects.isEmpty ? null : _stringValue(rawProjects.first['user_id']),
-      firstVisibleSpeakerUserId:
-          rawSpeakers.isEmpty ? null : _stringValue(rawSpeakers.first['user_id']),
+      firstVisibleProjectUserId: rawProjects.isEmpty
+          ? null
+          : _stringValue(rawProjects.first['user_id']),
+      firstVisibleSpeakerUserId: rawSpeakers.isEmpty
+          ? null
+          : _stringValue(rawSpeakers.first['user_id']),
       projectMatchesById: projectMatches,
       speakerMatchesById: speakerMatches,
     );
@@ -119,11 +121,13 @@ class MobileDataDiagnostics {
     final response = await _supabase.get<List<dynamic>>(
       path,
       queryParameters: queryParameters,
-      options: Options(headers: {
-        'apikey': supabaseAnonKey,
-        'authorization': 'Bearer $token',
-        'content-type': 'application/json',
-      }),
+      options: Options(
+        headers: {
+          'apikey': supabaseAnonKey,
+          'authorization': 'Bearer $token',
+          'content-type': 'application/json',
+        },
+      ),
     );
     return (response.data ?? const [])
         .whereType<Map>()
@@ -169,7 +173,9 @@ Map<String, dynamic> _jwtClaims(String? token) {
   final parts = token.split('.');
   if (parts.length < 2) return const {};
   try {
-    final payload = utf8.decode(base64Url.decode(base64Url.normalize(parts[1])));
+    final payload = utf8.decode(
+      base64Url.decode(base64Url.normalize(parts[1])),
+    );
     final json = jsonDecode(payload);
     return json is Map ? json.cast<String, dynamic>() : const {};
   } catch (_) {

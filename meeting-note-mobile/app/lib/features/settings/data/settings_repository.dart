@@ -20,20 +20,23 @@ final settingsCountsProvider = FutureProvider<SettingsCounts>(
 
 class SettingsRepository {
   SettingsRepository()
-      : _supabase = createAppDio(BaseOptions(
-            baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
+    : _supabase = createAppDio(
+        BaseOptions(
+          baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
         ),
-        _supabaseRoot = createAppDio(BaseOptions(
-            baseUrl: supabaseUrl.replaceAll(RegExp(r'/$'), ''),
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
-        ) {
-    _supabase.interceptors
-        .add(MobileSupabaseSession().retryOnUnauthorizedInterceptor());
+      ),
+      _supabaseRoot = createAppDio(
+        BaseOptions(
+          baseUrl: supabaseUrl.replaceAll(RegExp(r'/$'), ''),
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      ) {
+    _supabase.interceptors.add(
+      MobileSupabaseSession().retryOnUnauthorizedInterceptor(),
+    );
   }
 
   final Dio _supabase;
@@ -123,13 +126,15 @@ Rules:
     await _cache.writeList(
       _summaryPromptsCacheKey(auth.userId),
       prompts
-          .map((prompt) => {
-                'id': prompt.id,
-                'name': prompt.name,
-                'prompt': prompt.prompt,
-                if (prompt.createdAt != null)
-                  'created_at': prompt.createdAt!.toIso8601String(),
-              })
+          .map(
+            (prompt) => {
+              'id': prompt.id,
+              'name': prompt.name,
+              'prompt': prompt.prompt,
+              if (prompt.createdAt != null)
+                'created_at': prompt.createdAt!.toIso8601String(),
+            },
+          )
           .toList(),
     );
     return prompts;
@@ -168,8 +173,10 @@ Rules:
     if (defaults.length <= 1) return rows;
 
     defaults.sort((a, b) {
-      final createdCompare = (a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-          .compareTo(b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+      final createdCompare =
+          (a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
+            b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+          );
       if (createdCompare != 0) return createdCompare;
       return a.id.compareTo(b.id);
     });
@@ -198,9 +205,9 @@ Rules:
     final auth = await _supabaseAuth();
     final cleanName = name.trim();
     if (_isDefaultPromptName(cleanName)) {
-      final existingDefaults = _promptRows(await _fetchSummaryPromptRows(auth))
-          .where((row) => row.isDefault)
-          .toList();
+      final existingDefaults = _promptRows(
+        await _fetchSummaryPromptRows(auth),
+      ).where((row) => row.isDefault).toList();
       if (existingDefaults.isNotEmpty) {
         throw StateError('A default prompt already exists.');
       }
@@ -213,10 +220,12 @@ Rules:
         'prompt': prompt.trim(),
       },
       queryParameters: {'select': 'id,name,prompt,created_at'},
-      options: Options(headers: {
-        ..._supabaseHeaders(auth.token),
-        'Prefer': 'return=representation',
-      }),
+      options: Options(
+        headers: {
+          ..._supabaseHeaders(auth.token),
+          'Prefer': 'return=representation',
+        },
+      ),
     );
     final rows = _promptRows(response.data);
     if (rows.isEmpty) throw StateError('Prompt was not created.');
@@ -227,19 +236,16 @@ Rules:
   Future<void> updateSummaryPrompt(SettingsSummaryPrompt prompt) async {
     final auth = await _supabaseAuth();
     if (prompt.isDefault) {
-      final existingDefaults = _promptRows(await _fetchSummaryPromptRows(auth))
-          .where((row) => row.isDefault && row.id != prompt.id)
-          .toList();
+      final existingDefaults = _promptRows(
+        await _fetchSummaryPromptRows(auth),
+      ).where((row) => row.isDefault && row.id != prompt.id).toList();
       if (existingDefaults.isNotEmpty) {
         throw StateError('A default prompt already exists.');
       }
     }
     await _supabase.patch<void>(
       '/summary_prompt',
-      data: {
-        'name': prompt.name.trim(),
-        'prompt': prompt.prompt.trim(),
-      },
+      data: {'name': prompt.name.trim(), 'prompt': prompt.prompt.trim()},
       queryParameters: {
         'id': 'eq.${prompt.id}',
         'user_id': 'eq.${auth.userId}',
@@ -303,10 +309,7 @@ Rules:
     await _supabase.patch<void>(
       '/speaker',
       data: {'profile': _cleanProfile(profile)},
-      queryParameters: {
-        'id': 'eq.$id',
-        'user_id': 'eq.${auth.userId}',
-      },
+      queryParameters: {'id': 'eq.$id', 'user_id': 'eq.${auth.userId}'},
       options: Options(headers: _supabaseHeaders(auth.token)),
     );
     await _cache.delete(_speakerProfilesCacheKey(auth.userId));
@@ -341,10 +344,7 @@ Rules:
     final auth = await _supabaseAuth();
     final response = await _supabase.get<List<dynamic>>(
       '/user_memory',
-      queryParameters: {
-        'select': 'memory',
-        'user_id': 'eq.${auth.userId}',
-      },
+      queryParameters: {'select': 'memory', 'user_id': 'eq.${auth.userId}'},
       options: Options(headers: _supabaseHeaders(auth.token)),
     );
     final rows = response.data ?? const [];
@@ -397,7 +397,9 @@ Rules:
     });
     final token = _stringValue(data['token']);
     final row = data['tokenRecord'] is Map
-        ? McpTokenRow.fromJson((data['tokenRecord'] as Map).cast<String, dynamic>())
+        ? McpTokenRow.fromJson(
+            (data['tokenRecord'] as Map).cast<String, dynamic>(),
+          )
         : null;
     if (token == null || row == null) {
       throw StateError('MCP key was not returned.');
@@ -406,28 +408,29 @@ Rules:
   }
 
   Future<void> revokeMcpToken(String tokenId) async {
-    await _callMcpTokenFunction({
-      'action': 'revoke',
-      'tokenId': tokenId,
-    });
+    await _callMcpTokenFunction({'action': 'revoke', 'tokenId': tokenId});
   }
 
   Future<Map<String, dynamic>> _callMcpTokenFunction(
     Map<String, dynamic> body,
   ) async {
-    final microsoftToken = await _storage.read(key: AuthTokenStore.accessTokenKey);
+    final microsoftToken = await _storage.read(
+      key: AuthTokenStore.accessTokenKey,
+    );
     if (microsoftToken == null || microsoftToken.isEmpty) {
       throw StateError('Microsoft access token is unavailable. Sign in again.');
     }
     final response = await _supabaseRoot.post<Map<String, dynamic>>(
       '/functions/v1/mcp-token',
       data: body,
-      options: Options(headers: {
-        'apikey': supabaseAnonKey,
-        'authorization': 'Bearer $supabaseAnonKey',
-        'content-type': 'application/json',
-        'x-ms-access-token': microsoftToken,
-      }),
+      options: Options(
+        headers: {
+          'apikey': supabaseAnonKey,
+          'authorization': 'Bearer $supabaseAnonKey',
+          'content-type': 'application/json',
+          'x-ms-access-token': microsoftToken,
+        },
+      ),
     );
     final data = response.data ?? const <String, dynamic>{};
     final error = data['error'];
@@ -532,12 +535,12 @@ class SettingsSpeakerProfile {
   final String? microsoftId;
 
   SettingsSpeakerProfile copyWith({String? profile}) => SettingsSpeakerProfile(
-        id: id,
-        name: name,
-        profile: profile ?? this.profile,
-        email: email,
-        microsoftId: microsoftId,
-      );
+    id: id,
+    name: name,
+    profile: profile ?? this.profile,
+    email: email,
+    microsoftId: microsoftId,
+  );
 
   static SettingsSpeakerProfile? fromJson(Map<String, dynamic> json) {
     final id = _stringValue(json['id']);
@@ -575,12 +578,14 @@ class McpTokenRow {
   final List<String> scopes;
 
   bool get isActive =>
-      revokedAt == null && (expiresAt == null || expiresAt!.isAfter(DateTime.now()));
+      revokedAt == null &&
+      (expiresAt == null || expiresAt!.isAfter(DateTime.now()));
 
   static McpTokenRow? fromJson(Map<String, dynamic> json) {
     final id = _stringValue(json['id']);
     final name = _stringValue(json['name']) ?? 'Claude Desktop';
-    final prefix = _stringValue(json['tokenPrefix']) ??
+    final prefix =
+        _stringValue(json['tokenPrefix']) ??
         _stringValue(json['token_prefix']) ??
         'mcp_...';
     final created = _dateValue(json['createdAt'] ?? json['created_at']);
@@ -616,10 +621,10 @@ class _SupabaseAuth {
 }
 
 Map<String, String> _supabaseHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+};
 
 String _summaryPromptsCacheKey(String userId) => 'summary_prompts_$userId';
 

@@ -21,19 +21,22 @@ final projectsProvider = FutureProvider<List<MeetingProject>>(
 
 class ProjectsRepository {
   ProjectsRepository()
-      : _supabase = createAppDio(BaseOptions(
-            baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
+    : _supabase = createAppDio(
+        BaseOptions(
+          baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
         ),
-        _webhook = createAppDio(BaseOptions(
-            connectTimeout: const Duration(seconds: 20),
-            receiveTimeout: const Duration(minutes: 2),
-          ),
-        ) {
-    _supabase.interceptors
-        .add(MobileSupabaseSession().retryOnUnauthorizedInterceptor());
+      ),
+      _webhook = createAppDio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(minutes: 2),
+        ),
+      ) {
+    _supabase.interceptors.add(
+      MobileSupabaseSession().retryOnUnauthorizedInterceptor(),
+    );
   }
 
   final Dio _supabase;
@@ -84,10 +87,7 @@ class ProjectsRepository {
 
     final response = await _supabase.post<List<dynamic>>(
       '/project',
-      data: {
-        'name': name,
-        'user_id': auth.userId,
-      },
+      data: {'name': name, 'user_id': auth.userId},
       queryParameters: {'select': 'id,name,user_id,shared_users'},
       options: Options(headers: _supabaseInsertHeaders(auth.token)),
     );
@@ -105,10 +105,7 @@ class ProjectsRepository {
     for (final noteId in noteIds) {
       await _supabase.post<void>(
         '/rpc/add_accessible_note_to_project',
-        data: {
-          'p_note_id': noteId,
-          'p_project_id': project.id,
-        },
+        data: {'p_note_id': noteId, 'p_project_id': project.id},
         options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
     }
@@ -253,8 +250,9 @@ class ProjectsRepository {
     void Function(String)? onDelta,
   }) async {
     final auth = await MobileSupabaseSession().auth();
-    final microsoftToken =
-        await _storage.read(key: AuthTokenStore.accessTokenKey);
+    final microsoftToken = await _storage.read(
+      key: AuthTokenStore.accessTokenKey,
+    );
     if (microsoftToken == null || microsoftToken.isEmpty) {
       throw StateError('Sign in with Microsoft before using project chat.');
     }
@@ -274,10 +272,7 @@ class ProjectsRepository {
     if (isNewSession) {
       await _supabase.post<void>(
         '/session',
-        data: {
-          'id': nextSessionId,
-          'project_id': projectId,
-        },
+        data: {'id': nextSessionId, 'project_id': projectId},
         options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
     }
@@ -292,10 +287,7 @@ class ProjectsRepository {
       await _supabase.post<void>(
         '/chat',
         data: [
-          {
-            ...basePayload,
-            'response': assistant,
-          }
+          {...basePayload, 'response': assistant},
         ],
         options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
@@ -305,10 +297,7 @@ class ProjectsRepository {
       await _supabase.post<void>(
         '/chat',
         data: [
-          {
-            ...basePayload,
-            'repsonse': assistant,
-          }
+          {...basePayload, 'repsonse': assistant},
         ],
         options: Options(headers: _supabaseJsonHeaders(auth.token)),
       );
@@ -333,22 +322,23 @@ class ProjectsRepository {
     try {
       final response = await _webhook.post<ResponseBody>(
         '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat/stream',
-        data: {
-          'message': message,
-          'project_id': projectId,
-        },
-        options: Options(headers: {
-          'content-type': 'application/json',
-          'accept': 'text/event-stream',
-          'authorization': 'Bearer $microsoftToken',
-        }, responseType: ResponseType.stream),
+        data: {'message': message, 'project_id': projectId},
+        options: Options(
+          headers: {
+            'content-type': 'application/json',
+            'accept': 'text/event-stream',
+            'authorization': 'Bearer $microsoftToken',
+          },
+          responseType: ResponseType.stream,
+        ),
       );
       final body = response.data;
       if (body == null) return '';
       var buffer = '';
       var assistant = '';
-      await for (final chunk
-          in body.stream.cast<List<int>>().transform(utf8.decoder)) {
+      await for (final chunk in body.stream.cast<List<int>>().transform(
+        utf8.decoder,
+      )) {
         buffer += chunk;
         final events = buffer.split(RegExp(r'\r?\n\r?\n'));
         buffer = events.removeLast();
@@ -397,14 +387,13 @@ class ProjectsRepository {
   }) async {
     final response = await _webhook.post<Object?>(
       '${workflowApiUrl.replaceAll(RegExp(r'/$'), '')}/project-chat',
-      data: {
-        'message': message,
-        'project_id': projectId,
-      },
-      options: Options(headers: {
-        'content-type': 'application/json',
-        'authorization': 'Bearer $microsoftToken',
-      }),
+      data: {'message': message, 'project_id': projectId},
+      options: Options(
+        headers: {
+          'content-type': 'application/json',
+          'authorization': 'Bearer $microsoftToken',
+        },
+      ),
     );
     final assistant = _extractWebhookResponse(response.data) ?? '';
     if (assistant.isNotEmpty) {
@@ -503,10 +492,12 @@ class ProjectNoteSummary {
     return ProjectNoteSummary(
       id: id,
       title: _stringValue(json['name']) ?? 'Untitled note',
-      createdAt: _dateValue(json['meeting_at'] ?? json['created_at']) ??
+      createdAt:
+          _dateValue(json['meeting_at'] ?? json['created_at']) ??
           DateTime.fromMillisecondsSinceEpoch(0),
       durationSec: _intValue(json['duration_seconds']) ?? 0,
-      summary: _stringValue(json['summary_edit']) ??
+      summary:
+          _stringValue(json['summary_edit']) ??
           summaryTranslations['en'] ??
           summaryTranslations['ko'] ??
           _stringValue(json['summary']),
@@ -589,24 +580,24 @@ class ProjectChatSendResult {
 }
 
 Map<String, String> _supabaseHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-      'prefer': 'return=minimal',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+  'prefer': 'return=minimal',
+};
 
 Map<String, String> _supabaseJsonHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+};
 
 Map<String, String> _supabaseInsertHeaders(String token) => {
-      'apikey': supabaseAnonKey,
-      'authorization': 'Bearer $token',
-      'content-type': 'application/json',
-      'prefer': 'return=representation',
-    };
+  'apikey': supabaseAnonKey,
+  'authorization': 'Bearer $token',
+  'content-type': 'application/json',
+  'prefer': 'return=representation',
+};
 
 String _projectsCacheKey(String userId) => 'projects_$userId';
 
@@ -673,10 +664,10 @@ String _generateSessionId() {
   final hh = now.hour.toString().padLeft(2, '0');
   final min = now.minute.toString().padLeft(2, '0');
   final ss = now.second.toString().padLeft(2, '0');
-  final random = DateTime.now()
-      .microsecondsSinceEpoch
+  final random = DateTime.now().microsecondsSinceEpoch
       .remainder(100000000)
       .toString()
       .padLeft(8, '0');
-  return '$yy$mm$dd$hh$min$ss' '_$random';
+  return '$yy$mm$dd$hh$min$ss'
+      '_$random';
 }
