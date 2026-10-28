@@ -22,6 +22,7 @@ import {
   requestSpeakerSuggestions,
   type SpeakerSuggestion,
 } from '../lib/identifySpeakers';
+import { useSpeakerSuggestions } from '../lib/speakers/suggestionStore';
 import { logSpeakerFeedback } from '../lib/speakerFeedback';
 import { accumulateSpeakerProfile } from '../lib/accumulateSpeakerProfile';
 import { fetchTecAceContacts, type MicrosoftContact } from '../services/microsoftContacts';
@@ -150,6 +151,15 @@ export interface TranscriptDiarizedEditorProps {
   transcription?: string | null;
   onPersistSegments?: (next: TranscriptSegment[]) => Promise<void>;
   onNoteShared?: (sharedUserIds: string[]) => void;
+  /** U9 (DEC-0024): request name suggestions once per note without a click (default false). */
+  autoSuggest?: boolean;
+  /**
+   * Where the suggestion card goes: 'inline' above the transcript (default), 'hidden' (another
+   * editor of the same note shows it), or 'only' (the card alone, without the transcript).
+   */
+  suggestionPanel?: 'inline' | 'hidden' | 'only';
+  /** Optional link in the suggestion card to the place where names can be edited. */
+  onReviewSpeakers?: () => void;
 }
 
 export function getTranscriptSpeakerFilters(segments: TranscriptSegment[]): string[] {
@@ -251,6 +261,9 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   transcription = null,
   onPersistSegments,
   onNoteShared,
+  autoSuggest = false,
+  suggestionPanel = 'inline',
+  onReviewSpeakers,
 }) => {
   const scopeGroupId = useId();
   const { user, getAccessToken } = useAuth();
@@ -262,9 +275,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const [contactsFetchError, setContactsFetchError] = useState<string | null>(null);
   const [speakersLoading, setSpeakersLoading] = useState(false);
   const [speakersFetchError, setSpeakersFetchError] = useState<string | null>(null);
-  const [suggesting, setSuggesting] = useState(false);
-  const [suggestions, setSuggestions] = useState<SpeakerSuggestion[] | null>(null);
-  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [applySuggestionError, setApplySuggestionError] = useState<string | null>(null);
   const [applyingSuggestions, setApplyingSuggestions] = useState(false);
   const [profileSyncMsg, setProfileSyncMsg] = useState<string | null>(null);
   // Dedupe F1a auto-accumulation per (note, speaker) so re-applying a label does not re-run it.
@@ -470,32 +481,39 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     [user?.id, noteId, getAccessToken, t]
   );
 
-  const handleSuggestSpeakers = useCallback(async () => {
-    if (suggesting) return;
-    setSuggesting(true);
-    setSuggestError(null);
-    try {
+  const fetchSuggestions = useCallback(
+    async (signal: AbortSignal): Promise<SpeakerSuggestion[]> => {
       const roster = await loadSpeakersForMenu();
       const appToken = await getSupabaseAccessTokenForRequest();
       const msToken = appToken ? null : await getAccessToken();
       if (!appToken && !msToken) throw new Error('Could not get access. Please sign in again.');
-      const result = await requestSpeakerSuggestions(segments, roster, user?.displayName ?? null, { appToken, msToken }, noteId);
-      setSuggestions(result);
-    } catch (err: unknown) {
-      setSuggestError(err instanceof Error ? err.message : 'Speaker suggestion failed');
-      setSuggestions(null);
-    } finally {
-      setSuggesting(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- noteId is stable for this editor instance
-  }, [suggesting, loadSpeakersForMenu, getAccessToken, segments, user?.displayName]);
+      return requestSpeakerSuggestions(segments, roster, user?.displayName ?? null, { appToken, msToken }, noteId, signal);
+    },
+    [loadSpeakersForMenu, getAccessToken, segments, user?.displayName, noteId]
+  );
+  // Shared per note and transcript revision (DEC-0024): a remount or a second editor of the same
+  // note reads the cached result; suggestions for labels the user already named are not shown.
+  const {
+    suggestions,
+    allSuggestions,
+    suggesting,
+    error: suggestError,
+    requestSuggestions,
+  } = useSpeakerSuggestions({ noteId, segments, autoSuggest, fetcher: fetchSuggestions });
+  const handleSuggestSpeakers = useCallback(
+    (force: boolean) => {
+      setApplySuggestionError(null);
+      void requestSuggestions({ force });
+    },
+    [requestSuggestions]
+  );
 
   const handleAcceptSuggestion = useCallback(async (suggestion: SpeakerSuggestion) => {
     if (!suggestion.name || applyingSuggestions) return;
     const idx = segments.findIndex((s) => s.speaker.trim() === suggestion.label);
     if (idx === -1) return;
     setApplyingSuggestions(true);
-    setSuggestError(null);
+    setApplySuggestionError(null);
     try {
       const next = applySpeakerReplacements(segments, idx, suggestion.label, suggestion.name, 'all');
       if (noteId) {
@@ -509,11 +527,10 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         chosenName: suggestion.name, chosenSpeakerId: suggestion.speakerId,
         source: 'suggest_sheet', suggestion, client: 'web',
       });
-      setSuggestions((prev) => prev?.filter((s) => s.label !== suggestion.label) ?? null);
       void accumulateProfileInBackground(suggestion.name, suggestion.speakerId, next);
       scheduleNoteInsightRefresh(noteId, getAccessToken);
     } catch (err: unknown) {
-      setSuggestError(err instanceof Error ? err.message : 'Could not apply the suggestion');
+      setApplySuggestionError(err instanceof Error ? err.message : 'Could not apply the suggestion');
     } finally {
       setApplyingSuggestions(false);
     }
@@ -744,7 +761,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         userId: user?.id, noteId: noteId ?? null, label: speakerMenu.originalSpeaker,
         chosenName, chosenSpeakerId: selectedSpeaker?.id ?? pickedSpeakerId ?? null,
         source: 'manual_rename',
-        suggestion: suggestions?.find((s) => s.label === speakerMenu.originalSpeaker) ?? null,
+        suggestion: allSuggestions?.find((s) => s.label === speakerMenu.originalSpeaker) ?? null,
         client: 'web',
       });
       void accumulateProfileInBackground(chosenName, selectedSpeaker?.id ?? pickedSpeakerId ?? null, nextTranscript);
@@ -827,7 +844,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         userId: user?.id, noteId: noteId ?? null, label: speakerMenu.originalSpeaker,
         chosenName: speakerRow.name, chosenSpeakerId: speakerRow.id,
         source: 'manual_rename',
-        suggestion: suggestions?.find((s) => s.label === speakerMenu.originalSpeaker) ?? null,
+        suggestion: allSuggestions?.find((s) => s.label === speakerMenu.originalSpeaker) ?? null,
         client: 'web',
       });
       void accumulateProfileInBackground(speakerRow.name, speakerRow.id, nextTranscript);
@@ -916,6 +933,134 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       .filter(({ segment }) => selected.size === 0 || selected.has(segment.speaker.trim() || 'Speaker'));
   }, [segments, selectedSpeakerFilters]);
 
+  // Shown only while some label is still anonymous (DEC-0024: suggestions are a prefill, never applied
+  // without the user). 'only' renders this card alone, e.g. above the summary.
+  const suggestionCard = anonymousLabels.length > 0 ? (
+    <div
+      className="mb-3 rounded-lg border p-3"
+      style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface-subtle)' }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
+          <User01 className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="truncate">{t('suggestSpeakersTitle')}</span>
+        </div>
+        {suggestions === null ? (
+          <button
+            type="button"
+            disabled={suggesting}
+            onClick={() => handleSuggestSpeakers(false)}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+            style={{ backgroundColor: 'var(--accent)' }}
+          >
+            {suggesting ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
+            {suggesting ? t('suggestingSpeakers') : t('suggestSpeakers')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={suggesting}
+            onClick={() => handleSuggestSpeakers(true)}
+            className="shrink-0 text-xs font-medium underline disabled:opacity-50"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            {suggesting ? t('suggestingSpeakers') : t('reSuggestSpeakers')}
+          </button>
+        )}
+      </div>
+
+      {autoSuggest ? (
+        <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>{t('suggestionsNotInSummaryHint')}</p>
+      ) : null}
+
+      {(suggestError || applySuggestionError) && (
+        <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{applySuggestionError ?? suggestError}</p>
+      )}
+
+      {suggestions && suggestions.length === 0 && !suggesting && (
+        <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>{t('noSpeakerSuggestions')}</p>
+      )}
+
+      {suggestions && suggestions.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {suggestions.map((s) => {
+            // A non-self pick below the floor is a tentative GUESS (no concrete anchor): dim
+            // it, tag it, and make Apply secondary so it never looks like a confident match.
+            const lowConf = !!s.name && !s.isSelf && s.confidence < LOW_CONFIDENCE_NONSELF;
+            return (
+            <div
+              key={s.label}
+              className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5"
+              style={{ backgroundColor: 'var(--surface)', opacity: lowConf ? 0.6 : 1 }}
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm" style={{ color: 'var(--text)' }}>
+                  <span className="font-medium">{s.label}</span>
+                  {' → '}
+                  {s.name ? (
+                    <span className={lowConf ? 'font-medium' : 'font-semibold'} style={lowConf ? { color: 'var(--text-muted)' } : undefined}>{s.name}{s.isSelf ? ' (me)' : ''}</span>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)' }}>{t('unknownSpeakerLabel')}</span>
+                  )}
+                  {s.name ? (
+                    <span className="ml-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {Math.round(s.confidence * 100)}%
+                    </span>
+                  ) : null}
+                  {lowConf ? (
+                    <span className="ml-1 rounded px-1 text-[10px] font-medium" style={{ border: '1px solid var(--border)', color: 'var(--text-muted)' }}>{t('lowConfidenceTag')}</span>
+                  ) : null}
+                </div>
+                {s.rationale ? (
+                  <div className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>{s.rationale}</div>
+                ) : null}
+              </div>
+              {s.name ? (
+                <button
+                  type="button"
+                  disabled={applyingSuggestions}
+                  onClick={() => void handleAcceptSuggestion(s)}
+                  className="shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
+                  style={lowConf
+                    ? { border: '1px solid var(--border)', color: 'var(--text)', backgroundColor: 'transparent' }
+                    : { color: '#fff', backgroundColor: 'var(--accent)' }}
+                >
+                  {t('applySuggestion')}
+                </button>
+              ) : null}
+            </div>
+            );
+          })}
+        </div>
+      )}
+
+      {onReviewSpeakers ? (
+        <button
+          type="button"
+          onClick={onReviewSpeakers}
+          className="mt-2 text-xs font-medium underline"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          {t('editSpeakerNamesInTranscript')}
+        </button>
+      ) : null}
+    </div>
+  ) : null;
+
+  if (suggestionPanel === 'only') {
+    return (
+      <>
+        {profileSyncMsg && (
+          <div className="mb-2 flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+            <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            {profileSyncMsg}
+          </div>
+        )}
+        {suggestionCard}
+      </>
+    );
+  }
+
   return (
     <>
       {profileSyncMsg && (
@@ -924,102 +1069,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
           {profileSyncMsg}
         </div>
       )}
-      {(anonymousLabels.length > 0 || suggestions) && (
-        <div
-          className="mb-3 rounded-lg border p-3"
-          style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface-subtle)' }}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text)' }}>
-              <User01 className="h-4 w-4 shrink-0" aria-hidden />
-              <span className="truncate">{t('suggestSpeakersTitle')}</span>
-            </div>
-            {suggestions === null ? (
-              <button
-                type="button"
-                disabled={suggesting}
-                onClick={() => void handleSuggestSpeakers()}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-                style={{ backgroundColor: 'var(--accent)' }}
-              >
-                {suggesting ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                {suggesting ? t('suggestingSpeakers') : t('suggestSpeakers')}
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={suggesting}
-                onClick={() => void handleSuggestSpeakers()}
-                className="shrink-0 text-xs font-medium underline disabled:opacity-50"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                {suggesting ? t('suggestingSpeakers') : t('reSuggestSpeakers')}
-              </button>
-            )}
-          </div>
-
-          {suggestError && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>{suggestError}</p>
-          )}
-
-          {suggestions && suggestions.length === 0 && !suggesting && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>{t('noSpeakerSuggestions')}</p>
-          )}
-
-          {suggestions && suggestions.length > 0 && (
-            <div className="mt-2 space-y-1.5">
-              {suggestions.map((s) => {
-                // A non-self pick below the floor is a tentative GUESS (no concrete anchor): dim
-                // it, tag it, and make Apply secondary so it never looks like a confident match.
-                const lowConf = !!s.name && !s.isSelf && s.confidence < LOW_CONFIDENCE_NONSELF;
-                return (
-                <div
-                  key={s.label}
-                  className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5"
-                  style={{ backgroundColor: 'var(--surface)', opacity: lowConf ? 0.6 : 1 }}
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-sm" style={{ color: 'var(--text)' }}>
-                      <span className="font-medium">{s.label}</span>
-                      {' → '}
-                      {s.name ? (
-                        <span className={lowConf ? 'font-medium' : 'font-semibold'} style={lowConf ? { color: 'var(--text-muted)' } : undefined}>{s.name}{s.isSelf ? ' (me)' : ''}</span>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>{t('unknownSpeakerLabel')}</span>
-                      )}
-                      {s.name ? (
-                        <span className="ml-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                          {Math.round(s.confidence * 100)}%
-                        </span>
-                      ) : null}
-                      {lowConf ? (
-                        <span className="ml-1 rounded px-1 text-[10px] font-medium" style={{ border: '1px solid var(--border)', color: 'var(--text-muted)' }}>{t('lowConfidenceTag')}</span>
-                      ) : null}
-                    </div>
-                    {s.rationale ? (
-                      <div className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>{s.rationale}</div>
-                    ) : null}
-                  </div>
-                  {s.name ? (
-                    <button
-                      type="button"
-                      disabled={applyingSuggestions}
-                      onClick={() => void handleAcceptSuggestion(s)}
-                      className="shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
-                      style={lowConf
-                        ? { border: '1px solid var(--border)', color: 'var(--text)', backgroundColor: 'transparent' }
-                        : { color: '#fff', backgroundColor: 'var(--accent)' }}
-                    >
-                      {t('applySuggestion')}
-                    </button>
-                  ) : null}
-                </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      {suggestionPanel === 'inline' ? suggestionCard : null}
       <div
         className={`rounded-lg p-4 text-base leading-relaxed overflow-y-auto custom-scrollbar ${scrollContainerClassName ?? 'max-h-96'}`}
         style={{ backgroundColor: 'transparent' }}
