@@ -225,8 +225,8 @@ describe('useNotePlayback playing', () => {
     act(() => {
       void result.current.playTranscriptSegment(NOTE_A, BOB, 1);
     });
-    await waitFor(() => expect(result.current.playbackLoadingSegment).toEqual({ noteId: 'n1', segmentIndex: 1 }));
-    expect(result.current.segmentPlayback).toMatchObject({ segmentIndex: 1, isPlaying: true });
+    await waitFor(() => expect(result.current.segmentPlayback).toMatchObject({ segmentIndex: 1, isPlaying: true }));
+    expect(result.current.playbackLoadingSegment).toEqual({ noteId: 'n1', segmentIndex: 1 });
   });
 
   it('ignores an untimed segment and does nothing without an audio element', async () => {
