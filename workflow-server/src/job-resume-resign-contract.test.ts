@@ -531,3 +531,88 @@ test('an AssemblyAI error that echoes the audio_url reaches the job row, logs an
     assert.ok(surfaces.every((text) => !text.includes(token)), `${jobId}: no surface carries the token`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// L1: a still-valid link is not lost to a failed re-sign
+// ---------------------------------------------------------------------------
+
+test('near expiry but still valid: a failed or refused re-sign falls back to the stored link when it answers', async (t) => {
+  const warn = quiet(t);
+  const h = await harness(t);
+  const nearlyExpired = storedLink(PATH, nowSeconds() + 300);
+
+  // Re-sign lookup 5xx: an infra incident, but the job still submits the stored link.
+  h.own(); h.fileRow(); h.storage.fileStatus = 500;
+  const done = await resume(h, 'fallback-lookup-job', webRequest({ downloadUrl: nearlyExpired }));
+  assert.equal(done.status, 'completed', 'the still-valid stored link is used');
+  assert.equal(submits(h)[0]!.body.audio_url, nearlyExpired);
+  assert.equal(h.storage.signs.length, 0);
+  assert.deepEqual(h.storage.probes, [`${BUCKET}/${PATH}`], 'the stored link is probed before it is submitted');
+  assert.ok(warned(warn, 'Workflow job fallback-lookup-job submits its stored link, still valid, after the re-sign was not done (lookup-failed)'));
+  await until(() => incidents(h).some((c) => c.method === 'POST'), 'the lookup incident');
+
+  // Ownership refused: the client's own still-valid link is submitted as before #23.
+  await sleep(30);
+  h.f.reset(); Object.assign(h.storage, { fileStatus: 200 }); h.storage.probes.length = 0; h.storage.objects.clear();
+  h.own(PATH, OTHER);
+  const refused = await resume(h, 'fallback-refused-job', webRequest({ downloadUrl: nearlyExpired }));
+  assert.equal(refused.status, 'completed');
+  assert.equal(submits(h)[0]!.body.audio_url, nearlyExpired);
+  assert.ok(refusedWith(warn, 'fallback-refused-job', 'storage-owner-mismatch'));
+  assert.equal(h.storage.signs.length, 0, 'nothing the server signs reaches AssemblyAI without the ownership check');
+
+  // The stored link does not answer either: the localized failure.
+  h.f.reset(); h.storage.probeStatus = 400;
+  const failed = await resume(h, 'fallback-dead-job', webRequest({ downloadUrl: nearlyExpired }));
+  assert.deepEqual([failed.status, failed.error], ['failed', audioUnavailableMessage('ko')]);
+  assert.equal(submits(h).length, 0);
+
+  // An already expired link is never probed or submitted after a refusal.
+  h.f.reset(); h.storage.probeStatus = 0; h.storage.probes.length = 0;
+  const expired = await resume(h, 'no-fallback-expired-job', webRequest());
+  assert.equal(expired.status, 'failed');
+  assert.deepEqual(h.storage.probes, [], 'no probe of an expired link');
+});
+
+// ---------------------------------------------------------------------------
+// Review: 429 handling and URL-normalization bucket switches
+// ---------------------------------------------------------------------------
+
+test('a 429 probe is retried once and then fails without a re-sign', async (t) => {
+  quiet(t);
+  const h = await harness(t);
+  h.own(); h.fileRow(); h.storage.probeStatus = 429;
+  const unreadable = `${STORAGE_ORIGIN}/storage/v1/object/sign/${BUCKET}/${PATH}?token=garbage`;
+  const done = await resume(h, 'rate-limited-job', webRequest({ downloadUrl: unreadable }));
+  assert.deepEqual([done.status, done.error], ['failed', audioUnavailableMessage('ko')]);
+  assert.equal(h.storage.probes.length, 2, 'a 429 is retried once');
+  assert.equal(h.storage.signs.length + h.storage.fileLookups.length + h.storage.ownerLookups.length, 0, 'a rate limit is not helped by a new signature');
+  assert.equal(submits(h).length, 0);
+});
+
+test('a link whose dot segments switch the bucket under URL normalization is refused before any lookup', async (t) => {
+  const warn = quiet(t);
+  const h = await harness(t);
+  assert.equal(isSafeRecordingPath('%2e%2e/meeting-note-images/x.ogg'), false);
+  assert.equal(isSafeRecordingPath('../meeting-note-images/x.ogg'), false);
+  h.storage.objects.set('meeting-note-images/x.ogg', { owner: USER });
+  const exp = nowSeconds() - 60;
+  const cases: Array<[string, string, string]> = [
+    // %2e%2e is a dot segment for the URL parser: the link resolves into another bucket.
+    ['dot-bucket-switch-job', `${STORAGE_ORIGIN}/storage/v1/object/sign/${BUCKET}/%2e%2e/meeting-note-images/x.ogg?token=${mintToken('meeting-note-images/x.ogg', exp)}`, 'link-bucket-mismatch'],
+    // Encoded slashes survive parsing and decode into a traversal path.
+    ['slash-bucket-switch-job', `${STORAGE_ORIGIN}/storage/v1/object/sign/${BUCKET}/%2e%2e%2Fmeeting-note-images%2Fx.ogg?token=${mintToken('x', exp)}`, 'unsafe-path'],
+  ];
+  for (const withFileId of [true, false]) {
+    for (const [jobId, link, reason] of cases) {
+      const id = `${jobId}-${withFileId ? 'file' : 'nofile'}`;
+      h.f.reset(); h.storage.signs.length = 0; h.storage.fileLookups.length = 0; h.storage.ownerLookups.length = 0;
+      const request = webRequest({ downloadUrl: link });
+      if (!withFileId) delete (request as Record<string, unknown>).fileId;
+      const done = await resume(h, id, request);
+      assertRefused(h, warn, id, done, reason);
+      assert.equal(h.storage.signs.length + h.storage.fileLookups.length + h.storage.ownerLookups.length, 0, `${id}: refused before any lookup or signing`);
+      assert.equal(submits(h).length, 0);
+    }
+  }
+});
