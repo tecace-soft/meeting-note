@@ -431,31 +431,44 @@ test('SSRF and path traversal: foreign hosts are never fetched or re-signed, uns
   }
 });
 
-test('a re-sign failure fails with the localized message and keeps the recording', async (t) => {
+test('a re-sign failure fails with the localized message and keeps the recording; only infra failures are incidents', async (t) => {
   const warn = quiet(t);
+  const error = t.mock.method(console, 'error', () => undefined);
   const h = await harness(t);
-  const cases: Array<[string, string, () => void]> = [
-    ['sign-error-job', 'sign-failed', () => { h.storage.signStatus = 500; }],
-    ['sign-refused-job', 'sign-failed', () => { h.storage.signStatus = 400; }],
-    ['owner-lookup-error-job', 'lookup-failed', () => { h.storage.ownerStatus = 500; }],
-    ['file-lookup-error-job', 'lookup-failed', () => { h.storage.fileStatus = 500; }],
+  // Expected outcomes first (warning, no incident), then the infrastructure failures, so a
+  // late incident from one case cannot be counted in an expected-outcome case.
+  const cases: Array<[string, string, boolean, () => void]> = [
     // The object was deleted after the job started: storage has no owner for it any more.
-    ['deleted-object-job', 'storage-owner-unknown', () => { h.storage.objects.delete(`${BUCKET}/${PATH}`); }],
+    ['deleted-object-job', 'storage-owner-unknown', false, () => { h.storage.objects.delete(`${BUCKET}/${PATH}`); }],
     // Storage answered with a link to another object: never submitted.
-    ['wrong-signed-object-job', 'signed-link-mismatch', () => { h.storage.signAs = `${BUCKET}/other.m4a`; }],
+    ['wrong-signed-object-job', 'signed-link-mismatch', false, () => { h.storage.signAs = `${BUCKET}/other.m4a`; }],
     // The fresh link does not answer either.
-    ['fresh-unreachable-job', 'fresh-link-unreachable', () => { h.storage.probeStatus = 400; }],
+    ['fresh-unreachable-job', 'fresh-link-unreachable', false, () => { h.storage.probeStatus = 400; }],
+    ['sign-error-job', 'sign-failed', true, () => { h.storage.signStatus = 500; }],
+    ['sign-refused-job', 'sign-failed', true, () => { h.storage.signStatus = 400; }],
+    ['owner-lookup-error-job', 'lookup-failed', true, () => { h.storage.ownerStatus = 500; }],
+    ['file-lookup-error-job', 'lookup-failed', true, () => { h.storage.fileStatus = 500; }],
   ];
-  for (const [jobId, reason, arrange] of cases) {
+  for (const [jobId, reason, infra, arrange] of cases) {
     h.f.reset();
     Object.assign(h.storage, { signStatus: 200, signAs: null, probeStatus: 0, ownerStatus: 200, fileStatus: 200 });
     h.storage.objects.clear(); h.storage.files.clear();
     h.own(); h.fileRow();
     arrange();
     const done = await resume(h, jobId, webRequest());
-    assertRefused(h, warn, jobId, done, reason);
+    assert.deepEqual([done.status, done.error], ['failed', audioUnavailableMessage('ko')], `${jobId}: the localized "recording is kept" failure`);
+    assert.equal(h.storage.deletes, 0, `${jobId}: the recording is kept`);
     assert.equal(submits(h).length, 0, `${jobId}: nothing is submitted`);
-    assert.equal(incidents(h).length, 0, `${jobId}: no ops incident`);
+    const errorLogged = error.mock.calls.some((c) => String(c.arguments[0]).startsWith(`Workflow job ${jobId} could not re-sign its recording (${reason})`));
+    if (infra) {
+      assert.ok(errorLogged, `${jobId}: an infra failure is logged as an error`);
+      await until(() => incidents(h).some((c) => c.method === 'POST' && JSON.stringify(c.body).includes('Resumed job could not re-sign its recording')), `${jobId}: the ops incident`);
+      await sleep(30);
+    } else {
+      assert.ok(refusedWith(warn, jobId, reason), `${jobId}: the refusal is a warning`);
+      assert.ok(!errorLogged, `${jobId}: not an error`);
+      assert.equal(incidents(h).length, 0, `${jobId}: an expected outcome, no ops incident`);
+    }
   }
 });
 

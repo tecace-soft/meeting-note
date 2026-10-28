@@ -4,12 +4,13 @@
 // outage), the server signs a new link for the same recording, but only after a strict
 // ownership check; anything that does not match fails with the localized "your recording
 // is kept, start again" message (AudioUnavailableError), never an ops incident.
-// Imports config, db, the Android upload bucket constant and pipeline errors only.
+// Imports config, db, ops incidents, the Android upload bucket constant and pipeline errors only.
 import { createClient } from '@supabase/supabase-js';
 import { env } from '../config/env.js';
 import { supabase } from '../db/supabaseClient.js';
 import { AUDIO_BUCKET } from './androidUpload.js';
-import { AudioUnavailableError } from './errors.js';
+import { AudioUnavailableError, redactSignedUrls } from './errors.js';
+import { raiseIncident } from '../ops/incidents.js';
 
 export const AUDIO_PROBE_TIMEOUT_MS = 15_000;
 const AUDIO_PROBE_TRIES = 2;
@@ -220,6 +221,27 @@ export async function resignOwnedRecording(input: { userId: string; fileId: stri
   return { ok: true, url: signedUrl };
 }
 
+// A lookup or signing failure is an infrastructure problem (DB or storage): logged as an
+// error and filed as an ops incident. Every other refusal (ownership, bucket, path) is an
+// expected outcome of untrusted input: a warning only. The detail can carry decoded
+// client-supplied text or a provider message, so it is redacted and JSON-quoted (one
+// line, no forged log entries) and only the reason code goes into the incident context.
+const INFRA_REFUSALS: ReadonlySet<ResignRefusal> = new Set(['lookup-failed', 'sign-failed']);
+
+function reportRefusal(input: { jobId: string; userId: string }, outcome: { reason: ResignRefusal; detail: string }, why: string): void {
+  const detail = JSON.stringify(redactSignedUrls(outcome.detail));
+  if (!INFRA_REFUSALS.has(outcome.reason)) {
+    console.warn(`Workflow job ${input.jobId} does not re-sign its recording (${outcome.reason}): ${detail}. ${why}.`);
+    return;
+  }
+  console.error(`Workflow job ${input.jobId} could not re-sign its recording (${outcome.reason}): ${detail}. ${why}.`);
+  void raiseIncident({
+    title: 'Resumed job could not re-sign its recording',
+    error: new Error(`Re-sign ${outcome.reason}: ${detail}`),
+    context: { jobId: input.jobId, userId: input.userId, reason: outcome.reason },
+  });
+}
+
 // The link a resumed execution submits. Re-signs only when needed: the stored link's
 // expiry is known and (nearly) past, or its probe answered 4xx. A storage 5xx, 429 or
 // network failure is not helped by a new signature and fails as before.
@@ -242,9 +264,7 @@ export async function resumableAudioUrl(input: {
   }
   const outcome = await resignOwnedRecording({ userId: input.userId, fileId: input.fileId, storedUrl: input.downloadUrl });
   if (!outcome.ok) {
-    // The detail can carry decoded client-supplied text (bucket names, storage messages):
-    // JSON.stringify keeps it on one quoted line so it cannot forge log entries.
-    console.warn(`Workflow job ${input.jobId} does not re-sign its recording (${outcome.reason}): ${JSON.stringify(outcome.detail)}. ${why}; the user restarts the summary.`);
+    reportRefusal(input, outcome, why);
     throw new AudioUnavailableError(input.language, `${why}; re-sign refused (${outcome.reason})`);
   }
   console.log(`Workflow job ${input.jobId} re-signed its recording after ${why}; resuming with the fresh link.`);
