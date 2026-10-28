@@ -46,6 +46,20 @@ Migrations are files for review, with PRE/POST checks and ROLLBACK.
 Andrew applies approved SQL in the SQL Editor and records the migration; agents do not run production schema writes or automated db push.
 There is no Management-API token wired into automation — schema DDL is a human SQL-Editor step.
 
+**Storage policy audit (run after any storage or RLS change, and periodically):** migrations alone don't prove the live state, because hand-made dashboard policies survive them (2026-10-28 incident, see `20261028120000_drop_anon_storage_policies.sql`).
+Run these read-only queries in the Supabase SQL Editor. Both must return 0 rows.
+
+```sql
+-- Policies on storage.objects that apply to anon or public (expected: 0 rows).
+select policyname, cmd, roles, qual, with_check
+from pg_policies
+where schemaname = 'storage' and tablename = 'objects'
+  and (roles && array['anon', 'public']::name[]);
+
+-- Buckets readable without auth (expected: 0 rows).
+select id, public from storage.buckets where public = true;
+```
+
 ---
 
 ## 2.1 S1: every backend deployment requires a pre-merge gate
