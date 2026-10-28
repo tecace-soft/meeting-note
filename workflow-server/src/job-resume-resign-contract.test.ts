@@ -63,6 +63,10 @@ interface FakeStorageState {
   objects: Map<string, { owner: string | null }>;
   files: Map<string, Record<string, unknown>>;
   signStatus: number;
+  // When set, the sign endpoint answers with a link to this object key instead.
+  signAs: string | null;
+  // When not 0, signed GETs (probes) answer with this status.
+  probeStatus: number;
   ownerStatus: number;
   fileStatus: number;
   signs: string[];
@@ -80,7 +84,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 
 async function startFakeStorage(): Promise<{ state: FakeStorageState; origin: string; server: Server }> {
   const state: FakeStorageState = {
-    objects: new Map(), files: new Map(), signStatus: 200, ownerStatus: 200, fileStatus: 200,
+    objects: new Map(), files: new Map(), signStatus: 200, signAs: null, probeStatus: 0, ownerStatus: 200, fileStatus: 200,
     signs: [], probes: [], ownerLookups: [], fileLookups: [], deletes: 0,
   };
   const server = createServer((req, res) => {
@@ -98,9 +102,11 @@ async function startFakeStorage(): Promise<{ state: FakeStorageState; origin: st
           state.signs.push(key);
           if (state.signStatus !== 200) return send(state.signStatus, { statusCode: String(state.signStatus), error: 'internal', message: 'fixture sign failure' });
           if (!state.objects.has(key)) return send(400, { statusCode: '404', error: 'not_found', message: 'Object not found' });
-          return send(200, { signedURL: `/object/sign/${key}?token=${mintToken(key, nowSeconds() + Number(body?.expiresIn ?? 0))}` });
+          const signed = state.signAs ?? key;
+          return send(200, { signedURL: `/object/sign/${signed}?token=${mintToken(signed, nowSeconds() + Number(body?.expiresIn ?? 0))}` });
         }
         state.probes.push(key);
+        if (state.probeStatus) return send(state.probeStatus, { statusCode: String(state.probeStatus), error: 'fixture', message: 'fixture probe status' });
         const claims = readToken(url.searchParams.get('token'));
         if (!claims || claims.url !== key) return send(400, { statusCode: '400', error: 'InvalidSignature', message: 'The signature is invalid' });
         if (typeof claims.exp !== 'number' || claims.exp <= nowSeconds()) return send(400, { statusCode: '400', error: 'InvalidJWT', message: '"exp" claim timestamp check failed' });
@@ -249,7 +255,8 @@ test('isSafeRecordingPath accepts upload names and refuses traversal, encoding a
 // ---------------------------------------------------------------------------
 
 test('an expired link on resume, owner matching: re-signs from the file row, then transcribes', async (t) => {
-  const warn = quiet(t);
+  quiet(t);
+  const log = t.mock.method(console, 'log', () => undefined);
   const h = await harness(t);
   h.own(); h.fileRow();
   const done = await resume(h, 'resign-job', webRequest());
@@ -264,7 +271,7 @@ test('an expired link on resume, owner matching: re-signs from the file row, the
   assert.deepEqual(h.storage.probes, [`${BUCKET}/${PATH}`], 'a known-expired link is not probed; only the fresh link is');
   assert.ok(h.forwarded.filter((c) => c.method === 'GET' && c.url.pathname.startsWith('/storage/')).every((c) => c.redirect === 'error'), 'probes refuse redirects');
   assert.ok(h.forwarded.every((c) => c.signal), 'every re-sign I/O (file row, owner, sign, probe) is bounded by a signal');
-  assert.ok(warned(warn, 'Workflow job resign-job re-signed its recording'), 'the re-sign is logged');
+  assert.ok(log.mock.calls.some((c) => String(c.arguments[0]).startsWith('Workflow job resign-job re-signed its recording')), 'the re-sign is logged');
   assert.equal(incidents(h).length, 0);
 });
 
@@ -289,7 +296,9 @@ test('a link whose expiry is not readable is probed first; a 4xx probe re-signs,
   assert.equal(submits(h)[0]!.body.audio_url, live);
 
   h.f.reset(); h.storage.signs.length = 0;
-  const nearlyExpired = storedLink(PATH, nowSeconds() + Math.floor(RESIGN_EXPIRY_MARGIN_MS / 2_000));
+  // Five minutes left: AssemblyAI might fetch it after it expires.
+  assert.ok(RESIGN_EXPIRY_MARGIN_MS >= 10 * 60_000, 'the margin covers the provider fetch delay');
+  const nearlyExpired = storedLink(PATH, nowSeconds() + 300);
   await resume(h, 'near-expiry-job', webRequest({ downloadUrl: nearlyExpired }));
   assert.equal(h.storage.signs.length, 1, 'a link inside the expiry margin is re-signed before AssemblyAI fetches it');
 });
@@ -397,23 +406,22 @@ test('a re-sign failure fails with the localized message and keeps the recording
   const h = await harness(t);
   const cases: Array<[string, string, () => void]> = [
     ['sign-error-job', 'sign-failed', () => { h.storage.signStatus = 500; }],
+    ['sign-refused-job', 'sign-failed', () => { h.storage.signStatus = 400; }],
     ['owner-lookup-error-job', 'lookup-failed', () => { h.storage.ownerStatus = 500; }],
     ['file-lookup-error-job', 'lookup-failed', () => { h.storage.fileStatus = 500; }],
-    // The object was deleted after the job started: the sign call itself is refused.
-    ['deleted-object-job', 'sign-failed', () => { h.storage.objects.delete(`${BUCKET}/${PATH}`); h.storage.ownerStatus = 200; }],
+    // The object was deleted after the job started: storage has no owner for it any more.
+    ['deleted-object-job', 'storage-owner-unknown', () => { h.storage.objects.delete(`${BUCKET}/${PATH}`); }],
+    // Storage answered with a link to another object: never submitted.
+    ['wrong-signed-object-job', 'signed-link-mismatch', () => { h.storage.signAs = `${BUCKET}/other.m4a`; }],
+    // The fresh link does not answer either.
+    ['fresh-unreachable-job', 'fresh-link-unreachable', () => { h.storage.probeStatus = 400; }],
   ];
   for (const [jobId, reason, arrange] of cases) {
     h.f.reset();
-    Object.assign(h.storage, { signStatus: 200, ownerStatus: 200, fileStatus: 200 });
+    Object.assign(h.storage, { signStatus: 200, signAs: null, probeStatus: 0, ownerStatus: 200, fileStatus: 200 });
     h.storage.objects.clear(); h.storage.files.clear();
     h.own(); h.fileRow();
     arrange();
-    if (jobId === 'deleted-object-job') {
-      // Owner lookups answer from a table the delete did not reach yet (a race), so the
-      // ownership check passes and only the sign call can fail.
-      h.storage.objects.set(`${BUCKET}/${PATH}`, { owner: USER });
-      h.storage.signStatus = 400;
-    }
     const done = await resume(h, jobId, webRequest());
     assertRefused(h, warn, jobId, done, reason);
     assert.equal(submits(h).length, 0, `${jobId}: nothing is submitted`);

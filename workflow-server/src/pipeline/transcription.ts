@@ -9,7 +9,8 @@ import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
 import { parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from '../parsers.js';
 import { buildTranscriptTranslationPrompt } from '../prompts.js';
 import { hasAssemblyUsage, recordAssemblyResubmission, recordAssemblyUsage, recordGeminiUsage } from './usage.js';
-import { AudioUnavailableError, NoSpeechDetectedError, noSpeechMessage } from './errors.js';
+import { NoSpeechDetectedError, noSpeechMessage } from './errors.js';
+import { resumableAudioUrl } from './resumeAudio.js';
 import { loadTranscriptCheckpoint, saveTranscriptCheckpoint, updateWorkflowJob } from '../jobs/store.js';
 import { jobLeases, JobLeaseLostError, type JobExecution } from '../jobs/lease.js';
 
@@ -335,40 +336,8 @@ async function finishAssemblyTranscript(transcript: Record<string, unknown>, inp
   return { segments, latencyMs, audioDurationSeconds, detectedLanguage };
 }
 
-export const AUDIO_PROBE_TIMEOUT_MS = 15_000;
-const AUDIO_PROBE_TRIES = 2;
-
-// S10 resume guard: before paying for a fresh submission of a recovered job, check that
-// the saved audio link still answers, so an expired link fails with a clear message
-// instead of an opaque provider download error. Probes only links on this project's
-// Supabase host (signed storage URLs). The server never fetches other client-supplied
-// hosts, which would let a resume make a server-side request to an arbitrary URL.
-export async function assertAudioReachable(downloadUrl: string, language: 'en' | 'ko'): Promise<void> {
-  let target: URL;
-  let storageHost: string;
-  try {
-    target = new URL(downloadUrl);
-    storageHost = new URL(env.supabaseUrl).host;
-  } catch {
-    return;
-  }
-  if (target.protocol !== 'https:' || target.host !== storageHost) return;
-  let problem = 'not checked';
-  for (let attempt = 1; attempt <= AUDIO_PROBE_TRIES; attempt += 1) {
-    try {
-      // redirect: 'error' keeps the probe on the storage host even if it answers with a redirect.
-      const response = await fetch(target, { headers: { Range: 'bytes=0-0' }, redirect: 'error', signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS) });
-      await response.body?.cancel().catch(() => undefined);
-      if (response.ok) return;
-      problem = `HTTP ${response.status}`;
-      // A 4xx (expired or invalid signature, deleted object) does not heal on retry.
-      if (response.status < 500 && response.status !== 429) break;
-    } catch (error) {
-      problem = error instanceof Error ? error.message : String(error);
-    }
-  }
-  throw new AudioUnavailableError(language, problem);
-}
+// The S10 resume probe and the #23 re-sign live in resumeAudio.ts; re-exported for callers.
+export { AUDIO_PROBE_TIMEOUT_MS, assertAudioReachable } from './resumeAudio.js';
 
 // Marks the submission in flight before calling AssemblyAI. Lost lease: stop. Any other
 // failure: submit anyway (never strand the recording) and say so in the log.
@@ -413,6 +382,7 @@ async function persistTranscriptId(job: JobExecution, transcriptId: string): Pro
 // earlier one may have been charged (DEC-0022), submit, save the id, then poll.
 async function transcribeForJob(input: {
   downloadUrl: string;
+  fileId?: string | null;
   noteId: string;
   userId: string;
   language: 'en' | 'ko';
@@ -438,7 +408,11 @@ async function transcribeForJob(input: {
     if (ownership.superseded) throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record');
     return result;
   }
-  if (job.resumed) await assertAudioReachable(input.downloadUrl, input.language);
+  // A resume checks the stored link first and, when it expired, re-signs the recording
+  // after an ownership check (#23); a fresh run submits the link it was given.
+  const downloadUrl = job.resumed
+    ? await resumableAudioUrl({ jobId: job.jobId, userId: input.userId, fileId: input.fileId ?? null, downloadUrl: input.downloadUrl, language: input.language })
+    : input.downloadUrl;
   const reason = job.submissionState === 'submitting'
     ? 'submit-outcome-unknown' as const
     : job.unknownPriorSubmission;
@@ -457,7 +431,7 @@ async function transcribeForJob(input: {
   const startedAt = performance.now();
   let transcriptId: string;
   try {
-    transcriptId = await submitAssemblyTranscript({ downloadUrl: input.downloadUrl, settings: input.settings });
+    transcriptId = await submitAssemblyTranscript({ downloadUrl, settings: input.settings });
   } catch (error) {
     // A rejected submit was not accepted, so a later retry is not a resubmission.
     if (error instanceof AssemblySubmitRejectedError) {
@@ -512,6 +486,8 @@ export async function transcribeOrReuseCheckpoint(input: {
   noteId: string;
   userId: string;
   downloadUrl: string;
+  // The job's file row id, used only to re-sign an expired link on a resume (#23).
+  fileId?: string | null;
   language: 'en' | 'ko';
   settings: TranscriptionSettings;
   job?: JobExecution;
