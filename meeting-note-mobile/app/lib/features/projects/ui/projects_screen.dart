@@ -10,6 +10,7 @@ import '../../auth/providers/auth_provider.dart';
 import '../../notes/data/notes_repository.dart';
 import '../../notes/models/meeting_note.dart';
 import '../data/projects_repository.dart';
+import '../../../core/network/error_message.dart';
 
 class ProjectsScreen extends ConsumerStatefulWidget {
   const ProjectsScreen({super.key});
@@ -142,6 +143,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                         return _ProjectBody(
                           snapshot: snapshot,
                           errorTitle: t('projects.loadListErrorTitle'),
+                          errorMessage: friendlyErrorMessage(snapshot.error, t.call),
                           tryAgainLabel: t('projects.tryAgain'),
                           emptyTitle: t('projects.emptyTitle'),
                           emptySubtitle: t('projects.emptySubtitle'),
@@ -468,7 +470,7 @@ class _ProjectDetailScreenState extends ConsumerState<ProjectDetailScreen> {
                     EmptyState(
                       icon: Icons.error_outline_rounded,
                       title: t('projects.loadDetailErrorTitle'),
-                      subtitle: '${snapshot.error}',
+                      subtitle: friendlyErrorMessage(snapshot.error, t.call),
                       action: FilledButton(
                         onPressed: _refresh,
                         child: Text(t('projects.tryAgain')),
@@ -1230,6 +1232,7 @@ class _ProjectBody extends StatelessWidget {
   const _ProjectBody({
     required this.snapshot,
     required this.errorTitle,
+    required this.errorMessage,
     required this.tryAgainLabel,
     required this.emptyTitle,
     required this.emptySubtitle,
@@ -1242,6 +1245,7 @@ class _ProjectBody extends StatelessWidget {
 
   final AsyncSnapshot<_ProjectsScreenData> snapshot;
   final String errorTitle;
+  final String errorMessage;
   final String tryAgainLabel;
   final String emptyTitle;
   final String emptySubtitle;
@@ -1260,7 +1264,7 @@ class _ProjectBody extends StatelessWidget {
       return EmptyState(
         icon: Icons.error_outline_rounded,
         title: errorTitle,
-        subtitle: '${snapshot.error}',
+        subtitle: errorMessage,
         action: FilledButton(
           onPressed: onRetry,
           child: Text(tryAgainLabel),

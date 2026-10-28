@@ -12,6 +12,7 @@ import '../../../shared/widgets/widgets.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../data/notes_repository.dart';
 import '../models/meeting_note.dart';
+import '../../../core/network/error_message.dart';
 
 class SummaryScreen extends ConsumerWidget {
   const SummaryScreen({super.key, required this.noteId});
@@ -36,7 +37,11 @@ class SummaryScreen extends ConsumerWidget {
             child: EmptyState(
               icon: Icons.error_outline_rounded,
               title: t('note.loadFailed'),
-              subtitle: '$e',
+              subtitle: friendlyErrorMessage(e, t.call),
+              action: FilledButton(
+                onPressed: () => ref.invalidate(noteProvider(noteId)),
+                child: Text(t('common.tryAgain')),
+              ),
             ),
           ),
         ),

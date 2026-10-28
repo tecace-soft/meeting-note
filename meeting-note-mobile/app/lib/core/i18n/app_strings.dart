@@ -20,6 +20,14 @@ const Map<String, Map<String, String>> _appStrings = {
   'common.cancel': {'en': 'Cancel', 'ko': '취소'},
   'common.back': {'en': 'Back', 'ko': '뒤로'},
   'common.tryAgain': {'en': 'Try again', 'ko': '다시 시도'},
+  'error.network': {
+    'en': "Can't reach the server. Check your connection and try again.",
+    'ko': '서버에 연결할 수 없습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.',
+  },
+  'error.generic': {
+    'en': 'Something went wrong. Please try again.',
+    'ko': '문제가 발생했습니다. 다시 시도해 주세요.',
+  },
 
   // ---- Shell / bottom nav ----
   'shell.home': {'en': 'Home', 'ko': '홈'},
