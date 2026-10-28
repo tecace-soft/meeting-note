@@ -52,14 +52,44 @@ class NetworkRetryInterceptor extends Interceptor {
     }
     options.extra[attemptKey] = attempt + 1;
     final index = attempt < backoffs.length ? attempt : backoffs.length - 1;
-    await _delay(backoffs[index]);
+    final cancelled = await _waitOrCancel(backoffs[index], options.cancelToken);
+    if (cancelled) {
+      handler.reject(
+        DioException.requestCancelled(
+          requestOptions: options,
+          reason: options.cancelToken?.cancelError?.error,
+        ),
+      );
+      return;
+    }
     try {
       handler.resolve(await _dio.fetch<dynamic>(options));
     } on DioException catch (e) {
       // The nested fetch already exhausted its own retries and ran the other
       // error interceptors, so surface its result as final.
       handler.reject(e);
+    } catch (e) {
+      // Nothing may escape the interceptor chain as a non-Dio exception.
+      handler.next(
+        DioException(
+          requestOptions: options,
+          error: e,
+          type: DioExceptionType.unknown,
+        ),
+      );
     }
+  }
+
+  /// Waits [duration]; returns true early if [token] is cancelled meanwhile.
+  Future<bool> _waitOrCancel(Duration duration, CancelToken? token) async {
+    if (token == null) {
+      await _delay(duration);
+      return false;
+    }
+    if (token.isCancelled) return true;
+    final cancelled = token.whenCancel.then((_) => true);
+    final waited = _delay(duration).then((_) => false);
+    return Future.any<bool>([cancelled, waited]);
   }
 
   /// True for connection-level failures on idempotent methods.

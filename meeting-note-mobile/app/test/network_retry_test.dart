@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -26,23 +27,32 @@ class _ScriptedAdapter implements HttpClientAdapter {
     final step = script[calls < script.length ? calls : script.length - 1];
     calls++;
     if (step is Exception) throw step;
-    return ResponseBody.fromString('{}', step as int, headers: {
-      Headers.contentTypeHeader: [Headers.jsonContentType],
-    });
+    return ResponseBody.fromString(
+      '{}',
+      step as int,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
   }
 
   @override
   void close({bool force = false}) {}
 }
 
+/// Dio whose nested fetch throws a non-Dio error.
+class _ThrowingDio extends Fake implements Dio {
+  @override
+  Future<Response<T>> fetch<T>(RequestOptions requestOptions) =>
+      throw StateError('boom');
+}
+
 Dio _dio(_ScriptedAdapter adapter, List<Duration> delays) {
   return createAppDio(
     BaseOptions(baseUrl: 'https://example.test'),
     adapter: adapter,
-    retryBuilder: (dio) => NetworkRetryInterceptor(
-      dio,
-      delay: (d) async => delays.add(d),
-    ),
+    retryBuilder: (dio) =>
+        NetworkRetryInterceptor(dio, delay: (d) async => delays.add(d)),
   );
 }
 
@@ -96,8 +106,12 @@ void main() {
   for (final method in ['POST', 'PATCH', 'PUT', 'DELETE']) {
     test('$method is never retried', () async {
       final a = _ScriptedAdapter([abort, 200]);
-      final err = await _failure(() => _dio(a, []).request<dynamic>('/x',
-          options: Options(method: method)));
+      final err = await _failure(
+        () => _dio(
+          a,
+          [],
+        ).request<dynamic>('/x', options: Options(method: method)),
+      );
       expect(err, isNotNull);
       expect(a.calls, 1);
     });
@@ -124,44 +138,103 @@ void main() {
     expect(a.calls, 1);
   });
 
-  test('401 replay carries refreshed auth and does not multiply retries',
-      () async {
-    // Mirrors the production order: network retry first, then auth replay.
-    final a = _ScriptedAdapter([abort, 401, 200]);
-    final dio = _dio(a, []);
-    dio.interceptors.add(InterceptorsWrapper(
-      onError: (error, handler) async {
-        if (error.response?.statusCode != 401) return handler.next(error);
-        error.requestOptions.headers['authorization'] = 'Bearer fresh';
-        handler.resolve(await dio.fetch<dynamic>(error.requestOptions));
-      },
-    ));
-    final res = await dio.get<dynamic>('/x',
-        options: Options(headers: {'authorization': 'Bearer stale'}));
-    expect(res.statusCode, 200);
-    expect(a.calls, 3);
-    expect(a.headers.last['authorization'], 'Bearer fresh');
+  test(
+    '401 replay carries refreshed auth and does not multiply retries',
+    () async {
+      // Mirrors the production order: network retry first, then auth replay.
+      final a = _ScriptedAdapter([abort, 401, 200]);
+      final dio = _dio(a, []);
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onError: (error, handler) async {
+            if (error.response?.statusCode != 401) return handler.next(error);
+            error.requestOptions.headers['authorization'] = 'Bearer fresh';
+            handler.resolve(await dio.fetch<dynamic>(error.requestOptions));
+          },
+        ),
+      );
+      final res = await dio.get<dynamic>(
+        '/x',
+        options: Options(headers: {'authorization': 'Bearer stale'}),
+      );
+      expect(res.statusCode, 200);
+      expect(a.calls, 3);
+      expect(a.headers.last['authorization'], 'Bearer fresh');
+    },
+  );
+
+  test(
+    'retries stay bounded with a second error interceptor present',
+    () async {
+      final a = _ScriptedAdapter([abort]);
+      final dio = _dio(a, []);
+      dio.interceptors.add(
+        InterceptorsWrapper(onError: (error, handler) => handler.next(error)),
+      );
+      await _failure(() => dio.get<dynamic>('/x'));
+      expect(a.calls, 3);
+    },
+  );
+
+  test(
+    'non-Dio exception from the nested fetch is wrapped, not leaked',
+    () async {
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = _ScriptedAdapter([abort]);
+      dio.interceptors.add(
+        NetworkRetryInterceptor(_ThrowingDio(), delay: (_) async {}),
+      );
+      final err = await _failure(() => dio.get<dynamic>('/x'));
+      expect(err?.type, DioExceptionType.unknown);
+      expect(err?.error, isA<StateError>());
+    },
+  );
+
+  test(
+    'cancel during the backoff rejects immediately with a cancel error',
+    () async {
+      final a = _ScriptedAdapter([abort, 200]);
+      final never = Completer<void>();
+      final token = CancelToken();
+      final dio = createAppDio(
+        BaseOptions(baseUrl: 'https://example.test'),
+        adapter: a,
+        retryBuilder: (d) =>
+            NetworkRetryInterceptor(d, delay: (_) => never.future),
+      );
+      final future = _failure(() => dio.get<dynamic>('/x', cancelToken: token));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      token.cancel('user left');
+      final err = await future.timeout(const Duration(seconds: 2));
+      expect(err?.type, DioExceptionType.cancel);
+      expect(a.calls, 1);
+    },
+  );
+
+  test('exhausted retries keep the original type and inner error', () async {
+    final a = _ScriptedAdapter([abort]);
+    final err = await _failure(() => _dio(a, []).get<dynamic>('/x'));
+    expect(err?.type, DioExceptionType.unknown);
+    expect(err?.error, isA<SocketException>());
+    expect(
+      (err?.error as SocketException).message,
+      'Software caused connection abort',
+    );
   });
 
-  test('retries stay bounded with a second error interceptor present',
-      () async {
-    final a = _ScriptedAdapter([abort]);
-    final dio = _dio(a, []);
-    dio.interceptors.add(InterceptorsWrapper(
-      onError: (error, handler) => handler.next(error),
-    ));
-    await _failure(() => dio.get<dynamic>('/x'));
-    expect(a.calls, 3);
+  test('HttpException error also survives exhaustion', () async {
+    final a = _ScriptedAdapter([const HttpException('closed')]);
+    final err = await _failure(() => _dio(a, []).get<dynamic>('/x'));
+    expect(err?.error, isA<HttpException>());
   });
 
   group('friendlyErrorMessage', () {
     String t(String k) => k;
-    DioException dioErr(DioExceptionType type, [Object? inner]) =>
-        DioException(
-          requestOptions: RequestOptions(path: '/x'),
-          type: type,
-          error: inner,
-        );
+    DioException dioErr(DioExceptionType type, [Object? inner]) => DioException(
+      requestOptions: RequestOptions(path: '/x'),
+      type: type,
+      error: inner,
+    );
 
     test('connection-level errors map to error.network', () {
       for (final e in [
@@ -170,26 +243,35 @@ void main() {
         dioErr(DioExceptionType.unknown, abort),
         dioErr(DioExceptionType.unknown, const HttpException('x')),
       ]) {
-        expect(
-            friendlyErrorMessage(e, t, showDetails: false), 'error.network');
+        expect(friendlyErrorMessage(e, t, showDetails: false), 'error.network');
       }
     });
 
     test('other errors map to error.generic', () {
-      expect(friendlyErrorMessage(StateError('boom'), t, showDetails: false),
-          'error.generic');
       expect(
-          friendlyErrorMessage(dioErr(DioExceptionType.badResponse), t,
-              showDetails: false),
-          'error.generic');
+        friendlyErrorMessage(StateError('boom'), t, showDetails: false),
+        'error.generic',
+      );
+      expect(
+        friendlyErrorMessage(
+          dioErr(DioExceptionType.badResponse),
+          t,
+          showDetails: false,
+        ),
+        'error.generic',
+      );
     });
 
     test('raw text only with showDetails', () {
       final e = StateError('secret-detail');
-      expect(friendlyErrorMessage(e, t, showDetails: false),
-          isNot(contains('secret-detail')));
-      expect(friendlyErrorMessage(e, t, showDetails: true),
-          contains('secret-detail'));
+      expect(
+        friendlyErrorMessage(e, t, showDetails: false),
+        isNot(contains('secret-detail')),
+      );
+      expect(
+        friendlyErrorMessage(e, t, showDetails: true),
+        contains('secret-detail'),
+      );
     });
   });
 }
