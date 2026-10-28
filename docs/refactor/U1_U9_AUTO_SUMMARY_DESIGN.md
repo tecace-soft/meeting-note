@@ -48,7 +48,7 @@
 
 | 진입 경로 | 자동 시작 | 구현 |
 | --- | --- | --- |
-| 이 화면에서 녹음 중지 | 예(짧은 녹음 제외, 유예 후) | 중지 버튼이 의도를 표시하고 녹음 결과가 생기면 유예 시작 |
+| 이 화면에서 녹음 중지 | 예(짧은 녹음 제외, 유예 후) | 중지 버튼이 의도를 표시하고 녹음 결과가 생기면 유예 시작(의도는 15초 안에 녹음 결과가 생길 때만 유효) |
 | 떠 있는 위젯에서 중지 | 예 | 위젯이 `navigate(..., { state: { autoSummarize: true } })`로 이동, 화면은 state를 한 번 쓰고 지운다 |
 | 2시간 자동 중지 | 예 | 이 화면에 있으면 `recordingAutoStopped`로 감지; 다른 화면이면 위젯의 "녹음 확인"이 같은 state로 이동 |
 | 중단된 녹음 복구본 | 아니오 | 복구 후 완료 패널의 "요약" 버튼 |
@@ -59,6 +59,9 @@
 입력 snapshot: 제출 시점의 프롬프트, 추가 지시, 첨부를 요청 본문에 고정한다(현행 handleSummarize와 같음).
 옵션은 녹음 전과 녹음 중에도 접힌 "옵션"에서 바꿀 수 있다.
 요약 뒤 노트에 추가하는 첨부는 요약 입력에 들어가지 않는다(U5, 문구 유지).
+
+완료 패널의 "녹음 사용" 버튼은 "요약"으로 바뀌고 한 번 누르면 업로드 뒤 요약까지 한다(짧은 녹음, 복구본, 취소한 뒤의 수동 경로).
+옵션 줄의 "요약" 버튼은 업로드된 파일이 있을 때만 보이고, 누르면 진행 중인 유예를 끝내고 바로 제출한다.
 
 취소 경계: 유예 중 취소는 서버에 아무것도 보내지 않는다는 뜻이다.
 POST가 나간 뒤에는 서버 취소 API가 없으므로 취소 버튼을 보이지 않는다.
@@ -109,7 +112,7 @@ job 완료 -> 요약 화면 표시
 
 - 화자 단위는 speakerKey(없으면 표시 이름)다.
 - 발화 시간 = 구간의 `end - start`(초) 합계.
-  모든 구간에 유효한 시간이 없으면 원문 글자 수로 대신한다.
+  한 구간이라도 유효한 시간(end > start)이 없으면 원문 글자 수로 대신한다.
 - 주요 화자 = 발화 시간이 전체 발화 시간의 `MAIN_SPEAKER_MIN_SHARE`(0.10) 이상인 화자.
   값은 `src/lib/speakers/mainSpeakers.ts`의 상수 하나이며 실제 데이터로 나중에 조정한다.
 - 화자가 "이름 있음"이려면 그 화자의 모든 구간 라벨이 익명 라벨(isAnonymousSpeakerLabel: "Speaker A", "Speaker 1", "Unknown Speaker" 등)이 아니어야 한다.
@@ -198,7 +201,14 @@ regenerate 라우트는 지금 `summary_edit`에 결과를 쓴다(routes/regener
 
 `FloatingRecorderWidget.tsx`: 중지와 "녹음 확인" 이동에 `state: { autoSummarize: true }`를 붙인다.
 
-## 7. 테스트
+## 7. 파일
+
+- 서버: `workflow-server/src/routes/regenerateSummary.ts`, `workflow-server/src/prompts.ts`, 계약 테스트 `regenerate-name-refresh-contract.test.ts`.
+- 웹 로직: `src/lib/speakers/mainSpeakers.ts`, `src/lib/speakers/suggestionStore.ts`, `src/lib/regenerateSummary.ts`, `src/lib/summarySubmitRecord.ts`, `src/lib/notes/repository.ts`의 `readOwnedNoteSummaryEdit`.
+- 웹 훅: `src/pages/transcriptionSummary/useSummaryNameRefresh.ts`, `src/pages/transcriptionSummary/useAutoSubmitGrace.ts`.
+- 화면: `src/pages/TranscriptionSummary.tsx`, `src/components/TranscriptDiarizedEditor.tsx`, `src/components/FloatingRecorderWidget.tsx`, 문구 `src/context/LanguageContext.tsx`.
+
+## 8. 테스트
 
 - 순수 로직: 주요 화자와 서명, 제출 기록, 제안 저장소, 재생성 요청(timeout, 오류).
 - renderHook: 이름 반영 갱신(debounce, 중복 제거, 상한, 실패, 수동 편집 알림, abort), 유예 타이머.

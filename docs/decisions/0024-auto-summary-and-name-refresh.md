@@ -11,6 +11,11 @@ chosen: "(c). 웹: 녹음을 멈추면 5초 유예 뒤 업로드와 요약을 �
 reason: Hansoo가 원하는 단순한 새 Meeting Note(10/30)와 계획 5절의 승인(U1, U9)에 맞춘다. 제안 정확도가 백테스트 약 63%라 자동 적용은 하지 않고, 이름을 잠그지 않는 Andrew 요구(2026-10-21)를 지킨다. regenerate가 summary_edit에 쓰므로 열 추가 없이 생성 텍스트 비교로 사람의 수정을 판별한다. 2026-10-28 Andrew 결정 5건.
 paths:
   - src/pages/TranscriptionSummary.tsx
+  - src/pages/transcriptionSummary/**
+  - src/lib/speakers/mainSpeakers.ts
+  - src/lib/speakers/suggestionStore.ts
+  - src/lib/regenerateSummary.ts
+  - src/lib/summarySubmitRecord.ts
   - src/components/TranscriptDiarizedEditor.tsx
   - src/components/FloatingRecorderWidget.tsx
   - src/lib/identifySpeakers.ts

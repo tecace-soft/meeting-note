@@ -147,7 +147,7 @@
       "title": "화자 식별 (Speaker Identification)",
       "section": "Features",
       "order": 3,
-      "revision": "2026-10-13.1",
+      "revision": "2026-10-28.1",
       "summary": "익명 라벨(Speaker A/B)을 아는 사람으로 추정하는 프로덕션 경로. TF-IDF 시그니처 1차 + LLM fallback + 결정적 앵커 게이트, '한 사람당 최대 한 번' 규칙, 단일 화자만 자동 적용.",
       "depends_on": [
         "workflow-server/src/speakerSignature.ts",
