@@ -37,6 +37,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Client } from '@microsoft/microsoft-graph-client';
 import type { Note } from './summaryHistory/types';
+import { invokeGenerateProfile, type GeneratedHistoryProfile } from './summaryHistory/generateProfile';
 import { getLocalizedSummary, getNoteDisplayTitle } from './summaryHistory/noteDisplay';
 import { normalizeTagList } from './summaryHistory/noteSearch';
 import { NOTES_PAGE_SIZE, useNotesList, type HistoryViewMode } from './summaryHistory/useNotesList';
@@ -127,48 +128,6 @@ const NOTE_SUMMARY_TEXTAREA = `w-full resize-none ${NOTE_PANEL_SCROLL_CLASS} bor
 const RESULT_ACTION_BTN_CLASS =
   'result-action-btn flex min-h-[2.75rem] w-full min-w-0 items-center justify-center gap-2 rounded-lg px-2 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-start sm:px-4 sm:py-2';
 const RESULT_ACTION_BTN_LABEL_CLASS = 'hidden truncate sm:inline';
-
-interface GeneratedHistoryProfile {
-  speakerId: string | null;
-  speakerName: string;
-  draft: string;
-  isNew: boolean;
-  saving: boolean;
-  saved: boolean;
-  saveError: string | null;
-}
-
-async function invokeGenerateProfile(
-  body: {
-    speakerName: string;
-    speakerId: string;
-    transcriptText: string;
-    existingProfile: string | null;
-  },
-  auth: { appToken: string | null; msToken: string | null }
-): Promise<{ profile?: string; error?: string }> {
-  const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/generate-profile`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${auth.appToken ?? SUPABASE_ANON_KEY}`,
-      ...(auth.msToken ? { 'x-ms-access-token': auth.msToken } : {}),
-    },
-    body: JSON.stringify(body),
-  });
-  const raw = await response.text();
-  let parsed: { profile?: string; error?: string };
-  try {
-    parsed = raw ? JSON.parse(raw) as { profile?: string; error?: string } : {};
-  } catch {
-    parsed = { error: raw || `HTTP ${response.status}` };
-  }
-  if (!response.ok) {
-    throw new Error(parsed.error || raw || `HTTP ${response.status}`);
-  }
-  return parsed;
-}
 
 const CALENDAR_VISIBLE_START_HOUR = 8;
 const CALENDAR_VISIBLE_END_HOUR = 20;
