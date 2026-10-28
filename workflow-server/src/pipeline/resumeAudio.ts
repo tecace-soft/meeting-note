@@ -157,34 +157,46 @@ export type ResignRefusal =
 export type ResignOutcome = { ok: true; url: string } | { ok: false; reason: ResignRefusal; detail: string };
 
 const refuse = (reason: ResignRefusal, detail: string): ResignOutcome => ({ ok: false, reason, detail });
-const errorText = (error: unknown) => (error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error ? String((error as { message: unknown }).message) : String(error));
 
-// Signs a fresh link for the job's recording only when every check holds:
-// 1. the stored link is a signed link on this project, in the recordings bucket, to a safe path;
-// 2. the job's file row exists, belongs to the job's user, is in the recordings bucket and
-//    names that same object (file rows are client-writable, so this alone proves nothing);
-// 3. storage.objects.owner_id of that object (set by Supabase from the uploader's JWT,
-//    not forgeable) equals the job's user. A null owner (legacy upload) is refused;
-// 4. the signed link names the same bucket and object, and it answers.
-export async function resignOwnedRecording(input: { userId: string; fileId: string; storedUrl: string }): Promise<ResignOutcome> {
-  if (!UUID_RE.test(input.fileId)) return refuse('invalid-file-id', 'the stored fileId is not a uuid');
-  const stored = parseProjectSignedUrl(input.storedUrl);
-  if (!stored) return refuse('not-project-storage-link', 'the stored link is not a signed link on this project');
-  if (stored.bucket !== AUDIO_BUCKET) return refuse('link-bucket-mismatch', `the stored link is in bucket ${JSON.stringify(stored.bucket)}`);
-  if (!isSafeRecordingPath(stored.path)) return refuse('unsafe-path', 'the stored object path is not a plain upload name');
-
+// The job's file row must name exactly the stored link's object, for the job's user.
+async function checkFileRow(fileId: string, userId: string, path: string): Promise<ResignOutcome | null> {
   const { data: row, error: rowError } = await supabase
     .from('file')
     .select('id, user_id, bucket, storage_path')
-    .eq('id', input.fileId)
+    .eq('id', fileId)
     .abortSignal(AbortSignal.timeout(RESIGN_IO_TIMEOUT_MS))
     .maybeSingle();
   if (rowError) return refuse('lookup-failed', `file row: ${rowError.message}`);
   const file = row as { user_id?: unknown; bucket?: unknown; storage_path?: unknown } | null;
   if (!file) return refuse('file-row-missing', 'no file row with the stored fileId');
-  if (file.user_id !== input.userId) return refuse('file-owner-mismatch', 'the file row belongs to another user');
+  if (file.user_id !== userId) return refuse('file-owner-mismatch', 'the file row belongs to another user');
   if (file.bucket !== AUDIO_BUCKET) return refuse('file-bucket-mismatch', 'the file row is in another bucket');
-  if (file.storage_path !== stored.path) return refuse('file-path-mismatch', 'the file row names another object than the stored link');
+  if (file.storage_path !== path) return refuse('file-path-mismatch', 'the file row names another object than the stored link');
+  return null;
+}
+const errorText = (error: unknown) => (error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error ? String((error as { message: unknown }).message) : String(error));
+
+// Signs a fresh link for the job's recording only when every check holds:
+// 1. the stored link is a signed link on this project, in the recordings bucket, to a safe path;
+// 2. when the job carries a fileId: its file row exists, belongs to the job's user, is in the
+//    recordings bucket and names that same object. File rows are client-writable, so this
+//    alone proves nothing, but a mismatch signals tampering and is refused. Without a fileId
+//    (a web upload whose file row was not saved, an older Flutter storage ref) the stored
+//    link's path is the only locator, and step 3 alone decides;
+// 3. storage.objects.owner_id of that object (set by Supabase from the uploader's JWT,
+//    not forgeable) equals the job's user. A null owner (legacy upload) is always refused;
+// 4. the signed link names the same bucket and object, and it answers.
+export async function resignOwnedRecording(input: { userId: string; fileId: string | null; storedUrl: string }): Promise<ResignOutcome> {
+  if (input.fileId !== null && !UUID_RE.test(input.fileId)) return refuse('invalid-file-id', 'the stored fileId is not a uuid');
+  const stored = parseProjectSignedUrl(input.storedUrl);
+  if (!stored) return refuse('not-project-storage-link', 'the stored link is not a signed link on this project');
+  if (stored.bucket !== AUDIO_BUCKET) return refuse('link-bucket-mismatch', `the stored link is in bucket ${JSON.stringify(stored.bucket)}`);
+  if (!isSafeRecordingPath(stored.path)) return refuse('unsafe-path', 'the stored object path is not a plain upload name');
+
+  if (input.fileId !== null) {
+    const fileRefusal = await checkFileRow(input.fileId, input.userId, stored.path);
+    if (fileRefusal) return fileRefusal;
+  }
 
   const { data: owner, error: ownerError } = await supabase
     .rpc('storage_object_owner', { p_bucket: AUDIO_BUCKET, p_name: stored.path })
@@ -209,9 +221,8 @@ export async function resignOwnedRecording(input: { userId: string; fileId: stri
 }
 
 // The link a resumed execution submits. Re-signs only when needed: the stored link's
-// expiry is known and (nearly) past, or its probe answered 4xx. Without a fileId (older
-// jobs) this is the plain probe, unchanged. A storage 5xx or network failure is not
-// helped by a new signature and fails as before.
+// expiry is known and (nearly) past, or its probe answered 4xx. A storage 5xx, 429 or
+// network failure is not helped by a new signature and fails as before.
 export async function resumableAudioUrl(input: {
   jobId: string;
   userId: string;
@@ -219,10 +230,6 @@ export async function resumableAudioUrl(input: {
   downloadUrl: string;
   language: Language;
 }): Promise<string> {
-  if (!input.fileId) {
-    await assertAudioReachable(input.downloadUrl, input.language);
-    return input.downloadUrl;
-  }
   const stored = parseProjectSignedUrl(input.downloadUrl);
   let why: string;
   if (stored?.expiresAtMs != null && stored.expiresAtMs <= Date.now() + RESIGN_EXPIRY_MARGIN_MS) {

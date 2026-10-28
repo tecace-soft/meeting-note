@@ -1,8 +1,7 @@
 // #23 (S10 follow-up, DEC-0022): when a resumed web or Flutter job's signed audio link has
-// expired, the server re-signs the recording from the job's file row, but only after a
-// strict ownership check (file row owner, recordings bucket, a safe path that is the same
-// object the job's stored link named, and storage.objects.owner_id equal to the job's
-// user). Supabase storage, the file table and the storage_object_owner RPC are a fake HTTP
+// expired, the server re-signs the object the stored link named, but only after a strict
+// ownership check (recordings bucket, a safe path, the job's file row when a fileId is
+// present, and storage.objects.owner_id equal to the job's user). Supabase storage, the file table and the storage_object_owner RPC are a fake HTTP
 // server on 127.0.0.1; the app still sees https://supabase.invalid (so the SSRF guard is
 // exercised unchanged) and the test forwards those requests to the fake. Everything else
 // uses the shared offline fixture. Nothing reads .env and no real service is called.
@@ -365,22 +364,39 @@ test('refusal logs quote decoded client-supplied text so it cannot forge log lin
   assert.ok(lines.some((line) => line.includes('link-bucket-mismatch') && line.includes('\\\\nWorkflow job forged-job')), 'the decoded bucket is logged escaped');
 });
 
-test('a request without fileId keeps the current behavior: probe, then the expired-link failure', async (t) => {
-  quiet(t);
+test('a request without fileId re-signs from the stored link path only when storage owns it to the job user', async (t) => {
+  const warn = quiet(t);
   const h = await harness(t);
-  h.own(); h.fileRow();
   const { fileId: _omit, ...withoutFileId } = webRequest();
-  const done = await resume(h, 'no-file-id-job', withoutFileId);
-  assert.deepEqual([done.status, done.error], ['failed', audioUnavailableMessage('ko')]);
-  assert.deepEqual(h.storage.probes, [`${BUCKET}/${PATH}`], 'the stored link is probed as before');
-  assert.equal(h.storage.fileLookups.length + h.storage.ownerLookups.length + h.storage.signs.length, 0, 'no lookup and no re-sign');
-  assert.equal(incidents(h).length, 0);
 
-  h.f.reset(); h.storage.probes.length = 0;
+  // Owner matches: re-signed from the stored link's object, no file row involved.
+  h.own(PATH, USER);
+  const done = await resume(h, 'no-file-id-job', withoutFileId);
+  assert.equal(done.status, 'completed');
+  assert.deepEqual(h.storage.fileLookups, [], 'no file row lookup without a fileId');
+  assert.deepEqual(h.storage.ownerLookups, [{ p_bucket: BUCKET, p_name: PATH }]);
+  assert.deepEqual(h.storage.signs, [`${BUCKET}/${PATH}`]);
+  const fresh = parseProjectSignedUrl(String(submits(h)[0]!.body.audio_url))!;
+  assert.deepEqual([fresh.bucket, fresh.path], [BUCKET, PATH]);
+
+  // Owner is another user, or unknown (legacy): refused, nothing signed.
+  for (const [jobId, owner, reason] of [['no-file-id-foreign', OTHER, 'storage-owner-mismatch'], ['no-file-id-null-owner', null, 'storage-owner-unknown']] as const) {
+    h.f.reset(); h.storage.signs.length = 0; h.storage.objects.clear();
+    h.own(PATH, owner);
+    const refused = await resume(h, jobId, withoutFileId);
+    assertRefused(h, warn, jobId, refused, reason);
+    assert.equal(h.storage.signs.length, 0, `${jobId}: nothing is signed`);
+    assert.equal(submits(h).length, 0, `${jobId}: nothing is submitted`);
+    assert.equal(incidents(h).length, 0, `${jobId}: no ops incident`);
+  }
+
+  // A live link is still reused as is.
+  h.f.reset(); h.storage.signs.length = 0;
   const live = storedLink(PATH, nowSeconds() + 3_600);
   const reachable = await resume(h, 'no-file-id-live-job', { ...withoutFileId, downloadUrl: live });
   assert.equal(reachable.status, 'completed');
   assert.equal(submits(h)[0]!.body.audio_url, live);
+  assert.equal(h.storage.signs.length, 0);
 });
 
 test('SSRF and path traversal: foreign hosts are never fetched or re-signed, unsafe paths are refused before any signing', async (t) => {
