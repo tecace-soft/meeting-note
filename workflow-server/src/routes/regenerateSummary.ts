@@ -9,7 +9,7 @@ import { getPersonalMemoryContext } from '../pipeline/memoryContext.js';
 import { recordGeminiUsage } from '../pipeline/usage.js';
 import { callGeminiWithFallback } from '../ai/geminiFallback.js';
 import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
-import { buildRegenerateSummaryPrompt, unnamedSpeakerLabels } from '../prompts.js';
+import { buildRegenerateSummaryPrompt, minorUnnamedSpeakerLabels } from '../prompts.js';
 import { foldNoteIntoMemory } from '../memory.js';
 
 interface RegenerateSummaryRequest {
@@ -113,7 +113,7 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
         previousSummary: input.previousSummary,
         speakerProfiles: input.speakerProfiles,
         personalMemoryContext,
-        unnamedSpeakerLabels: unnamedSpeakerLabels(input.segments),
+        unnamedSpeakerLabels: minorUnnamedSpeakerLabels(input.segments),
       }),
     }],
   });

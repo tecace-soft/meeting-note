@@ -267,12 +267,50 @@ function isGenericSpeakerLabel(label: string): boolean {
   return /^(speaker|transcript|unknown)\b/i.test(t) || /^speaker\s*#?\s*\d+$/i.test(t);
 }
 
-// U1/U9 (DEC-0024): the generic labels of a transcript in which the user has named at least one
-// other speaker, in first-seen order. Returns [] when every speaker is named or none is, so the
-// regenerate prompt only changes for the mixed case the name-aware refresh produces (minor speakers
-// below the main-speaker threshold may stay unnamed and must not block the refresh).
-export function unnamedSpeakerLabels(segments: readonly { speaker: string }[]): string[] {
-  const generic: string[] = [];
+// A speaker below this share of the speaking time is "minor" (DEC-0024). Mirrors
+// MAIN_SPEAKER_MIN_SHARE in src/lib/speakers/mainSpeakers.ts (web): main speakers are at or
+// above it. Keep the two values equal.
+export const MINOR_SPEAKER_MAX_SHARE = 0.1;
+
+interface ShareSegment {
+  speaker: string;
+  speakerKey?: string;
+  text: string;
+  start?: number;
+  end?: number;
+}
+
+function segmentSeconds(segment: ShareSegment): number | null {
+  const { start, end } = segment;
+  if (typeof start !== 'number' || typeof end !== 'number') return null;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return end - start;
+}
+
+// Share of the speaking time per speaker key (speakerKey, else the display label). Uses start/end
+// when every segment has a valid time, otherwise text length; same rule as the web's speakerShares.
+function speakerShareByKey(segments: readonly ShareSegment[]): Map<string, number> {
+  const useTime = segments.length > 0 && segments.every((segment) => segmentSeconds(segment) !== null);
+  const weights = new Map<string, number>();
+  let total = 0;
+  for (const segment of segments) {
+    const key = segment.speakerKey?.trim() || segment.speaker.trim();
+    const weight = useTime ? (segmentSeconds(segment) ?? 0) : segment.text.trim().length;
+    weights.set(key, (weights.get(key) ?? 0) + weight);
+    total += weight;
+  }
+  const shares = new Map<string, number>();
+  for (const [key, weight] of weights) shares.set(key, total > 0 ? weight / total : 0);
+  return shares;
+}
+
+// U1/U9 (DEC-0024): generic labels of MINOR speakers (under MINOR_SPEAKER_MAX_SHARE of the speaking
+// time) in a transcript where the user has named at least one speaker, in first-seen order. Unnamed
+// main speakers are not listed, so they keep their own labels in the summary. Returns [] when there
+// is nothing to fold, which keeps the regenerate prompt byte-identical.
+export function minorUnnamedSpeakerLabels(segments: readonly ShareSegment[]): string[] {
+  const shares = speakerShareByKey(segments);
+  const minor: string[] = [];
   let hasNamed = false;
   for (const segment of segments) {
     const label = segment.speaker.trim();
@@ -281,16 +319,17 @@ export function unnamedSpeakerLabels(segments: readonly { speaker: string }[]): 
       hasNamed = true;
       continue;
     }
-    if (!generic.includes(label)) generic.push(label);
+    const key = segment.speakerKey?.trim() || label;
+    if ((shares.get(key) ?? 0) < MINOR_SPEAKER_MAX_SHARE && !minor.includes(label)) minor.push(label);
   }
-  return hasNamed ? generic : [];
+  return hasNamed ? minor : [];
 }
 
 function buildUnnamedSpeakerRule(labels: readonly string[] | undefined): string {
   if (!labels || labels.length === 0) return '';
   const list = labels.map((label) => `"${label}"`).join(', ');
   return `
-- UNNAMED SPEAKERS: the user has named the main speakers in the diarized transcript. These remaining labels are speakers the user has NOT named: ${list}. Treat each of them as another participant: attribute their points to "another participant" (or "other participants"), never guess or invent a name for them, and do not list them as named attendees or action owners. Every other speaker name in the diarized transcript was confirmed by the user; use those names, even where the previous summary used a generic label such as "Speaker A".`;
+- UNNAMED SPEAKERS: these labels are minor speakers (a small share of the meeting) the user has NOT named: ${list}. Treat each of them as another participant: attribute their points to "another participant" (or "other participants"), never guess or invent a name for them, and do not list them as named attendees or action owners. Any other generic label in the diarized transcript is a main speaker; keep that label as written. Every real name in the diarized transcript was set by the user; use those names, even where the previous summary used a generic label such as "Speaker A".`;
 }
 
 export function buildRegenerateSummaryPrompt(input: {
@@ -301,7 +340,7 @@ export function buildRegenerateSummaryPrompt(input: {
   previousSummary: string;
   speakerProfiles: unknown;
   personalMemoryContext?: string;
-  // U1/U9 (DEC-0024): generic labels left after the user named the other speakers.
+  // U1/U9 (DEC-0024): generic labels of minor speakers (minorUnnamedSpeakerLabels).
   // Empty or absent keeps the prompt byte-identical to before.
   unnamedSpeakerLabels?: readonly string[];
 }): string {
