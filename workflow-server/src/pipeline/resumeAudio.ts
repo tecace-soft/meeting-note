@@ -170,7 +170,7 @@ export async function resignOwnedRecording(input: { userId: string; fileId: stri
   if (!UUID_RE.test(input.fileId)) return refuse('invalid-file-id', 'the stored fileId is not a uuid');
   const stored = parseProjectSignedUrl(input.storedUrl);
   if (!stored) return refuse('not-project-storage-link', 'the stored link is not a signed link on this project');
-  if (stored.bucket !== AUDIO_BUCKET) return refuse('link-bucket-mismatch', `the stored link is in bucket ${stored.bucket}`);
+  if (stored.bucket !== AUDIO_BUCKET) return refuse('link-bucket-mismatch', `the stored link is in bucket ${JSON.stringify(stored.bucket)}`);
   if (!isSafeRecordingPath(stored.path)) return refuse('unsafe-path', 'the stored object path is not a plain upload name');
 
   const { data: row, error: rowError } = await supabase
@@ -235,7 +235,9 @@ export async function resumableAudioUrl(input: {
   }
   const outcome = await resignOwnedRecording({ userId: input.userId, fileId: input.fileId, storedUrl: input.downloadUrl });
   if (!outcome.ok) {
-    console.warn(`Workflow job ${input.jobId} does not re-sign its recording (${outcome.reason}): ${outcome.detail}. ${why}; the user restarts the summary.`);
+    // The detail can carry decoded client-supplied text (bucket names, storage messages):
+    // JSON.stringify keeps it on one quoted line so it cannot forge log entries.
+    console.warn(`Workflow job ${input.jobId} does not re-sign its recording (${outcome.reason}): ${JSON.stringify(outcome.detail)}. ${why}; the user restarts the summary.`);
     throw new AudioUnavailableError(input.language, `${why}; re-sign refused (${outcome.reason})`);
   }
   console.log(`Workflow job ${input.jobId} re-signed its recording after ${why}; resuming with the fresh link.`);

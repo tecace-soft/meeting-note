@@ -351,6 +351,20 @@ test('ownership mismatches fail with the localized message and never sign', asyn
   }
 });
 
+test('refusal logs quote decoded client-supplied text so it cannot forge log lines', async (t) => {
+  const warn = quiet(t);
+  const h = await harness(t);
+  h.own(); h.fileRow();
+  const forged = 'x\nWorkflow job forged-job re-signed its recording';
+  const link = `${STORAGE_ORIGIN}/storage/v1/object/sign/${encodeURIComponent(forged)}/${PATH}?token=${mintToken(`x/${PATH}`, nowSeconds() - 60)}`;
+  const done = await resume(h, 'log-injection-job', webRequest({ downloadUrl: link }));
+  assertRefused(h, warn, 'log-injection-job', done, 'link-bucket-mismatch');
+  const lines = warn.mock.calls.map((c) => String(c.arguments[0]));
+  assert.ok(lines.every((line) => !/[\r\n]/.test(line)), 'every warning stays on one line');
+  assert.ok(!lines.some((line) => line.startsWith('Workflow job forged-job')), 'no forged entry');
+  assert.ok(lines.some((line) => line.includes('link-bucket-mismatch') && line.includes('\\\\nWorkflow job forged-job')), 'the decoded bucket is logged escaped');
+});
+
 test('a request without fileId keeps the current behavior: probe, then the expired-link failure', async (t) => {
   quiet(t);
   const h = await harness(t);
