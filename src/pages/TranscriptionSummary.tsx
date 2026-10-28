@@ -1,8 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, startTransition } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../components/ConfirmDialog';
-import { patchNoteReturningId, saveNoteTranslations } from '../lib/notes/repository';
+import {
+  patchNoteReturningId,
+  patchOwnedNoteReturningId,
+  readOwnedNoteSummaryEdit,
+  saveNoteTranslations,
+} from '../lib/notes/repository';
+import { loadSpeakerProfilesForSummary, requestRegeneratedSummary } from '../lib/regenerateSummary';
+import { useSummaryNameRefresh } from './transcriptionSummary/useSummaryNameRefresh';
 import { insertSpeaker, selectSpeakersByNames, updateSpeakerProfileReturningId } from '../lib/speakers/repository';
 import {
   supabase,
@@ -83,6 +90,7 @@ import {
 } from '../lib/audioFileReferences';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
+const NO_SEGMENTS: TranscriptSegment[] = [];
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
 
 interface GeneratedProfile {
@@ -372,8 +380,6 @@ const TranscriptionSummary: React.FC = () => {
   const [isShareNoteModalOpen, setIsShareNoteModalOpen] = useState(false);
   const [generatedSharedUserIds, setGeneratedSharedUserIds] = useState<string[]>([]);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [isRegenerating, setIsRegenerating] = useState(false);
-  const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
   const [profileGenError, setProfileGenError] = useState<string | null>(null);
   const [generatedProfiles, setGeneratedProfiles] = useState<GeneratedProfile[]>([]);
@@ -385,6 +391,54 @@ const TranscriptionSummary: React.FC = () => {
   const [transcriptSpeakerFilters, setTranscriptSpeakerFilters] = useState<string[]>([]);
   const [generatedTranscriptLanguage, setGeneratedTranscriptLanguage] = useState<TranscriptLanguage>('original');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // U9 (DEC-0024): once every main speaker has a real name, refresh the summary with the names
+  // (debounced, one request at a time, never over a hand edit without asking).
+  const nameRefreshNoteId = summaryResult && currentNoteId && !isSummarizing ? currentNoteId : null;
+  const generatedSummaryTexts = useMemo(
+    () => (summaryResult ? [summaryResult.summary, ...Object.values(summaryResult.summaryTranslations ?? {})] : []),
+    [summaryResult]
+  );
+  const nameRefresh = useSummaryNameRefresh({
+    noteId: nameRefreshNoteId,
+    segments: summaryResult?.transcript ?? NO_SEGMENTS,
+    generatedTexts: generatedSummaryTexts,
+    currentSummary: editedSummary,
+    isEditing: isEditingSummary,
+    regenerate: async (segments, signal) => {
+      if (!currentNoteId || !user?.id) throw new Error('No note is open.');
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not acquire Microsoft access token.');
+      const speakerProfiles = await loadSpeakerProfilesForSummary(user.id, segments);
+      return requestRegeneratedSummary({
+        apiUrl: WORKFLOW_API_URL,
+        token,
+        noteId: currentNoteId,
+        diarization: segments,
+        previousSummary: editedSummary,
+        speakerProfiles,
+        instructions: optionalInstructions,
+        promptId: selectedSummaryPromptId ? String(selectedSummaryPromptId) : undefined,
+        persist: false,
+        signal,
+      });
+    },
+    readSavedEdit: async () => {
+      if (!currentNoteId || !user?.id) throw new Error('No note is open.');
+      return readOwnedNoteSummaryEdit({ noteId: currentNoteId, userId: user.id });
+    },
+    saveSummary: async (text) => {
+      if (!currentNoteId || !user?.id) throw new Error('No note is open.');
+      const row = await patchOwnedNoteReturningId({ noteId: currentNoteId, userId: user.id, patch: { summary_edit: text } });
+      if (!row) throw new Error('Could not save the summary. Please refresh and try again.');
+    },
+    onApply: (text) => {
+      setEditedSummary(text);
+      // The regenerated summary is one text in the meeting's language; old translations are stale.
+      setSummaryResult((prev) => (prev ? { ...prev, summary: text, summaryTranslations: undefined } : prev));
+    },
+  });
+  const isRegenerating = nameRefresh.phase === 'running';
 
   // Recording and recent audio states
   const [recentAudioFiles, setRecentAudioFiles] = useState<RecentAudioFile[]>([]);
@@ -1719,60 +1773,51 @@ const TranscriptionSummary: React.FC = () => {
     setSaveAllStatus('error');
   };
 
-  const handleRegenerateSummary = async () => {
-    if (!summaryResult || !currentNoteId || !user?.id) return;
-    setIsRegenerating(true);
-    setRegenerateError(null);
-    try {
-      if (!WORKFLOW_API_URL) {
-        throw new Error('Workflow API URL is not configured.');
-      }
-      const token = await getAccessToken();
-      if (!token) throw new Error('Could not acquire Microsoft access token.');
-      const uniqueSpeakers = [...new Set(summaryResult.transcript.map((s) => s.speaker).filter(Boolean))];
-      const { data: speakerRows } = await selectSpeakersByNames(user.id, uniqueSpeakers, 'name, profile');
-
-      const speakerProfiles = ((speakerRows ?? []) as { name: string; profile: string | null }[])
-        .filter((s) => s.profile)
-        .map((s) => ({
-          speakerName: s.name,
-          profile: (() => { try { return JSON.parse(s.profile!); } catch { return s.profile; } })(),
-        }));
-
-      const response = await fetch(`${WORKFLOW_API_URL}/regenerate-summary`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          noteId: currentNoteId,
-          diarization: summaryResult.transcript,
-          previousSummary: editedSummary,
-          speakerProfiles,
-          instructions: optionalInstructions,
-          promptId: selectedSummaryPromptId ? String(selectedSummaryPromptId) : undefined,
-        }),
-      });
-
-      if (!response.ok) {
-        const detail = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(detail?.error || `Request failed: ${response.status}`);
-      }
-
-      const result = await response.json();
-      const newSummary = typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
-      if (!newSummary) throw new Error('No summary returned from webhook');
-
-      setEditedSummary(newSummary);
-      setSummaryResult((prev) => (prev ? { ...prev, summary: newSummary } : prev));
-      setResultsTab('summary');
-    } catch (err: unknown) {
-      console.error('Regenerate summary failed:', err);
-      setRegenerateError(err instanceof Error ? err.message : 'Regeneration failed');
-    } finally {
-      setIsRegenerating(false);
+  // Status of the name-aware summary refresh, shown above the summary (DEC-0024).
+  const renderNameRefreshStatus = () => {
+    const rowStyle = { borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' };
+    if (nameRefresh.pendingReplacement) {
+      return (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm" style={rowStyle} role="status">
+          <span>{t('newSummaryReady')}</span>
+          <span className="flex shrink-0 gap-2">
+            <button type="button" className="rounded-md px-3 py-1 text-xs font-semibold" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              onClick={() => void nameRefresh.acceptReplacement()}>
+              {t('replaceSummary')}
+            </button>
+            <button type="button" className="rounded-md px-3 py-1 text-xs font-medium underline" onClick={nameRefresh.dismissReplacement}>
+              {t('dismiss')}
+            </button>
+          </span>
+        </div>
+      );
     }
+    if (nameRefresh.error) {
+      return (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm" style={{ ...rowStyle, color: 'var(--error)' }} role="alert">
+          <span>{t('summaryNameRefreshFailed')} {nameRefresh.error}</span>
+          <button type="button" className="shrink-0 text-xs font-semibold underline" onClick={nameRefresh.retry}>
+            {t('tryAgain')}
+          </button>
+        </div>
+      );
+    }
+    if (nameRefresh.phase !== 'idle') {
+      return (
+        <div className="mb-3 flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }} role="status">
+          <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          {t('updatingSummaryWithNames')}
+        </div>
+      );
+    }
+    if (nameRefresh.autoPaused) {
+      return (
+        <p className="mb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+          {t('autoSummaryRefreshPaused')}
+        </p>
+      );
+    }
+    return null;
   };
 
   const resultActionBtnClass =
@@ -2483,6 +2528,18 @@ const TranscriptionSummary: React.FC = () => {
                       </p>
                     </div>
                     {summaryResult.transcript.length > 0 ? (
+                      <TranscriptDiarizedEditor
+                        segments={summaryResult.transcript}
+                        onSegmentsChange={(next) => updateGeneratedTranscript('original', next)}
+                        onPersistSegments={(next) => persistGeneratedTranscript('original', next)}
+                        noteId={currentNoteId}
+                        onNoteShared={setGeneratedSharedUserIds}
+                        autoSuggest
+                        suggestionPanel="only"
+                        onReviewSpeakers={() => setResultsTab('transcription')}
+                      />
+                    ) : null}
+                    {summaryResult.transcript.length > 0 ? (
                       <div
                         className="results-header flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"
                         style={{ borderColor: 'var(--border)' }}
@@ -2671,6 +2728,7 @@ const TranscriptionSummary: React.FC = () => {
 
                     {(summaryResult.transcript.length === 0 || resultsTab === 'summary') && resultsTab !== 'images' && (
                       <div className="flex flex-1 min-h-0 flex-col pt-4">
+                        {renderNameRefreshStatus()}
                         {isEditingSummary ? (
                           <textarea
                             value={editedSummary}
@@ -2740,6 +2798,8 @@ const TranscriptionSummary: React.FC = () => {
                           onPlaySegment={(segment, index) => void handlePlayResultTranscriptSegment(segment, index)}
                           transcriptLanguage={getGeneratedTranscriptLanguage()}
                           onNoteShared={setGeneratedSharedUserIds}
+                          autoSuggest
+                          suggestionPanel="hidden"
                         />
                       </div>
                     ) : null}
@@ -2790,30 +2850,23 @@ const TranscriptionSummary: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        title={t('regenerateSummary')}
-                        aria-label={t('regenerateSummary')}
+                        title={t('updateSummaryWithNames')}
+                        aria-label={t('updateSummaryWithNames')}
                         disabled={isRegenerating || summaryResult.transcript.length === 0}
-                        onClick={() => void handleRegenerateSummary()}
+                        onClick={() => {
+                          setResultsTab('summary');
+                          nameRefresh.runManual();
+                        }}
                         className={resultActionBtnClass}
                       >
                         {isRegenerating ? (
-                          <>
-                            <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Regenerating…</span>
-                          </>
+                          <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                         ) : (
-                          <>
-                            <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Regenerate</span>
-                          </>
+                          <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
                         )}
+                        <span className={resultActionBtnLabelClass}>{t('updateSummaryWithNames')}</span>
                       </button>
                     </div>
-                    {regenerateError ? (
-                      <p className="shrink-0 px-1 pb-2 text-xs" style={{ color: 'var(--error)' }}>
-                        {regenerateError}
-                      </p>
-                    ) : null}
                   </div>
                 )}
               </div>
