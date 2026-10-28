@@ -9,7 +9,7 @@ import { getPersonalMemoryContext } from '../pipeline/memoryContext.js';
 import { recordGeminiUsage } from '../pipeline/usage.js';
 import { callGeminiWithFallback } from '../ai/geminiFallback.js';
 import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
-import { buildRegenerateSummaryPrompt } from '../prompts.js';
+import { buildRegenerateSummaryPrompt, unnamedSpeakerLabels } from '../prompts.js';
 import { foldNoteIntoMemory } from '../memory.js';
 
 interface RegenerateSummaryRequest {
@@ -19,6 +19,7 @@ interface RegenerateSummaryRequest {
   speakerProfiles?: unknown;
   instructions?: unknown;
   promptId?: unknown;
+  persist?: unknown;
 }
 
 export function parseRegenerateSummaryInput(body: RegenerateSummaryRequest): {
@@ -28,6 +29,7 @@ export function parseRegenerateSummaryInput(body: RegenerateSummaryRequest): {
   speakerProfiles: unknown;
   instructions: string;
   promptId?: string;
+  persist: boolean;
 } {
   const noteId = typeof body.noteId === 'string' && body.noteId.trim() ? body.noteId.trim() : '';
   if (!noteId) throw new Error('noteId is required.');
@@ -53,6 +55,10 @@ export function parseRegenerateSummaryInput(body: RegenerateSummaryRequest): {
     speakerProfiles: body.speakerProfiles ?? [],
     instructions: typeof body.instructions === 'string' ? body.instructions : '',
     promptId: promptIdRaw || undefined,
+    // U1/U9 (DEC-0024): only an explicit boolean false skips the save. The web's name-aware
+    // auto refresh saves on the client after checking for a hand edit; every other caller
+    // keeps the save-by-default contract.
+    persist: body.persist !== false,
   };
 }
 
@@ -107,6 +113,7 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
         previousSummary: input.previousSummary,
         speakerProfiles: input.speakerProfiles,
         personalMemoryContext,
+        unnamedSpeakerLabels: unnamedSpeakerLabels(input.segments),
       }),
     }],
   });
@@ -122,13 +129,15 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
     latencyMs: result.latencyMs,
   });
 
-  const { error: updateError } = await supabase
-    .from('note')
-    .update({ summary_edit: parsedSummary.summary })
-    .eq('id', input.noteId);
-  if (updateError) throw updateError;
+  if (input.persist) {
+    const { error: updateError } = await supabase
+      .from('note')
+      .update({ summary_edit: parsedSummary.summary })
+      .eq('id', input.noteId);
+    if (updateError) throw updateError;
+  }
 
-  sendJson(res, 200, parsedSummary);
+  sendJson(res, 200, { ...parsedSummary, persisted: input.persist });
 
   // After responding (so the user is not blocked), fold this note into the owner's
   // memory + refresh its note_insight, best-effort. foldNoteIntoMemory is idempotent:
