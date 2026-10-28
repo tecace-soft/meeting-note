@@ -17,7 +17,6 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  CloseMd,
   Copy,
   EditPencilLine01,
   Expand,
@@ -42,6 +41,11 @@ import { normalizeTagList } from './summaryHistory/noteSearch';
 import { NOTES_PAGE_SIZE, useNotesList, type HistoryViewMode } from './summaryHistory/useNotesList';
 import { useNoteEditing } from './summaryHistory/useNoteEditing';
 import { useNoteSpeakers } from './summaryHistory/useNoteSpeakers';
+import { AddToProjectDialog } from './summaryHistory/modals/AddToProjectDialog';
+import { DeleteNoteDialog } from './summaryHistory/modals/DeleteNoteDialog';
+import { NoteLinkedModals } from './summaryHistory/modals/NoteLinkedModals';
+import { SaveAllConfirmDialog, SyncProfileDialog } from './summaryHistory/modals/SyncProfileDialogs';
+import { useAddToProject } from './summaryHistory/modals/useAddToProject';
 import TranscriptDiarizedEditor, {
   getTranscriptSpeakerFilters,
   TranscriptSpeakerFilterControls,
@@ -63,8 +67,6 @@ import {
 import { formatDurationMeta, getNoteDurationSeconds } from '../lib/noteDuration';
 import { getNoteImageCounts } from '../lib/noteImages';
 import { getOutlookCalendarEvents, type OutlookCalendarEvent } from '../services/graphService';
-import ShareNoteModal from '../components/ShareNoteModal';
-import MeetingKnowledgeModal from '../components/MeetingKnowledgeModal';
 import AxkhIntegrationButton from '../components/AxkhIntegrationButton';
 import { meetingKnowledgeUiEnabled } from '../services/meetingKnowledge';
 import NoteImageAttachments from '../components/NoteImageAttachments';
@@ -87,25 +89,10 @@ const getNoteSharedUserIds = (note: Note): string[] => {
   return [];
 };
 
-interface ProjectOption {
-  id: string;
-  name: string;
-  notes?: Array<string | number> | null;
-}
-
 interface ChatInfo {
   topic: string | null;
   chatType: string;
   members: { displayName: string; email: string }[];
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) return message;
-  }
-  return fallback;
 }
 
 /** Mobile keeps fixed panel height; desktop fills available detail pane height. */
@@ -322,11 +309,6 @@ function compareNotesForSort(a: Note, b: Note, sortKey: NoteSortKey): number {
   }
 }
 
-function toProjectIdValue(id: string): string | number {
-  const asNumber = Number(id);
-  return Number.isNaN(asNumber) ? id : asNumber;
-}
-
 const SummaryHistory: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -375,11 +357,6 @@ const SummaryHistory: React.FC = () => {
   const [deletingNote, setDeletingNote] = useState(false);
   const [deleteNoteError, setDeleteNoteError] = useState<string | null>(null);
   const [noteListActionError, setNoteListActionError] = useState<string | null>(null);
-  const [addToProjectNote, setAddToProjectNote] = useState<Note | null>(null);
-  const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
-  const [projectsLoading, setProjectsLoading] = useState(false);
-  const [addToProjectSavingId, setAddToProjectSavingId] = useState<string | null>(null);
-  const [addToProjectError, setAddToProjectError] = useState<string | null>(null);
 
   // Per-note expanded tab state
   const [noteExpandedTab, setNoteExpandedTab] = useState<Record<string, NoteDetailTab>>({});
@@ -584,6 +561,24 @@ const SummaryHistory: React.FC = () => {
     userId: user?.id,
     getAccessToken,
     closeNoteMenu: () => setOpenNoteMenuId(null),
+  });
+
+  const {
+    addToProjectNote,
+    closeAddToProject,
+    projectOptions,
+    projectsLoading,
+    addToProjectSavingId,
+    addToProjectError,
+    openAddToProject: handleOpenAddToProject,
+    addNoteToProject: handleAddNoteToProject,
+  } = useAddToProject({
+    userId: user?.id,
+    setNotes,
+    closeNoteMenu: () => {
+      setOpenNoteMenuId(null);
+      setNoteMenuPos(null);
+    },
   });
 
   useEffect(() => {
@@ -1552,65 +1547,6 @@ const SummaryHistory: React.FC = () => {
     setNotes((prev) =>
       prev.map((note) => (note.id === noteId ? { ...note, shared_users: sharedUserIds } : note))
     );
-  };
-
-  const handleOpenAddToProject = async (note: Note) => {
-    setOpenNoteMenuId(null);
-    setNoteMenuPos(null);
-    setAddToProjectNote(note);
-    setAddToProjectError(null);
-    if (!user?.id) return;
-    setProjectsLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('project')
-        .select('id, name, notes')
-        .order('name', { ascending: true });
-      if (error) throw error;
-      setProjectOptions((data as ProjectOption[]) || []);
-    } catch (err: unknown) {
-      setProjectOptions([]);
-      setAddToProjectError(err instanceof Error ? err.message : 'Failed to load projects');
-    } finally {
-      setProjectsLoading(false);
-    }
-  };
-
-  const handleAddNoteToProject = async (project: ProjectOption) => {
-    if (!addToProjectNote || !user?.id) return;
-    const projectIdValue = toProjectIdValue(project.id);
-    const existingNoteProjects = Array.isArray(addToProjectNote.projects) ? addToProjectNote.projects : [];
-    const alreadyInProject = existingNoteProjects.some((id) => String(id) === String(projectIdValue));
-    if (alreadyInProject) return;
-
-    setAddToProjectSavingId(project.id);
-    setAddToProjectError(null);
-    try {
-      const existingProjectNotes = Array.isArray(project.notes) ? project.notes : [];
-      const nextProjectNotes = Array.from(
-        new Set([...existingProjectNotes.map((id) => String(id)), addToProjectNote.id])
-      ).map(toProjectIdValue);
-      const nextNoteProjects = Array.from(
-        new Set([...existingNoteProjects.map((id) => String(id)), String(projectIdValue)])
-      ).map(toProjectIdValue);
-      const { error: addProjectError } = await supabase.rpc('add_accessible_note_to_project', {
-        p_note_id: addToProjectNote.id,
-        p_project_id: project.id,
-      });
-      if (addProjectError) throw addProjectError;
-
-      setNotes((prev) =>
-        prev.map((note) => (note.id === addToProjectNote.id ? { ...note, projects: nextNoteProjects } : note))
-      );
-      setProjectOptions((prev) =>
-        prev.map((p) => (p.id === project.id ? { ...p, notes: nextProjectNotes } : p))
-      );
-      setAddToProjectNote(null);
-      setAddToProjectSavingId(null);
-    } catch (err: unknown) {
-      setAddToProjectError(getErrorMessage(err, 'Failed to add note to project'));
-      setAddToProjectSavingId(null);
-    }
   };
 
   const handleRegenerateNoteSummary = async (note: Note) => {
@@ -3128,400 +3064,74 @@ const SummaryHistory: React.FC = () => {
       />
 
       {isDeleteNoteOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
-          onClick={() => {
-            if (!deletingNote) {
-              setIsDeleteNoteOpen(false);
-              setDeleteNoteTarget(null);
-            }
+        <DeleteNoteDialog
+          note={deleteNoteTarget}
+          isSharedWithCurrentUser={Boolean(deleteNoteTarget && isSharedWithCurrentUser(deleteNoteTarget))}
+          deleting={deletingNote}
+          error={deleteNoteError}
+          t={t}
+          onCancel={() => {
+            setIsDeleteNoteOpen(false);
+            setDeleteNoteTarget(null);
           }}
-        >
-          <div
-            className="w-full max-w-sm rounded-lg border p-4 sm:p-5"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-              {deleteNoteTarget && isSharedWithCurrentUser(deleteNoteTarget) ? 'Remove shared note?' : `${t('deleteNote')}?`}
-            </h3>
-            <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {deleteNoteTarget && isSharedWithCurrentUser(deleteNoteTarget) ? (
-                <>
-                  This will remove{' '}
-                  <span className="font-medium" style={{ color: 'var(--text)' }}>
-                    {deleteNoteTarget?.name?.trim() || 'Untitled note'}
-                  </span>{' '}
-                  from your shared notes. The owner and other shared users will still have access.
-                </>
-              ) : (
-                <>
-                  This will permanently delete{' '}
-                  <span className="font-medium" style={{ color: 'var(--text)' }}>
-                    {deleteNoteTarget?.name?.trim() || 'Untitled note'}
-                  </span>
-                  .
-                </>
-              )}
-            </p>
-            {deleteNoteError ? (
-              <p className="mt-2 text-xs" style={{ color: 'var(--error)' }}>
-                {deleteNoteError}
-              </p>
-            ) : null}
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsDeleteNoteOpen(false);
-                  setDeleteNoteTarget(null);
-                }}
-                className="rounded-lg px-3 py-2 text-sm"
-                style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                disabled={deletingNote}
-              >
-                {t('cancel')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  void handleConfirmDeleteNote();
-                }}
-                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-60"
-                style={{ backgroundColor: 'var(--error)', color: '#fff' }}
-                disabled={deletingNote}
-              >
-                {deletingNote ? <Loading className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                {deleteNoteTarget && isSharedWithCurrentUser(deleteNoteTarget) ? 'Remove' : t('delete')}
-              </button>
-            </div>
-          </div>
-        </div>
+          onConfirm={() => {
+            void handleConfirmDeleteNote();
+          }}
+        />
       )}
-      {meetingKnowledgeUiEnabled && knowledgeModalNoteId && (() => {
-        const note = notes.find(n => n.id === knowledgeModalNoteId && n.user_id === user?.id);
-        return note ? <MeetingKnowledgeModal key={note.id} noteId={note.id} noteTitle={note.name} onClose={() => setKnowledgeModalNoteId(null)} /> : null;
-      })()}
-      {shareModalNoteId && (() => {
-        const note = notes.find((n) => n.id === shareModalNoteId);
-        return (
-          <ShareNoteModal
-            isOpen={Boolean(note)}
-            noteId={note?.id ?? null}
-            noteTitle={note?.name}
-            existingSharedUserIds={note ? getNoteSharedUserIds(note) : []}
-            onClose={() => setShareModalNoteId(null)}
-            onShared={handleNoteShared}
-          />
-        );
-      })()}
+      <NoteLinkedModals
+        notes={notes}
+        userId={user?.id}
+        shareModalNoteId={shareModalNoteId}
+        knowledgeModalNoteId={knowledgeModalNoteId}
+        getSharedUserIds={getNoteSharedUserIds}
+        onCloseShare={() => setShareModalNoteId(null)}
+        onShared={handleNoteShared}
+        onCloseKnowledge={() => setKnowledgeModalNoteId(null)}
+      />
 
       {addToProjectNote ? (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
-          role="presentation"
-          onClick={() => {
-            if (!addToProjectSavingId) setAddToProjectNote(null);
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="add-note-to-project-title"
-            className="flex max-h-[min(80vh,34rem)] w-full max-w-md flex-col overflow-hidden rounded-xl app-surface-elevated"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className="flex shrink-0 items-start justify-between gap-3 px-4 py-4 sm:px-5"
-              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
-            >
-              <div className="min-w-0">
-                <h2 id="add-note-to-project-title" className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-                  {t('addToProject')}
-                </h2>
-                <p
-                  className="mt-1 truncate text-sm"
-                  style={{ color: 'var(--text-secondary)' }}
-                  title={getNoteDisplayTitle(addToProjectNote)}
-                >
-                  {getNoteDisplayTitle(addToProjectNote)}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={Boolean(addToProjectSavingId)}
-                onClick={() => setAddToProjectNote(null)}
-                className="rounded-md p-2 transition-opacity disabled:opacity-50 hover:opacity-70"
-                style={{ color: 'var(--text-muted)' }}
-                aria-label={t('close')}
-              >
-                <CloseMd className="h-5 w-5" aria-hidden />
-              </button>
-            </div>
-            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4">
-              {projectsLoading ? (
-                <div className="flex items-center justify-center py-10">
-                  <Loading className="h-5 w-5 animate-spin" style={{ color: 'var(--text-muted)' }} aria-hidden />
-                </div>
-              ) : projectOptions.length === 0 ? (
-                <div className="py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  {t('noProjectsFound')}
-                </div>
-              ) : (
-                <div className="summary-note-list">
-                  {projectOptions.map((project) => {
-                    const alreadyInProject = (addToProjectNote.projects || []).some((id) => String(id) === String(project.id));
-                    const isSaving = addToProjectSavingId === project.id;
-                    return (
-                      <button
-                        key={project.id}
-                        type="button"
-                        disabled={alreadyInProject || Boolean(addToProjectSavingId)}
-                        onClick={() => void handleAddNoteToProject(project)}
-                        className={`summary-note-row-content flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-all disabled:cursor-default ${
-                          alreadyInProject ? 'opacity-60' : 'hover:opacity-85'
-                        }`}
-                        style={{ color: 'var(--text)' }}
-                      >
-                        <span
-                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-                          style={{
-                            backgroundColor: alreadyInProject ? 'var(--bg-secondary)' : 'var(--accent-light)',
-                            color: alreadyInProject ? 'var(--text-muted)' : 'var(--accent)',
-                          }}
-                          aria-hidden
-                        >
-                          {alreadyInProject ? <Check className="h-4 w-4" /> : <FileAdd className="h-4 w-4" />}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium">{project.name}</span>
-                          <span className="mt-0.5 block text-xs" style={{ color: 'var(--text-muted)' }}>
-                            {alreadyInProject ? t('alreadyInProject') : t('addToProject')}
-                          </span>
-                        </span>
-                        {isSaving ? (
-                          <Loading className="h-4 w-4 shrink-0 animate-spin" style={{ color: 'var(--text-muted)' }} aria-hidden />
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            {addToProjectError ? (
-              <p className="shrink-0 px-4 pb-3 text-xs sm:px-5" style={{ color: 'var(--error)' }}>
-                {addToProjectError}
-              </p>
-            ) : null}
-          </div>
-        </div>
+        <AddToProjectDialog
+          note={addToProjectNote}
+          projectOptions={projectOptions}
+          loading={projectsLoading}
+          savingId={addToProjectSavingId}
+          error={addToProjectError}
+          t={t}
+          onClose={closeAddToProject}
+          onSelect={(project) => void handleAddNoteToProject(project)}
+        />
       ) : null}
 
       {/* Sync Profile modal */}
       {profileModalNoteId && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
-          role="presentation"
-          onClick={() => { if (profileGenStep !== 'finding-speakers' && profileGenStep !== 'generating') setProfileModalNoteId(null); }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="flex max-h-[min(92vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl app-surface-elevated"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className="flex shrink-0 items-center justify-between gap-3 px-5 py-4"
-              style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 45%, transparent)' }}
-            >
-              <div>
-                <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('syncProfile')}</h2>
-                <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>AI-generated speaker profiles from the meeting transcript</p>
-              </div>
-              <button type="button" disabled={profileGenStep === 'finding-speakers' || profileGenStep === 'generating'} onClick={() => setProfileModalNoteId(null)} className="rounded-md p-2 transition-opacity disabled:opacity-40 hover:opacity-70" style={{ color: 'var(--text-muted)' }} aria-label={t('close')}><CloseMd className="h-5 w-5" aria-hidden /></button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-5 py-4">
-              {(profileGenStep === 'finding-speakers' || profileGenStep === 'generating') && (
-                <div className="flex flex-col items-center justify-center py-16">
-                  <div className="mb-5 h-10 w-10 animate-spin rounded-full border-4 border-t-transparent" style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} aria-hidden />
-                  <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{profileGenStep === 'finding-speakers' ? t('lookingUpSpeakerData') : t('generatingProfilesAi')}</p>
-                </div>
-              )}
-              {profileGenStep === 'error' && <div className="rounded-lg border p-4" style={{ borderColor: 'var(--error)', backgroundColor: 'var(--error-light)' }}><p className="text-sm font-medium" style={{ color: 'var(--error)' }}>{profileGenError}</p></div>}
-              {profileGenStep === 'ready' && (
-                <div className="space-y-4">
-                  {generatedProfiles.map((profile) => (
-                    <div key={profile.speakerName} className="overflow-hidden rounded-lg border" style={{ borderColor: 'var(--border)' }}>
-                      <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-                        <div className="flex min-w-0 items-center gap-3">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold" style={{ backgroundColor: 'color-mix(in srgb, var(--accent) 20%, var(--bg-secondary))', color: 'var(--accent)' }}>{profile.speakerName.slice(0, 2).toUpperCase()}</div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold" style={{ color: 'var(--text)' }}>{profile.speakerName}</p>
-                            <span className="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: profile.isNew ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'color-mix(in srgb, var(--success) 15%, transparent)', color: profile.isNew ? 'var(--accent)' : 'var(--success)' }}>{profile.isNew ? t('newProfile') : t('updatedProfile')}</span>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void handleCopyText(profile.draft, `history-profile-${profile.speakerName}`)}
-                            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity"
-                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                            title={`Copy profile for ${profile.speakerName}`}
-                            aria-label={`Copy profile for ${profile.speakerName}`}
-                          >
-                            {copiedKey === `history-profile-${profile.speakerName}` ? (
-                              <Check className="h-3.5 w-3.5" aria-hidden />
-                            ) : (
-                              <Copy className="h-3.5 w-3.5" aria-hidden />
-                            )}
-                            {t('copy')}
-                          </button>
-                          {profile.saved ? <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--success)' }}><Check className="h-3.5 w-3.5" />{t('saved')}</span> : null}
-                          {profile.saveError ? <span className="text-xs" style={{ color: 'var(--error)' }}>{profile.saveError}</span> : null}
-                          {!profile.saved && (
-                            <button type="button" disabled={profile.saving} onClick={() => void handleSaveHistoryProfile(profile.speakerName)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
-                              {profile.saving ? <><Loading className="h-3.5 w-3.5 animate-spin" />{t('saving')}</> : <><Save className="h-3.5 w-3.5" />{t('saveProfile')}</>}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="p-4">
-                        <textarea
-                          value={profile.draft}
-                          disabled={profile.saved}
-                          onChange={(e) => setGeneratedProfiles((prev) => prev.map((p) => p.speakerName === profile.speakerName ? { ...p, draft: e.target.value, saved: false } : p))}
-                          className="custom-scrollbar w-full resize-y rounded-lg border p-3 font-mono text-xs leading-relaxed outline-none disabled:opacity-70"
-                          style={{ minHeight: '12rem', backgroundColor: 'var(--bg-secondary)', color: 'var(--text)', borderColor: 'var(--border)' }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            {profileGenStep === 'ready' && (
-              <div className="flex shrink-0 items-center justify-between gap-3 border-t px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{generatedProfiles.filter((p) => p.saved).length} of {generatedProfiles.length} profile{generatedProfiles.length !== 1 ? 's' : ''} saved</p>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t('close')}</button>
-                  <button
-                    type="button"
-                    disabled={generatedProfiles.some((p) => p.saving)}
-                    onClick={() => {
-                      setSaveAllStatus('idle');
-                      setSaveAllErrorDetails([]);
-                      setIsSaveAllConfirmOpen(true);
-                    }}
-                    className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
-                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                  >
-                    {generatedProfiles.some((p) => p.saving) ? <><Loading className="h-4 w-4 animate-spin" />{t('saving')}</> : t('saveAll')}
-                  </button>
-                </div>
-              </div>
-            )}
-            {profileGenStep === 'error' && (
-              <div className="flex shrink-0 justify-end border-t px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-                <button type="button" onClick={() => setProfileModalNoteId(null)} className="rounded-lg px-4 py-2 text-sm font-medium" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t('close')}</button>
-              </div>
-            )}
-          </div>
-        </div>
+        <SyncProfileDialog
+          step={profileGenStep}
+          error={profileGenError}
+          profiles={generatedProfiles}
+          copiedKey={copiedKey}
+          t={t}
+          onClose={() => setProfileModalNoteId(null)}
+          onCopy={(text, key) => void handleCopyText(text, key)}
+          onSave={(speakerName) => void handleSaveHistoryProfile(speakerName)}
+          onDraftChange={(speakerName, draft) =>
+            setGeneratedProfiles((prev) => prev.map((p) => (p.speakerName === speakerName ? { ...p, draft, saved: false } : p)))
+          }
+          onSaveAll={() => {
+            setSaveAllStatus('idle');
+            setSaveAllErrorDetails([]);
+            setIsSaveAllConfirmOpen(true);
+          }}
+        />
       )}
       {isSaveAllConfirmOpen && (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
-          role="presentation"
-          onClick={() => {
-            if (saveAllStatus !== 'saving') setIsSaveAllConfirmOpen(false);
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="w-full max-w-lg rounded-xl border p-5 shadow-xl"
-            style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {saveAllStatus === 'idle' && (
-              <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('saveAllProfiles')}</h3>
-                <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  {t('confirmSaveAllDescription')}
-                </p>
-                <div className="mt-4 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsSaveAllConfirmOpen(false)}
-                    className="rounded-lg px-4 py-2 text-sm font-medium"
-                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                  >
-                    {t('cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleConfirmSaveAllProfiles()}
-                    className="rounded-lg px-4 py-2 text-sm font-medium"
-                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                  >
-                    {t('confirmSaveAll')}
-                  </button>
-                </div>
-              </>
-            )}
-            {saveAllStatus === 'saving' && (
-              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                <Loading className="h-4 w-4 animate-spin" aria-hidden />
-                {t('savingProfiles')}
-              </div>
-            )}
-            {saveAllStatus === 'success' && (
-              <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('profilesSaved')}</h3>
-                <p className="mt-2 text-sm" style={{ color: 'var(--success)' }}>
-                  {t('profilesSavedDescription')}
-                </p>
-                <div className="mt-4 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setIsSaveAllConfirmOpen(false)}
-                    className="rounded-lg px-4 py-2 text-sm font-medium"
-                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                  >
-                    {t('close')}
-                  </button>
-                </div>
-              </>
-            )}
-            {saveAllStatus === 'error' && (
-              <>
-                <h3 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('failedSaveAllProfiles')}</h3>
-                <p className="mt-2 text-sm" style={{ color: 'var(--error)' }}>
-                  {t('failedSaveAllProfilesDescription')}
-                </p>
-                <ul className="mt-2 max-h-40 list-disc space-y-1 overflow-y-auto pl-5 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  {saveAllErrorDetails.map((detail, idx) => (
-                    <li key={`${detail}-${idx}`}>{detail}</li>
-                  ))}
-                </ul>
-                <div className="mt-4 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setIsSaveAllConfirmOpen(false)}
-                    className="rounded-lg px-4 py-2 text-sm font-medium"
-                    style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-                  >
-                    {t('close')}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <SaveAllConfirmDialog
+          status={saveAllStatus}
+          errorDetails={saveAllErrorDetails}
+          t={t}
+          onClose={() => setIsSaveAllConfirmOpen(false)}
+          onConfirm={() => void handleConfirmSaveAllProfiles()}
+        />
       )}
       {(() => {
         const menuNote = openNoteMenuId ? notes.find((n) => n.id === openNoteMenuId) ?? null : null;
