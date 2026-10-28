@@ -9,7 +9,7 @@ import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
 import { parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from '../parsers.js';
 import { buildTranscriptTranslationPrompt } from '../prompts.js';
 import { hasAssemblyUsage, recordAssemblyResubmission, recordAssemblyUsage, recordGeminiUsage } from './usage.js';
-import { NoSpeechDetectedError, noSpeechMessage } from './errors.js';
+import { NoSpeechDetectedError, noSpeechMessage, redactSignedUrls } from './errors.js';
 import { resumableAudioUrl } from './resumeAudio.js';
 import { loadTranscriptCheckpoint, saveTranscriptCheckpoint, updateWorkflowJob } from '../jobs/store.js';
 import { jobLeases, JobLeaseLostError, type JobExecution } from '../jobs/lease.js';
@@ -154,7 +154,7 @@ async function submitAssemblyTranscript(input: { downloadUrl: string; settings: 
   });
   const createRaw = await createResponse.text();
   if (!createResponse.ok) {
-    throw new AssemblySubmitRejectedError(`AssemblyAI transcript submit failed (${createResponse.status}): ${createRaw.slice(0, 800)}`);
+    throw new AssemblySubmitRejectedError(`AssemblyAI transcript submit failed (${createResponse.status}): ${redactSignedUrls(createRaw.slice(0, 800))}`);
   }
   const created = JSON.parse(createRaw) as { id?: unknown };
   if (typeof created.id !== 'string' || !created.id.trim()) {
@@ -203,11 +203,11 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number, a
     if (!pollResponse.ok) {
       const isTransient = pollResponse.status >= 500 || pollResponse.status === 429;
       if (!isTransient) {
-        throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+        throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${redactSignedUrls(pollRaw.slice(0, 800))}`);
       }
       consecutivePollFailures += 1;
       if (consecutivePollFailures > maxConsecutivePollFailures) {
-        throw new Error(`AssemblyAI transcript poll failed after ${consecutivePollFailures} consecutive transient errors (last ${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+        throw new Error(`AssemblyAI transcript poll failed after ${consecutivePollFailures} consecutive transient errors (last ${pollResponse.status}): ${redactSignedUrls(pollRaw.slice(0, 800))}`);
       }
       console.warn(`AssemblyAI transcript poll transient ${pollResponse.status} (${consecutivePollFailures}/${maxConsecutivePollFailures}), retrying.`);
       continue;
@@ -217,7 +217,7 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number, a
     } catch {
       consecutivePollFailures += 1;
       if (consecutivePollFailures > maxConsecutivePollFailures) {
-        throw new Error(`AssemblyAI transcript poll returned invalid JSON ${consecutivePollFailures} times in a row (${pollResponse.status}): ${pollRaw.slice(0, 500)}`);
+        throw new Error(`AssemblyAI transcript poll returned invalid JSON ${consecutivePollFailures} times in a row (${pollResponse.status}): ${redactSignedUrls(pollRaw.slice(0, 500))}`);
       }
       console.warn(`AssemblyAI transcript poll returned invalid JSON (${consecutivePollFailures}/${maxConsecutivePollFailures}), retrying.`);
       continue;
@@ -225,7 +225,8 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number, a
     consecutivePollFailures = 0;
     if (transcript.status === 'completed') break;
     if (transcript.status === 'error') {
-      throw new Error(typeof transcript.error === 'string' ? transcript.error : 'AssemblyAI transcription failed.');
+      // AssemblyAI's error names the audio_url it could not fetch: a signed credential.
+      throw new Error(typeof transcript.error === 'string' ? redactSignedUrls(transcript.error) : 'AssemblyAI transcription failed.');
     }
   }
   if (!transcript || transcript.status !== 'completed') {

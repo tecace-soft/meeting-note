@@ -458,3 +458,63 @@ test('a re-sign failure fails with the localized message and keeps the recording
     assert.equal(incidents(h).length, 0, `${jobId}: no ops incident`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// I2: a signed link never leaks through provider errors
+// ---------------------------------------------------------------------------
+
+test('redactSignedUrls removes signed storage links and token values', async () => {
+  const { redactSignedUrls } = await import('./pipeline/errors.js');
+  const link = storedLink(PATH, nowSeconds() + 3_600);
+  const token = new URL(link).searchParams.get('token')!;
+  const cases = [
+    `Download failed for ${link}`,
+    `{"error":"bad audio_url \\"${link}\\""}`,
+    `relative /object/sign/${BUCKET}/${PATH}?token=${token}&download=1`,
+    `upload https://supabase.invalid/storage/v1/object/upload/sign/${BUCKET}/${PATH}?token=${token}`,
+  ];
+  for (const text of cases) {
+    const redacted = redactSignedUrls(text);
+    assert.ok(!redacted.includes(token), `token removed: ${redacted}`);
+    assert.ok(!redacted.includes(`?token=${token.slice(0, 8)}`), redacted);
+  }
+  assert.equal(redactSignedUrls(`Download failed for ${link}`), 'Download failed for [signed storage link]');
+  assert.equal(redactSignedUrls('AssemblyAI transcription failed.'), 'AssemblyAI transcription failed.', 'plain text is untouched');
+});
+
+test('an AssemblyAI error that echoes the audio_url reaches the job row, logs and incident without the signed link', async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  t.mock.method(console, 'warn', () => undefined);
+  const error = t.mock.method(console, 'error', () => undefined);
+  const h = await harness(t);
+  h.own(); h.fileRow();
+  const live = storedLink(PATH, nowSeconds() + 3_600);
+  const token = new URL(live).searchParams.get('token')!;
+  const inner = globalThis.fetch;
+  let mode: 'poll-error' | 'submit-rejected' = 'poll-error';
+  t.mock.method(globalThis, 'fetch', async (input: FetchInput, init?: RequestInit) => {
+    const url = toUrl(input);
+    if (url.hostname === 'api.assemblyai.com') {
+      const method = init?.method ?? 'GET';
+      h.f.state.calls.push({ url, method, body: parseJson(init?.body) });
+      if (mode === 'submit-rejected' && method === 'POST') return Response.json({ error: `Cannot access uploaded file at ${live}` }, { status: 400 });
+      if (method === 'POST') return Response.json({ id: 'leaky-transcript', status: 'queued' });
+      return Response.json({ id: 'leaky-transcript', status: 'error', error: `Download error, unable to download ${live}. Please make sure the file exists.` });
+    }
+    return inner(input, init);
+  });
+  for (const [jobId, next] of [['leaky-poll-job', 'poll-error'], ['leaky-submit-job', 'submit-rejected']] as const) {
+    h.f.reset(); mode = next; error.mock.resetCalls();
+    const done = await resume(h, jobId, webRequest({ downloadUrl: live }));
+    assert.equal(done.status, 'failed', jobId);
+    assert.ok(String(done.error).includes('[signed storage link]'), `${jobId}: ${done.error}`);
+    await until(() => incidents(h).some((c) => c.method === 'POST'), `${jobId}: the incident`);
+    await sleep(30);
+    const surfaces = [
+      String(done.error),
+      ...error.mock.calls.flatMap((c) => c.arguments.map((a) => (a instanceof Error ? `${a.message}\n${a.stack}` : String(a)))),
+      ...incidents(h).map((c) => JSON.stringify(c.body ?? null)),
+    ];
+    assert.ok(surfaces.every((text) => !text.includes(token)), `${jobId}: no surface carries the token`);
+  }
+});
