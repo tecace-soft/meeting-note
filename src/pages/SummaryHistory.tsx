@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { graphScopes } from '../config/msalConfig';
-import { getSupabaseAccessTokenForRequest, supabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../config/supabaseConfig';
+import { supabase } from '../config/supabaseConfig';
 import { selectSpeakersByNames } from '../lib/speakers/repository';
 import {
   deleteOwnedNoteReturningId,
@@ -40,6 +40,7 @@ import { getLocalizedSummary, getNoteDisplayTitle } from './summaryHistory/noteD
 import { normalizeTagList } from './summaryHistory/noteSearch';
 import { NOTES_PAGE_SIZE, useNotesList, type HistoryViewMode } from './summaryHistory/useNotesList';
 import { useNoteEditing } from './summaryHistory/useNoteEditing';
+import { formatPlaybackTime, isPlayableSegment, useNotePlayback } from './summaryHistory/useNotePlayback';
 import { useNoteSpeakers } from './summaryHistory/useNoteSpeakers';
 import { AddToProjectDialog } from './summaryHistory/modals/AddToProjectDialog';
 import { DeleteNoteDialog } from './summaryHistory/modals/DeleteNoteDialog';
@@ -56,7 +57,6 @@ import {
   hasUsableDiarization,
   normalizeTranscript,
   type TranscriptLanguage,
-  type TranscriptSegment,
 } from '../lib/transcriptSegments';
 import {
   getAvailableTranscriptLanguages,
@@ -126,16 +126,6 @@ type NoteDetailTab = 'summary' | 'transcription' | 'images';
 const NOTE_ACTION_MENU_WIDTH_PX = 190;
 const NOTE_ACTION_MENU_GAP_PX = 6;
 const NOTE_ACTION_MENU_VIEWPORT_PADDING_PX = 8;
-
-interface SegmentPlaybackState {
-  noteId: string;
-  segmentIndex: number;
-  speaker: string;
-  start: number;
-  end: number | null;
-  currentTime: number;
-  isPlaying: boolean;
-}
 
 interface CalendarDay {
   date: Date;
@@ -335,11 +325,6 @@ const SummaryHistory: React.FC = () => {
   const [noteOwnershipFilter, setNoteOwnershipFilter] = useState<NoteOwnershipFilter>('all');
   const [noteSortKey, setNoteSortKey] = useState<NoteSortKey>('meeting_desc');
   const [noteDetailExpanded, setNoteDetailExpanded] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlCacheRef = useRef<Map<string, string>>(new Map());
-  const playbackStopAtRef = useRef<number | null>(null);
-  const [segmentPlayback, setSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
-  const [playbackLoadingSegment, setPlaybackLoadingSegment] = useState<{ noteId: string; segmentIndex: number } | null>(null);
   /** Mobile + desktop each render a menu anchor for the open note; click-outside checks both. */
   const noteMenuAnchorsRef = useRef<{ mobile: HTMLDivElement | null; desktop: HTMLDivElement | null }>({
     mobile: null,
@@ -708,6 +693,13 @@ const SummaryHistory: React.FC = () => {
   const notesRangeStart = notesTotalCount === 0 ? 0 : (notesPage - 1) * NOTES_PAGE_SIZE + 1;
   const notesRangeEnd = Math.min(notesPage * NOTES_PAGE_SIZE, notesTotalCount);
   const selectedNote = notes.find((n) => n.id === expandedNoteId) ?? null;
+  const {
+    audioRef,
+    segmentPlayback,
+    playbackLoadingSegment,
+    playTranscriptSegment: handlePlayTranscriptSegment,
+    audioElementProps,
+  } = useNotePlayback({ selectedNote, getAccessToken });
   useEffect(() => {
     let cancelled = false;
     const noteIds = notes.map((note) => note.id);
@@ -1325,164 +1317,6 @@ const SummaryHistory: React.FC = () => {
       </div>
     </div>
   );
-
-  const formatPlaybackTime = (seconds: number): string => {
-    const safeSeconds = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
-    const minutes = Math.floor(safeSeconds / 60);
-    const remainder = safeSeconds % 60;
-    return `${minutes}:${String(remainder).padStart(2, '0')}`;
-  };
-
-  const isPlayableSegment = (segment: TranscriptSegment): boolean =>
-    typeof segment.start === 'number' && Number.isFinite(segment.start) && segment.start >= 0;
-
-  const getNoteAudioUrl = async (note: Note): Promise<string> => {
-    const cached = audioUrlCacheRef.current.get(note.id);
-    if (cached) return cached;
-    const appToken = await getSupabaseAccessTokenForRequest();
-    const msToken = appToken ? null : await getAccessToken();
-    if (!appToken && !msToken) throw new Error('Could not get access. Please sign in again.');
-    const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/note-audio-url`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${appToken ?? SUPABASE_ANON_KEY}`,
-        ...(msToken ? { 'x-ms-access-token': msToken } : {}),
-      },
-      body: JSON.stringify({ noteId: note.id }),
-    });
-    const raw = await response.text();
-    let parsed: { url?: unknown; error?: unknown };
-    try {
-      parsed = raw ? JSON.parse(raw) as { url?: unknown; error?: unknown } : {};
-    } catch {
-      parsed = { error: raw || `HTTP ${response.status}` };
-    }
-    if (!response.ok) {
-      throw new Error(typeof parsed.error === 'string' ? parsed.error : `Audio request failed (${response.status}).`);
-    }
-    if (typeof parsed.url !== 'string' || !parsed.url.trim()) {
-      throw new Error('Audio URL was not returned.');
-    }
-    audioUrlCacheRef.current.set(note.id, parsed.url);
-    return parsed.url;
-  };
-
-  useEffect(() => {
-    if (!selectedNote) return;
-    const segments = normalizeTranscript(getNoteDiarizationRaw(selectedNote));
-    if (!segments.some(isPlayableSegment)) return;
-    void getNoteAudioUrl(selectedNote).catch((error) => {
-      console.warn('Could not preload note audio URL:', error);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- preload only when the selected note id changes
-  }, [selectedNote?.id]);
-
-  const stopSegmentPlayback = () => {
-    const audio = audioRef.current;
-    if (audio) audio.pause();
-    playbackStopAtRef.current = null;
-    setSegmentPlayback(null);
-  };
-
-  const getAudioErrorMessage = (audio: HTMLAudioElement): string => {
-    const code = audio.error?.code;
-    const detail =
-      code === MediaError.MEDIA_ERR_ABORTED ? 'loading was aborted' :
-      code === MediaError.MEDIA_ERR_NETWORK ? 'a network error occurred' :
-      code === MediaError.MEDIA_ERR_DECODE ? 'the browser could not decode this audio file' :
-      code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ? 'the audio URL or format is not supported by this browser' :
-      'the browser did not provide a media error code';
-    return `Audio file could not be loaded: ${detail}.`;
-  };
-
-  const loadAudioMetadata = (audio: HTMLAudioElement, url: string): Promise<void> => {
-    if (audio.src === url && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      return Promise.resolve();
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      const cleanup = () => {
-        window.clearTimeout(timeout);
-        audio.removeEventListener('loadedmetadata', onLoaded);
-        audio.removeEventListener('canplay', onLoaded);
-        audio.removeEventListener('error', onError);
-      };
-      const onLoaded = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = () => {
-        cleanup();
-        reject(new Error(getAudioErrorMessage(audio)));
-      };
-      const timeout = window.setTimeout(() => {
-        cleanup();
-        reject(new Error('Audio metadata did not load. The audio URL may be expired, blocked, or not playable in this browser.'));
-      }, 15000);
-
-      audio.addEventListener('loadedmetadata', onLoaded, { once: true });
-      audio.addEventListener('canplay', onLoaded, { once: true });
-      audio.addEventListener('error', onError, { once: true });
-
-      if (audio.src !== url) {
-        audio.src = url;
-      }
-      audio.load();
-    });
-  };
-
-  useEffect(() => {
-    if (!selectedNote || segmentPlayback?.noteId === selectedNote.id) return;
-    stopSegmentPlayback();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the selected note id or playback note changes
-  }, [selectedNote?.id, segmentPlayback?.noteId]);
-
-  const handlePlayTranscriptSegment = async (note: Note, segment: TranscriptSegment, segmentIndex: number) => {
-    if (!isPlayableSegment(segment)) return;
-    const start = segment.start ?? 0;
-    const end = typeof segment.end === 'number' && Number.isFinite(segment.end) && segment.end > start
-      ? segment.end
-      : null;
-
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (segmentPlayback?.noteId === note.id && segmentPlayback.segmentIndex === segmentIndex && segmentPlayback.isPlaying) {
-      stopSegmentPlayback();
-      return;
-    }
-
-    try {
-      setPlaybackLoadingSegment({ noteId: note.id, segmentIndex });
-      const url = audioUrlCacheRef.current.get(note.id) ?? await getNoteAudioUrl(note);
-      audio.muted = false;
-      audio.volume = 1;
-      playbackStopAtRef.current = end;
-      setSegmentPlayback({
-        noteId: note.id,
-        segmentIndex,
-        speaker: segment.speaker.trim() || 'Speaker',
-        start,
-        end,
-        currentTime: start,
-        isPlaying: true,
-      });
-      await loadAudioMetadata(audio, url);
-      if (Number.isFinite(audio.duration) && start > audio.duration) {
-        throw new Error(`Segment timestamp ${formatPlaybackTime(start)} is outside this audio file (${formatPlaybackTime(audio.duration)}).`);
-      }
-      audio.currentTime = start;
-      await audio.play();
-    } catch (error) {
-      console.error('Failed to play transcript segment:', error);
-      playbackStopAtRef.current = null;
-      setSegmentPlayback(null);
-    } finally {
-      setPlaybackLoadingSegment(null);
-    }
-  };
 
   const handleOpenDeleteNote = (note: Note) => {
     setOpenNoteMenuId(null);
@@ -3031,37 +2865,7 @@ const SummaryHistory: React.FC = () => {
         </div>
       </main>
 
-      <audio
-        ref={audioRef}
-        className="hidden"
-        onTimeUpdate={(event) => {
-          const audio = event.currentTarget;
-          const stopAt = playbackStopAtRef.current;
-          const currentTime = audio.currentTime;
-          setSegmentPlayback((prev) => prev ? { ...prev, currentTime } : prev);
-          if (stopAt != null && currentTime >= stopAt) {
-            audio.pause();
-            playbackStopAtRef.current = null;
-            setSegmentPlayback((prev) => prev ? { ...prev, currentTime: stopAt, isPlaying: false } : prev);
-          }
-        }}
-        onPlay={(event) => {
-          const currentTime = event.currentTarget.currentTime;
-          setSegmentPlayback((prev) => prev ? { ...prev, currentTime, isPlaying: true } : prev);
-        }}
-        onPause={(event) => {
-          const currentTime = event.currentTarget.currentTime;
-          setSegmentPlayback((prev) => prev ? { ...prev, currentTime, isPlaying: false } : prev);
-        }}
-        onEnded={() => {
-          playbackStopAtRef.current = null;
-          setSegmentPlayback((prev) => prev ? { ...prev, isPlaying: false } : prev);
-        }}
-        onError={() => {
-          playbackStopAtRef.current = null;
-          setSegmentPlayback(null);
-        }}
-      />
+      <audio ref={audioRef} className="hidden" {...audioElementProps} />
 
       {isDeleteNoteOpen && (
         <DeleteNoteDialog
