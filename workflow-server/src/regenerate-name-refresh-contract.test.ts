@@ -12,6 +12,14 @@ const named = [
   { speaker: 'Hansoo', speakerKey: 'Speaker B', text: 'Agreed, mobile can follow.', start: 40, end: 80 },
 ];
 const mixed = [...named, { speaker: 'Speaker C', speakerKey: 'Speaker C', text: 'Sounds good.', start: 80, end: 82 }];
+// A named (40s), B unnamed MAIN (40s), C unnamed minor (2s).
+const unnamedMain = [
+  named[0],
+  { speaker: 'Speaker B', speakerKey: 'Speaker B', text: 'Mobile can follow.', start: 40, end: 80 },
+  { speaker: 'Speaker C', speakerKey: 'Speaker C', text: 'Sounds good.', start: 80, end: 82 },
+];
+// A named, B unnamed but main: nothing minor to fold.
+const namedAndMainGeneric = [named[0], { speaker: 'Speaker B', speakerKey: 'Speaker B', text: 'Agreed.', start: 40, end: 80 }];
 const anonymous = [
   { speaker: 'Speaker A', speakerKey: 'Speaker A', text: 'Hello.', start: 0, end: 1 },
   { speaker: 'Speaker B', speakerKey: 'Speaker B', text: 'Hi.', start: 1, end: 2 },
@@ -24,9 +32,18 @@ test('U1/U9 regenerate-summary persist flag and unnamed-speaker prompt rule', as
   t.mock.method(console, 'log', () => undefined);
 
   const noteWrites = () => f.state.calls.filter((c) => c.method === 'PATCH' && c.url.pathname.endsWith('/note'));
+  // Every string in the Gemini request body, joined with real newlines (bounded depth).
   const promptText = () => {
     const call = f.state.calls.find((c) => c.url.hostname === 'generativelanguage.googleapis.com');
-    return JSON.stringify(call?.body ?? null);
+    const strings: string[] = [];
+    const collect = (value: unknown, depth: number): void => {
+      if (depth > 8) return;
+      if (typeof value === 'string') strings.push(value);
+      else if (Array.isArray(value)) value.forEach((item) => collect(item, depth + 1));
+      else if (value && typeof value === 'object') Object.values(value).forEach((item) => collect(item, depth + 1));
+    };
+    collect(call?.body ?? null, 0);
+    return strings.join('\n');
   };
   const regenerate = async (body: Record<string, unknown>) => {
     f.reset();
@@ -59,24 +76,41 @@ test('U1/U9 regenerate-summary persist flag and unnamed-speaker prompt rule', as
     }
   });
 
-  await t.test('mixed named and generic labels add the other-participants rule with the generic labels', async () => {
-    await regenerate({ diarization: mixed, persist: false });
+  const ruleLine = () => {
     const text = promptText();
-    assert.match(text, /UNNAMED SPEAKERS/);
-    assert.match(text, /Speaker C/);
-    assert.match(text, /other participant/);
+    const at = text.indexOf('UNNAMED SPEAKERS');
+    if (at < 0) return null;
+    const end = text.indexOf('\n', at);
+    return text.slice(at, end < 0 ? undefined : end);
+  };
+
+  await t.test('mixed case: only the minor unnamed labels (under 10% of speaking time) get the other-participants rule', async () => {
+    await regenerate({ diarization: mixed, persist: false });
+    const rule = ruleLine();
+    assert.ok(rule, 'rule expected');
+    assert.match(rule, /"Speaker C"/);
+    assert.match(rule, /another participant/);
   });
 
-  await t.test('all named or all generic transcripts keep the prompt without the rule', async () => {
-    await regenerate({ diarization: named, persist: false });
-    assert.doesNotMatch(promptText(), /UNNAMED SPEAKERS/);
-    await regenerate({ diarization: anonymous, persist: false });
-    assert.doesNotMatch(promptText(), /UNNAMED SPEAKERS/);
+  await t.test('an unnamed MAIN speaker keeps its label and is not folded into other participants', async () => {
+    await regenerate({ diarization: unnamedMain, persist: false });
+    const rule = ruleLine();
+    assert.ok(rule, 'rule expected for the minor label');
+    assert.match(rule, /"Speaker C"/);
+    assert.doesNotMatch(rule, /Speaker B/);
+    assert.match(promptText(), /Speaker B: Mobile can follow/);
+  });
+
+  await t.test('no minor unnamed labels: no rule (all named, all generic, or only unnamed main speakers)', async () => {
+    for (const diarization of [named, anonymous, namedAndMainGeneric]) {
+      await regenerate({ diarization, persist: false });
+      assert.equal(ruleLine(), null);
+    }
   });
 });
 
-test('U1/U9 prompt builder is byte-identical without unnamed labels', async () => {
-  const { buildRegenerateSummaryPrompt, unnamedSpeakerLabels } = await import('./prompts.js');
+test('U1/U9 prompt builder is byte-identical without minor unnamed labels', async () => {
+  const { buildRegenerateSummaryPrompt, minorUnnamedSpeakerLabels, MINOR_SPEAKER_MAX_SHARE } = await import('./prompts.js');
   const base = {
     now: '2026-10-28T00:00:00.000Z',
     summaryRules: 'Rules.',
@@ -87,14 +121,35 @@ test('U1/U9 prompt builder is byte-identical without unnamed labels', async () =
   assert.equal(buildRegenerateSummaryPrompt(base), buildRegenerateSummaryPrompt({ ...base, unnamedSpeakerLabels: [] }));
   assert.notEqual(buildRegenerateSummaryPrompt(base), buildRegenerateSummaryPrompt({ ...base, unnamedSpeakerLabels: ['Speaker C'] }));
 
-  assert.deepEqual(unnamedSpeakerLabels(mixed), ['Speaker C']);
-  assert.deepEqual(unnamedSpeakerLabels(named), []);
-  assert.deepEqual(unnamedSpeakerLabels(anonymous), []);
-  const withGeneric: { speaker: string; text: string }[] = [
-    ...named,
-    { speaker: 'Unknown Speaker', text: 'x' },
-    { speaker: 'Speaker 3', text: 'y' },
-    { speaker: 'Speaker 3', text: 'z' },
-  ];
-  assert.deepEqual(unnamedSpeakerLabels(withGeneric), ['Unknown Speaker', 'Speaker 3']);
+  assert.equal(MINOR_SPEAKER_MAX_SHARE, 0.1);
+  assert.deepEqual(minorUnnamedSpeakerLabels(mixed), ['Speaker C']);
+  assert.deepEqual(minorUnnamedSpeakerLabels(unnamedMain), ['Speaker C']);
+  assert.deepEqual(minorUnnamedSpeakerLabels(namedAndMainGeneric), []);
+  assert.deepEqual(minorUnnamedSpeakerLabels(named), []);
+  assert.deepEqual(minorUnnamedSpeakerLabels(anonymous), []);
+  // Exactly 10% is a main speaker, so it keeps its label.
+  assert.deepEqual(
+    minorUnnamedSpeakerLabels([
+      { speaker: 'Andrew', speakerKey: 'Speaker A', text: 'a', start: 0, end: 9 },
+      { speaker: 'Speaker B', speakerKey: 'Speaker B', text: 'b', start: 9, end: 10 },
+    ]),
+    [],
+  );
+  // Invalid timing on any segment falls back to text length (web mainSpeakers.ts does the same).
+  assert.deepEqual(
+    minorUnnamedSpeakerLabels([
+      { speaker: 'Andrew', speakerKey: 'Speaker A', text: 'x'.repeat(95) },
+      { speaker: 'Speaker B', speakerKey: 'Speaker B', text: 'y'.repeat(5), start: 0, end: 50 },
+    ]),
+    ['Speaker B'],
+  );
+  // Legacy segments without speakerKey group by the display label.
+  assert.deepEqual(
+    minorUnnamedSpeakerLabels([
+      { speaker: 'Andrew', text: 'a'.repeat(60) },
+      { speaker: 'Unknown Speaker', text: 'b'.repeat(35) },
+      { speaker: 'Speaker 3', text: 'c'.repeat(5) },
+    ]),
+    ['Speaker 3'],
+  );
 });
