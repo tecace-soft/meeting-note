@@ -8,6 +8,7 @@ import '../../../core/network/supabase_config.dart';
 import '../../../core/network/workflow_config.dart';
 import '../../auth/data/auth_token_store.dart';
 import '../../auth/data/mobile_supabase_session.dart';
+import '../../../core/network/dio_factory.dart';
 
 /// F2: in-app feedback / issue tracker — mobile data + pure-logic layer.
 ///
@@ -310,15 +311,13 @@ final issuesRepositoryProvider =
 
 class IssuesRepository {
   IssuesRepository()
-      : _supabase = Dio(
-          BaseOptions(
+      : _supabase = createAppDio(BaseOptions(
             baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 30),
           ),
         ),
-        _workflow = Dio(
-          BaseOptions(
+        _workflow = createAppDio(BaseOptions(
             baseUrl: workflowApiUrl.replaceAll(RegExp(r'/$'), ''),
             // 60s connect: the free-tier backend cold-starts (~12-60s) after idle.
             connectTimeout: const Duration(seconds: 60),

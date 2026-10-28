@@ -7,6 +7,7 @@ import '../../../core/network/supabase_config.dart';
 import 'auth_token_store.dart';
 import 'microsoft_auth_service.dart';
 import 'supabase_token_service.dart';
+import '../../../core/network/dio_factory.dart';
 
 class MobileSupabaseAuth {
   const MobileSupabaseAuth({
@@ -162,8 +163,7 @@ class MobileSupabaseSession {
 
   /// Short-lived Dio for replaying a single retried request. It must carry
   /// timeouts so a replay can never hang indefinitely (a bare `Dio()` has none).
-  static Dio _replayDio() => Dio(
-        BaseOptions(
+  static Dio _replayDio() => createAppDio(BaseOptions(
           connectTimeout: const Duration(seconds: 30),
           receiveTimeout: const Duration(minutes: 2),
           sendTimeout: const Duration(minutes: 5),

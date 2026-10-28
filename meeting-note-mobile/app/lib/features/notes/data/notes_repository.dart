@@ -17,6 +17,7 @@ import '../../auth/data/auth_token_store.dart';
 import '../../auth/data/mobile_supabase_session.dart';
 import '../models/meeting_note.dart';
 import 'active_job_store.dart';
+import '../../../core/network/dio_factory.dart';
 
 final notesRepositoryProvider = Provider<NotesRepository>(
   (ref) => NotesRepository(ref.watch(apiClientProvider)),
@@ -39,23 +40,20 @@ const _defaultSummaryPromptName = 'Default';
 /// notes when Supabase cannot be reached.
 class NotesRepository {
   NotesRepository(this._dio)
-      : _supabase = Dio(
-          BaseOptions(
+      : _supabase = createAppDio(BaseOptions(
             baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 30),
           ),
         ),
-        _supabaseRoot = Dio(
-          BaseOptions(
+        _supabaseRoot = createAppDio(BaseOptions(
             baseUrl: supabaseUrl.replaceAll(RegExp(r'/$'), ''),
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 30),
             sendTimeout: const Duration(minutes: 5),
           ),
         ),
-        _workflow = Dio(
-          BaseOptions(
+        _workflow = createAppDio(BaseOptions(
             baseUrl: workflowApiUrl.replaceAll(RegExp(r'/$'), ''),
             // 60s connect: the free-tier backend spins down after ~15 min idle
             // and a cold start can take up to ~60s; a shorter timeout surfaces
@@ -1025,7 +1023,7 @@ class NotesRepository {
           'Microsoft access token is not available. Sign in again.');
     }
 
-    final graph = Dio(BaseOptions(
+    final graph = createAppDio(BaseOptions(
       connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(seconds: 30),
     ));
@@ -1596,8 +1594,7 @@ Future<String> _localAudioPath(String audioPath, String title) async {
   final target = File('${dir.path}${Platform.pathSeparator}$targetName');
   // Timeouts required: a stalled/huge remote file must not hang the create-note
   // flow forever. A bare Dio() has no connect/receive timeout.
-  final downloadDio = Dio(
-    BaseOptions(
+  final downloadDio = createAppDio(BaseOptions(
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(minutes: 5),
     ),

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../features/auth/data/auth_token_store.dart';
+import 'dio_factory.dart';
 
 /// Base URL per flavor: flutter run --dart-define=API_BASE_URL=https://meetingnote.tecace.com/api/v1
 const _baseUrl = String.fromEnvironment(
@@ -11,7 +12,7 @@ const _baseUrl = String.fromEnvironment(
 );
 
 final apiClientProvider = Provider<Dio>((ref) {
-  final dio = Dio(BaseOptions(
+  final dio = createAppDio(BaseOptions(
     baseUrl: _baseUrl,
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 30),

@@ -5,11 +5,11 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../core/network/supabase_config.dart';
 import '../../auth/data/auth_token_store.dart';
+import '../../../core/network/dio_factory.dart';
 
 class MobileDataDiagnostics {
   MobileDataDiagnostics()
-      : _supabase = Dio(
-          BaseOptions(
+      : _supabase = createAppDio(BaseOptions(
             baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 30),

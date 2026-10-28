@@ -9,6 +9,7 @@ import '../../../core/network/supabase_config.dart';
 import '../../../core/network/workflow_config.dart';
 import '../../auth/data/auth_token_store.dart';
 import '../../auth/data/mobile_supabase_session.dart';
+import '../../../core/network/dio_factory.dart';
 
 final projectsRepositoryProvider = Provider<ProjectsRepository>(
   (ref) => ProjectsRepository(),
@@ -20,15 +21,13 @@ final projectsProvider = FutureProvider<List<MeetingProject>>(
 
 class ProjectsRepository {
   ProjectsRepository()
-      : _supabase = Dio(
-          BaseOptions(
+      : _supabase = createAppDio(BaseOptions(
             baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 30),
           ),
         ),
-        _webhook = Dio(
-          BaseOptions(
+        _webhook = createAppDio(BaseOptions(
             connectTimeout: const Duration(seconds: 20),
             receiveTimeout: const Duration(minutes: 2),
           ),
