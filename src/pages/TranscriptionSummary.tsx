@@ -521,6 +521,8 @@ const TranscriptionSummary: React.FC = () => {
     grace.cancel();
     graceFileIdRef.current = null;
     setAutoSummarizeFileId(null);
+    // A handled 2-hour auto stop must not restart the countdown when the page is opened again.
+    if (recordingAutoStopped) acknowledgeAutoStop();
   };
 
   const startAutoSubmit = (source: AutoSubmitSource, fileId: string | null) => {
