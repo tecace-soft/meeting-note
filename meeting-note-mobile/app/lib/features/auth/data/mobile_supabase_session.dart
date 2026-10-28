@@ -7,12 +7,10 @@ import '../../../core/network/supabase_config.dart';
 import 'auth_token_store.dart';
 import 'microsoft_auth_service.dart';
 import 'supabase_token_service.dart';
+import '../../../core/network/dio_factory.dart';
 
 class MobileSupabaseAuth {
-  const MobileSupabaseAuth({
-    required this.token,
-    required this.userId,
-  });
+  const MobileSupabaseAuth({required this.token, required this.userId});
 
   final String token;
   final String userId;
@@ -22,22 +20,27 @@ class MobileSupabaseSession {
   MobileSupabaseSession({
     SupabaseTokenService? supabaseTokenService,
     MicrosoftAuthService? microsoftAuthService,
-  })  : _supabaseTokenService = supabaseTokenService ?? SupabaseTokenService(),
-        _microsoftAuthService =
-            microsoftAuthService ?? createMicrosoftAuthService();
+    Dio Function()? replayDioBuilder,
+  }) : _replayDioBuilder = replayDioBuilder ?? _defaultReplayDio,
+       _supabaseTokenService = supabaseTokenService ?? SupabaseTokenService(),
+       _microsoftAuthService =
+           microsoftAuthService ?? createMicrosoftAuthService();
 
   static const _storage = FlutterSecureStorage();
   static const _store = AuthTokenStore();
   static Future<SupabaseTokenResult>? _refreshing;
 
+  final Dio Function() _replayDioBuilder;
   final SupabaseTokenService _supabaseTokenService;
   final MicrosoftAuthService _microsoftAuthService;
 
   static Future<String?> cachedUserId() async {
-    final supabaseUserId =
-        await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
-    final microsoftUserId =
-        await _storage.read(key: AuthTokenStore.microsoftUserIdKey);
+    final supabaseUserId = await _storage.read(
+      key: AuthTokenStore.supabaseUserIdKey,
+    );
+    final microsoftUserId = await _storage.read(
+      key: AuthTokenStore.microsoftUserIdKey,
+    );
     final trimmed = supabaseUserId?.trim();
     if (trimmed != null && trimmed.isNotEmpty) return trimmed;
     final fallback = microsoftUserId?.trim();
@@ -52,7 +55,8 @@ class MobileSupabaseSession {
     var token = await _storage.read(key: AuthTokenStore.supabaseAccessTokenKey);
     var userId = await _storage.read(key: AuthTokenStore.supabaseUserIdKey);
     final expiresAt = await _storage.read(
-        key: AuthTokenStore.supabaseAccessTokenExpiresAtKey);
+      key: AuthTokenStore.supabaseAccessTokenExpiresAtKey,
+    );
 
     if (token == null || token.isEmpty || _expiresSoon(expiresAt)) {
       final refreshed = await _refreshSupabaseToken();
@@ -60,7 +64,8 @@ class MobileSupabaseSession {
       userId = refreshed.userId ?? userId;
     }
 
-    userId = _validUserId(userId) ??
+    userId =
+        _validUserId(userId) ??
         _validUserId(_jwtSubject(token)) ??
         _validUserId(
           await _storage.read(key: AuthTokenStore.microsoftUserIdKey),
@@ -93,14 +98,21 @@ class MobileSupabaseSession {
           return;
         }
 
+        var replaying = false;
         try {
           final refreshed = await refreshAuth();
           final request = error.requestOptions;
           request.extra['supabaseAuthRetried'] = true;
           request.headers['authorization'] = 'Bearer ${refreshed.token}';
           request.headers['apikey'] = supabaseAnonKey;
-          final response = await _replayDio().fetch<dynamic>(request);
+          replaying = true;
+          final response = await _replayDioBuilder().fetch<dynamic>(request);
           handler.resolve(response);
+        } on DioException catch (replayError) {
+          // Forward the replay's own failure (e.g. a connection error) rather
+          // than the stale 401, so the UI can show the right message. A
+          // failure before the replay (token refresh) keeps the original 401.
+          handler.next(replaying ? replayError : error);
         } catch (_) {
           handler.next(error);
         }
@@ -129,12 +141,19 @@ class MobileSupabaseSession {
           handler.next(error);
           return;
         }
+        var replaying = false;
         try {
           final request = error.requestOptions;
           request.extra['workflowAuthRetried'] = true;
           request.headers['authorization'] = 'Bearer $freshToken';
-          final response = await _replayDio().fetch<dynamic>(request);
+          replaying = true;
+          final response = await _replayDioBuilder().fetch<dynamic>(request);
           handler.resolve(response);
+        } on DioException catch (replayError) {
+          // Forward the replay's own failure (e.g. a connection error) rather
+          // than the stale 401, so the UI can show the right message. A
+          // failure before the replay (token refresh) keeps the original 401.
+          handler.next(replaying ? replayError : error);
         } catch (_) {
           handler.next(error);
         }
@@ -162,17 +181,18 @@ class MobileSupabaseSession {
 
   /// Short-lived Dio for replaying a single retried request. It must carry
   /// timeouts so a replay can never hang indefinitely (a bare `Dio()` has none).
-  static Dio _replayDio() => Dio(
-        BaseOptions(
-          connectTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(minutes: 2),
-          sendTimeout: const Duration(minutes: 5),
-        ),
-      );
+  static Dio _defaultReplayDio() => createAppDio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(minutes: 2),
+      sendTimeout: const Duration(minutes: 5),
+    ),
+  );
 
   Future<MobileSupabaseAuth> refreshAuth() async {
     final refreshed = await _refreshSupabaseToken();
-    final userId = _validUserId(refreshed.userId) ??
+    final userId =
+        _validUserId(refreshed.userId) ??
         _validUserId(_jwtSubject(refreshed.accessToken)) ??
         _validUserId(
           await _storage.read(key: AuthTokenStore.microsoftUserIdKey),
@@ -202,8 +222,7 @@ class MobileSupabaseSession {
       if (cached == null || cached.isEmpty) {
         throw StateError('Microsoft session expired. Sign in again.');
       }
-      final cachedIdToken =
-          await _storage.read(key: AuthTokenStore.idTokenKey);
+      final cachedIdToken = await _storage.read(key: AuthTokenStore.idTokenKey);
       return _exchange(cached, cachedIdToken);
     }
   }
@@ -229,8 +248,8 @@ class MobileSupabaseSession {
     final expiresAt = DateTime.tryParse(value);
     if (expiresAt == null) return true;
     return expiresAt.toUtc().isBefore(
-          DateTime.now().toUtc().add(const Duration(minutes: 2)),
-        );
+      DateTime.now().toUtc().add(const Duration(minutes: 2)),
+    );
   }
 
   String? _validUserId(String? value) {
@@ -244,8 +263,9 @@ String? _jwtSubject(String? token) {
   final parts = token.split('.');
   if (parts.length < 2) return null;
   try {
-    final payload =
-        utf8.decode(base64Url.decode(base64Url.normalize(parts[1])));
+    final payload = utf8.decode(
+      base64Url.decode(base64Url.normalize(parts[1])),
+    );
     final data = jsonDecode(payload);
     if (data is Map<String, dynamic>) {
       final sub = data['sub'];

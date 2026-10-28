@@ -11,6 +11,7 @@ import '../../auth/providers/auth_provider.dart';
 import '../../notes/data/notes_repository.dart';
 import '../data/settings_repository.dart';
 import '../providers/settings_provider.dart';
+import '../../../core/network/error_message.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -245,7 +246,7 @@ class _SummaryPromptsScreenState extends ConsumerState<SummaryPromptsScreen> {
           if (snapshot.hasError) {
             return _ErrorState(
               title: t('prompts.loadError'),
-              error: snapshot.error,
+              message: friendlyErrorMessage(snapshot.error, t.call),
               onRetry: _refresh,
               retryLabel: t('common.tryAgain'),
             );
@@ -381,7 +382,7 @@ class _SpeakerProfilesScreenState extends ConsumerState<SpeakerProfilesScreen> {
           if (snapshot.hasError) {
             return _ErrorState(
               title: t('speakers.loadError'),
-              error: snapshot.error,
+              message: friendlyErrorMessage(snapshot.error, t.call),
               onRetry: _refresh,
               retryLabel: t('common.tryAgain'),
             );
@@ -508,7 +509,7 @@ class _MyMemoryScreenState extends ConsumerState<MyMemoryScreen> {
           if (snapshot.hasError) {
             return _ErrorState(
               title: t('memory.loadError'),
-              error: snapshot.error,
+              message: friendlyErrorMessage(snapshot.error, t.call),
               onRetry: _refresh,
               retryLabel: t('common.tryAgain'),
             );
@@ -1890,13 +1891,13 @@ class _SegmentedToggle extends StatelessWidget {
 class _ErrorState extends StatelessWidget {
   const _ErrorState({
     required this.title,
-    required this.error,
+    required this.message,
     required this.onRetry,
     required this.retryLabel,
   });
 
   final String title;
-  final Object? error;
+  final String message;
   final VoidCallback onRetry;
   final String retryLabel;
 
@@ -1925,7 +1926,7 @@ class _ErrorState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              error.toString(),
+              message,
               textAlign: TextAlign.center,
               style: TextStyle(color: palette.textSecondary, fontSize: 13),
             ),

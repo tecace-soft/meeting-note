@@ -8,6 +8,7 @@ import '../../../core/network/supabase_config.dart';
 import '../../../core/network/workflow_config.dart';
 import '../../auth/data/auth_token_store.dart';
 import '../../auth/data/mobile_supabase_session.dart';
+import '../../../core/network/dio_factory.dart';
 
 /// F2: in-app feedback / issue tracker — mobile data + pure-logic layer.
 ///
@@ -43,15 +44,30 @@ class IssueOption<T> {
 
 const purposeOptions = <IssueOption<IssuePurpose>>[
   IssueOption(IssuePurpose.bug, 'bug', 'issues.purposeBug', 0xFFDC2626),
-  IssueOption(IssuePurpose.feature, 'feature', 'issues.purposeFeature', 0xFF2563EB),
-  IssueOption(IssuePurpose.question, 'question', 'issues.purposeQuestion', 0xFF7C3AED),
+  IssueOption(
+    IssuePurpose.feature,
+    'feature',
+    'issues.purposeFeature',
+    0xFF2563EB,
+  ),
+  IssueOption(
+    IssuePurpose.question,
+    'question',
+    'issues.purposeQuestion',
+    0xFF7C3AED,
+  ),
   IssueOption(IssuePurpose.other, 'other', 'issues.purposeOther', 0xFF6B7280),
 ];
 
 const statusOptions = <IssueOption<IssueStatus>>[
   IssueOption(IssueStatus.open, 'OPEN', 'issues.statusOpen', 0xFF0EA5E9),
   IssueOption(IssueStatus.triage, 'TRIAGE', 'issues.statusTriage', 0xFFF59E0B),
-  IssueOption(IssueStatus.inProgress, 'IN_PROGRESS', 'issues.statusInProgress', 0xFF8B5CF6),
+  IssueOption(
+    IssueStatus.inProgress,
+    'IN_PROGRESS',
+    'issues.statusInProgress',
+    0xFF8B5CF6,
+  ),
   IssueOption(IssueStatus.done, 'DONE', 'issues.statusDone', 0xFF16A34A),
   IssueOption(IssueStatus.closed, 'CLOSED', 'issues.statusClosed', 0xFF6B7280),
 ];
@@ -80,14 +96,48 @@ class AreaOption {
 }
 
 const areaOptions = <AreaOption>[
-  AreaOption('meeting-note', 'issues.areaMeetingNote',
-      ['회의', '노트', '녹음', 'meeting', 'note', 'record', '전사', '요약', 'summary']),
-  AreaOption('history', 'issues.areaHistory', ['히스토리', '기록', '목록', 'history', '검색', 'search']),
+  AreaOption('meeting-note', 'issues.areaMeetingNote', [
+    '회의',
+    '노트',
+    '녹음',
+    'meeting',
+    'note',
+    'record',
+    '전사',
+    '요약',
+    'summary',
+  ]),
+  AreaOption('history', 'issues.areaHistory', [
+    '히스토리',
+    '기록',
+    '목록',
+    'history',
+    '검색',
+    'search',
+  ]),
   AreaOption('projects', 'issues.areaProjects', ['프로젝트', 'project']),
-  AreaOption('onedrive', 'issues.areaOnedrive',
-      ['onedrive', '원드라이브', '저장', 'save', '내보내기', 'export']),
-  AreaOption('settings', 'issues.areaSettings', ['설정', '계정', 'settings', 'account', '프로필', 'profile']),
-  AreaOption('speaker', 'issues.areaSpeaker', ['화자', 'speaker', '다이어리제이션', 'diariz']),
+  AreaOption('onedrive', 'issues.areaOnedrive', [
+    'onedrive',
+    '원드라이브',
+    '저장',
+    'save',
+    '내보내기',
+    'export',
+  ]),
+  AreaOption('settings', 'issues.areaSettings', [
+    '설정',
+    '계정',
+    'settings',
+    'account',
+    '프로필',
+    'profile',
+  ]),
+  AreaOption('speaker', 'issues.areaSpeaker', [
+    '화자',
+    'speaker',
+    '다이어리제이션',
+    'diariz',
+  ]),
   AreaOption('general', 'issues.areaGeneral', <String>[]),
 ];
 
@@ -158,7 +208,11 @@ class IssueResolution {
 }
 
 class IssueAttachment {
-  const IssueAttachment({required this.name, required this.path, required this.type});
+  const IssueAttachment({
+    required this.name,
+    required this.path,
+    required this.type,
+  });
 
   final String name;
   final String path;
@@ -169,7 +223,11 @@ class IssueAttachment {
     final map = raw.cast<String, dynamic>();
     final name = _str(map['name']);
     if (name.isEmpty) return null;
-    return IssueAttachment(name: name, path: _str(map['path']), type: _str(map['type']));
+    return IssueAttachment(
+      name: name,
+      path: _str(map['path']),
+      type: _str(map['type']),
+    );
   }
 }
 
@@ -196,11 +254,11 @@ class TriageSuggestion {
   final bool escalated; // urgency expression raised priority/severity
 
   Map<String, dynamic> toJson() => {
-        'purpose': purposeWire(purpose),
-        'area': area,
-        'priority': priorityWire(priority),
-        'severity': severityWire(severity),
-      };
+    'purpose': purposeWire(purpose),
+    'area': area,
+    'priority': priorityWire(priority),
+    'severity': severityWire(severity),
+  };
 }
 
 class FeedbackIssue {
@@ -266,9 +324,9 @@ class FeedbackIssue {
       triageNote: _strOrNull(row['triage_note']),
       attachments: attachmentsRaw is List
           ? attachmentsRaw
-              .map(IssueAttachment.fromJson)
-              .whereType<IssueAttachment>()
-              .toList()
+                .map(IssueAttachment.fromJson)
+                .whereType<IssueAttachment>()
+                .toList()
           : const [],
       resolution: IssueResolution.fromJson(row['resolution']),
       authorEmail: _str(row['author_email']),
@@ -305,30 +363,32 @@ class NewIssueInput {
 
 // ---- repository ------------------------------------------------------------
 
-final issuesRepositoryProvider =
-    Provider<IssuesRepository>((ref) => IssuesRepository());
+final issuesRepositoryProvider = Provider<IssuesRepository>(
+  (ref) => IssuesRepository(),
+);
 
 class IssuesRepository {
   IssuesRepository()
-      : _supabase = Dio(
-          BaseOptions(
-            baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
+    : _supabase = createAppDio(
+        BaseOptions(
+          baseUrl: '${supabaseUrl.replaceAll(RegExp(r'/$'), '')}/rest/v1',
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
         ),
-        _workflow = Dio(
-          BaseOptions(
-            baseUrl: workflowApiUrl.replaceAll(RegExp(r'/$'), ''),
-            // 60s connect: the free-tier backend cold-starts (~12-60s) after idle.
-            connectTimeout: const Duration(seconds: 60),
-            receiveTimeout: const Duration(minutes: 2),
-          ),
-        ) {
+      ),
+      _workflow = createAppDio(
+        BaseOptions(
+          baseUrl: workflowApiUrl.replaceAll(RegExp(r'/$'), ''),
+          // 60s connect: the free-tier backend cold-starts (~12-60s) after idle.
+          connectTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(minutes: 2),
+        ),
+      ) {
     final session = MobileSupabaseSession();
     _supabase.interceptors.add(session.retryOnUnauthorizedInterceptor());
-    _workflow.interceptors
-        .add(session.retryOnWorkflowUnauthorizedInterceptor());
+    _workflow.interceptors.add(
+      session.retryOnWorkflowUnauthorizedInterceptor(),
+    );
   }
 
   final Dio _supabase;
@@ -383,8 +443,7 @@ class IssuesRepository {
     if (rows.isEmpty) {
       throw StateError('Issue was not created. Please try again.');
     }
-    final created =
-        FeedbackIssue.fromJson(rows.first.cast<String, dynamic>());
+    final created = FeedbackIssue.fromJson(rows.first.cast<String, dynamic>());
     if (created == null) {
       throw StateError('Issue was created but could not be read back.');
     }
@@ -446,10 +505,10 @@ class IssuesRepository {
     final m = at.month.toString().padLeft(2, '0');
     final d = at.day.toString().padLeft(2, '0');
     final random = Random.secure();
-    final rand = List<int>.generate(4, (_) => random.nextInt(256))
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join()
-        .toUpperCase();
+    final rand = List<int>.generate(
+      4,
+      (_) => random.nextInt(256),
+    ).map((b) => b.toRadixString(16).padLeft(2, '0')).join().toUpperCase();
     return 'FB-$y$m$d-$rand';
   }
 
@@ -458,8 +517,9 @@ class IssuesRepository {
   Future<void> _notifyCreated(FeedbackIssue issue) async {
     try {
       if (workflowApiUrl.trim().isEmpty) return;
-      final microsoftToken =
-          await _storage.read(key: AuthTokenStore.accessTokenKey);
+      final microsoftToken = await _storage.read(
+        key: AuthTokenStore.accessTokenKey,
+      );
       if (microsoftToken == null || microsoftToken.isEmpty) return;
       await _workflow.post<void>(
         '/issue-notify',
@@ -475,10 +535,12 @@ class IssuesRepository {
           'assigneeName': issue.assigneeName,
           'attachmentPaths': const <String>[],
         },
-        options: Options(headers: {
-          'content-type': 'application/json',
-          'authorization': 'Bearer $microsoftToken',
-        }),
+        options: Options(
+          headers: {
+            'content-type': 'application/json',
+            'authorization': 'Bearer $microsoftToken',
+          },
+        ),
       );
     } catch (_) {
       // best-effort: email failure must never surface to the user.
@@ -486,17 +548,17 @@ class IssuesRepository {
   }
 
   Map<String, String> _headers(String token) => {
-        'apikey': supabaseAnonKey,
-        'authorization': 'Bearer $token',
-        'content-type': 'application/json',
-      };
+    'apikey': supabaseAnonKey,
+    'authorization': 'Bearer $token',
+    'content-type': 'application/json',
+  };
 
   Map<String, String> _insertHeaders(String token) => {
-        'apikey': supabaseAnonKey,
-        'authorization': 'Bearer $token',
-        'content-type': 'application/json',
-        'prefer': 'return=representation',
-      };
+    'apikey': supabaseAnonKey,
+    'authorization': 'Bearer $token',
+    'content-type': 'application/json',
+    'prefer': 'return=representation',
+  };
 }
 
 // ---- keyword rules (ported verbatim from the web) --------------------------
@@ -511,16 +573,33 @@ class _PurposeRule {
 }
 
 final _purposeRules = <_PurposeRule>[
-  _PurposeRule(IssuePurpose.bug, IssuePriority.p2, IssueSeverity.high,
-      RegExp(r'안\s*됨|안돼|안된|에러|오류|크래시|crash|실패|fail|버그|bug|깨짐|튕김|먹통|안 나와|작동', caseSensitive: false)),
-  _PurposeRule(IssuePurpose.feature, IssuePriority.p3, IssueSeverity.medium,
-      RegExp(r'추가|개선|요청|주세요|했으면|기능|feature|지원|넣어|만들어', caseSensitive: false)),
-  _PurposeRule(IssuePurpose.question, IssuePriority.p4, IssueSeverity.low,
-      RegExp(r'\?|인가요|문의|어떻게|가능한가|질문|how|왜', caseSensitive: false)),
+  _PurposeRule(
+    IssuePurpose.bug,
+    IssuePriority.p2,
+    IssueSeverity.high,
+    RegExp(
+      r'안\s*됨|안돼|안된|에러|오류|크래시|crash|실패|fail|버그|bug|깨짐|튕김|먹통|안 나와|작동',
+      caseSensitive: false,
+    ),
+  ),
+  _PurposeRule(
+    IssuePurpose.feature,
+    IssuePriority.p3,
+    IssueSeverity.medium,
+    RegExp(r'추가|개선|요청|주세요|했으면|기능|feature|지원|넣어|만들어', caseSensitive: false),
+  ),
+  _PurposeRule(
+    IssuePurpose.question,
+    IssuePriority.p4,
+    IssueSeverity.low,
+    RegExp(r'\?|인가요|문의|어떻게|가능한가|질문|how|왜', caseSensitive: false),
+  ),
 ];
 
-final _escalateRe =
-    RegExp(r'긴급|급함|전혀|아무도|안돼요|urgent|critical|심각|중요', caseSensitive: false);
+final _escalateRe = RegExp(
+  r'긴급|급함|전혀|아무도|안돼요|urgent|critical|심각|중요',
+  caseSensitive: false,
+);
 
 IssuePriority _escalatePriority(IssuePriority p) {
   const order = [

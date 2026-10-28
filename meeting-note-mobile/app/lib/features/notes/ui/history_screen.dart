@@ -9,6 +9,7 @@ import '../../auth/data/mobile_supabase_session.dart';
 import '../../projects/data/projects_repository.dart';
 import '../data/notes_repository.dart';
 import '../models/meeting_note.dart';
+import '../../../core/network/error_message.dart';
 
 class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
@@ -174,7 +175,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                         return const Center(child: CircularProgressIndicator());
                       }
                       return _ErrorState(
-                        error: snapshot.error,
+                        message: friendlyErrorMessage(snapshot.error, t.call),
                         title: t('history.loadFailedTitle'),
                         retryLabel: t('history.tryAgain'),
                         onRetry: _refresh,
@@ -2123,13 +2124,13 @@ Color _noteAccentColor(MeetingNote note, String? currentUserId) {
 
 class _ErrorState extends StatelessWidget {
   const _ErrorState({
-    required this.error,
+    required this.message,
     required this.title,
     required this.retryLabel,
     required this.onRetry,
   });
 
-  final Object? error;
+  final String message;
   final String title;
   final String retryLabel;
   final VoidCallback onRetry;
@@ -2139,7 +2140,7 @@ class _ErrorState extends StatelessWidget {
     return EmptyState(
       icon: Icons.error_outline_rounded,
       title: title,
-      subtitle: error.toString(),
+      subtitle: message,
       action: FilledButton(
         onPressed: onRetry,
         child: Text(retryLabel),

@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../../../core/cache/json_cache_store.dart';
 import '../../../core/network/supabase_config.dart';
 import '../../auth/data/mobile_supabase_session.dart';
+import '../../../core/network/dio_factory.dart';
 
 /// Upload order, so a just-uploaded old file stays on top. recorded_at is
 /// File.lastModified and is display-only.
@@ -69,15 +70,16 @@ class RecentRecording {
 
 class RecentRecordingsRepository {
   RecentRecordingsRepository()
-      : _supabase = Dio(
-          BaseOptions(
-            baseUrl: supabaseUrl.replaceAll(RegExp(r'/$'), ''),
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
-        ) {
-    _supabase.interceptors
-        .add(MobileSupabaseSession().retryOnUnauthorizedInterceptor());
+    : _supabase = createAppDio(
+        BaseOptions(
+          baseUrl: supabaseUrl.replaceAll(RegExp(r'/$'), ''),
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      ) {
+    _supabase.interceptors.add(
+      MobileSupabaseSession().retryOnUnauthorizedInterceptor(),
+    );
   }
 
   final Dio _supabase;
@@ -221,17 +223,19 @@ class RecentRecordingsRepository {
       sizeBytes: _int(row['size_bytes']),
       source: row['source'] as String?,
       recordedAt: _date(row['recorded_at']),
-      createdAt: _date(row['created_at']) ?? DateTime.fromMillisecondsSinceEpoch(0),
+      createdAt:
+          _date(row['created_at']) ?? DateTime.fromMillisecondsSinceEpoch(0),
     );
   }
 
   Map<String, String> _headers(String token) => {
-        'apikey': supabaseAnonKey,
-        'authorization': 'Bearer $token',
-        'content-type': 'application/json',
-      };
+    'apikey': supabaseAnonKey,
+    'authorization': 'Bearer $token',
+    'content-type': 'application/json',
+  };
 
-  String _recentRecordingsCacheKey(String userId) => 'recent_recordings_$userId';
+  String _recentRecordingsCacheKey(String userId) =>
+      'recent_recordings_$userId';
 
   String _encodeStoragePath(String path) =>
       path.split('/').map(Uri.encodeComponent).join('/');

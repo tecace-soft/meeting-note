@@ -6,6 +6,7 @@ import '../../../core/i18n/app_strings.dart';
 import '../../../shared/widgets/widgets.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../data/issues_repository.dart';
+import '../../../core/network/error_message.dart';
 
 /// F2 mobile: team feedback / issues board (web parity).
 /// Scope: LIST + CREATE + READ-ONLY DETAIL. Triage/assignment/resolution editing stays web-only.
@@ -111,7 +112,7 @@ class _IssuesScreenState extends ConsumerState<IssuesScreen> {
                   if (snapshot.hasError) {
                     return _ErrorView(
                       title: t('issues.loadError'),
-                      error: snapshot.error,
+                      message: friendlyErrorMessage(snapshot.error, t.call),
                       retryLabel: t('common.tryAgain'),
                       onRetry: _refresh,
                     );
@@ -876,13 +877,13 @@ class _Dropdown<T> extends StatelessWidget {
 class _ErrorView extends StatelessWidget {
   const _ErrorView({
     required this.title,
-    required this.error,
+    required this.message,
     required this.retryLabel,
     required this.onRetry,
   });
 
   final String title;
-  final Object? error;
+  final String message;
   final String retryLabel;
   final VoidCallback onRetry;
 
@@ -908,7 +909,7 @@ class _ErrorView extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              error.toString(),
+              message,
               textAlign: TextAlign.center,
               style: TextStyle(color: palette.textSecondary, fontSize: 13),
             ),
