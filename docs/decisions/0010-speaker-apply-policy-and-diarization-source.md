@@ -1,7 +1,7 @@
 ---
 id: DEC-0010
 date: 2026-08-12
-status: active
+status: superseded
 question: 화자 이름 제안을 어떻게 적용하고, 이름의 기준 출처를 무엇으로 둘 것인가
 options:
   - 모든 제안을 자동 적용
