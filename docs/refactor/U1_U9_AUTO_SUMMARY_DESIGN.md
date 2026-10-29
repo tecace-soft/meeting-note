@@ -103,8 +103,8 @@ job 완료 -> 요약 화면 표시
   그래서 사용자가 먼저 이름을 고친 라벨에 늦게 도착한 제안은 보이지 않고 아무것도 덮지 않는다.
 - 저장소는 최대 50개 키를 넣은 순서대로 버린다.
   identify-speakers 요청은 60초 timeout을 둔다.
-- SummaryHistory는 autoSuggest를 켜지 않는다(이 PR은 새 노트 화면만).
-  같은 저장소를 쓰므로 그 화면에서 누른 제안도 다시 열 때 남는다.
+- SummaryHistory도 전사를 열면 autoSuggest로 제안을 자동 표시한다(Andrew 승인, 2026-10-29 후속 웹 PR).
+  목록의 모바일 상세, 데스크톱 상세와 캘린더 상세는 같은 저장소를 쓰므로 탭 전환, 다시 열기와 새 노트 화면 전환에도 같은 노트의 자동 요청을 반복하지 않는다.
 
 ## 4. 이름 반영 요약 갱신
 
@@ -204,7 +204,8 @@ regenerate 라우트는 지금 `summary_edit`에 결과를 쓴다(routes/regener
 - 제안 상태를 지역 state에서 `useSpeakerSuggestions`(공유 저장소)로 옮긴다.
 - 선택 prop `autoSuggest`(기본 false)와 `suggestionPanel`(`inline` 기본, `hidden`, `only`)을 추가한다.
 - 제안 카드는 익명 라벨이 남아 있을 때만 보인다.
-- 기본값에서 SummaryHistory의 동작은 같고, 차이는 같은 세션에서 다시 열면 이전 제안이 남는다는 점이다.
+- autoSuggest의 기본값은 false이고 SummaryHistory는 세 전사 편집기에서 명시적으로 켠다.
+  제안의 적용은 계속 사용자 확인이며 이름 저장과 노트 공유는 별개다.
 
 `FloatingRecorderWidget.tsx`: 중지와 "녹음 확인" 이동에 `state: { autoSummarize: true }`를 붙인다.
 
@@ -229,7 +230,7 @@ Andrew의 docs:verify 일괄 정리 때 `speaker-id` 문서에 아래 내용을 
 첫 줄은 "Suggest UI가 이 함수를 호출한다." 바로 뒤, 나머지는 "## cold-start 한계" 앞에 넣는다.
 
 ```markdown
-웹의 새 노트 화면은 노트가 생기면 이 함수를 노트당 한 번 자동으로 부르고(DEC-0024), 기록 화면은 Suggest를 눌러야 부른다.
+웹의 새 노트 화면은 노트가 생기면, 기록 화면은 전사를 열면 이 함수를 노트당 세션에서 한 번 자동으로 부른다(DEC-0024).
 ## 웹 새 노트 화면의 자동 제안과 요약 갱신 (DEC-0024)
 
 - 노트가 생기면 요약 위에 "화자 자동 식별" 카드가 나타나고 제안이 자동으로 채워진다.
