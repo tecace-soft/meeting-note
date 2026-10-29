@@ -347,7 +347,7 @@ describe('useSummaryNameRefresh failures', () => {
   });
 
   it('an older server that saved by itself: show its summary, pause automatic refresh, no replace prompt', async () => {
-    const { rerender, regenerate, saveSummary, onApply, result } = setup({ currentSummary: 'My own words' });
+    const { rerender, regenerate, saveSummary, onApply, result } = setup();
     regenerate.mockResolvedValueOnce({ summary: 'Saved by server', persisted: null });
     rerender({ segments: transcript('Andrew', 'Hansoo') });
     await passDebounce();
@@ -376,4 +376,95 @@ describe('useSummaryNameRefresh failures', () => {
     expect(onApply).not.toHaveBeenCalled();
     expect((regenerate.mock.calls[0][1] as AbortSignal).aborted).toBe(true);
   });
+});
+
+
+describe('review #61: editor and late-save protection', () => {
+  it('reports an already-saved refresh to the editor without replacing its draft', async () => {
+    const save = deferred<boolean>();
+    const onSavedWhileEditing = vi.fn();
+    const view = setup({ onSavedWhileEditing });
+    view.saveSummary.mockImplementationOnce(() => save.promise);
+    view.rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    view.rerender({ isEditing: true });
+    await act(async () => { save.resolve(true); });
+    await flush();
+    vi.useRealTimers();
+    expect(onSavedWhileEditing).toHaveBeenCalledWith('Named summary');
+    expect(view.onApply).not.toHaveBeenCalled();
+  }, 5000);
+
+  it('keeps a timed-out write as a barrier, reconciles it, then permits the next refresh', async () => {
+    const save = deferred<boolean>();
+    const view = setup();
+    view.saveSummary.mockImplementationOnce(() => save.promise);
+    view.rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(NAME_REFRESH_RUN_DEADLINE_MS); });
+    const phaseAtDeadline = view.result.current.phase;
+    const busyAtDeadline = view.result.current.isBusy?.();
+    const errorAtDeadline = view.result.current.error;
+    act(() => view.result.current.retry());
+    await flush();
+    const attemptsWhileSaving = view.regenerate.mock.calls.length;
+    view.readSavedEdit.mockResolvedValue('Named summary');
+    await act(async () => { save.resolve(true); });
+    await flush();
+    const appliedAfterSave = view.onApply.mock.calls.map((call) => call[0]);
+    const busyAfterSave = view.result.current.isBusy?.();
+    view.rerender({ segments: transcript('Andrew', 'Mina'), currentSummary: 'Named summary' });
+    await passDebounce();
+    vi.useRealTimers();
+    expect(phaseAtDeadline).toBe('idle');
+    expect(errorAtDeadline).toMatch(/timed out/);
+    expect(busyAtDeadline).toBe(true);
+    expect(attemptsWhileSaving).toBe(1);
+    expect(appliedAfterSave).toEqual(['Named summary']);
+    expect(busyAfterSave).toBe(false);
+    expect(view.regenerate).toHaveBeenCalledTimes(2);
+  }, 5000);
+
+  it('preserves a draft when a timed-out save commits after the editor opens', async () => {
+    const save = deferred<boolean>();
+    const onSavedWhileEditing = vi.fn();
+    const view = setup({ onSavedWhileEditing });
+    view.saveSummary.mockImplementationOnce(() => save.promise);
+    view.rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(NAME_REFRESH_RUN_DEADLINE_MS); });
+    view.rerender({ isEditing: true, currentSummary: 'My draft' });
+    view.readSavedEdit.mockResolvedValue('Named summary');
+    await act(async () => { save.resolve(true); });
+    await flush();
+    vi.useRealTimers();
+    expect(onSavedWhileEditing).toHaveBeenCalledWith('Named summary');
+    expect(view.onApply).not.toHaveBeenCalled();
+  }, 5000);
+
+  it('never reconciles an old note write onto a different note', async () => {
+    const save = deferred<boolean>();
+    const view = setup();
+    view.saveSummary.mockImplementationOnce(() => save.promise);
+    view.rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(NAME_REFRESH_RUN_DEADLINE_MS); });
+    view.rerender({ noteId: 'n2', currentSummary: 'Other note', segments: transcript() });
+    await act(async () => { save.resolve(true); });
+    await flush();
+    vi.useRealTimers();
+    expect(view.onApply).not.toHaveBeenCalled();
+    expect(view.result.current.pendingReplacement).toBeNull();
+  }, 5000);
+
+  it('checks hand edits before taking the old-backend display path', async () => {
+    const view = setup({ currentSummary: 'My own words' });
+    view.regenerate.mockResolvedValueOnce({ summary: 'Saved by old server', persisted: null });
+    view.rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    vi.useRealTimers();
+    expect(view.onApply).not.toHaveBeenCalled();
+    expect(view.result.current.pendingReplacement).toBe('Saved by old server');
+    expect(view.result.current.autoPaused).toBe(true);
+  }, 5000);
 });
