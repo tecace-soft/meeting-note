@@ -21,6 +21,7 @@ paths:
   - workflow-server/src/routes/jobs.ts
   - workflow-server/src/pipeline/transcription.ts
   - workflow-server/src/pipeline/resumeAudio.ts
+  - workflow-server/src/pipeline/errors.ts
   - workflow-server/src/pipeline/summarize.ts
   - workflow-server/src/pipeline/usage.ts
   - workflow-server/src/index.ts
@@ -38,13 +39,20 @@ S12(SIGTERM 처리, 503)와 동시 실행 상한은 이 결정에 들어 있지 
 ## 재개 시 오디오 재서명 (#23, 2026-10-28)
 
 웹과 Flutter 작업은 클라이언트가 만든 6시간짜리 서명 링크를 request에 저장하므로, 서버가 그보다 오래 멈추면 재개 시 링크가 만료돼 있다.
-재개 경로에서 새 AssemblyAI 제출이 필요할 때만, 링크 토큰의 만료가 지났거나 10분 안에 지나거나 probe가 4xx를 답하면 서버가 같은 녹음을 다시 서명한다.
-재서명은 request의 fileId로 file 행을 찾고 다음을 모두 만족할 때만 한다.
+재개 경로에서 새 AssemblyAI 제출이 필요할 때만, 링크 토큰의 만료가 지났거나 10분 안에 지나거나 probe가 4xx를 답하면 서버가 저장된 링크가 가리키던 녹음을 다시 서명한다.
+재서명은 다음을 모두 만족할 때만 한다.
 저장된 링크가 이 프로젝트의 meeting-recordings 서명 링크이고 객체 이름이 평범한 업로드 이름(`[A-Za-z0-9._-]` 세그먼트, 점으로 시작하는 세그먼트와 인코딩 없음)이다.
-file 행이 작업 사용자 소유이고 meeting-recordings에 있으며 저장된 링크와 같은 객체를 가리킨다.
-`storage_object_owner`(storage.objects.owner_id, DEC-0002)가 작업 사용자와 같다.
-file 행은 클라이언트가 쓸 수 있어 위조할 수 있으므로 owner_id가 최종 근거이며, owner가 없는(legacy) 객체는 재서명하지 않는다.
-새 링크가 같은 객체를 가리키고 실제로 응답해야 제출한다.
-하나라도 어긋나거나 조회와 서명이 실패하면 기존의 "녹음은 남아 있으니 다시 시작해 주세요" 메시지로 실패시키고 경고 로그만 남긴다(ops incident 없음).
-fileId가 없는 예전 작업, 프로젝트 밖 호스트의 링크, 스토리지 5xx나 네트워크 오류는 기존 동작을 유지한다.
+request에 fileId가 있으면 그 file 행이 작업 사용자 소유이고 meeting-recordings에 있으며 저장된 링크와 같은 객체를 가리킨다.
+fileId가 있는데 file 행이 어긋나면 변조 신호로 보고 거부한다.
+fileId가 없으면(file 행 저장에 실패한 웹 업로드, 예전 Flutter storage ref) 저장된 링크의 경로만으로 찾고 아래 owner 검사만으로 판단한다(2026-10-28 Andrew 결정 b).
+`storage_object_owner`(storage.objects.owner_id, DEC-0002)가 null이 아니고 작업 사용자와 같다.
+file 행은 클라이언트가 쓸 수 있어 위조할 수 있으므로 owner_id가 최종 근거이며, owner가 없는(legacy) 객체는 file 행 대체 확인 없이 재서명하지 않는다(2026-10-28 Andrew 결정 a).
+새 링크가 같은 bucket과 객체를 가리키고 실제로 응답해야 제출한다.
+하나라도 어긋나면 기존의 "녹음은 남아 있으니 다시 시작해 주세요" 메시지로 실패시킨다.
+소유권, bucket, 경로 거부는 예상된 결과이므로 경고 로그만 남기고 ops incident를 만들지 않는다.
+조회 실패와 서명 실패(lookup-failed, sign-failed)는 DB나 스토리지 장애이므로 error 로그와 ops incident를 남긴다.
+로그에 남기는 거부 상세는 서명 링크를 지우고 JSON으로 감싸서 클라이언트가 보낸 문자열이 로그 줄을 위조하지 못하게 한다.
+저장된 링크가 아직 만료되지 않았는데(10분 margin 안) 재서명이 거부되거나 실패하면, 저장된 링크를 probe해 응답하면 #23 이전처럼 그 링크로 제출한다.
+프로젝트 밖 호스트의 링크, 스토리지 5xx와 429, 네트워크 오류는 새 서명으로 나아지지 않으므로 기존 동작을 유지한다.
+AssemblyAI 오류 본문은 audio_url(서명 링크)을 되돌려 줄 수 있으므로 job 오류, 로그, incident에 쓰기 전에 서명 링크와 token 값을 지운다.
 Android 작업은 서버가 쓴 storagePath로 재서명하는 기존 규칙을 그대로 쓴다.
