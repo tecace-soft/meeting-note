@@ -139,6 +139,31 @@ export async function readOwnedNoteSummaryEdit(input: { noteId: string; userId: 
   return typeof value === 'string' ? value : null;
 }
 
+/**
+ * Owner-scoped conditional write: saves `text` as summary_edit only while the note has no saved
+ * summary edit (null or empty), in one UPDATE. Resolves false when no row matched (an edit was
+ * saved meanwhile, or the note is not the owner's), so the caller asks instead of overwriting.
+ * A non-empty known value is not compared in the filter: PostgREST filters travel in the URL and a
+ * long summary would exceed its length limit; the caller re-reads right before writing instead.
+ */
+export async function saveOwnedNoteSummaryEditIfUnsaved(input: {
+  noteId: string;
+  userId: string;
+  text: string;
+}): Promise<boolean> {
+  const userId = requireOwnerId(input.userId);
+  const { data, error } = await supabase
+    .from('note')
+    .update({ summary_edit: input.text })
+    .eq('id', input.noteId)
+    .eq('user_id', userId)
+    .or('summary_edit.is.null,summary_edit.eq.')
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
 /** Owner-scoped share-list write. Unlike updateOwnedNote it does not confirm a changed row (unchanged from the modal's old behavior). */
 export async function setNoteSharedUsersAsOwner(input: { noteId: string; userId: string; sharedUsers: string[] }): Promise<void> {
   requireOwnerId(input.userId);

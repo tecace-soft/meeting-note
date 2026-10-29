@@ -22,6 +22,7 @@ const h = vi.hoisted(() => {
     patchNoteReturningId: null as unknown as ReturnType<typeof vi.fn>,
     patchOwnedNoteReturningId: null as unknown as ReturnType<typeof vi.fn>,
     readOwnedNoteSummaryEdit: null as unknown as ReturnType<typeof vi.fn>,
+    saveIfUnsaved: null as unknown as ReturnType<typeof vi.fn>,
     fetchReferencingNotes: null as unknown as ReturnType<typeof vi.fn>,
     upload: null as unknown as ReturnType<typeof vi.fn>,
     fileInsert: null as unknown as ReturnType<typeof vi.fn>,
@@ -86,7 +87,9 @@ vi.mock('../lib/notes/repository', () => {
   h.patchNoteReturningId = vi.fn(async () => ({ id: 'note-1' }));
   h.patchOwnedNoteReturningId = vi.fn(async () => ({ id: 'note-1' }));
   h.readOwnedNoteSummaryEdit = vi.fn(async () => null);
+  h.saveIfUnsaved = vi.fn(async () => true);
   return {
+    saveOwnedNoteSummaryEditIfUnsaved: (...a: unknown[]) => h.saveIfUnsaved(...a),
     patchNoteReturningId: (...a: unknown[]) => h.patchNoteReturningId(...a),
     patchOwnedNoteReturningId: (...a: unknown[]) => h.patchOwnedNoteReturningId(...a),
     readOwnedNoteSummaryEdit: (...a: unknown[]) => h.readOwnedNoteSummaryEdit(...a),
@@ -263,6 +266,8 @@ beforeEach(() => {
   h.patchOwnedNoteReturningId.mockClear();
   h.readOwnedNoteSummaryEdit.mockReset();
   h.readOwnedNoteSummaryEdit.mockResolvedValue(null);
+  h.saveIfUnsaved.mockReset();
+  h.saveIfUnsaved.mockResolvedValue(true);
   h.fetchReferencingNotes.mockReset();
   h.fetchReferencingNotes.mockResolvedValue([]);
   h.upload = vi.fn(async () => ({ error: null }));
@@ -297,11 +302,34 @@ describe('TranscriptionSummary speaker suggestions and name-aware refresh (U9)',
     const body = regenerateCalls()[0].body!;
     expect(body.persist).toBe(false);
     expect((body.diarization as Seg[]).map((s) => s.speaker)).toEqual(['Andrew', 'Hansoo', 'Speaker C']);
-    expect(h.patchOwnedNoteReturningId).toHaveBeenCalledWith({
-      noteId: 'note-1',
-      userId: 'user-1',
-      patch: { summary_edit: 'Andrew and Hansoo agreed.' },
-    });
+    // Nothing was saved yet: one conditional owner-scoped write (only while summary_edit is empty).
+    expect(h.saveIfUnsaved).toHaveBeenCalledWith({ noteId: 'note-1', userId: 'user-1', text: 'Andrew and Hansoo agreed.' });
+    expect(h.patchOwnedNoteReturningId).not.toHaveBeenCalled();
+  });
+
+  it('an edit saved elsewhere while the request was in flight is kept, and the page asks instead', async () => {
+    h.readOwnedNoteSummaryEdit.mockResolvedValueOnce(null).mockResolvedValue('Edited in another tab.');
+    await openCompletedNote();
+    await nameMainSpeakers();
+    await passDebounce();
+    await screen.findByText('newSummaryReady');
+    expect(h.saveIfUnsaved).not.toHaveBeenCalled();
+    expect(h.patchOwnedNoteReturningId).not.toHaveBeenCalled();
+    expect(screen.getByText('Generic summary about Speaker A.')).toBeInTheDocument();
+  });
+
+  it('an older backend that saved by itself: shows its summary with a neutral notice, no replace prompt, no more auto refresh', async () => {
+    regenerateResponses.push(() => Response.json({ summary: 'Saved by the old server.' }));
+    await openCompletedNote();
+    await nameMainSpeakers();
+    await passDebounce();
+    await screen.findByText('Saved by the old server.');
+    expect(screen.getByText('summaryUpdatedAutoPaused')).toBeInTheDocument();
+    expect(screen.queryByText('newSummaryReady')).not.toBeInTheDocument();
+    expect(h.saveIfUnsaved).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'rename-b' }));
+    await passDebounce();
+    expect(regenerateCalls()).toHaveLength(1);
   });
 
   it('asks before replacing a summary the user edited, and replaces only on accept', async () => {

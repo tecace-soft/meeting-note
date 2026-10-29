@@ -5,6 +5,7 @@ import type { RegenerateSummaryResult } from '../../lib/regenerateSummary';
 import {
   MAX_AUTO_NAME_REFRESHES_PER_NOTE,
   NAME_REFRESH_DEBOUNCE_MS,
+  NAME_REFRESH_RUN_DEADLINE_MS,
   useSummaryNameRefresh,
   type SummaryNameRefreshInput,
 } from './useSummaryNameRefresh';
@@ -37,7 +38,7 @@ function setup(initial: Props = {}) {
     })
   );
   const readSavedEdit = vi.fn(async (): Promise<string | null> => null);
-  const saveSummary = vi.fn(async () => undefined);
+  const saveSummary = vi.fn(async (_text: string, _options: { onlyIfUnsaved: boolean }) => true);
   const onApply = vi.fn();
   const base: SummaryNameRefreshInput = {
     noteId: 'n1',
@@ -105,7 +106,8 @@ describe('useSummaryNameRefresh trigger', () => {
     await passDebounce();
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate.mock.calls[0][0]).toEqual(named);
-    expect(saveSummary).toHaveBeenCalledWith('Named summary');
+    // Nothing was saved yet, so the write is conditional on summary_edit still being empty.
+    expect(saveSummary).toHaveBeenCalledWith('Named summary', { onlyIfUnsaved: true });
     expect(onApply).toHaveBeenCalledWith('Named summary');
     expect(result.current.phase).toBe('idle');
     await passDebounce();
@@ -210,7 +212,7 @@ describe('useSummaryNameRefresh hand edits', () => {
     await act(async () => {
       await result.current.acceptReplacement();
     });
-    expect(saveSummary).toHaveBeenCalledWith('Named summary');
+    expect(saveSummary).toHaveBeenCalledWith('Named summary', { onlyIfUnsaved: false });
     expect(onApply).toHaveBeenCalledWith('Named summary');
     expect(result.current.pendingReplacement).toBeNull();
   });
@@ -248,6 +250,50 @@ describe('useSummaryNameRefresh hand edits', () => {
     rerender({ segments: transcript('Andrew', 'Mina'), currentSummary: 'Named summary' });
     await passDebounce();
     expect(onApply).toHaveBeenCalledTimes(2);
+  });
+
+  it('an edit saved elsewhere while the request was in flight is not overwritten; it asks instead', async () => {
+    const { rerender, readSavedEdit, saveSummary, onApply, result } = setup();
+    readSavedEdit.mockResolvedValueOnce(null).mockResolvedValueOnce('Edited in another tab');
+    rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    expect(readSavedEdit).toHaveBeenCalledTimes(2);
+    expect(saveSummary).not.toHaveBeenCalled();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(result.current.pendingReplacement).toBe('Named summary');
+  });
+
+  it('a conditional save that finds a changed summary asks instead of applying', async () => {
+    const { rerender, saveSummary, onApply, result } = setup();
+    saveSummary.mockResolvedValueOnce(false);
+    rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(result.current.pendingReplacement).toBe('Named summary');
+  });
+
+  it('after a previous refresh the save is unconditional only when the saved text is a generated one', async () => {
+    const { rerender, readSavedEdit, saveSummary } = setup();
+    rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    readSavedEdit.mockResolvedValue('Named summary');
+    rerender({ segments: transcript('Andrew', 'Mina'), currentSummary: 'Named summary' });
+    await passDebounce();
+    expect(saveSummary).toHaveBeenLastCalledWith('Named summary', { onlyIfUnsaved: false });
+  });
+
+  it('does not replace the screen when the editor opened while saving', async () => {
+    const save = deferred<boolean>();
+    const { rerender, saveSummary, onApply } = setup();
+    saveSummary.mockImplementationOnce(() => save.promise);
+    rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    rerender({ isEditing: true });
+    await act(async () => {
+      save.resolve(true);
+    });
+    await flush();
+    expect(onApply).not.toHaveBeenCalled();
   });
 
   it('dismissing keeps the edit and does not ask again for the same names', async () => {
@@ -300,12 +346,34 @@ describe('useSummaryNameRefresh failures', () => {
     expect(result.current.error).toBe('Could not save');
   });
 
-  it('does not save again when the server already saved', async () => {
-    const { rerender, regenerate, saveSummary, onApply } = setup();
-    regenerate.mockResolvedValueOnce({ summary: 'Saved by server', persisted: true });
+  it('an older server that saved by itself: show its summary, pause automatic refresh, no replace prompt', async () => {
+    const { rerender, regenerate, saveSummary, onApply, result } = setup({ currentSummary: 'My own words' });
+    regenerate.mockResolvedValueOnce({ summary: 'Saved by server', persisted: null });
     rerender({ segments: transcript('Andrew', 'Hansoo') });
     await passDebounce();
     expect(saveSummary).not.toHaveBeenCalled();
+    expect(result.current.pendingReplacement).toBeNull();
     expect(onApply).toHaveBeenCalledWith('Saved by server');
+    expect(result.current.serverSavedNotice).toBe(true);
+    expect(result.current.autoPaused).toBe(true);
+    rerender({ segments: transcript('Andrew', 'Mina') });
+    await passDebounce();
+    expect(regenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after the run deadline even if a step never settles', async () => {
+    const { rerender, regenerate, onApply, result } = setup();
+    regenerate.mockImplementationOnce(() => new Promise<never>(() => undefined));
+    rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    expect(result.current.phase).toBe('running');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NAME_REFRESH_RUN_DEADLINE_MS);
+    });
+    await flush();
+    expect(result.current.phase).toBe('idle');
+    expect(result.current.error).toMatch(/timed out/);
+    expect(onApply).not.toHaveBeenCalled();
+    expect((regenerate.mock.calls[0][1] as AbortSignal).aborted).toBe(true);
   });
 });

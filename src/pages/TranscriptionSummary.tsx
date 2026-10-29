@@ -7,6 +7,7 @@ import {
   patchOwnedNoteReturningId,
   readOwnedNoteSummaryEdit,
   saveNoteTranslations,
+  saveOwnedNoteSummaryEditIfUnsaved,
 } from '../lib/notes/repository';
 import { loadSpeakerProfilesForSummary, requestRegeneratedSummary } from '../lib/regenerateSummary';
 import { useSummaryNameRefresh } from './transcriptionSummary/useSummaryNameRefresh';
@@ -441,10 +442,14 @@ const TranscriptionSummary: React.FC = () => {
       if (!currentNoteId || !user?.id) throw new Error('No note is open.');
       return readOwnedNoteSummaryEdit({ noteId: currentNoteId, userId: user.id });
     },
-    saveSummary: async (text) => {
+    saveSummary: async (text, { onlyIfUnsaved }) => {
       if (!currentNoteId || !user?.id) throw new Error('No note is open.');
+      if (onlyIfUnsaved) {
+        return saveOwnedNoteSummaryEditIfUnsaved({ noteId: currentNoteId, userId: user.id, text });
+      }
       const row = await patchOwnedNoteReturningId({ noteId: currentNoteId, userId: user.id, patch: { summary_edit: text } });
       if (!row) throw new Error('Could not save the summary. Please refresh and try again.');
+      return true;
     },
     onApply: (text) => {
       setEditedSummary(text);
@@ -1934,6 +1939,13 @@ const TranscriptionSummary: React.FC = () => {
           <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />
           {t('updatingSummaryWithNames')}
         </div>
+      );
+    }
+    if (nameRefresh.serverSavedNotice) {
+      return (
+        <p className="mb-3 text-xs" role="status" style={{ color: 'var(--text-muted)' }}>
+          {t('summaryUpdatedAutoPaused')}
+        </p>
       );
     }
     if (nameRefresh.autoPaused) {
