@@ -259,6 +259,79 @@ Source diarized transcript JSON:
 ${JSON.stringify({ segments: input.segments }).slice(0, 180000)}`;
 }
 
+// A generic diarization label ("Speaker A", "Speaker 1", "Unknown Speaker", "Transcript") rather
+// than a real name the user set. Mirrors the web's isAnonymousSpeakerLabel (src/lib/identifySpeakers.ts).
+function isGenericSpeakerLabel(label: string): boolean {
+  const t = label.trim();
+  if (!t) return false;
+  return /^(speaker|transcript|unknown)\b/i.test(t) || /^speaker\s*#?\s*\d+$/i.test(t);
+}
+
+// A speaker below this share of the speaking time is "minor" (DEC-0024). Mirrors
+// MAIN_SPEAKER_MIN_SHARE in src/lib/speakers/mainSpeakers.ts (web): main speakers are at or
+// above it. Keep the two values equal.
+export const MINOR_SPEAKER_MAX_SHARE = 0.1;
+
+interface ShareSegment {
+  speaker: string;
+  speakerKey?: string;
+  text: string;
+  start?: number;
+  end?: number;
+}
+
+function segmentSeconds(segment: ShareSegment): number | null {
+  const { start, end } = segment;
+  if (typeof start !== 'number' || typeof end !== 'number') return null;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return end - start;
+}
+
+// Share of the speaking time per speaker key (speakerKey, else the display label). Uses start/end
+// when every segment has a valid time, otherwise text length; same rule as the web's speakerShares.
+function speakerShareByKey(segments: readonly ShareSegment[]): Map<string, number> {
+  const useTime = segments.length > 0 && segments.every((segment) => segmentSeconds(segment) !== null);
+  const weights = new Map<string, number>();
+  let total = 0;
+  for (const segment of segments) {
+    const key = segment.speakerKey?.trim() || segment.speaker.trim();
+    const weight = useTime ? (segmentSeconds(segment) ?? 0) : segment.text.trim().length;
+    weights.set(key, (weights.get(key) ?? 0) + weight);
+    total += weight;
+  }
+  const shares = new Map<string, number>();
+  for (const [key, weight] of weights) shares.set(key, total > 0 ? weight / total : 0);
+  return shares;
+}
+
+// U1/U9 (DEC-0024): generic labels of MINOR speakers (under MINOR_SPEAKER_MAX_SHARE of the speaking
+// time) in a transcript where the user has named at least one speaker, in first-seen order. Unnamed
+// main speakers are not listed, so they keep their own labels in the summary. Returns [] when there
+// is nothing to fold, which keeps the regenerate prompt byte-identical.
+export function minorUnnamedSpeakerLabels(segments: readonly ShareSegment[]): string[] {
+  const shares = speakerShareByKey(segments);
+  const minor: string[] = [];
+  let hasNamed = false;
+  for (const segment of segments) {
+    const label = segment.speaker.trim();
+    if (!label) continue;
+    if (!isGenericSpeakerLabel(label)) {
+      hasNamed = true;
+      continue;
+    }
+    const key = segment.speakerKey?.trim() || label;
+    if ((shares.get(key) ?? 0) < MINOR_SPEAKER_MAX_SHARE && !minor.includes(label)) minor.push(label);
+  }
+  return hasNamed ? minor : [];
+}
+
+function buildUnnamedSpeakerRule(labels: readonly string[] | undefined): string {
+  if (!labels || labels.length === 0) return '';
+  const list = labels.map((label) => `"${label}"`).join(', ');
+  return `
+- UNNAMED SPEAKERS: these labels are minor speakers (a small share of the meeting) the user has NOT named: ${list}. Treat each of them as another participant: attribute their points to "another participant" (or "other participants"), never guess or invent a name for them, and do not list them as named attendees or action owners. Any other generic label in the diarized transcript is a main speaker; keep that label as written. Every real name in the diarized transcript was set by the user; use those names, even where the previous summary used a generic label such as "Speaker A".`;
+}
+
 export function buildRegenerateSummaryPrompt(input: {
   now: string;
   instructions?: string;
@@ -267,6 +340,9 @@ export function buildRegenerateSummaryPrompt(input: {
   previousSummary: string;
   speakerProfiles: unknown;
   personalMemoryContext?: string;
+  // U1/U9 (DEC-0024): generic labels of minor speakers (minorUnnamedSpeakerLabels).
+  // Empty or absent keeps the prompt byte-identical to before.
+  unnamedSpeakerLabels?: readonly string[];
 }): string {
   const userInstructions = input.instructions?.trim() || '';
   const speakerProfiles = typeof input.speakerProfiles === 'string'
@@ -282,6 +358,7 @@ export function buildRegenerateSummaryPrompt(input: {
     ? `\n- Personal memory context is the logged-in user's accumulated memory from PAST meetings. Use it ONLY to connect this meeting to ongoing work: recognize recurring projects, people, and threads, resolve vague references (for example expand "the migration", "the AX thing", or a bare first name to the project, product, or person the memory identifies), and note genuine continuity or contradiction with what the diarized transcript actually says. It must NOT introduce people, decisions, action items, numbers, or any fact that is not present in the diarized transcript. If it is irrelevant to this meeting, ignore it completely.
 - Resolving WHAT a reference points to (a project name, a product, who a person is) is allowed. Asserting a specific VALUE the transcript did not state is NOT: when the transcript only alludes to a prior decision, date, amount, or number without stating it (for example "the launch date we agreed", "the discount we settled on", "the budget"), you may name the topic being referred to, but you MUST NOT substitute the concrete date, number, amount, or decided value from memory. Keep it as "the previously agreed launch date" or "the agreed discount", never a specific value like "October 14" or "20%" unless the diarized transcript itself states it. Never restate a memory item as a fact of this meeting unless the diarized transcript supports it.`
     : '';
+  const unnamedSpeakerRule = buildUnnamedSpeakerRule(input.unnamedSpeakerLabels);
 
   return `Today's date is [DateTime: ${input.now}]
 
@@ -334,7 +411,7 @@ REGENERATION GROUNDING RULES
 - Use speaker profiles only to improve context, speaker attribution, role understanding, relationship understanding, and action item ownership. Do not add facts from speaker profiles unless they help interpret something actually discussed in the transcript. If speaker profiles conflict with the transcript, trust the transcript.
 - Do not expose raw ontology JSON in the summary, and do not mention "ontology" or "speaker profile" unless the meeting itself discussed them.
 - Do not hallucinate. If speaker identity is uncertain, write "Speaker 1", "Speaker 2", etc. rather than guessing.
-- Write the summary in the meeting's original language (Korean meeting → Korean, English meeting → English, mixed → dominant language) unless the SUMMARIZATION RULES specify otherwise.${personalMemoryRule}
+- Write the summary in the meeting's original language (Korean meeting → Korean, English meeting → English, mixed → dominant language) unless the SUMMARIZATION RULES specify otherwise.${personalMemoryRule}${unnamedSpeakerRule}
 
 <inputs>
 DIARIZED TRANSCRIPT:
