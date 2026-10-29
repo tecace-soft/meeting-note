@@ -27,7 +27,7 @@ const NOTE_UNTIMED: Note = { id: 'n3', name: 'Gamma', user_id: 'u1', user_name: 
 const ANN = { speaker: 'Ann', text: 'hi', start: 0, end: 4 };
 const BOB = { speaker: 'Bob', text: 'yo', start: 5 };
 
-const media = { calls: [] as string[], currentTime: 0, duration: Number.NaN, src: '', loadMode: 'ok' as 'ok' | 'error' | 'never' };
+const media = { calls: [] as string[], currentTime: 0, duration: Number.NaN, src: '', loadMode: 'ok' as 'ok' | 'error' | 'never', loadModes: [] as Array<'ok' | 'error' | 'never'> };
 let fetchCalls: { url: string; headers: Record<string, string>; body: unknown }[] = [];
 let fetchHandler: (noteId: string) => { ok: boolean; status?: number; payload: unknown };
 const getAccessToken = vi.fn(async (): Promise<string | null> => 'ms');
@@ -54,7 +54,7 @@ function stubMedia() {
   });
   vi.spyOn(proto, 'load').mockImplementation(function (this: HTMLMediaElement) {
     media.calls.push('load');
-    const mode = media.loadMode;
+    const mode = media.loadModes.shift() ?? media.loadMode;
     setTimeout(() => {
       if (mode === 'ok') this.dispatchEvent(new Event('loadedmetadata'));
       if (mode === 'error') this.dispatchEvent(new Event('error'));
@@ -77,6 +77,7 @@ function setup(initial: Note | null = NOTE_A) {
   });
   const audio = document.createElement('audio');
   view.result.current.audioRef.current = audio;
+  audio.addEventListener('error', () => view.result.current.audioElementProps.onError());
   const fire = (name: string) => act(() => audio.dispatchEvent(new Event(name)));
   return { ...view, audio, fire };
 }
@@ -86,7 +87,7 @@ beforeEach(() => {
   h.appToken = null;
   getAccessToken.mockClear();
   getAccessToken.mockResolvedValue('ms');
-  Object.assign(media, { calls: [], currentTime: 0, duration: Number.NaN, src: '', loadMode: 'ok' });
+  Object.assign(media, { calls: [], currentTime: 0, duration: Number.NaN, src: '', loadMode: 'ok', loadModes: [] });
   fetchCalls = [];
   fetchHandler = (id) => ({ ok: true, payload: { url: `https://audio.example/${id}.mp3` } });
   vi.stubGlobal(
@@ -103,6 +104,7 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   for (const key of ['readyState', 'duration', 'currentTime', 'src']) {
@@ -267,6 +269,147 @@ describe('useNotePlayback playing', () => {
     expect(sawError('blocked')).toBe(true);
     expect(result.current.segmentPlayback).toBeNull();
   });
+
+  it('invalidates only the failed note, signs once more and restores playback after the media error', async () => {
+    const { result, rerender } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    rerender({ note: NOTE_B });
+    await waitFor(() => expect(signed()).toHaveLength(2));
+    rerender({ note: NOTE_A });
+    fetchHandler = (id) => ({ ok: true, payload: { url: `https://audio.example/${id}-fresh.mp3` } });
+    media.loadModes = ['error', 'ok'];
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, ANN, 0));
+    expect(signed().map((call) => (call.body as { noteId: string }).noteId)).toEqual(['n1', 'n2', 'n1']);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(2);
+    expect(media.calls).toContain('src:https://audio.example/n1-fresh.mp3');
+    expect(media.calls).toContain('play');
+    expect(result.current.segmentPlayback).toMatchObject({ noteId: 'n1', segmentIndex: 0, isPlaying: true });
+    expect(result.current.playbackLoadingSegment).toBeNull();
+    rerender({ note: NOTE_B });
+    await act(async () => result.current.playTranscriptSegment(NOTE_B, BOB, 1));
+    expect(signed()).toHaveLength(3);
+  }, 5000);
+
+  it('retries exactly once even when signing returns the same URL, then resets and discards the failed URL', async () => {
+    const { result } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    media.loadMode = 'error';
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, ANN, 0));
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(2);
+    expect(signed()).toHaveLength(2);
+    expect(media.calls).not.toContain('play');
+    expect(result.current.segmentPlayback).toBeNull();
+    expect(result.current.playbackLoadingSegment).toBeNull();
+    media.loadMode = 'ok';
+    media.src = '';
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, ANN, 0));
+    expect(signed()).toHaveLength(3);
+  }, 5000);
+
+  it('does not retry when the refreshed signing request is denied', async () => {
+    const { result } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    fetchHandler = () => ({ ok: false, status: 403, payload: { error: 'no longer shared' } });
+    media.loadMode = 'error';
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, ANN, 0));
+    expect(signed()).toHaveLength(2);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(1);
+    expect(media.calls).not.toContain('play');
+    expect(result.current.segmentPlayback).toBeNull();
+  }, 5000);
+
+  it('at fifteen seconds refreshes the link once and plays if the second metadata load succeeds', async () => {
+    const { result } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    vi.useFakeTimers();
+    let playing!: Promise<void>;
+    let beforeDeadline = 0;
+    let wasLoading = false;
+    try {
+      media.loadModes = ['never', 'ok'];
+      fetchHandler = () => ({ ok: true, payload: { url: 'https://audio.example/fresh.mp3' } });
+      await act(async () => {
+        playing = result.current.playTranscriptSegment(NOTE_A, ANN, 0);
+        await vi.advanceTimersByTimeAsync(14999);
+      });
+      beforeDeadline = signed().length;
+      wasLoading = result.current.playbackLoadingSegment !== null;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(11);
+        await playing;
+      });
+    } finally { vi.useRealTimers(); }
+    expect(beforeDeadline).toBe(1);
+    expect(wasLoading).toBe(true);
+    expect(signed()).toHaveLength(2);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(2);
+    expect(result.current.segmentPlayback?.isPlaying).toBe(true);
+    expect(result.current.playbackLoadingSegment).toBeNull();
+  }, 5000);
+
+  it('bounds both metadata attempts to fifteen seconds and removes every load listener', async () => {
+    const { result, audio } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    const removed = vi.spyOn(audio, 'removeEventListener');
+    media.loadMode = 'never';
+    vi.useFakeTimers();
+    let playing!: Promise<void>;
+    let requestsAfterFirstDeadline = 0;
+    let timers = -1;
+    try {
+      await act(async () => {
+        playing = result.current.playTranscriptSegment(NOTE_A, ANN, 0);
+        await vi.advanceTimersByTimeAsync(15000);
+      });
+      requestsAfterFirstDeadline = signed().length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15000);
+        await playing;
+      });
+      timers = vi.getTimerCount();
+    } finally { vi.useRealTimers(); }
+    expect(requestsAfterFirstDeadline).toBe(2);
+    expect(signed()).toHaveLength(2);
+    expect(result.current.segmentPlayback).toBeNull();
+    expect(result.current.playbackLoadingSegment).toBeNull();
+    expect(timers).toBe(0);
+    for (const event of ['loadedmetadata', 'canplay', 'error']) {
+      expect(removed.mock.calls.filter(([name]) => name === event)).toHaveLength(2);
+    }
+  }, 5000);
+
+  it('does not re-sign for autoplay rejection or an invalid timestamp', async () => {
+    const { result } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValueOnce(new Error('blocked'));
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, ANN, 0));
+    media.duration = 3;
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, BOB, 1));
+    expect(signed()).toHaveLength(1);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(1);
+    expect(result.current.segmentPlayback).toBeNull();
+  }, 5000);
+
+  it('unmount cancels a pending metadata wait without refreshing or leaking its timeout', async () => {
+    const { result, unmount } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    media.loadMode = 'never';
+    vi.useFakeTimers();
+    let playing!: Promise<void>;
+    let timers = -1;
+    try {
+      await act(async () => {
+        playing = result.current.playTranscriptSegment(NOTE_A, ANN, 0);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      unmount();
+      await act(async () => { await playing; });
+      timers = vi.getTimerCount();
+    } finally { vi.useRealTimers(); }
+    expect(timers).toBe(0);
+    expect(signed()).toHaveLength(1);
+    expect(media.calls).not.toContain('play');
+  }, 5000);
 
   it('stops playback when another note is selected, but not while its own note stays selected', async () => {
     const { result, rerender } = setup();

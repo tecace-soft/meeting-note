@@ -10,6 +10,7 @@ import {
   saveOwnedNoteSummaryEditIfUnsaved,
 } from '../lib/notes/repository';
 import { loadSpeakerProfilesForSummary, requestRegeneratedSummary } from '../lib/regenerateSummary';
+import { requestNoteAudioUrl } from '../lib/noteAudioUrl';
 import { useSummaryNameRefresh } from './transcriptionSummary/useSummaryNameRefresh';
 import {
   MIN_AUTO_SUMMARY_SECONDS,
@@ -367,6 +368,7 @@ const TranscriptionSummary: React.FC = () => {
   // without listing an every-render-changing function in its dependency array.
   const runSummaryJobRef = useRef<((jobId: string, noteId: string, token: string) => Promise<void>) | null>(null);
   const resultAudioRef = useRef<HTMLAudioElement | null>(null);
+  const resultPlaybackLoadRef = useRef<AbortController | null>(null);
   const resultPlaybackStopAtRef = useRef<number | null>(null);
   const [resultSegmentPlayback, setResultSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
   const [resultPlaybackLoadingSegmentIndex, setResultPlaybackLoadingSegmentIndex] = useState<number | null>(null);
@@ -1280,7 +1282,8 @@ const TranscriptionSummary: React.FC = () => {
   const isPlayableSegment = (segment: TranscriptSegment): boolean =>
     typeof segment.start === 'number' && Number.isFinite(segment.start) && segment.start >= 0;
 
-  const getResultAudioUrl = async (): Promise<string> => {
+  const getResultAudioUrl = async (refresh = false, signal?: AbortSignal): Promise<string> => {
+    if (refresh && currentNoteId) return requestNoteAudioUrl(currentNoteId, getAccessToken, signal);
     const completedFile = uploadedFiles.find((f) => f.status === 'completed' && (f.storagePath || f.publicUrl));
     if (!completedFile) throw new Error('No audio file is available for playback.');
     if (completedFile.storagePath) {
@@ -1291,6 +1294,9 @@ const TranscriptionSummary: React.FC = () => {
   };
 
   const stopResultSegmentPlayback = () => {
+    resultPlaybackLoadRef.current?.abort();
+    resultPlaybackLoadRef.current = null;
+    setResultPlaybackLoadingSegmentIndex(null);
     const audio = resultAudioRef.current;
     if (audio) audio.pause();
     resultPlaybackStopAtRef.current = null;
@@ -1310,51 +1316,66 @@ const TranscriptionSummary: React.FC = () => {
     const start = segment.start ?? 0;
     const end = typeof segment.end === 'number' && Number.isFinite(segment.end) && segment.end > start ? segment.end : null;
 
+    resultPlaybackLoadRef.current?.abort();
+    const controller = new AbortController();
+    resultPlaybackLoadRef.current = controller;
+    const isCurrent = () => !controller.signal.aborted && resultPlaybackLoadRef.current === controller;
+    const playing = { segmentIndex, start, end, currentTime: start, isPlaying: true };
     try {
       setResultPlaybackLoadingSegmentIndex(segmentIndex);
-      const url = await getResultAudioUrl();
+      let url = await getResultAudioUrl();
+      if (!isCurrent()) return;
       audio.muted = false;
       audio.volume = 1;
       resultPlaybackStopAtRef.current = end;
-      setResultSegmentPlayback({
-        segmentIndex,
-        start,
-        end,
-        currentTime: start,
-        isPlaying: true,
-      });
-      if (audio.src !== url) {
-        audio.src = url;
-        audio.load();
+      setResultSegmentPlayback(playing);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          if (attempt > 0 || audio.src !== url || audio.error || audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+            await new Promise<void>((resolve, reject) => {
+              const cleanup = () => {
+                window.clearTimeout(timeout);
+                audio.removeEventListener('loadedmetadata', onReady);
+                audio.removeEventListener('canplay', onReady);
+                audio.removeEventListener('error', onError);
+                controller.signal.removeEventListener('abort', onAbort);
+              };
+              const onReady = () => { cleanup(); resolve(); };
+              const onError = () => { cleanup(); reject(new Error('Could not load audio for playback.')); };
+              const onAbort = () => { cleanup(); reject(new DOMException('Playback cancelled.', 'AbortError')); };
+              const timeout = window.setTimeout(onError, 15000);
+              audio.addEventListener('loadedmetadata', onReady, { once: true });
+              audio.addEventListener('canplay', onReady, { once: true });
+              audio.addEventListener('error', onError, { once: true });
+              controller.signal.addEventListener('abort', onAbort, { once: true });
+              if (audio.src !== url) audio.src = url;
+              audio.load();
+            });
+          }
+          break;
+        } catch (loadError) {
+          if (!isCurrent()) return;
+          if (attempt > 0) throw loadError;
+          url = await getResultAudioUrl(true, controller.signal);
+          if (!isCurrent()) return;
+        }
       }
-      if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
-        await new Promise<void>((resolve, reject) => {
-          const cleanup = () => {
-            audio.removeEventListener('loadedmetadata', onReady);
-            audio.removeEventListener('canplay', onReady);
-            audio.removeEventListener('error', onError);
-          };
-          const onReady = () => {
-            cleanup();
-            resolve();
-          };
-          const onError = () => {
-            cleanup();
-            reject(new Error('Could not load audio for playback.'));
-          };
-          audio.addEventListener('loadedmetadata', onReady, { once: true });
-          audio.addEventListener('canplay', onReady, { once: true });
-          audio.addEventListener('error', onError, { once: true });
-        });
-      }
+      if (!isCurrent()) return;
+      // The first media error also reset React's segment state and stop position.
+      resultPlaybackStopAtRef.current = end;
+      setResultSegmentPlayback(playing);
       audio.currentTime = start;
       await audio.play();
     } catch (error) {
+      if (!isCurrent()) return;
       console.error('Failed to play generated transcript segment:', error);
       resultPlaybackStopAtRef.current = null;
       setResultSegmentPlayback(null);
     } finally {
-      setResultPlaybackLoadingSegmentIndex(null);
+      if (isCurrent()) {
+        resultPlaybackLoadRef.current = null;
+        setResultPlaybackLoadingSegmentIndex(null);
+      }
     }
   };
 
@@ -1576,6 +1597,7 @@ const TranscriptionSummary: React.FC = () => {
   useEffect(() => {
     return () => {
       summaryJobAbortRef.current?.abort();
+      resultPlaybackLoadRef.current?.abort();
     };
   }, []);
 
