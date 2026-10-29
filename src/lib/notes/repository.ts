@@ -120,6 +120,50 @@ export async function getNoteSharing(noteId: string): Promise<{ user_id?: string
   return data as { user_id?: string | null; shared_users?: unknown } | null;
 }
 
+/**
+ * Owner-scoped read of a note's saved summary edit (null when none). Throws when the owner
+ * cannot see the note, so a caller deciding whether it may replace the summary never mistakes
+ * "unreadable" for "unedited" (U1/U9, DEC-0024).
+ */
+export async function readOwnedNoteSummaryEdit(input: { noteId: string; userId: string }): Promise<string | null> {
+  const userId = requireOwnerId(input.userId);
+  const { data, error } = await supabase
+    .from('note')
+    .select('summary_edit')
+    .eq('id', input.noteId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Note not found for this owner.');
+  const value = (data as { summary_edit?: unknown }).summary_edit;
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * Owner-scoped conditional write: saves `text` as summary_edit only while the note has no saved
+ * summary edit (null or empty), in one UPDATE. Resolves false when no row matched (an edit was
+ * saved meanwhile, or the note is not the owner's), so the caller asks instead of overwriting.
+ * A non-empty known value is not compared in the filter: PostgREST filters travel in the URL and a
+ * long summary would exceed its length limit; the caller re-reads right before writing instead.
+ */
+export async function saveOwnedNoteSummaryEditIfUnsaved(input: {
+  noteId: string;
+  userId: string;
+  text: string;
+}): Promise<boolean> {
+  const userId = requireOwnerId(input.userId);
+  const { data, error } = await supabase
+    .from('note')
+    .update({ summary_edit: input.text })
+    .eq('id', input.noteId)
+    .eq('user_id', userId)
+    .or('summary_edit.is.null,summary_edit.eq.')
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
 /** Owner-scoped share-list write. Unlike updateOwnedNote it does not confirm a changed row (unchanged from the modal's old behavior). */
 export async function setNoteSharedUsersAsOwner(input: { noteId: string; userId: string; sharedUsers: string[] }): Promise<void> {
   requireOwnerId(input.userId);

@@ -1,8 +1,22 @@
-import React, { useState, useEffect, useRef, useCallback, startTransition } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef, useCallback, startTransition } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from '../components/ConfirmDialog';
-import { patchNoteReturningId, saveNoteTranslations } from '../lib/notes/repository';
+import {
+  patchNoteReturningId,
+  patchOwnedNoteReturningId,
+  readOwnedNoteSummaryEdit,
+  saveNoteTranslations,
+  saveOwnedNoteSummaryEditIfUnsaved,
+} from '../lib/notes/repository';
+import { loadSpeakerProfilesForSummary, requestRegeneratedSummary } from '../lib/regenerateSummary';
+import { useSummaryNameRefresh } from './transcriptionSummary/useSummaryNameRefresh';
+import {
+  MIN_AUTO_SUMMARY_SECONDS,
+  useAutoSubmitGrace,
+  type AutoSubmitSource,
+} from './transcriptionSummary/useAutoSubmitGrace';
+import { clearSubmitRecord, noteIdForSubmission } from '../lib/summarySubmitRecord';
 import { insertSpeaker, selectSpeakersByNames, updateSpeakerProfileReturningId } from '../lib/speakers/repository';
 import {
   supabase,
@@ -83,6 +97,9 @@ import {
 } from '../lib/audioFileReferences';
 
 const SUMMARY_PROMPT_TABLE = 'summary_prompt';
+const NO_SEGMENTS: TranscriptSegment[] = [];
+/** A stop intent older than this is ignored (the recorder finalizes audio within moments). */
+const RECORDING_INTENT_MAX_AGE_MS = 15_000;
 const WORKFLOW_API_URL = ((import.meta.env.VITE_WORKFLOW_API_URL as string | undefined) ?? '').replace(/\/$/, '');
 
 interface GeneratedProfile {
@@ -357,13 +374,19 @@ const TranscriptionSummary: React.FC = () => {
   const [editedSummary, setEditedSummary] = useState<string>('');
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
   const [isKnowledgeModalOpen, setIsKnowledgeModalOpen] = useState(false);
-  // Keep the generated note id stable across retries of the SAME source file.
-  // The backend write is idempotent on note.id (upsert, ignoreDuplicates), so a
-  // retried summary of the same audio must carry the same id or it creates a
-  // duplicate note and bills the transcription twice. A different source file
-  // (new recording or upload) yields a different key and a fresh id; a
-  // successful run clears the slot so the next summary starts clean.
-  const summaryNoteIdRef = useRef<{ fileKey: string; noteId: string } | null>(null);
+  // U1 (DEC-0024): automatic summary after a recording stops or a file is chosen.
+  // A recording stop records an intent; once its audio exists the grace countdown starts.
+  const [recordingAutoIntent, setRecordingAutoIntent] = useState<{ seconds: number; at: number } | null>(null);
+  const consumedRecordingBlobRef = useRef<Blob | null>(null);
+  const [shortRecordingNotice, setShortRecordingNotice] = useState(false);
+  // After the grace period: summarize this uploaded file as soon as its upload completes.
+  const [autoSummarizeFileId, setAutoSummarizeFileId] = useState<string | null>(null);
+  const graceFileIdRef = useRef<string | null>(null);
+  const [existingNoteForSource, setExistingNoteForSource] = useState<{ noteId: string; title: string } | null>(null);
+  const [autoSkipNotice, setAutoSkipNotice] = useState<string | null>(null);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  // Synchronous guard so two triggers in one tick cannot both POST.
+  const submitInFlightRef = useRef(false);
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
   const generatedTitleInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingGeneratedTitle, setIsEditingGeneratedTitle] = useState(false);
@@ -372,8 +395,6 @@ const TranscriptionSummary: React.FC = () => {
   const [isShareNoteModalOpen, setIsShareNoteModalOpen] = useState(false);
   const [generatedSharedUserIds, setGeneratedSharedUserIds] = useState<string[]>([]);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [isRegenerating, setIsRegenerating] = useState(false);
-  const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [profileGenStep, setProfileGenStep] = useState<'idle' | 'finding-speakers' | 'generating' | 'ready' | 'error'>('idle');
   const [profileGenError, setProfileGenError] = useState<string | null>(null);
   const [generatedProfiles, setGeneratedProfiles] = useState<GeneratedProfile[]>([]);
@@ -385,6 +406,58 @@ const TranscriptionSummary: React.FC = () => {
   const [transcriptSpeakerFilters, setTranscriptSpeakerFilters] = useState<string[]>([]);
   const [generatedTranscriptLanguage, setGeneratedTranscriptLanguage] = useState<TranscriptLanguage>('original');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // U9 (DEC-0024): once every main speaker has a real name, refresh the summary with the names
+  // (debounced, one request at a time, never over a hand edit without asking).
+  const nameRefreshNoteId = summaryResult && currentNoteId && !isSummarizing ? currentNoteId : null;
+  const generatedSummaryTexts = useMemo(
+    () => (summaryResult ? [summaryResult.summary, ...Object.values(summaryResult.summaryTranslations ?? {})] : []),
+    [summaryResult]
+  );
+  const nameRefresh = useSummaryNameRefresh({
+    noteId: nameRefreshNoteId,
+    segments: summaryResult?.transcript ?? NO_SEGMENTS,
+    generatedTexts: generatedSummaryTexts,
+    currentSummary: editedSummary,
+    isEditing: isEditingSummary,
+    regenerate: async (segments, signal) => {
+      if (!currentNoteId || !user?.id) throw new Error('No note is open.');
+      const token = await getAccessToken();
+      if (!token) throw new Error('Could not acquire Microsoft access token.');
+      const speakerProfiles = await loadSpeakerProfilesForSummary(user.id, segments);
+      return requestRegeneratedSummary({
+        apiUrl: WORKFLOW_API_URL,
+        token,
+        noteId: currentNoteId,
+        diarization: segments,
+        previousSummary: editedSummary,
+        speakerProfiles,
+        instructions: optionalInstructions,
+        promptId: selectedSummaryPromptId ? String(selectedSummaryPromptId) : undefined,
+        persist: false,
+        signal,
+      });
+    },
+    readSavedEdit: async () => {
+      if (!currentNoteId || !user?.id) throw new Error('No note is open.');
+      return readOwnedNoteSummaryEdit({ noteId: currentNoteId, userId: user.id });
+    },
+    saveSummary: async (text, { onlyIfUnsaved }) => {
+      if (!currentNoteId || !user?.id) throw new Error('No note is open.');
+      if (onlyIfUnsaved) {
+        return saveOwnedNoteSummaryEditIfUnsaved({ noteId: currentNoteId, userId: user.id, text });
+      }
+      const row = await patchOwnedNoteReturningId({ noteId: currentNoteId, userId: user.id, patch: { summary_edit: text } });
+      if (!row) throw new Error('Could not save the summary. Please refresh and try again.');
+      return true;
+    },
+    onApply: (text) => {
+      setEditedSummary(text);
+      // The regenerated summary is one text in the meeting's language; old translations are stale.
+      setSummaryResult((prev) => (prev ? { ...prev, summary: text, summaryTranslations: undefined } : prev));
+    },
+  });
+  const isRegenerating = nameRefresh.phase === 'running';
 
   // Recording and recent audio states
   const [recentAudioFiles, setRecentAudioFiles] = useState<RecentAudioFile[]>([]);
@@ -406,8 +479,6 @@ const TranscriptionSummary: React.FC = () => {
     return () => mq.removeEventListener('change', sync);
   }, []);
 
-  /** Must match Supabase `note.id` type (uuid). The summarize webhook receives this value. */
-  const generateNoteId = (): string => crypto.randomUUID();
 
   /** Stable identity for one source file, so retries reuse the same note id. */
   const summaryFileKey = (file: UploadedFile): string =>
@@ -417,15 +488,10 @@ const TranscriptionSummary: React.FC = () => {
    * Note id for summarizing `file`: the same id while retrying the same source
    * file (idempotent dedup on the backend), a fresh id once the file changes.
    */
-  const noteIdForFile = (file: UploadedFile): string => {
-    const fileKey = summaryFileKey(file);
-    if (summaryNoteIdRef.current?.fileKey === fileKey) {
-      return summaryNoteIdRef.current.noteId;
-    }
-    const noteId = generateNoteId();
-    summaryNoteIdRef.current = { fileKey, noteId };
-    return noteId;
-  };
+  const noteIdForFile = (file: UploadedFile, userId: string): string =>
+    // S11 minimal piece: persisted BEFORE the POST and reused for the same user and source
+    // (the backend dedupes jobs on user_id + note_id). Note ids are uuids (Supabase note.id).
+    noteIdForSubmission({ userId, fileKey: summaryFileKey(file), now: Date.now(), generate: () => crypto.randomUUID() });
 
   const formatRecordingTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -445,8 +511,76 @@ const TranscriptionSummary: React.FC = () => {
     [confirm]
   );
 
-  const useRecording = () => {
-    if (!recordedBlob) return;
+  // ---- U1 automatic start (DEC-0024) -------------------------------------------------------
+  // Grace countdown, then submit. Recording: upload starts after the grace (cancel = nothing
+  // leaves the browser). Upload and recent recording: the file uploads as before and only the
+  // summary submit waits for the grace.
+  const onGraceElapsed = (source: AutoSubmitSource) => {
+    const fileId = source === 'recording' ? uploadRecording() : graceFileIdRef.current;
+    graceFileIdRef.current = null;
+    if (fileId) setAutoSummarizeFileId(fileId);
+  };
+  const grace = useAutoSubmitGrace(onGraceElapsed);
+
+  const cancelAutoSubmit = () => {
+    grace.cancel();
+    graceFileIdRef.current = null;
+    setAutoSummarizeFileId(null);
+    // A handled 2-hour auto stop must not restart the countdown when the page is opened again.
+    if (recordingAutoStopped) acknowledgeAutoStop();
+  };
+
+  const startAutoSubmit = (source: AutoSubmitSource, fileId: string | null) => {
+    setExistingNoteForSource(null);
+    setAutoSkipNotice(null);
+    setShortRecordingNotice(false);
+    graceFileIdRef.current = fileId;
+    grace.start(source);
+  };
+
+  // A normal stop on this page, via the floating widget, or the 2-hour cap starts the grace once
+  // its audio exists. Recovered recordings and stops from the navigation guard never get here.
+  const location = useLocation();
+  const routeAutoSummarize = Boolean((location.state as { autoSummarize?: unknown } | null)?.autoSummarize);
+  useEffect(() => {
+    if (!routeAutoSummarize) return;
+    setRecordingAutoIntent({ seconds: recordingTime, at: Date.now() });
+    navigate(location.pathname, { replace: true, state: null });
+    // Consume the one-shot route flag only; recordingTime is read at that moment on purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeAutoSummarize]);
+  useEffect(() => {
+    if (recordingAutoStopped && recordedBlob && consumedRecordingBlobRef.current !== recordedBlob) {
+      setRecordingAutoIntent({ seconds: recordingTime, at: Date.now() });
+    }
+    // recordingTime is read when the auto stop lands; ticking it must not re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordingAutoStopped, recordedBlob]);
+  useEffect(() => {
+    if (!recordingAutoIntent || !recordedBlob || isRecording) return;
+    setRecordingAutoIntent(null);
+    // A stop that produced no audio must not turn a later recovered recording into an auto start.
+    if (Date.now() - recordingAutoIntent.at > RECORDING_INTENT_MAX_AGE_MS) return;
+    if (consumedRecordingBlobRef.current === recordedBlob) return;
+    consumedRecordingBlobRef.current = recordedBlob;
+    if (recordingAutoIntent.seconds < MIN_AUTO_SUMMARY_SECONDS) {
+      setShortRecordingNotice(true);
+      return;
+    }
+    startAutoSubmit('recording', null);
+    // startAutoSubmit only touches setters and the grace hook.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordingAutoIntent, recordedBlob, isRecording]);
+
+  const handleStopRecording = async () => {
+    const seconds = recordingTime;
+    await stopRecording();
+    setRecordingAutoIntent({ seconds, at: Date.now() });
+  };
+
+  /** Upload the finished recording; returns the new upload entry id (null without audio). */
+  const uploadRecording = (): string | null => {
+    if (!recordedBlob) return null;
 
     startScreenWakeLockKeepAlive();
 
@@ -465,6 +599,7 @@ const TranscriptionSummary: React.FC = () => {
     void uploadToSupabase(newFile.id, audioFile, 'recording').then((ok) => {
       if (ok) clearRecording({ discardDraft: true });
     });
+    return newFile.id;
   };
 
   const seekPlayback = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -700,10 +835,34 @@ const TranscriptionSummary: React.FC = () => {
         },
       ]);
       setSummaryError(null);
+      await startAutoSubmitForRecent(file);
     } catch (error) {
       console.error('Failed to create signed URL for recent audio file:', error);
       setRecentAudioError(error instanceof Error ? error.message : 'Failed to load recent recording');
     }
+  };
+
+  // A recent recording that already has a note is not resubmitted automatically (U1 entry-path
+  // table); a failed check also skips the auto start (fail-closed). Manual Summarize stays available.
+  const startAutoSubmitForRecent = async (file: RecentAudioFile) => {
+    if (!user?.id) return;
+    cancelAutoSubmit();
+    setExistingNoteForSource(null);
+    setAutoSkipNotice(null);
+    try {
+      const identity = { id: file.id, bucket: file.bucket || AUDIO_BUCKET, storage_path: file.storage_path };
+      const referencing = await fetchReferencingNotes(supabase, user.id, identity);
+      if (referencing.length > 0) {
+        const [first] = referencing;
+        setExistingNoteForSource({ noteId: first.id, title: formatNoteTitles([first], t('untitledNote'))[0] ?? '' });
+        return;
+      }
+    } catch (error) {
+      console.error('Could not check notes for the selected recording:', error);
+      setAutoSkipNotice(t('recordingNoteCheckFailed'));
+      return;
+    }
+    startAutoSubmit('recent', file.id);
   };
 
   const deleteRecentAudioFile = async (file: RecentAudioFile) => {
@@ -773,9 +932,14 @@ const TranscriptionSummary: React.FC = () => {
   useEffect(() => {
     const translatedSummary = summaryResult?.summaryTranslations?.[appLanguage]?.trim();
     if (!translatedSummary || isEditingSummary) return;
+    if (editedSummary === translatedSummary && summaryResult?.summary === translatedSummary) return;
+    // Review finding 7: only swap a generated text for its translation; a summary the user
+    // edited by hand stays on screen (it is what was saved).
+    const shown = editedSummary.trim();
+    if (shown && !generatedSummaryTexts.some((text) => text.trim() === shown)) return;
     setEditedSummary(translatedSummary);
     setSummaryResult((prev) => (prev ? { ...prev, summary: translatedSummary } : prev));
-  }, [appLanguage, isEditingSummary, summaryResult?.summaryTranslations]);
+  }, [appLanguage, isEditingSummary, summaryResult?.summaryTranslations, summaryResult?.summary, editedSummary, generatedSummaryTexts]);
 
   // Keep in sync with the meeting-recordings bucket file_size_limit
   // (supabase/migrations/20260805120000_raise_meeting_recordings_upload_limit.sql)
@@ -818,6 +982,7 @@ const TranscriptionSummary: React.FC = () => {
     newUploadedFiles.forEach((meta, i) => {
       void uploadToSupabase(meta.id, audioFiles[i], 'upload');
     });
+    startAutoSubmit('upload', newUploadedFiles[0].id);
   };
 
   const uploadToSupabase = async (fileId: string, file: File, source: 'upload' | 'recording'): Promise<boolean> => {
@@ -957,6 +1122,9 @@ const TranscriptionSummary: React.FC = () => {
   };
 
   const removeFile = (fileId: string) => {
+    cancelAutoSubmit();
+    setExistingNoteForSource(null);
+    setAutoSkipNotice(null);
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
     clearRecording({ discardDraft: true });
   };
@@ -1015,7 +1183,8 @@ const TranscriptionSummary: React.FC = () => {
   };
 
   const hasCompletedFiles = uploadedFiles.some(f => f.status === 'completed');
-  const showPromptSection = isRecording || recordedAudioUrl || uploadedFiles.length > 0;
+  // Options (U3, U4, U5) can be changed before and during recording; they are read at submit time.
+  const showPromptSection = true;
   const summaryFlowActive =
     isSummarizing || isRegenerating || summaryResult !== null || summaryError !== null;
   const promptSectionLayoutExpanded =
@@ -1262,7 +1431,7 @@ const TranscriptionSummary: React.FC = () => {
       await applySummaryResult(completedJob, noteId);
       clearActiveSummaryJob();
       // Succeeded: release the reuse slot so a later summary starts with a fresh id.
-      if (summaryNoteIdRef.current?.noteId === noteId) summaryNoteIdRef.current = null;
+      clearSubmitRecord(noteId);
     } catch (error: any) {
       if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         // Unmount/navigation: keep the persisted job so a later mount resumes it.
@@ -1280,8 +1449,14 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
-  const handleSummarize = async () => {
-    if (!hasCompletedFiles) return;
+  /**
+   * Submit one uploaded file. An automatic start passes the file it waited for; the manual button
+   * passes none and summarizes the first ready file (unchanged behavior).
+   */
+  const handleSummarize = async (targetFileId?: string) => {
+    if (!hasCompletedFiles || submitInFlightRef.current || isSummarizing) return;
+    // A manual or automatic start ends any pending automatic start (no second submit later).
+    cancelAutoSubmit();
     const selectedPrompt =
       summaryPromptRows.find((row) => String(row.id) === String(selectedSummaryPromptId)) ??
       summaryPromptRows[0] ??
@@ -1292,7 +1467,8 @@ const TranscriptionSummary: React.FC = () => {
     }
 
     const completedFiles = uploadedFiles.filter(f => f.status === 'completed' && (f.publicUrl || f.storagePath));
-    if (completedFiles.length === 0) return;
+    const file = targetFileId ? completedFiles.find((f) => f.id === targetFileId) : completedFiles[0];
+    if (!file) return;
 
     stopResultSegmentPlayback();
     setIsSummarizing(true);
@@ -1308,9 +1484,10 @@ const TranscriptionSummary: React.FC = () => {
     let jobId: string;
     let noteId: string;
     let token: string;
+    submitInFlightRef.current = true;
     try {
-      const file = completedFiles[0];
-      noteId = noteIdForFile(file);
+      if (!user?.id) throw new Error('Not signed in.');
+      noteId = noteIdForFile(file, user.id);
       setCurrentNoteId(noteId);
 
       if (!WORKFLOW_API_URL) {
@@ -1370,12 +1547,29 @@ const TranscriptionSummary: React.FC = () => {
       setIsSummarizing(false);
       setSummaryProgress(null);
       return;
+    } finally {
+      submitInFlightRef.current = false;
     }
 
     await runSummaryJob(jobId, noteId, token);
   };
 
   runSummaryJobRef.current = runSummaryJob;
+
+  // After the grace period, start the summary once the chosen file has finished uploading.
+  useEffect(() => {
+    if (!autoSummarizeFileId) return;
+    const file = uploadedFiles.find((f) => f.id === autoSummarizeFileId);
+    if (!file || file.status === 'error') {
+      setAutoSummarizeFileId(null);
+      return;
+    }
+    if (file.status !== 'completed' || summaryPromptsLoading || isSummarizing) return;
+    setAutoSummarizeFileId(null);
+    void handleSummarize(file.id);
+    // handleSummarize reads the latest state of this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSummarizeFileId, uploadedFiles, summaryPromptsLoading, isSummarizing]);
 
   // Abort the active poll loop on unmount so it stops updating state; the backend
   // job keeps running and is resumed from localStorage on the next mount.
@@ -1719,60 +1913,58 @@ const TranscriptionSummary: React.FC = () => {
     setSaveAllStatus('error');
   };
 
-  const handleRegenerateSummary = async () => {
-    if (!summaryResult || !currentNoteId || !user?.id) return;
-    setIsRegenerating(true);
-    setRegenerateError(null);
-    try {
-      if (!WORKFLOW_API_URL) {
-        throw new Error('Workflow API URL is not configured.');
-      }
-      const token = await getAccessToken();
-      if (!token) throw new Error('Could not acquire Microsoft access token.');
-      const uniqueSpeakers = [...new Set(summaryResult.transcript.map((s) => s.speaker).filter(Boolean))];
-      const { data: speakerRows } = await selectSpeakersByNames(user.id, uniqueSpeakers, 'name, profile');
-
-      const speakerProfiles = ((speakerRows ?? []) as { name: string; profile: string | null }[])
-        .filter((s) => s.profile)
-        .map((s) => ({
-          speakerName: s.name,
-          profile: (() => { try { return JSON.parse(s.profile!); } catch { return s.profile; } })(),
-        }));
-
-      const response = await fetch(`${WORKFLOW_API_URL}/regenerate-summary`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          noteId: currentNoteId,
-          diarization: summaryResult.transcript,
-          previousSummary: editedSummary,
-          speakerProfiles,
-          instructions: optionalInstructions,
-          promptId: selectedSummaryPromptId ? String(selectedSummaryPromptId) : undefined,
-        }),
-      });
-
-      if (!response.ok) {
-        const detail = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(detail?.error || `Request failed: ${response.status}`);
-      }
-
-      const result = await response.json();
-      const newSummary = typeof result.summary === 'string' ? result.summary : String(result.summary ?? '');
-      if (!newSummary) throw new Error('No summary returned from webhook');
-
-      setEditedSummary(newSummary);
-      setSummaryResult((prev) => (prev ? { ...prev, summary: newSummary } : prev));
-      setResultsTab('summary');
-    } catch (err: unknown) {
-      console.error('Regenerate summary failed:', err);
-      setRegenerateError(err instanceof Error ? err.message : 'Regeneration failed');
-    } finally {
-      setIsRegenerating(false);
+  // Status of the name-aware summary refresh, shown above the summary (DEC-0024).
+  const renderNameRefreshStatus = () => {
+    const rowStyle = { borderColor: 'var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' };
+    if (nameRefresh.pendingReplacement) {
+      return (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm" style={rowStyle} role="status">
+          <span>{t('newSummaryReady')}</span>
+          <span className="flex shrink-0 gap-2">
+            <button type="button" className="rounded-md px-3 py-1 text-xs font-semibold" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              onClick={() => void nameRefresh.acceptReplacement()}>
+              {t('replaceSummary')}
+            </button>
+            <button type="button" className="rounded-md px-3 py-1 text-xs font-medium underline" onClick={nameRefresh.dismissReplacement}>
+              {t('dismiss')}
+            </button>
+          </span>
+        </div>
+      );
     }
+    if (nameRefresh.error) {
+      return (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm" style={{ ...rowStyle, color: 'var(--error)' }} role="alert">
+          <span>{t('summaryNameRefreshFailed')} {nameRefresh.error}</span>
+          <button type="button" className="shrink-0 text-xs font-semibold underline" onClick={nameRefresh.retry}>
+            {t('tryAgain')}
+          </button>
+        </div>
+      );
+    }
+    if (nameRefresh.phase !== 'idle') {
+      return (
+        <div className="mb-3 flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }} role="status">
+          <Loading className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          {t('updatingSummaryWithNames')}
+        </div>
+      );
+    }
+    if (nameRefresh.serverSavedNotice) {
+      return (
+        <p className="mb-3 text-xs" role="status" style={{ color: 'var(--text-muted)' }}>
+          {t('summaryUpdatedAutoPaused')}
+        </p>
+      );
+    }
+    if (nameRefresh.autoPaused) {
+      return (
+        <p className="mb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+          {t('autoSummaryRefreshPaused')}
+        </p>
+      );
+    }
+    return null;
   };
 
   const resultActionBtnClass =
@@ -1944,7 +2136,7 @@ const TranscriptionSummary: React.FC = () => {
                   {/* Record Option */}
                   <button
                     type="button"
-                    onClick={isRecording ? stopRecording : startRecording}
+                    onClick={isRecording ? () => void handleStopRecording() : startRecording}
                     className={`audio-option-panel record-audio-panel flex-1 card rounded-lg p-4 md:p-6 text-center transition-all ${isRecording ? 'recording-active' : ''}`}
                   >
                     {!isRecording ? (
@@ -2036,6 +2228,53 @@ const TranscriptionSummary: React.FC = () => {
               </p>
             ) : null}
 
+            {grace.secondsLeft !== null ? (
+              <div
+                className="mb-4 flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text)' }}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="flex items-center gap-2">
+                  <Loading className="h-4 w-4 animate-spin" aria-hidden />
+                  {t('autoSummaryStartsIn').replace('{seconds}', String(grace.secondsLeft))}
+                </span>
+                <button
+                  type="button"
+                  onClick={cancelAutoSubmit}
+                  className="shrink-0 rounded-md px-3 py-1 text-xs font-semibold"
+                  style={{ backgroundColor: 'var(--card, var(--bg))', border: '1px solid var(--border)', color: 'var(--text)' }}
+                >
+                  {t('cancel')}
+                </button>
+              </div>
+            ) : null}
+            {existingNoteForSource ? (
+              <div
+                className="mb-4 flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}
+                role="status"
+              >
+                <span>
+                  {t('recordingHasNote')}
+                  {existingNoteForSource.title ? ` (${existingNoteForSource.title})` : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/history?note_id=${encodeURIComponent(existingNoteForSource.noteId)}`)}
+                  className="shrink-0 text-xs font-semibold underline"
+                  style={{ color: 'var(--accent)' }}
+                >
+                  {t('openNote')}
+                </button>
+              </div>
+            ) : null}
+            {autoSkipNotice ? (
+              <p className="mb-4 text-sm" role="status" style={{ color: 'var(--text-secondary)' }}>
+                {autoSkipNotice}
+              </p>
+            ) : null}
+
             {/* Recording Playback - Shows when recording is complete but not uploaded */}
             <div className={`collapse-container ${(recordedAudioUrl && uploadedFiles.length === 0) ? 'expanded' : 'collapsed'}`}>
               <div className="collapse-content">
@@ -2082,6 +2321,11 @@ const TranscriptionSummary: React.FC = () => {
                     </div>
                   </div>
                   
+                  {shortRecordingNotice ? (
+                    <p className="mb-3 text-xs" role="status" style={{ color: 'var(--text-secondary)' }}>
+                      {t('shortRecordingNoAutoSummary').replace('{seconds}', String(MIN_AUTO_SUMMARY_SECONDS))}
+                    </p>
+                  ) : null}
                   {/* Action Buttons */}
                   <div className="recording-playback-actions flex items-center justify-end gap-3">
                     {recordedAudioUrl ? (
@@ -2108,12 +2352,18 @@ const TranscriptionSummary: React.FC = () => {
                       <span className="recording-action-label">{t('discard')}</span>
                     </button>
                     <button
-                      onClick={useRecording}
+                      onClick={() => {
+                        // One click: upload, then summarize (also ends a running countdown).
+                        cancelAutoSubmit();
+                        setShortRecordingNotice(false);
+                        const fileId = uploadRecording();
+                        if (fileId) setAutoSummarizeFileId(fileId);
+                      }}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                     >
                       <Check className="w-4 h-4" />
-                      <span className="recording-action-label">{t('useRecording')}</span>
+                      <span className="recording-action-label">{t('summarize')}</span>
                     </button>
                   </div>
                 </div>
@@ -2301,7 +2551,45 @@ const TranscriptionSummary: React.FC = () => {
             >
               <div className="collapse-content">
               <div className="prompt-controls-shell card rounded-lg mt-2 p-4">
-                <div className="flex w-full min-w-0 flex-col gap-4 md:flex-row md:items-start md:gap-4">
+                {/* U3/U4/U5 (DEC-0024): prompt, extra instructions and attachments live under a collapsed
+                    "Options" with defaults; the summary starts on its own after a recording or upload. */}
+                <div className="flex w-full min-w-0 items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    aria-expanded={optionsOpen}
+                    onClick={() => setOptionsOpen((open) => !open)}
+                    className="text-sm font-medium"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    {optionsOpen ? '▾' : '▸'} {t('summaryOptions')}
+                    {pendingNoteImages.length > 0 ? ` (${pendingNoteImages.length})` : ''}
+                  </button>
+                  {hasCompletedFiles ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleSummarize()}
+                      disabled={
+                        isSummarizing ||
+                        !selectedSummaryPromptId ||
+                        summaryPromptRows.length === 0
+                      }
+                      className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 sm:px-5"
+                      style={{
+                        backgroundColor: 'var(--accent)',
+                        color: '#ffffff',
+                      }}
+                    >
+                      {isSummarizing ? (
+                        <Loading className="h-4 w-4 shrink-0 animate-spin" />
+                      ) : (
+                        <Play className="h-4 w-4 shrink-0" />
+                      )}
+                      {t('summarize')}
+                    </button>
+                  ) : null}
+                </div>
+                {optionsOpen ? (
+                <div className="mt-4 flex w-full min-w-0 flex-col gap-4 md:flex-row md:items-start md:gap-4">
                   <div className="min-w-0 flex-1 basis-0">
                     <label className="mb-2 block text-sm font-medium" style={{ color: 'var(--text)' }}>
                       {t('addInstructionsOptional')}
@@ -2361,36 +2649,10 @@ const TranscriptionSummary: React.FC = () => {
                         onPendingImageRemove={handlePendingImageRemove}
                         className="min-w-0 self-end md:flex-none"
                       />
-                      <button
-                        type="button"
-                        onClick={() => void handleSummarize()}
-                        disabled={
-                          isSummarizing ||
-                          !hasCompletedFiles ||
-                          !selectedSummaryPromptId ||
-                          summaryPromptRows.length === 0
-                        }
-                        className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 sm:px-5"
-                        style={{
-                          backgroundColor: 'var(--accent)',
-                          color: '#ffffff',
-                        }}
-                      >
-                        {isSummarizing ? (
-                          <>
-                            <Loading className="h-4 w-4 shrink-0 animate-spin" />
-                            Generate
-                          </>
-                        ) : (
-                          <>
-                            <Play className="h-4 w-4 shrink-0" />
-                            Generate
-                          </>
-                        )}
-                      </button>
                     </div>
                   </div>
                 </div>
+                ) : null}
               </div>
               </div>
             </div>
@@ -2482,6 +2744,18 @@ const TranscriptionSummary: React.FC = () => {
                         ) : null}
                       </p>
                     </div>
+                    {summaryResult.transcript.length > 0 ? (
+                      <TranscriptDiarizedEditor
+                        segments={summaryResult.transcript}
+                        onSegmentsChange={(next) => updateGeneratedTranscript('original', next)}
+                        onPersistSegments={(next) => persistGeneratedTranscript('original', next)}
+                        noteId={currentNoteId}
+                        onNoteShared={setGeneratedSharedUserIds}
+                        autoSuggest
+                        suggestionPanel="only"
+                        onReviewSpeakers={() => setResultsTab('transcription')}
+                      />
+                    ) : null}
                     {summaryResult.transcript.length > 0 ? (
                       <div
                         className="results-header flex shrink-0 flex-wrap items-end justify-between gap-3 border-b"
@@ -2671,6 +2945,7 @@ const TranscriptionSummary: React.FC = () => {
 
                     {(summaryResult.transcript.length === 0 || resultsTab === 'summary') && resultsTab !== 'images' && (
                       <div className="flex flex-1 min-h-0 flex-col pt-4">
+                        {renderNameRefreshStatus()}
                         {isEditingSummary ? (
                           <textarea
                             value={editedSummary}
@@ -2740,6 +3015,8 @@ const TranscriptionSummary: React.FC = () => {
                           onPlaySegment={(segment, index) => void handlePlayResultTranscriptSegment(segment, index)}
                           transcriptLanguage={getGeneratedTranscriptLanguage()}
                           onNoteShared={setGeneratedSharedUserIds}
+                          autoSuggest
+                          suggestionPanel="hidden"
                         />
                       </div>
                     ) : null}
@@ -2790,30 +3067,23 @@ const TranscriptionSummary: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        title={t('regenerateSummary')}
-                        aria-label={t('regenerateSummary')}
+                        title={t('updateSummaryWithNames')}
+                        aria-label={t('updateSummaryWithNames')}
                         disabled={isRegenerating || summaryResult.transcript.length === 0}
-                        onClick={() => void handleRegenerateSummary()}
+                        onClick={() => {
+                          setResultsTab('summary');
+                          nameRefresh.runManual();
+                        }}
                         className={resultActionBtnClass}
                       >
                         {isRegenerating ? (
-                          <>
-                            <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Regenerating…</span>
-                          </>
+                          <Loading className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
                         ) : (
-                          <>
-                            <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
-                            <span className={resultActionBtnLabelClass}>Regenerate</span>
-                          </>
+                          <ArrowsReload01 className="h-4 w-4 shrink-0" aria-hidden />
                         )}
+                        <span className={resultActionBtnLabelClass}>{t('updateSummaryWithNames')}</span>
                       </button>
                     </div>
-                    {regenerateError ? (
-                      <p className="shrink-0 px-1 pb-2 text-xs" style={{ color: 'var(--error)' }}>
-                        {regenerateError}
-                      </p>
-                    ) : null}
                   </div>
                 )}
               </div>

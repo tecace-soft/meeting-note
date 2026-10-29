@@ -77,6 +77,7 @@ export async function requestSpeakerSuggestions(
   selfName: string | null,
   auth: IdentifyAuth,
   noteId?: string | null,
+  signal?: AbortSignal,
 ): Promise<SpeakerSuggestion[]> {
   const labels = anonymousLabelsInTranscript(segments);
   if (labels.length === 0) return [];
@@ -107,6 +108,7 @@ export async function requestSpeakerSuggestions(
       ...(auth.msToken ? { 'x-ms-access-token': auth.msToken } : {}),
     },
     body: JSON.stringify({ transcriptText, labels, roster, selfName, noteId: noteId ?? null }),
+    signal,
   });
 
   const raw = await response.text();

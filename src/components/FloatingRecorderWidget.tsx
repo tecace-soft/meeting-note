@@ -4,6 +4,10 @@ import { CloseMd, Stop, UserVoice } from 'react-coolicons';
 import { useRecorder } from '../context/RecorderContext';
 import { useConfirm } from './ConfirmDialog';
 
+// U1 (DEC-0024): a normal stop (or reviewing a 2-hour auto stop) opens the new-note page with this
+// one-shot flag so the summary starts after the grace countdown there.
+const AUTO_SUMMARIZE_STATE = { autoSummarize: true } as const;
+
 function formatRecordingTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
@@ -60,7 +64,7 @@ const FloatingRecorderWidget: React.FC = () => {
               type="button"
               onClick={() => {
                 acknowledgeAutoStop();
-                navigate('/transcription-summary');
+                navigate('/transcription-summary', { state: AUTO_SUMMARIZE_STATE });
               }}
               className="mt-2 text-xs font-semibold"
               style={{ color: 'var(--primary)' }}
@@ -120,7 +124,7 @@ const FloatingRecorderWidget: React.FC = () => {
         <button
           type="button"
           onClick={() => {
-            void stopRecording().then(() => navigate('/transcription-summary'));
+            void stopRecording().then(() => navigate('/transcription-summary', { state: AUTO_SUMMARIZE_STATE }));
           }}
           className="flex h-9 w-9 items-center justify-center rounded-md transition-opacity hover:opacity-80"
           style={{ backgroundColor: 'var(--error)', color: '#fff' }}
