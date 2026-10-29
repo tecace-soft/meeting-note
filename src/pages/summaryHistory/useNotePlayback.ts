@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
-import { getSupabaseAccessTokenForRequest, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../config/supabaseConfig';
+import { requestNoteAudioUrl } from '../../lib/noteAudioUrl';
 import { getNoteDiarizationRaw, normalizeTranscript, type TranscriptSegment } from '../../lib/transcriptSegments';
 import type { Note } from './types';
 
@@ -49,34 +49,9 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
   const getNoteAudioUrl = async (note: Note): Promise<string> => {
     const cached = audioUrlCacheRef.current.get(note.id);
     if (cached) return cached;
-    const appToken = await getSupabaseAccessTokenForRequest();
-    const msToken = appToken ? null : await getAccessToken();
-    if (!appToken && !msToken) throw new Error('Could not get access. Please sign in again.');
-    const response = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/note-audio-url`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${appToken ?? SUPABASE_ANON_KEY}`,
-        ...(msToken ? { 'x-ms-access-token': msToken } : {}),
-      },
-      body: JSON.stringify({ noteId: note.id }),
-    });
-    const raw = await response.text();
-    let parsed: { url?: unknown; error?: unknown };
-    try {
-      parsed = raw ? JSON.parse(raw) as { url?: unknown; error?: unknown } : {};
-    } catch {
-      parsed = { error: raw || `HTTP ${response.status}` };
-    }
-    if (!response.ok) {
-      throw new Error(typeof parsed.error === 'string' ? parsed.error : `Audio request failed (${response.status}).`);
-    }
-    if (typeof parsed.url !== 'string' || !parsed.url.trim()) {
-      throw new Error('Audio URL was not returned.');
-    }
-    audioUrlCacheRef.current.set(note.id, parsed.url);
-    return parsed.url;
+    const url = await requestNoteAudioUrl(note.id, getAccessToken);
+    audioUrlCacheRef.current.set(note.id, url);
+    return url;
   };
 
   useEffect(() => {
