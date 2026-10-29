@@ -75,10 +75,25 @@ class SummarySubmitStore {
     final timestamp = (now ?? DateTime.now()).millisecondsSinceEpoch;
     final records = await cache.readMap(_key) ?? <String, dynamic>{};
     final identity = '$userId\u0000$fileKey';
-    final old = records[identity];
+    var old = records[identity];
+    // A recording picked from Recents after its upload is the same original.
+    // The preassigned file id joins its earlier local-path record to this source.
+    if (old == null && fileKey.startsWith('file:')) {
+      final sourceFileId = fileKey.substring('file:'.length);
+      for (final candidate in records.values) {
+        if (candidate is Map &&
+            candidate['userId'] == userId &&
+            candidate['fileId'] == sourceFileId) {
+          old = candidate;
+          break;
+        }
+      }
+    }
     if (old is Map &&
         old['userId'] == userId &&
-        old['fileKey'] == fileKey &&
+        (old['fileKey'] == fileKey ||
+            (fileKey.startsWith('file:') &&
+                old['fileId'] == fileKey.substring(5))) &&
         old['noteId'] is String &&
         (old['noteId'] as String).isNotEmpty &&
         old['fileId'] is String &&

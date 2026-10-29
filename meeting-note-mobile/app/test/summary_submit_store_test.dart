@@ -39,6 +39,26 @@ void main() {
     timeout: timeout,
   );
   test(
+    'a recent cloud recording reuses the pending local original through its file id',
+    () async {
+      final cache = MemoryCache();
+      final local = await SummarySubmitStore(cache: cache).getOrCreate(
+        userId: 'owner',
+        fileKey: 'local:/recording.m4a',
+        fileId: 'uploaded-file',
+      );
+      final recent = await SummarySubmitStore(cache: cache).getOrCreate(
+        userId: 'owner',
+        fileKey: 'file:uploaded-file',
+        noteId: 'new-note',
+      );
+      expect(recent.noteId, local.noteId);
+      expect(recent.fileId, local.fileId);
+      expect(cache.data, hasLength(1));
+    },
+    timeout: timeout,
+  );
+  test(
     'does not reuse another user or another source and isolates completed cleanup',
     () async {
       final store = SummarySubmitStore(cache: MemoryCache());
