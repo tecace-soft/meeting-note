@@ -164,15 +164,18 @@ export async function saveOwnedNoteSummaryEditIfUnsaved(input: {
   return Boolean(data);
 }
 
-/** Owner-scoped share-list write. Unlike updateOwnedNote it does not confirm a changed row (unchanged from the modal's old behavior). */
+/** Owner-scoped share-list write. A missing returned row is a denial, never a successful share. */
 export async function setNoteSharedUsersAsOwner(input: { noteId: string; userId: string; sharedUsers: string[] }): Promise<void> {
-  requireOwnerId(input.userId);
-  const { error } = await supabase
+  const userId = requireOwnerId(input.userId);
+  const { data, error } = await supabase
     .from('note')
     .update({ shared_users: input.sharedUsers })
     .eq('id', input.noteId)
-    .eq('user_id', input.userId);
+    .eq('user_id', userId)
+    .select('id')
+    .maybeSingle();
   if (error) throw error;
+  if (!data || data.id !== input.noteId) throw new Error('Could not share this note. You may not have permission. Refresh and try again.');
 }
 
 /** Share-list write without an owner filter (the transcript editor's old behavior; the plan tracks tightening it). */

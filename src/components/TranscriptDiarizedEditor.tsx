@@ -6,7 +6,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { canonicalOntologyProfileString, isOntologyProfile } from '../lib/speakerOntology';
 import { SpeakerOntologyView } from './SpeakerOntologyView';
 import { getSupabaseAccessTokenForRequest } from '../config/supabaseConfig';
-import { getNoteSharing, setNoteSharedUsers } from '../lib/notes/repository';
+import { SpeakerNoteShareActions, type SpeakerShareAssignment } from './SpeakerNoteShareActions';
 import {
   deleteSpeaker,
   findSpeakersByEmail,
@@ -151,6 +151,8 @@ export interface TranscriptDiarizedEditorProps {
   transcription?: string | null;
   onPersistSegments?: (next: TranscriptSegment[]) => Promise<void>;
   onNoteShared?: (sharedUserIds: string[]) => void;
+  /** Opens the existing note-sharing dialog when the named person has no account id. */
+  onSelectSharingTarget?: () => void;
   /** U9 (DEC-0024): request name suggestions once per note without a click (default false). */
   autoSuggest?: boolean;
   /**
@@ -261,6 +263,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   transcription = null,
   onPersistSegments,
   onNoteShared,
+  onSelectSharingTarget,
   autoSuggest = false,
   suggestionPanel = 'inline',
   onReviewSpeakers,
@@ -277,6 +280,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const [speakersFetchError, setSpeakersFetchError] = useState<string | null>(null);
   const [applySuggestionError, setApplySuggestionError] = useState<string | null>(null);
   const [applyingSuggestions, setApplyingSuggestions] = useState(false);
+  const [speakerAssignments, setSpeakerAssignments] = useState<SpeakerShareAssignment[]>([]);
   const [profileSyncMsg, setProfileSyncMsg] = useState<string | null>(null);
   // Dedupe F1a auto-accumulation per (note, speaker) so re-applying a label does not re-run it.
   const accumulatedProfilesRef = useRef<Set<string>>(new Set());
@@ -301,6 +305,46 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const pendingSegmentCaretOffsetRef = useRef<number | null>(null);
   const segmentEditDraftRef = useRef('');
   const segmentEditSaveTimeoutRef = useRef<number | null>(null);
+
+  const assignmentScope = useRef({ noteId, userId: user?.id, active: true });
+  if (assignmentScope.current.noteId !== noteId || assignmentScope.current.userId !== user?.id) {
+    assignmentScope.current.active = false;
+    assignmentScope.current = { noteId, userId: user?.id, active: true };
+  }
+  useEffect(() => {
+    const scope = assignmentScope.current;
+    scope.active = true;
+    setSpeakerAssignments([]);
+    return () => { scope.active = false; };
+  }, [noteId, user?.id]);
+
+  const currentAssignmentScope = assignmentScope.current;
+  const offerSpeakerSharing = useCallback((speakerKey: string, name: string, microsoftId: string | null | undefined) => {
+    const scope = assignmentScope.current;
+    // No name/email inference: only a selected saved speaker id or selected Graph object id.
+    if (scope !== currentAssignmentScope || !scope.active || scope.noteId !== noteId || scope.userId !== user?.id || !noteId || !user?.id) return;
+    const assignment: SpeakerShareAssignment = { speakerKey, name, microsoftId: microsoftId?.trim() || null, noteId, userId: user.id };
+    setSpeakerAssignments((prev) => [...prev.filter((a) => a.noteId === noteId && a.userId === user.id && a.speakerKey !== speakerKey), assignment]);
+  }, [noteId, user?.id, currentAssignmentScope]);
+
+  const visibleShareAssignments = useMemo(() => {
+    const seen = new Set<string>();
+    return speakerAssignments.filter((assignment) => {
+      if (assignment.noteId !== noteId || assignment.userId !== user?.id || assignment.microsoftId === user?.id) return false;
+      if (!segments.some((segment) => speakerKeyOf(segment) === assignment.speakerKey && segment.speaker.trim() === assignment.name)) return false;
+      const key = assignment.microsoftId || assignment.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [speakerAssignments, noteId, user?.id, segments]);
+
+  const sharingActions = noteId && user?.id && visibleShareAssignments.length ? (
+    <SpeakerNoteShareActions key={`${noteId}:${user.id}`} noteId={noteId} userId={user.id}
+      assignments={visibleShareAssignments} onNoteShared={onNoteShared} onSelectSharingTarget={onSelectSharingTarget}
+      onDismiss={(dismissed) => setSpeakerAssignments((prev) => prev.filter((a) =>
+        dismissed.microsoftId ? a.microsoftId !== dismissed.microsoftId : a.name.toLowerCase() !== dismissed.name.toLowerCase()))} />
+  ) : null;
 
   const closeSpeakerMenu = useCallback(() => {
     setSpeakerMenu(null);
@@ -512,6 +556,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     if (!suggestion.name || applyingSuggestions) return;
     const idx = segments.findIndex((s) => s.speaker.trim() === suggestion.label);
     if (idx === -1) return;
+    const scope = assignmentScope.current;
     setApplyingSuggestions(true);
     setApplySuggestionError(null);
     try {
@@ -520,7 +565,16 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         if (onPersistSegments) await onPersistSegments(next);
         else await persistNoteDiarization(noteId, next);
       }
-      startTransition(() => { onSegmentsChange(next); });
+      if (!scope.active || assignmentScope.current !== scope) return;
+      const roster = suggestion.speakerId != null && !savedSpeakers.some((speaker) => String(speaker.id) === String(suggestion.speakerId))
+        ? await loadSpeakersForMenu() : savedSpeakers;
+      const selected = roster.find((speaker) => String(speaker.id) === String(suggestion.speakerId)
+        && speaker.name.trim().toLowerCase() === suggestion.name!.trim().toLowerCase());
+      if (!scope.active || assignmentScope.current !== scope) return;
+      startTransition(() => {
+        onSegmentsChange(next);
+        offerSpeakerSharing(speakerKeyOf(segments[idx]), suggestion.name!, selected?.microsoft_id);
+      });
       // Ground-truth log: the human kept this suggestion (feedback loop, Stage 0).
       void logSpeakerFeedback({
         userId: user?.id, noteId: noteId ?? null, label: suggestion.label,
@@ -535,7 +589,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       setApplyingSuggestions(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- user id is stable for this editor instance
-  }, [applyingSuggestions, segments, noteId, onPersistSegments, onSegmentsChange, accumulateProfileInBackground, getAccessToken]);
+  }, [applyingSuggestions, segments, noteId, onPersistSegments, onSegmentsChange, accumulateProfileInBackground, getAccessToken, savedSpeakers, loadSpeakersForMenu, offerSpeakerSharing]);
 
   const loadMicrosoftContactsForMenu = useCallback(async () => {
     setContactsLoading(true);
@@ -679,27 +733,6 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
     }
   };
 
-  const shareCurrentNoteWithMicrosoftUser = async (microsoftUserId: string | null | undefined) => {
-    const targetUserId = microsoftUserId?.trim();
-    if (!noteId || !targetUserId) return;
-
-    const noteRow = await getNoteSharing(noteId);
-    if (!noteRow) return;
-
-    const rawSharedUsers = noteRow.shared_users;
-    const sharedUsers = Array.isArray(rawSharedUsers)
-      ? rawSharedUsers.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
-      : [];
-    if (noteRow.user_id === targetUserId || sharedUsers.includes(targetUserId)) {
-      onNoteShared?.(sharedUsers);
-      return;
-    }
-
-    const nextSharedUsers = [...sharedUsers, targetUserId];
-    await setNoteSharedUsers({ noteId, sharedUsers: nextSharedUsers });
-    onNoteShared?.(nextSharedUsers);
-  };
-
   const handleApplySpeakerChange = async () => {
     if (!speakerMenu || !user?.id) return;
     const chosenName = speakerNameInput.trim();
@@ -708,6 +741,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       return;
     }
     setSpeakerMenuError(null);
+    const scope = assignmentScope.current;
     setSpeakerChangeSaving(true);
     try {
       const exists = savedSpeakers.some((s) => s.name.toLowerCase() === chosenName.toLowerCase());
@@ -747,14 +781,15 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         }
       }
 
+      if (!scope.active || assignmentScope.current !== scope) return;
       const selectedSpeaker =
         (pickedSpeakerId ? savedSpeakers.find((s) => s.id === pickedSpeakerId) : null) ??
         savedSpeakers.find((s) => s.name.toLowerCase() === chosenName.toLowerCase()) ??
         null;
-      await shareCurrentNoteWithMicrosoftUser(selectedSpeaker?.microsoft_id);
 
       startTransition(() => {
         onSegmentsChange(nextTranscript);
+        offerSpeakerSharing(speakerMenu.originalSpeaker, chosenName, pickedSpeakerId ? selectedSpeaker?.microsoft_id : null);
       });
       // Ground-truth log: human set this label manually (accepted/overridden/manual vs any suggestion).
       void logSpeakerFeedback({
@@ -778,6 +813,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
   const handleSelectMicrosoftContact = async (contact: MicrosoftContact) => {
     if (!speakerMenu || !user?.id) return;
     setSpeakerMenuError(null);
+    const scope = assignmentScope.current;
     setSpeakerChangeSaving(true);
     try {
       const contactEmail = contact.email.trim().toLowerCase();
@@ -834,10 +870,11 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
           await persistNoteDiarization(noteId, nextTranscript);
         }
       }
-      await shareCurrentNoteWithMicrosoftUser(speakerRow.microsoft_id);
 
+      if (!scope.active || assignmentScope.current !== scope) return;
       startTransition(() => {
         onSegmentsChange(nextTranscript);
+        offerSpeakerSharing(speakerMenu.originalSpeaker, speakerRow.name, contact.id);
       });
       // Ground-truth log: human assigned a Microsoft contact to this label.
       void logSpeakerFeedback({
@@ -1057,6 +1094,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
           </div>
         )}
         {suggestionCard}
+        {sharingActions}
       </>
     );
   }
@@ -1070,6 +1108,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
         </div>
       )}
       {suggestionPanel === 'inline' ? suggestionCard : null}
+      {sharingActions}
       <div
         className={`rounded-lg p-4 text-base leading-relaxed overflow-y-auto custom-scrollbar ${scrollContainerClassName ?? 'max-h-96'}`}
         style={{ backgroundColor: 'transparent' }}
