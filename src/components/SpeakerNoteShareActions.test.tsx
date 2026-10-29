@@ -73,6 +73,24 @@ describe('explicit speaker sharing ownership and lifecycle', () => {
     expect(onNoteShared).toHaveBeenCalledWith(['legacy']); expect(h.write).not.toHaveBeenCalled();
   }, 5000);
 
+  it('does not share a previous assignee when the name changes during the click-time read', async () => {
+    const { rerender } = mount();
+    const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
+    let release!: (value: ReturnType<typeof owner>) => void;
+    const pending = new Promise<ReturnType<typeof owner>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('fixture read deadline')), 1000);
+      release = (value) => { clearTimeout(timer); resolve(value); };
+    });
+    h.read.mockReturnValueOnce(pending);
+    fireEvent.click(button);
+    rerender(<SpeakerNoteShareActions noteId="n1" userId="owner"
+      assignments={[{ ...ASSIGNMENTS[0], name: 'New colleague', microsoftId: 'new-oid' }]} onDismiss={() => undefined} />);
+    release(owner());
+    await pending;
+    await screen.findByText('New colleague · speakerNameSaved');
+    expect(h.write).not.toHaveBeenCalled();
+  }, 5000);
+
   it('ignores a click-time read arriving after unmount', async () => {
     const { unmount, onNoteShared } = mount();
     const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });

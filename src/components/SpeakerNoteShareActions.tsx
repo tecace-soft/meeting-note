@@ -31,6 +31,8 @@ export function SpeakerNoteShareActions({ noteId, userId, assignments, onDismiss
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const currentAssignments = useRef(assignments);
+  currentAssignments.current = assignments;
   const alive = useRef(true);
   const inFlight = useRef(false);
   useEffect(() => {
@@ -64,7 +66,7 @@ export function SpeakerNoteShareActions({ noteId, userId, assignments, onDismiss
     try {
       // A recipient may have been added since naming; preserve the current list, not a UI snapshot.
       const users = await readOwnerSharing();
-      if (!alive.current) return;
+      if (!alive.current || !currentAssignments.current.includes(assignment)) return;
       if (!assignment.microsoftId) {
         onNoteShared?.(users);
         onSelectSharingTarget?.();

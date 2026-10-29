@@ -15,6 +15,7 @@ const h = vi.hoisted(() => {
     zeroRows: false,
     rejectRename: false,
     unknownIdentity: false,
+    microsoftId: 'colleague-oid',
     contacts: [] as Array<{ id: string; displayName: string; email: string; userPrincipalName: string }>,
   };
 });
@@ -52,7 +53,7 @@ vi.mock('../config/supabaseConfig', async () => {
     if (q.table === 'speaker') {
       const inserted = q.calls.find(([m]) => m === 'insert')?.[1] as Record<string, unknown> | undefined;
       if (inserted) return { data: { id: 2, ...inserted } };
-      return { data: [{ id: 1, name: 'Colleague', microsoft_id: h.unknownIdentity ? null : 'colleague-oid' }] };
+      return { data: [{ id: 1, name: 'Colleague', microsoft_id: h.unknownIdentity ? null : h.microsoftId }] };
     }
     if (q.table === 'summary_prompt') return { data: [{ id: 1, name: 'Default', prompt: 'Summarize.' }] };
     return { data: [] };
@@ -90,7 +91,7 @@ const sharesIn = (q: RecordedQuery) => (q.calls.find(([m]) => m === 'update')?.[
 beforeEach(() => {
   window.localStorage.clear();
   resetSuggestionStoreForTests();
-  h.owner = 'owner'; h.shared = ['legacy-recipient']; h.zeroRows = false; h.rejectRename = false; h.unknownIdentity = false; h.contacts = [];
+  h.owner = 'owner'; h.shared = ['legacy-recipient']; h.zeroRows = false; h.rejectRename = false; h.unknownIdentity = false; h.microsoftId = 'colleague-oid'; h.contacts = [];
   fake().queries.length = 0;
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
@@ -140,6 +141,14 @@ for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit
     expect(sharesIn(shareWrites()[0])).toEqual(['legacy-recipient', 'added-in-other-tab', 'colleague-oid']);
     expect(shareWrites()[0].calls).toContainEqual(['eq', 'user_id', 'owner']);
     expect(shareWrites()[0].calls).toContainEqual(['select', 'id']);
+  }, 5000);
+
+  it('does not offer sharing with the note owner themselves', async () => {
+    h.microsoftId = 'owner';
+    await mountPage(page); await nameSpeaker();
+    expect(screen.queryByRole('button', { name: 'shareNoteWithThisPerson' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'selectNoteSharingTarget' })).not.toBeInTheDocument();
+    expect(shareWrites()).toHaveLength(0);
   }, 5000);
 
   it('a name without an account opens the existing sharing dialog without writing shares', async () => {

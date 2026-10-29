@@ -911,6 +911,7 @@ const TranscriptDiarizedEditor: React.FC<TranscriptDiarizedEditorProps> = ({
       }
       startTransition(() => {
         onSegmentsChange(nextTranscript);
+        setSpeakerAssignments([]);
       });
       scheduleNoteInsightRefresh(noteId, getAccessToken);
       closeSpeakerMenu();
