@@ -58,6 +58,8 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
         '/record/new-note',
         extra: NewNoteDraft(
           audioPath: path,
+          autoSummarize: true,
+          recordingDuration: const Duration(hours: 2),
           attachmentPaths: List.of(_capturedAttachmentPaths),
         ),
       );
@@ -78,12 +80,15 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
         attachmentCount: _capturedAttachmentPaths.length,
         onCamera: () => _capturePhoto(context),
         onDone: () async {
+          final duration = ref.read(recordingProvider).elapsed;
           final path = await notifier.stop();
           if (path != null && context.mounted) {
             context.push(
               '/record/new-note',
               extra: NewNoteDraft(
                 audioPath: path,
+                autoSummarize: true,
+                recordingDuration: duration,
                 attachmentPaths: List.of(_capturedAttachmentPaths),
               ),
             );
@@ -242,14 +247,20 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     if (selected == 'pick') {
       final path = await _pickAudioFile(context);
       if (path != null && context.mounted) {
-        context.push('/record/new-note', extra: path);
+        context.push(
+          '/record/new-note',
+          extra: NewNoteDraft(audioPath: path, autoSummarize: true),
+        );
       }
       return;
     }
     if (selected == 'manual') {
       final path = await _showManualPathDialog(context);
       if (path != null && context.mounted) {
-        context.push('/record/new-note', extra: path);
+        context.push(
+          '/record/new-note',
+          extra: NewNoteDraft(audioPath: path, autoSummarize: true),
+        );
       }
     }
   }
@@ -312,7 +323,14 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     try {
       final audioPath = await repository.resolveAudioPath(selected);
       if (context.mounted) {
-        context.push('/record/new-note', extra: audioPath);
+        context.push(
+          '/record/new-note',
+          extra: NewNoteDraft(
+            audioPath: audioPath,
+            autoSummarize: true,
+            checkReferences: true,
+          ),
+        );
       }
     } catch (error) {
       if (!context.mounted) return;

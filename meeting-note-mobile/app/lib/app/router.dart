@@ -53,6 +53,9 @@ final routerProvider = Provider<GoRouter>((ref) {
                           : extra is String
                               ? extra
                               : null,
+                      autoSummarize: extra is NewNoteDraft && extra.autoSummarize,
+                      recordingDuration: extra is NewNoteDraft ? extra.recordingDuration : null,
+                      checkReferences: extra is NewNoteDraft && extra.checkReferences,
                       initialAttachmentPaths:
                           extra is NewNoteDraft ? extra.attachmentPaths : const [],
                     );
