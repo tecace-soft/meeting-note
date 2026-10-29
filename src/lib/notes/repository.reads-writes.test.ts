@@ -107,12 +107,19 @@ describe('queryHistoryNotes chain', () => {
 });
 
 describe('note repository writes', () => {
-  it('setNoteSharedUsersAsOwner scopes to owner and does not select a row', async () => {
+  it('setNoteSharedUsersAsOwner confirms the owner-scoped changed row', async () => {
+    fixture.result = { data: { id: 'n1' } };
     await setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['a'] });
-    expect(calls()).toEqual([['note', ['update', { shared_users: ['a'] }], ['eq', 'id', 'n1'], ['eq', 'user_id', 'o']]]);
+    expect(calls()).toEqual([['note', ['update', { shared_users: ['a'] }], ['eq', 'id', 'n1'], ['eq', 'user_id', 'o'], ['select', 'id'], ['maybeSingle']]]);
     const error = { message: 'no' };
     fixture.result = { error };
     await expect(setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: [] })).rejects.toBe(error);
+  });
+  it('rejects an owner share write that returns zero rows or the wrong note', async () => {
+    for (const data of [null, { id: 'another-note' }]) {
+      fixture.result = { data };
+      await expect(setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['a'] })).rejects.toThrow(/Could not share/);
+    }
   });
   it('setNoteSharedUsers is unscoped (unchanged editor behavior) and throws the raw error', async () => {
     await setNoteSharedUsers({ noteId: 'n1', sharedUsers: ['a'] });
