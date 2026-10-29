@@ -13,6 +13,7 @@ const h = vi.hoisted(() => {
     owner: 'owner',
     shared: ['legacy-recipient'] as string[],
     zeroRows: false,
+    beforeShareWrite: null as (() => void) | null,
     rejectRename: false,
     unknownIdentity: false,
     microsoftId: 'colleague-oid',
@@ -34,6 +35,11 @@ vi.mock('../config/supabaseConfig', async () => {
       const update = q.calls.find(([m]) => m === 'update')?.[1] as Record<string, unknown> | undefined;
       if (update) {
         if ('shared_users' in update) {
+          const concurrentChange = h.beforeShareWrite;
+          h.beforeShareWrite = null;
+          concurrentChange?.();
+          const expected = q.calls.find(([m, column]) => m === 'eq' && column === 'shared_users');
+          if (expected && expected[2] !== `{${h.shared.map((id) => JSON.stringify(id)).join(',')}}`) return { data: null };
           if (h.zeroRows || h.owner !== 'owner') return { data: null };
           h.shared = update.shared_users as string[];
         } else if (h.rejectRename) return { data: null };
@@ -91,7 +97,7 @@ const sharesIn = (q: RecordedQuery) => (q.calls.find(([m]) => m === 'update')?.[
 beforeEach(() => {
   window.localStorage.clear();
   resetSuggestionStoreForTests();
-  h.owner = 'owner'; h.shared = ['legacy-recipient']; h.zeroRows = false; h.rejectRename = false; h.unknownIdentity = false; h.microsoftId = 'colleague-oid'; h.contacts = [];
+  h.owner = 'owner'; h.shared = ['legacy-recipient']; h.zeroRows = false; h.beforeShareWrite = null; h.rejectRename = false; h.unknownIdentity = false; h.microsoftId = 'colleague-oid'; h.contacts = [];
   fake().queries.length = 0;
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
@@ -141,6 +147,27 @@ for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit
     expect(sharesIn(shareWrites()[0])).toEqual(['legacy-recipient', 'added-in-other-tab', 'colleague-oid']);
     expect(shareWrites()[0].calls).toContainEqual(['eq', 'user_id', 'owner']);
     expect(shareWrites()[0].calls).toContainEqual(['select', 'id']);
+  }, 5000);
+
+  it('does not restore a recipient revoked by another tab between read and write', async () => {
+    h.shared = ['legacy-recipient', 'still-shared'];
+    await mountPage(page); await nameSpeaker();
+    const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
+    h.beforeShareWrite = () => { h.shared = ['still-shared']; };
+    fireEvent.click(button);
+    await screen.findByText('noteAlreadyShared');
+    expect(h.shared).toEqual(['still-shared', 'colleague-oid']);
+    expect(shareWrites()).toHaveLength(2);
+  }, 5000);
+
+  it('preserves a recipient added by another tab between read and write', async () => {
+    await mountPage(page); await nameSpeaker();
+    const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
+    h.beforeShareWrite = () => { h.shared = [...h.shared, 'other-tab-recipient']; };
+    fireEvent.click(button);
+    await screen.findByText('noteAlreadyShared');
+    expect(h.shared).toEqual(['legacy-recipient', 'other-tab-recipient', 'colleague-oid']);
+    expect(shareWrites()).toHaveLength(2);
   }, 5000);
 
   it('does not offer sharing with the note owner themselves', async () => {
