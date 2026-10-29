@@ -180,6 +180,15 @@ for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit
     expect(shareWrites()).toHaveLength(0);
   }, 5000);
 
+  it('refuses sharing if ownership changed after the button was shown', async () => {
+    await mountPage(page); await nameSpeaker();
+    const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
+    h.owner = 'another-owner';
+    fireEvent.click(button);
+    await screen.findByText('Only the note owner can share this note.');
+    expect(shareWrites()).toHaveLength(0);
+  }, 5000);
+
   it('a failed name save never offers or attempts sharing', async () => {
     h.rejectRename = true;
     await mountPage(page);
