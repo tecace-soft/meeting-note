@@ -671,6 +671,8 @@ test('S12: a lost or unavailable atomic note RPC never falls back to an unfenced
     assert.equal(persisted[0]!.body.p_owner, JOB_INSTANCE_ID);
     assert.equal(terminal(f, 'note-fence-lost'), undefined, 'unknown ownership does not mark the recording failed or completed');
     assert.ok(!f.state.calls.some((c) => isTable(c.url, 'note') && c.method !== 'GET'), 'no unfenced note fallback');
-    assert.ok(!f.state.calls.some((c) => isTable(c.url, 'user_memory')), 'enrichment does not run after an unconfirmed insert');
+    const persistedAt = indexOf(f, (c) => isRpc(c.url, 'workflow_job_persist_note'));
+    assert.ok(!f.state.calls.slice(persistedAt + 1).some((c) => isTable(c.url, 'user_memory') || isRpc(c.url, 'workflow_job_write_enrichment')),
+      'enrichment does not run after an unconfirmed insert; the earlier memory context read is allowed');
   }
 });
