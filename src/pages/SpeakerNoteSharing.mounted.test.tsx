@@ -17,6 +17,8 @@ const h = vi.hoisted(() => {
     rejectRename: false,
     unknownIdentity: false,
     microsoftId: 'colleague-oid',
+    suggestionCalls: 0,
+    suggestionFailure: false,
     contacts: [] as Array<{ id: string; displayName: string; email: string; userPrincipalName: string }>,
   };
 });
@@ -70,7 +72,11 @@ vi.mock('../config/supabaseConfig', async () => {
 vi.mock('../services/microsoftContacts', () => ({ fetchTecAceContacts: async () => h.contacts }));
 vi.mock('../lib/identifySpeakers', async (original) => ({
   ...await original<typeof import('../lib/identifySpeakers')>(),
-  requestSpeakerSuggestions: async () => [{ label: 'Speaker A', name: 'Colleague', speakerId: '1', confidence: 0.9, isSelf: false, rationale: 'fixture' }],
+  requestSpeakerSuggestions: async () => {
+    h.suggestionCalls++;
+    if (h.suggestionFailure) throw new Error('Synthetic suggestion failure');
+    return [{ label: 'Speaker A', name: 'Colleague', speakerId: '1', confidence: 0.9, isSelf: false, rationale: 'fixture' }];
+  },
 }));
 vi.mock('../lib/accumulateSpeakerProfile', () => ({ accumulateSpeakerProfile: async () => null }));
 vi.mock('../lib/speakerFeedback', () => ({ logSpeakerFeedback: async () => undefined }));
@@ -98,6 +104,7 @@ beforeEach(() => {
   window.localStorage.clear();
   resetSuggestionStoreForTests();
   h.owner = 'owner'; h.shared = ['legacy-recipient']; h.zeroRows = false; h.beforeShareWrite = null; h.rejectRename = false; h.unknownIdentity = false; h.microsoftId = 'colleague-oid'; h.contacts = [];
+  h.suggestionCalls = 0; h.suggestionFailure = false;
   fake().queries.length = 0;
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
@@ -267,5 +274,53 @@ for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit
     fireEvent.click(button);
     await screen.findByText('noteAlreadyShared');
     expect(sharesIn(shareWrites()[0])).toEqual(['legacy-recipient', 'contact-oid']);
+  }, 5000);
+});
+
+
+describe('SummaryHistory automatic speaker suggestions', () => {
+  it('shows suggestions on opening the transcript without applying names or sharing', async () => {
+    await mountPage('history');
+    await screen.findAllByRole('button', { name: 'applySuggestion' });
+    expect(h.suggestionCalls).toBe(1);
+    expect(diarizationWrites()).toHaveLength(0);
+    expect(shareWrites()).toHaveLength(0);
+  }, 5000);
+
+  it('reuses the same request across both detail panes, tab changes and reopening history', async () => {
+    await mountPage('history');
+    await screen.findAllByRole('button', { name: 'applySuggestion' });
+    fireEvent.click(screen.getAllByRole('tab', { name: 'summary' })[0]);
+    fireEvent.click(screen.getAllByRole('tab', { name: 'transcription' })[0]);
+    await screen.findAllByRole('button', { name: 'applySuggestion' });
+    cleanup();
+    await mountPage('history');
+    await screen.findAllByRole('button', { name: 'applySuggestion' });
+    expect(h.suggestionCalls).toBe(1);
+    expect(diarizationWrites()).toHaveLength(0);
+    expect(shareWrites()).toHaveLength(0);
+  }, 5000);
+
+  it('reuses suggestions already requested by the new-note screen', async () => {
+    await mountPage('new', false);
+    await screen.findAllByRole('button', { name: 'applySuggestion' });
+    cleanup();
+    await mountPage('history');
+    await screen.findAllByRole('button', { name: 'applySuggestion' });
+    expect(h.suggestionCalls).toBe(1);
+    expect(diarizationWrites()).toHaveLength(0);
+    expect(shareWrites()).toHaveLength(0);
+  }, 5000);
+
+  it('shows automatic failures and only retries when the user requests suggestions', async () => {
+    h.suggestionFailure = true;
+    await mountPage('history');
+    await screen.findAllByText('Synthetic suggestion failure');
+    expect(h.suggestionCalls).toBe(1);
+    h.suggestionFailure = false;
+    fireEvent.click(screen.getAllByRole('button', { name: 'suggestSpeakers' })[0]);
+    await screen.findAllByRole('button', { name: 'applySuggestion' });
+    expect(h.suggestionCalls).toBe(2);
+    expect(shareWrites()).toHaveLength(0);
   }, 5000);
 });
