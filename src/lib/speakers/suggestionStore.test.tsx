@@ -173,6 +173,23 @@ describe('useSpeakerSuggestions', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('times out even when a step ignores the abort signal (token, roster)', async () => {
+    vi.useFakeTimers();
+    const { result, fetcher } = setup();
+    fetcher.mockImplementation(() => new Promise<never>(() => undefined));
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.requestSuggestions();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SUGGESTION_TIMEOUT_MS + 1);
+      await done;
+    });
+    expect(result.current.error).toMatch(/timed out/);
+    expect(result.current.suggesting).toBe(false);
+    expect((fetcher.mock.calls[0][0] as AbortSignal).aborted).toBe(true);
+  });
+
   it('times out a request that never answers', async () => {
     vi.useFakeTimers();
     const { result, fetcher } = setup();

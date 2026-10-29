@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { DeadlineError, withDeadline } from '../deadline';
 import { anonymousLabelsInTranscript, type SpeakerSuggestion } from '../identifySpeakers';
 import type { TranscriptSegment } from '../transcriptSegments';
 
@@ -80,16 +81,17 @@ async function loadEntry(key: string, fetcher: SuggestionFetcher, force: boolean
   if (existing?.status === 'ready' && !force) return;
   setEntry(key, { status: 'loading' });
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SUGGESTION_TIMEOUT_MS);
   try {
-    const suggestions = await fetcher(controller.signal);
+    // The whole fetcher (token, roster load, identify call) races the deadline, so a step that
+    // ignores the abort signal can never leave the card loading.
+    const suggestions = await withDeadline(fetcher(controller.signal), SUGGESTION_TIMEOUT_MS, 'timeout');
     setEntry(key, { status: 'ready', suggestions });
   } catch (error) {
-    const message = controller.signal.aborted ? 'Speaker suggestion timed out. Please try again.' : errorMessage(error);
+    const timedOut = error instanceof DeadlineError;
+    if (timedOut) controller.abort();
+    const message = timedOut ? 'Speaker suggestion timed out. Please try again.' : errorMessage(error);
     console.error('Speaker suggestion failed:', error);
     setEntry(key, { status: 'error', message });
-  } finally {
-    clearTimeout(timer);
   }
 }
 
