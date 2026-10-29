@@ -22,7 +22,7 @@ vi.mock('../config/supabaseConfig', async () => {
 import ShareNoteModal from './ShareNoteModal';
 
 const fake = () => fixture.fake as ReturnType<typeof createFakeSupabase>;
-beforeEach(() => { fake().queries.length = 0; fixture.result = {}; });
+beforeEach(() => { fake().queries.length = 0; fixture.result = { data: { id: 'n1' } }; });
 afterEach(cleanup);
 
 async function openAndSave(props: { onShared?: (...a: unknown[]) => void; onClose?: () => void } = {}) {
@@ -33,12 +33,20 @@ async function openAndSave(props: { onShared?: (...a: unknown[]) => void; onClos
 }
 
 describe('ShareNoteModal save call contract', () => {
-  it('updates shared_users scoped to the owner without a row check, then notifies', async () => {
+  it('confirms an owner-scoped shared_users write, then notifies', async () => {
     const onShared = vi.fn(); const onClose = vi.fn();
     await openAndSave({ onShared, onClose });
     await waitFor(() => expect(onShared).toHaveBeenCalledWith('n1', ['x', 'c1']));
     expect(onClose).toHaveBeenCalled();
-    expect(fake().queries).toEqual([{ table: 'note', calls: [['update', { shared_users: ['x', 'c1'] }], ['eq', 'id', 'n1'], ['eq', 'user_id', 'owner-1']] }]);
+    expect(fake().queries).toEqual([{ table: 'note', calls: [['update', { shared_users: ['x', 'c1'] }], ['eq', 'id', 'n1'], ['eq', 'user_id', 'owner-1'], ['select', 'id'], ['maybeSingle']] }]);
+  });
+  it('keeps the dialog open and reports zero changed rows instead of claiming success', async () => {
+    fixture.result = { data: null };
+    const onShared = vi.fn(); const onClose = vi.fn();
+    await openAndSave({ onShared, onClose });
+    expect(await screen.findByText(/Could not share/)).toBeInTheDocument();
+    expect(onShared).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
   it('shows the generic fallback for a non-Error database error and does not notify', async () => {
     fixture.result = { error: { message: 'denied' } };

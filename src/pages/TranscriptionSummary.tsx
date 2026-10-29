@@ -2751,6 +2751,7 @@ const TranscriptionSummary: React.FC = () => {
                         onPersistSegments={(next) => persistGeneratedTranscript('original', next)}
                         noteId={currentNoteId}
                         onNoteShared={setGeneratedSharedUserIds}
+                        onSelectSharingTarget={() => setIsShareNoteModalOpen(true)}
                         autoSuggest
                         suggestionPanel="only"
                         onReviewSpeakers={() => setResultsTab('transcription')}
@@ -3015,6 +3016,7 @@ const TranscriptionSummary: React.FC = () => {
                           onPlaySegment={(segment, index) => void handlePlayResultTranscriptSegment(segment, index)}
                           transcriptLanguage={getGeneratedTranscriptLanguage()}
                           onNoteShared={setGeneratedSharedUserIds}
+                          onSelectSharingTarget={() => setIsShareNoteModalOpen(true)}
                           autoSuggest
                           suggestionPanel="hidden"
                         />
