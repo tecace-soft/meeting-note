@@ -11,6 +11,7 @@ chosen: "(c). 웹: 녹음을 멈추면 5초 유예 뒤 업로드와 요약을 �
 reason: Hansoo가 원하는 단순한 새 Meeting Note(10/30)와 계획 5절의 승인(U1, U9)에 맞춘다. 제안 정확도가 백테스트 약 63%라 자동 적용은 하지 않고, 이름을 잠그지 않는 Andrew 요구(2026-10-21)를 지킨다. regenerate가 summary_edit에 쓰므로 열 추가 없이 생성 텍스트 비교로 사람의 수정을 판별한다. 2026-10-28 Andrew 결정 5건.
 paths:
   - src/pages/TranscriptionSummary.tsx
+  - src/pages/SummaryHistory.tsx
   - src/pages/transcriptionSummary/**
   - src/lib/speakers/mainSpeakers.ts
   - src/lib/speakers/suggestionStore.ts
@@ -41,3 +42,6 @@ U9-0(화자 지정과 공유 분리)은 별도 단계이며 이 결정에 들어
 
 Andrew의 2026-10-29 후속 요청으로 모바일 U2에 같은 길이 경계, 유예와 취소, S11 제출 기록을 적용한다.
 모바일 세부 설계는 docs/refactor/MOBILE_U2_U9_0_DESIGN.md에 기록한다.
+
+Andrew의 2026-10-29 후속 승인으로 SummaryHistory의 세 전사 상세 화면도 autoSuggest를 켠다.
+새 노트 화면과 요청 저장소를 공유하고 자동 제안은 노트당 세션 한 번이며 적용은 사용자 확인 뒤에만 한다.
