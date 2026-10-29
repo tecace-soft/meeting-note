@@ -1964,6 +1964,7 @@ const SummaryHistory: React.FC = () => {
                                 {showDiarized ? (
                                   <div className="min-h-0 flex-1">
                                     <TranscriptDiarizedEditor
+                                      autoSuggest
                                       segments={diarRaw}
                                       onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
@@ -2465,6 +2466,7 @@ const SummaryHistory: React.FC = () => {
                                               {showDiarized ? (
                                                 <div className="min-h-0 flex-1">
                                                   <TranscriptDiarizedEditor
+                                                    autoSuggest
                                                     segments={diarRaw}
                                                     onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                                     onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}
@@ -2748,6 +2750,7 @@ const SummaryHistory: React.FC = () => {
                                 {showDiarized ? (
                                   <div className="min-h-0 flex-1">
                                     <TranscriptDiarizedEditor
+                                      autoSuggest
                                       segments={diarRaw}
                                       onSegmentsChange={(next) => updateDisplayedTranscript(note, selectedTranscriptLanguage, next)}
                                       onPersistSegments={(next) => persistDisplayedTranscript(note, selectedTranscriptLanguage, next)}

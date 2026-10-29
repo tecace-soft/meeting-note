@@ -210,7 +210,6 @@ for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit
 
   it('accepting a suggestion also requires an explicit share click', async () => {
     await mountPage(page, page === 'history');
-    if (page === 'history') fireEvent.click((await screen.findAllByRole('button', { name: 'suggestSpeakers' }))[0]);
     fireEvent.click((await screen.findAllByRole('button', { name: 'applySuggestion' }))[0]);
     await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
     expect(shareWrites()).toHaveLength(0);
