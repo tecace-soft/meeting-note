@@ -158,7 +158,12 @@ regenerate 라우트는 지금 `summary_edit`에 결과를 쓴다(routes/regener
 
 적용 규칙:
 
-- 자동 갱신, 수정 없음 -> 소유자 범위 쓰기(`patchOwnedNoteReturningId`)로 `summary_edit` 저장 후 화면 교체.
+- 자동 갱신, 수정 없음 -> 재생성이 돌아온 뒤 저장 직전에 `summary_edit`를 다시 읽는다(검토 2).
+  아직 저장된 것이 없으면 "비어 있을 때만" 조건을 건 소유자 범위 UPDATE 한 번(`saveOwnedNoteSummaryEditIfUnsaved`)으로 저장하고, 0행이면 묻는다.
+  이미 생성 텍스트가 저장돼 있으면 다시 읽은 값이 생성 텍스트일 때만 소유자 범위 쓰기(`patchOwnedNoteReturningId`)를 한다.
+  긴 요약 문자열은 PostgREST 필터(URL)에 넣을 수 없어 이 경우만 다시 읽기와 쓰기 사이의 짧은 틈이 남는다.
+  저장 뒤 실행이 취소됐거나 편집창이 열렸으면 화면을 바꾸지 않는다(검토 4).
+- 옛 백엔드(응답에 `persisted: false`가 없음) -> 서버가 이미 저장했으므로 그 요약을 보여 주고 중립 안내를 띄우며, 바꿀지 묻지 않고, 그 노트의 자동 갱신을 끈다(검토 1).
 - 자동 갱신, 직접 수정됨 -> 저장하지 않고 비차단 알림 "화자 이름을 반영한 새 요약이 준비됐습니다. 바꿀까요? [바꾸기] [닫기]".
   바꾸기 = 위와 같은 저장 후 교체, 닫기 = 버림(그 서명을 기준으로 삼아 같은 이름으로 다시 묻지 않음).
 - 수동 버튼("이름 반영해 요약 업데이트") -> 사용자가 요청했으므로 바로 저장하고 교체한다(현재 Regenerate 버튼과 같은 의미).
@@ -173,19 +178,21 @@ regenerate 라우트는 지금 `summary_edit`에 결과를 쓴다(routes/regener
    `persist: false`면 `summary_edit`를 쓰지 않고 응답에 `persisted: false`를 넣는다.
    생략하거나 다른 값이면 지금처럼 저장하고 `persisted: true`를 넣는다(모바일, SummaryHistory 호환).
    메모리 fold는 기존처럼 응답 뒤 best-effort로 실행된다(이미 접힌 노트는 건너뜀).
-2. 재생성 프롬프트: 전사에 실제 이름과 익명 라벨이 함께 있으면, 익명 라벨 목록을 주고 "이름이 지정되지 않은 다른 참석자"로 다루라는 규칙을 덧붙인다(이름을 추측하지 않음, 참석자 이름 목록에 넣지 않음).
+2. 재생성 프롬프트: 실제 이름이 하나 이상 있고, 발화 비중 10% 미만(`MINOR_SPEAKER_MAX_SHARE`, 웹 `MAIN_SPEAKER_MIN_SHARE`와 같은 값)인 익명 라벨이 있으면 그 라벨만 "다른 참석자"로 다루라는 규칙을 덧붙인다(검토 3).
+   비중은 서버가 받은 diarization의 start/end로 계산하고, 한 구간이라도 시간이 없으면 글자 수로 계산한다.
+   이름 없는 주요 화자는 자기 라벨을 그대로 쓴다.
    모두 이름이거나 모두 익명이면 프롬프트는 지금과 바이트 단위로 같다.
 3. 모델은 기존 `REGENERATE_SUMMARY_MODEL`(lite)과 `STANDARD_FALLBACK_CHAIN`(lite)을 그대로 쓴다(DEC-0005).
 
-배포 순서: 백엔드를 먼저 배포한다.
-옛 백엔드는 `persist`를 무시하고 저장하므로, 그 사이에는 직접 수정한 요약이 자동 갱신으로 덮일 수 있다.
+배포 순서: 서버 변경은 별도 PR(`feature/regenerate-persist-flag`)로 먼저 merge하고 백엔드 `/version`을 확인한 뒤 웹 PR을 merge한다.
+옛 백엔드는 `persist`를 무시하고 저장하므로, 웹은 위의 옛 백엔드 처리로 묻는 척하지 않고 자동 갱신을 멈춘다.
 
 ## 5. 비용 상한 (DEC-0005, S13 전)
 
 | 호출 | 상한 |
 | --- | --- |
-| identify-speakers 자동 | 노트당 세션 1회, 같은 키 동시 1개, 60초 timeout |
-| regenerate-summary 자동 | 노트당 진행 중 1개, 세션 3회, 4초 debounce, 120초 timeout |
+| identify-speakers 자동 | 노트당 세션 1회, 같은 키 동시 1개, 토큰과 로스터 읽기까지 포함한 전체 60초 deadline |
+| regenerate-summary 자동 | 노트당 진행 중 1개, 세션 3회, 4초 debounce, 요청 120초 timeout, 토큰과 읽기와 저장까지 포함한 전체 150초 deadline |
 | summarize job | 유예 뒤 1회, 같은 원본은 S11 기록으로 같은 noteId(서버 중복 제거) |
 
 서버 쪽 전역 및 사용자별 동시 실행 상한(S13 두 번째 부분)은 T1-9b 뒤 작업이며 이 PR에 없다.
