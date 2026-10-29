@@ -22,6 +22,12 @@ paths:
   - workflow-server/src/routes/regenerateSummary.ts
   - workflow-server/src/prompts.ts
   - workflow-server/src/pipeline/finalize.ts
+  - meeting-note-mobile/app/lib/app/router.dart
+  - meeting-note-mobile/app/lib/features/record/ui/record_screen.dart
+  - meeting-note-mobile/app/lib/features/notes/ui/new_note_screen.dart
+  - meeting-note-mobile/app/lib/features/notes/ui/processing_screen.dart
+  - meeting-note-mobile/app/lib/features/notes/data/summary_submit_store.dart
+  - meeting-note-mobile/app/lib/features/notes/data/notes_repository.dart
 supersedes:
   - DEC-0010
 source: 2026-10-28 Andrew 결정 1~5, docs/refactor/U1_U9_AUTO_SUMMARY_DESIGN.md, docs/refactor/REFACTOR_PLAN.md 5절 U1, U5, U9, U1/U2 진입 경로 표, U9 완료 기준, 4.2 S11
@@ -32,3 +38,6 @@ DEC-0010의 "임계값 이상 자동 적용"은 2026-08-25 측정 뒤 코드에�
 U9-0(화자 지정과 공유 분리)은 별도 단계이며 이 결정에 들어 있지 않다; 제안 적용 경로는 지금도 공유하지 않는다.
 서버의 전역 동시 실행 상한(S13 두 번째 부분)은 T1-9b 뒤 작업이며, 그 전까지는 클라이언트 상한으로 비용을 묶는다.
 모바일(U2와 모바일 U9)은 별도 PR에서 같은 규칙을 따른다.
+
+Andrew의 2026-10-29 후속 요청으로 모바일 U2에 같은 길이 경계, 유예와 취소, S11 제출 기록을 적용한다.
+모바일 세부 설계는 docs/refactor/MOBILE_U2_U9_0_DESIGN.md에 기록한다.

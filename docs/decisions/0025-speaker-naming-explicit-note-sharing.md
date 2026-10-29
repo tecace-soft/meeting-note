@@ -16,6 +16,9 @@ paths:
   - src/pages/TranscriptionSummary.tsx
   - src/pages/SummaryHistory.tsx
   - src/context/LanguageContext.tsx
+  - meeting-note-mobile/app/lib/features/notes/ui/summary_screen.dart
+  - meeting-note-mobile/app/lib/features/notes/ui/speaker_note_share_actions.dart
+  - meeting-note-mobile/app/lib/features/notes/data/notes_repository.dart
 supersedes: []
 source: REFACTOR_PLAN.md 개정 3의 3절 Andrew 결정(2026-10-21)과 5절 U9-0, 2026-10-29 Andrew 웹 설계 승인과 네 가지 추가 조건, DEC-0024
 ---
@@ -44,3 +47,10 @@ NULL과 빈 배열을 구분하고 경합으로 0행이면 최신 목록을 다�
 기존 노트의 공유를 철회하는 migration이나 backfill은 만들지 않는다.
 모바일과 C1 파일은 이 웹 PR에서 변경하지 않는다.
 제품 문서 본문은 유지하고 Andrew의 docs:verify 일괄 서명 때 화자 지정과 공유 분리 안내를 반영한다.
+
+## 모바일 후속 적용
+
+Andrew의 2026-10-29 후속 요청으로 모바일도 이름 지정 뒤 별도 공유 동작을 표시한다.
+수동 지정과 제안 수락은 공유하지 않고 확인된 object id에만 한 번 공유를 제공하며 그 밖의 대상은 기존 공유 창을 연다.
+모바일 공유도 소유자 조건과 반환 행을 확인하고 한 사람 추가는 정확한 이전 목록을 검사해 최대 3회 재시도한다.
+이전 자동 공유로 이미 공유된 노트는 모바일에서도 되돌리지 않으며 migration이나 backfill은 하지 않는다.
