@@ -114,6 +114,9 @@ vi.mock('../components/TranscriptDiarizedEditor', () => {
     autoSuggest?: boolean;
     onSegmentsChange: (next: Seg[]) => void;
     onPersistSegments?: (next: Seg[]) => Promise<void>;
+    onPlaySegment?: (segment: Seg, index: number) => void;
+    isPlaybackActive?: boolean;
+    loadingPlaybackSegmentIndex?: number | null;
   }) => {
     const panel = p.suggestionPanel ?? 'inline';
     const name = (names: Record<string, string>) => {
@@ -123,6 +126,8 @@ vi.mock('../components/TranscriptDiarizedEditor', () => {
     return (
       <div data-testid={`editor-${panel}`} data-auto={String(Boolean(p.autoSuggest))}>
         <span data-testid={`speakers-${panel}`}>{p.segments.map((s) => s.speaker).join('|')}</span>
+        {panel === 'hidden' && p.onPlaySegment ? <button type="button" data-playing={String(Boolean(p.isPlaybackActive))}
+          data-loading={String(p.loadingPlaybackSegmentIndex != null)} onClick={() => p.onPlaySegment?.(p.segments[0], 0)}>play-fixture-segment</button> : null}
         {panel === 'only' ? (
           <>
             <button type="button" onClick={() => name({ 'Speaker A': 'Andrew', 'Speaker B': 'Hansoo' })}>
@@ -213,6 +218,7 @@ function installFetch() {
           result: { transcript: TRANSCRIPT, summary: 'Generic summary about Speaker A.', title: 'Web slice', ...jobResultExtra },
         });
       }
+      if (input.endsWith('/note-audio-url')) return Response.json({ url: 'https://audio.example.test/refreshed' });
       if (input.endsWith('/regenerate-summary')) {
         const next = regenerateResponses.shift();
         return next ? next() : Response.json({ summary: 'Andrew and Hansoo agreed.', persisted: false });
@@ -578,4 +584,76 @@ describe('TranscriptionSummary automatic summary after recording or choosing a f
     expect(submitCalls()).toHaveLength(0);
     h.recent = [];
   });
+});
+
+
+describe('TranscriptionSummary bounded audio load recovery (R10)', () => {
+  async function openUploadedNote() {
+    const view = renderPage();
+    await screen.findByText('noRecentRecordings');
+    fireEvent.change(view.container.querySelector('#meeting-audio-upload')!, {
+      target: { files: [new File(['fixture'], 'audio.webm', { type: 'audio/webm' })] },
+    });
+    await screen.findByText('autoSummaryStartsIn');
+    await act(async () => { await vi.advanceTimersByTimeAsync(5200); });
+    await screen.findByText('Generic summary about Speaker A.');
+    fireEvent.click(screen.getByRole('tab', { name: 'transcription' }));
+    return view;
+  }
+  const signingCalls = () => fetchCalls.filter((call) => call.url.endsWith('/note-audio-url'));
+  function mediaPlan(plan: Array<'ok' | 'error' | 'never'>) {
+    let ready = 0;
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(() => ready);
+    const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(function (this: HTMLMediaElement) {
+      const mode = plan.shift() ?? 'never';
+      ready = 0;
+      setTimeout(() => {
+        if (mode === 'error') this.dispatchEvent(new Event('error'));
+        if (mode === 'ok') { ready = 1; this.dispatchEvent(new Event('loadedmetadata')); }
+      }, 0);
+    });
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    return { load, play };
+  }
+  it('re-signs the current note once after a load error and restores the playing state', async () => {
+    const { load, play } = mediaPlan(['error', 'ok']);
+    await openUploadedNote();
+    fireEvent.click(screen.getByRole('button', { name: 'play-fixture-segment' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    vi.useRealTimers();
+    expect(signingCalls()).toHaveLength(1);
+    expect(signingCalls()[0].body).toEqual({ noteId: submitCalls()[0].body!.noteId });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'play-fixture-segment' }).dataset.playing).toBe('true');
+    expect(screen.getByRole('button', { name: 'play-fixture-segment' }).dataset.loading).toBe('false');
+  }, 5000);
+  it('resets after the second load error without signing or loading a third time', async () => {
+    const { load, play } = mediaPlan(['error', 'error']);
+    await openUploadedNote();
+    fireEvent.click(screen.getByRole('button', { name: 'play-fixture-segment' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    vi.useRealTimers();
+    expect(signingCalls()).toHaveLength(1);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(play).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'play-fixture-segment' }).dataset.playing).toBe('false');
+    expect(screen.getByRole('button', { name: 'play-fixture-segment' }).dataset.loading).toBe('false');
+  }, 5000);
+  it('times out each metadata attempt at fifteen seconds and stops after the single retry', async () => {
+    const { load, play } = mediaPlan(['never', 'never']);
+    await openUploadedNote();
+    fireEvent.click(screen.getByRole('button', { name: 'play-fixture-segment' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(14999); });
+    const beforeDeadline = signingCalls().length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(15051); });
+    vi.useRealTimers();
+    expect(beforeDeadline).toBe(0);
+    expect(signingCalls()).toHaveLength(1);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(play).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'play-fixture-segment' }).dataset.loading).toBe('false');
+    expect(screen.getByRole('button', { name: 'play-fixture-segment' }).dataset.playing).toBe('false');
+  }, 5000);
 });
