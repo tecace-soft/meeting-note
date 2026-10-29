@@ -618,7 +618,7 @@ test('sweep recovers jobs whose note exists for the same user and fails the rest
   assert.deepEqual(withoutUpdatedAt(failPatch), { status: 'failed', stage: 'failed', error: RESTART_MESSAGE }, 'the failure write has no progress field');
   assert.deepEqual(log.mock.calls.map((c) => c.arguments[0]), [
     'Recovered 2 orphaned workflow job(s) to completed from an existing note.',
-    'Marked 3 orphaned workflow job(s) as failed.',
+    'Marked 4 orphaned workflow job(s) as failed.',
   ]);
 });
 

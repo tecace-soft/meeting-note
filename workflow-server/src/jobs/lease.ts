@@ -187,6 +187,22 @@ export function createJobLeaseStore(rpc: JobLeaseRpc, owner: string = JOB_INSTAN
       if (!parsed) return { kind: 'error', message: 'workflow_job_claim returned an unexpected row shape.' };
       return parsed.exhausted ? { kind: 'exhausted', claim: parsed.claim } : { kind: 'claimed', claim: parsed.claim };
     },
+    async release(execution: JobExecution): Promise<FencedOutcome> {
+      const { data, error } = await call('workflow_job_release', fence(execution));
+      return fenced(error, data === true);
+    },
+    async persistNote(execution: JobExecution, note: Record<string, unknown>, mode: 'insert' | 'diarization'): Promise<FencedOutcome> {
+      const { data, error } = await call('workflow_job_persist_note', { ...fence(execution), p_note: note, p_mode: mode });
+      return fenced(error, data === true);
+    },
+    async writeEnrichment(execution: JobExecution, kind: 'memory' | 'insight', payload: Record<string, unknown>): Promise<FencedOutcome> {
+      const { data, error } = await call('workflow_job_write_enrichment', { ...fence(execution), p_kind: kind, p_payload: payload });
+      return fenced(error, data === true);
+    },
+    async finishPostprocessing(execution: JobExecution): Promise<FencedOutcome> {
+      const { data, error } = await call('workflow_job_postprocessing_done', fence(execution));
+      return fenced(error, data === true);
+    },
     async renew(execution: JobExecution): Promise<FencedOutcome> {
       const { data, error } = await call('workflow_job_renew_lease', { ...fence(execution), p_lease_seconds: JOB_LEASE_SECONDS });
       return fenced(error, data === true);

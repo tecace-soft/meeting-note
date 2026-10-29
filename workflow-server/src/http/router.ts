@@ -1,3 +1,4 @@
+import { isDraining, ServerDrainingError } from '../runtime/executionScope.js';
 // HTTP router: the request dispatch for the workflow-server (knowledge, then OPTIONS,
 // then MCP, then /health and /version, then the route modules in order, then 404) and
 // the error-to-status mapping for anything a handler throws. It creates no server and
@@ -44,6 +45,15 @@ const handleMeetingKnowledgeRequest = createMeetingKnowledgeHttpHandler(createMe
 export function handleWorkflowRequest(req: IncomingMessage, res: ServerResponse): void {
   void (async () => {
     const url = new URL(req.url ?? '/', 'http://localhost');
+    if (req.method === 'GET' && url.pathname === '/ready') {
+      if (isDraining()) sendDraining(res);
+      else sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (isDraining() && !['GET', 'HEAD', 'OPTIONS'].includes(req.method ?? '')) {
+      sendDraining(res);
+      return;
+    }
     // New private routes own their CORS, credential checks and content-free errors.
     if (await handleMeetingKnowledgeRequest(req, res, url)) return;
     if (req.method === 'OPTIONS') {
@@ -91,6 +101,7 @@ export function handleWorkflowRequest(req: IncomingMessage, res: ServerResponse)
     if (await handleSummarizeJobsRequest(req, res, url)) return;
     sendJson(res, 404, { error: 'Not found' });
   })().catch((error) => {
+    if (error instanceof ServerDrainingError) { sendDraining(res); return; }
     const message = errorMessage(error);
     const status = getHttpStatus(error);
     console.error('Workflow request failed:', error);
@@ -107,4 +118,9 @@ export function handleWorkflowRequest(req: IncomingMessage, res: ServerResponse)
     }
     sendJson(res, status, { error: message });
   });
+}
+
+function sendDraining(res: ServerResponse): void {
+  res.setHeader('Retry-After', '5');
+  sendJson(res, 503, { error: 'Server is shutting down. Please retry.', code: 'SERVER_DRAINING', retryable: true });
 }

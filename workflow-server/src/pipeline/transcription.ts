@@ -1,3 +1,4 @@
+import { executionFetch } from '../runtime/executionScope.js';
 // AssemblyAI transcription stage of the summarize pipeline: global transcription
 // settings (keyterms, custom spelling), submit + poll + result parsing, detected
 // language helpers and the best-effort transcript translation. Imports only shared
@@ -144,7 +145,7 @@ async function submitAssemblyTranscript(input: { downloadUrl: string; settings: 
     hasKeytermsPrompt: Array.isArray(submitBody.keyterms_prompt) && submitBody.keyterms_prompt.length > 0,
     customSpellingCount: Array.isArray(submitBody.custom_spelling) ? submitBody.custom_spelling.length : 0,
   }));
-  const createResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
+  const createResponse = await executionFetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: {
       Authorization: env.assemblyAiApiKey,
@@ -187,7 +188,7 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number, a
     let pollResponse: Response;
     let pollRaw: string;
     try {
-      pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(transcriptId)}`, {
+      pollResponse = await executionFetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(transcriptId)}`, {
         headers: { Authorization: env.assemblyAiApiKey },
       });
       pollRaw = await pollResponse.text();

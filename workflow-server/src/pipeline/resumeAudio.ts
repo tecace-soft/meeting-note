@@ -1,3 +1,4 @@
+import { executionFetch } from '../runtime/executionScope.js';
 // Audio link of a resumed job (S10, DEC-0022, #23). Before a resumed execution pays for a
 // fresh AssemblyAI submission it checks that the job's stored audio link still answers.
 // When the link expired (a web or Flutter job's client-signed 6 h link outlived by a long
@@ -116,7 +117,7 @@ export async function probeStorageAudio(downloadUrl: string): Promise<ProbeResul
   let problem = 'not checked';
   for (let attempt = 1; attempt <= AUDIO_PROBE_TRIES; attempt += 1) {
     try {
-      const response = await fetch(target, { headers: { Range: 'bytes=0-0' }, redirect: 'error', signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS) });
+      const response = await executionFetch(target, { headers: { Range: 'bytes=0-0' }, redirect: 'error', signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS) });
       await response.body?.cancel().catch(() => undefined);
       if (response.ok) return { kind: 'ok' };
       status = response.status;
@@ -142,7 +143,7 @@ export async function assertAudioReachable(downloadUrl: string, language: Langua
 function boundedFetch(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
   const timeout = AbortSignal.timeout(RESIGN_IO_TIMEOUT_MS);
   const signal = init?.signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([init.signal, timeout]) : timeout;
-  return fetch(input, { ...init, signal });
+  return executionFetch(input, { ...init, signal });
 }
 const signingClient = createClient(env.supabaseUrl || 'https://placeholder.supabase.co', env.serviceRoleKey || 'missing-service-role-key', {
   auth: { persistSession: false, autoRefreshToken: false },

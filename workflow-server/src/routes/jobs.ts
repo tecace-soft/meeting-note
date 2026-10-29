@@ -1,3 +1,4 @@
+import { isDraining, ServerDrainingError } from '../runtime/executionScope.js';
 // Summarize job routes: the synchronous /summarize-audio route, job creation for web
 // (/summarize-audio/jobs) and Android multipart uploads (/android/recordings/jobs), and
 // job status reads. Starts runs through jobs/runner.ts; imports pipeline, jobs and http
@@ -26,6 +27,7 @@ async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promis
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
 
+  if (isDraining()) throw new ServerDrainingError();
   const result = await runSummarizeAudio(input);
   sendJson(res, 200, result);
   // Enrich after responding so the web client isn't held behind memory/speaker-ID calls.
@@ -66,6 +68,7 @@ async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Pr
     return;
   }
 
+  if (isDraining()) throw new ServerDrainingError();
   const { data, error } = await supabase.from('workflow_job').insert({
     user_id: input.userId,
     note_id: input.noteId,
@@ -146,6 +149,7 @@ async function createAndroidRecordingJob(req: IncomingMessage, res: ServerRespon
       promptId: upload.fields.promptId,
       userId: tokenUserId,
     });
+    if (isDraining()) throw new ServerDrainingError();
     const { storagePath, signedUrl } = await uploadAndroidAudioToStorage({
       userId: tokenUserId,
       noteId,
@@ -179,7 +183,8 @@ async function createAndroidRecordingJob(req: IncomingMessage, res: ServerRespon
       attachments: [],
       language: upload.fields.language === 'ko' ? 'ko' : 'en',
     };
-    const { data, error } = await supabase.from('workflow_job').insert({
+    if (isDraining()) throw new ServerDrainingError();
+  const { data, error } = await supabase.from('workflow_job').insert({
       user_id: tokenUserId,
       note_id: noteId,
       type: 'summarize_audio',

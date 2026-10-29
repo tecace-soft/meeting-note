@@ -1,3 +1,4 @@
+import { isDraining, registerExecution, ServerDrainingError, outsideExecution } from '../runtime/executionScope.js';
 // Summarize job runner: claims one job (S10, DEC-0022), runs it through the pipeline, keeps
 // its lease (or, before the S10 migration, its updated_at) fresh with a heartbeat, writes
 // the terminal status and runs the post-completion enrichment. Owns the in-memory
@@ -45,7 +46,12 @@ async function claimForStart(jobId: string, input: SummarizeAudioInput): Promise
 // Starts a freshly inserted job. With the S10 schema the run is owned (claimed lease,
 // fenced writes); before the migration it runs exactly as before S10.
 export async function processSummarizeJob(jobId: string, input: SummarizeAudioInput): Promise<void> {
+  if (isDraining()) return;
   const outcome = await claimForStart(jobId, input);
+  if (isDraining()) {
+    if (outcome.kind === 'claimed') await outsideExecution(() => jobLeases.release(executionFromClaim(outcome.claim, { resumed: false })));
+    return;
+  }
   if (outcome.kind === 'exhausted') return;
   if (outcome.kind === 'unsupported') {
     await runJob(jobId, input);
@@ -112,8 +118,20 @@ async function runJob(job: string | JobExecution, input: SummarizeAudioInput): P
   // multi-minute AssemblyAI poll) so the orphan sweep never mistakes this live job
   // for an orphan.
   const timer = setInterval(() => {
-    void heartbeat(job);
+    if (!isDraining()) void heartbeat(job);
   }, JOB_HEARTBEAT_INTERVAL_MS);
+  if (isDraining()) {
+    clearInterval(timer);
+    if (typeof job !== 'string') await outsideExecution(() => jobLeases.release(job));
+    return;
+  }
+  const registered = registerExecution(job, () => clearInterval(timer));
+  try { await registered.run(() => runJobSteps(job, input)); }
+  finally { registered.finish(); }
+}
+
+async function runJobSteps(job: string | JobExecution, input: SummarizeAudioInput): Promise<void> {
+  const jobId = typeof job === 'string' ? job : job.jobId;
   try {
     const result = await runSummarizeAudio(input, job);
     // Terminal writes retry: a transient DB blip here would otherwise strand the
@@ -137,12 +155,14 @@ async function runJob(job: string | JobExecution, input: SummarizeAudioInput): P
     // Post-completion enrichment (memory fold + speaker-ID). Runs after the job is
     // marked completed so the client sees the summary immediately; awaited here so the
     // work still finishes in-process (heartbeat keeps the row fresh). Never throws.
-    await finalizeNoteMemory(input, result.transcript);
+    if (!marked && typeof job !== 'string') return;
+    const complete = await finalizeNoteMemory(input, result.transcript, typeof job === 'string' ? undefined : job);
+    if (complete && typeof job !== 'string' && !job.lost && !isDraining()) await jobLeases.finishPostprocessing(job);
   } catch (error) {
     // S10: another execution owns this job now. Write nothing (no failure, no
     // enrichment, no incident); the owner decides the outcome.
-    if (error instanceof JobLeaseLostError) {
-      console.warn(`${error.message} This execution stops without writing.`);
+    if (error instanceof JobLeaseLostError || error instanceof ServerDrainingError || isDraining()) {
+      console.warn(`${error instanceof Error ? error.message : 'Execution interrupted.'} This execution stops without writing.`);
       return;
     }
     // Redacted again here (the job row is user-visible): no signed link from any stage.
@@ -173,7 +193,5 @@ async function runJob(job: string | JobExecution, input: SummarizeAudioInput): P
       });
     }
     await writeFailed(job, jobId, message);
-  } finally {
-    clearInterval(timer);
   }
 }

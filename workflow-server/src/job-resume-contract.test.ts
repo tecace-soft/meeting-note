@@ -653,3 +653,24 @@ test('the sweep falls back to the pre-S10 behavior when the S10 columns or RPCs 
   assert.ok(!f.state.calls.some((c) => c.url.searchParams.get('updated_at')?.startsWith('lt.')), 'no fallback that would fail live S10 jobs');
   await turn();
 });
+
+test('S12: a lost or unavailable atomic note RPC never falls back to an unfenced note write', { timeout: 10000 }, async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  t.mock.method(console, 'warn', () => undefined);
+  let missing = false;
+  const f = await fixture(t, (url) => {
+    if (!isRpc(url, 'workflow_job_persist_note')) return undefined;
+    return missing ? Response.json({ code: 'PGRST202', message: 'Synthetic missing migration' }, { status: 404 }) : Response.json(false);
+  });
+  for (const absent of [false, true]) {
+    f.reset(); missing = absent;
+    await processSummarizeJob('note-fence-lost', input());
+    const persisted = rpcCalls(f, 'workflow_job_persist_note');
+    assert.equal(persisted.length, 1);
+    assert.equal(persisted[0]!.body.p_generation, 1);
+    assert.equal(persisted[0]!.body.p_owner, JOB_INSTANCE_ID);
+    assert.equal(terminal(f, 'note-fence-lost'), undefined, 'unknown ownership does not mark the recording failed or completed');
+    assert.ok(!f.state.calls.some((c) => isTable(c.url, 'note') && c.method !== 'GET'), 'no unfenced note fallback');
+    assert.ok(!f.state.calls.some((c) => isTable(c.url, 'user_memory')), 'enrichment does not run after an unconfirmed insert');
+  }
+});

@@ -1,4 +1,6 @@
 import './config/loadEnv.js';
+import { resetDrain } from './runtime/executionScope.js';
+import { createGracefulStop } from './runtime/shutdown.js';
 import { raiseIncident } from './ops/incidents.js';
 import { handleWorkflowRequest } from './http/router.js';
 import { supabase } from './db/supabaseClient.js';
@@ -23,6 +25,7 @@ export const server = createServer(handleWorkflowRequest);
 // Production startup stays explicit so tests can own all process resources.
 export function startServer(options: { port?: number; host?: string; dispatcher?: Dispatcher } = {}): () => Promise<void> {
   if (server.listening) throw new Error('Workflow server is already listening.');
+  resetDrain();
   const previousDispatcher = getGlobalDispatcher();
   const dispatcher = options.dispatcher ?? new Agent({
     headersTimeout: env.fetchHeadersTimeoutMs,
@@ -51,19 +54,32 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
 
   process.on('unhandledRejection', onRejection);
   process.on('uncaughtException', onException);
+  let dispatcherClosing: Promise<void> | undefined;
+  const closeDispatcher = () => dispatcherClosing ??= dispatcher === previousDispatcher ? Promise.resolve() : dispatcher.close();
   let cleaned = false;
+  const stopWorkers = () => {
+    if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = undefined; }
+    for (const stopWorker of workerStops.splice(0)) stopWorker();
+  };
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     server.off('close', cleanup);
     server.off('error', cleanup);
-    if (sweepTimer) clearInterval(sweepTimer);
-    for (const stopWorker of workerStops.splice(0)) stopWorker();
+    stopWorkers();
+    process.off('SIGTERM', onSigterm);
     process.off('unhandledRejection', onRejection);
     process.off('uncaughtException', onException);
     setGlobalDispatcher(previousDispatcher);
-    if (dispatcher !== previousDispatcher) void dispatcher.close();
+    if (dispatcher !== previousDispatcher) void closeDispatcher().catch(() => undefined);
   };
+  const stop = createGracefulStop({
+    server, stopWorkers, cleanup,
+    closeDispatcher,
+    destroyDispatcher: () => dispatcher === previousDispatcher ? Promise.resolve() : dispatcher.destroy(),
+  });
+  const onSigterm = () => { void stop().then(() => process.exit(0)); };
+  process.on('SIGTERM', onSigterm);
   server.once('close', cleanup);
   server.once('error', cleanup);
   server.listen(options.port ?? env.port, options.host ?? env.listenHost, () => {
@@ -126,10 +142,7 @@ export function startServer(options: { port?: number; host?: string; dispatcher?
       }
     }
   });
-  return () => new Promise<void>((resolveStop, rejectStop) => {
-    server.close((error) => error ? rejectStop(error) : resolveStop());
-    server.closeIdleConnections();
-  });
+  return stop;
 }
 
 let isDirectExecution = false;

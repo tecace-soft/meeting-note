@@ -462,3 +462,49 @@ test('S12 SQL: completed remains completed, pending enrichment is durable and fe
   assert.deepEqual(await service(() => rpc('workflow_job_postprocessing_done', { ...fence, p_job_id: other }, 5000)), { data: true, error: null });
   assert.equal((await row(db, other)).postprocessing_status, 'done');
 });
+
+test('S12 SQL: SIGKILL recovery reopens durable state and rejects the dead generation', { timeout: 60000 }, async (t) => {
+  const { spawn } = await import('node:child_process');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const folder = await mkdtemp(join(tmpdir(), 'meeting-note-durable-lease-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const child = spawn(process.execPath, ['--import','tsx','--import','./src/test-setup.ts','src/test-support/lease-durable-child.ts',folder], {
+    cwd: fileURLToPath(new URL('../', import.meta.url)), env: process.env, stdio: ['ignore','ignore','pipe','ipc'],
+  });
+  let diagnostic = '';
+  child.stderr!.on('data', (chunk) => { diagnostic += String(chunk); });
+  const deadline = setTimeout(() => child.kill('SIGKILL'), 30000);
+  t.after(() => { clearTimeout(deadline); if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  const exited = new Promise<void>((resolve, reject) => { child.once('exit', () => resolve()); child.once('error', reject); });
+  const id = await new Promise<string>((resolve, reject) => {
+    child.once('message', (message: { id: string }) => resolve(message.id));
+    child.once('exit', () => reject(new Error('Durable fixture exited before ready: ' + diagnostic)));
+    child.once('error', reject);
+  });
+  child.kill('SIGKILL');
+  await exited;
+  assert.equal(child.signalCode, 'SIGKILL');
+  const db = new PGlite(folder);
+  t.after(() => db.close());
+  const saved = await row(db, id);
+  assert.equal(saved.lease_owner, 'killed-worker');
+  assert.equal(saved.execution_generation, 1);
+  assert.equal(saved.assembly_transcript_id, 'persisted-transcript');
+  assert.equal(saved.transcript_submission_state, 'submitted');
+  assert.ok(saved.lease_expires_at, 'an abrupt kill retains the durable lease');
+  await expireLease(db, id);
+  const rpc = pgliteRpc(db);
+  const outcome = await asRole(db, 'service_role', () => createJobLeaseStore(rpc, 'restart-worker').claim(id, 'recover'));
+  assert.equal(outcome.kind, 'claimed');
+  if (outcome.kind !== 'claimed') throw new Error('Expected a recovered claim');
+  assert.equal(outcome.claim.generation, 2);
+  assert.equal(outcome.claim.transcriptId, 'persisted-transcript', 'recovery reuses the paid transcript');
+  assert.equal((await rpc('workflow_job_persist_note', { p_job_id: id, p_owner: 'killed-worker', p_generation: 1,
+    p_note: { id: 'durable-note', user_id: 'fixture-user', summary: 'stale' }, p_mode: 'insert' }, 5000)).data, false);
+  assert.equal((await rpc('workflow_job_persist_note', { p_job_id: id, p_owner: 'restart-worker', p_generation: 2,
+    p_note: { id: 'durable-note', user_id: 'fixture-user', summary: 'recovered' }, p_mode: 'insert' }, 5000)).data, true);
+  assert.equal((await db.query('select id from public.note')).rows.length, 1, 'restart converges to one note');
+});

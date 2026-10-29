@@ -1,3 +1,4 @@
+import { executionSignal, executionFetch } from './runtime/executionScope.js';
 interface GeminiPart {
   text?: string;
   inlineData?: {
@@ -151,6 +152,8 @@ export async function callGemini(input: {
   // Let strict structured-output callers inspect native incomplete/blocked results.
   allowIncompleteOutput?: boolean;
 }): Promise<GeminiCallResult> {
+  const jobSignal = executionSignal();
+  if (jobSignal) input = { ...input, signal: input.signal ? AbortSignal.any([jobSignal, input.signal]) : jobSignal };
   if (input.maxResponseBytes !== undefined && (!Number.isSafeInteger(input.maxResponseBytes) || input.maxResponseBytes < 1 || input.maxResponseBytes > 1048576)) {
     throw new GeminiApiError('Invalid Gemini response byte limit');
   }
@@ -238,7 +241,7 @@ export async function uploadGeminiFile(input: {
 }): Promise<{ fileUri: string; mimeType: string }> {
   let startResponse: Response;
   try {
-    startResponse = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+    startResponse = await executionFetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -262,7 +265,7 @@ export async function uploadGeminiFile(input: {
 
   let uploadResponse: Response;
   try {
-    uploadResponse = await fetch(uploadUrl, {
+    uploadResponse = await executionFetch(uploadUrl, {
       method: 'POST',
       headers: {
         'X-Goog-Upload-Offset': '0',
@@ -286,7 +289,7 @@ export async function uploadGeminiFileStream(input: {
 }): Promise<{ fileUri: string; mimeType: string }> {
   let startResponse: Response;
   try {
-    startResponse = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+    startResponse = await executionFetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -310,7 +313,7 @@ export async function uploadGeminiFileStream(input: {
 
   let uploadResponse: Response;
   try {
-    uploadResponse = await fetch(uploadUrl, {
+    uploadResponse = await executionFetch(uploadUrl, {
       method: 'POST',
       headers: {
         'X-Goog-Upload-Offset': '0',

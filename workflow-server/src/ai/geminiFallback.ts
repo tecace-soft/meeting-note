@@ -1,3 +1,4 @@
+import { assertExecutionActive, executionDelay } from '../runtime/executionScope.js';
 import { env } from '../config/env.js';
 import { callGemini, dedupeModels, isRetryableGeminiError, type GeminiUsageMetadata } from '../gemini.js';
 
@@ -9,7 +10,7 @@ export interface GeminiWorkflowCallResult {
 }
 
 export async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await executionDelay(ms);
 }
 
 // Transient Gemini failures (429/5xx/network) get a few backoff retries on the
@@ -53,6 +54,7 @@ export async function callGeminiWithFallback(input: {
           latencyMs: Math.round(performance.now() - startedAt),
         };
       } catch (error) {
+        assertExecutionActive();
         lastError = error;
         const message = error instanceof Error ? error.message : String(error);
         const isMissingModel = message.includes('404') || message.includes('not found') || message.includes('not supported');
