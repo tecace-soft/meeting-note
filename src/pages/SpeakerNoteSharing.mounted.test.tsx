@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { createFakeSupabase, RecordedQuery } from '../test/fakeSupabase';
@@ -271,7 +271,10 @@ for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit
     h.contacts = [{ id: 'contact-oid', displayName: 'Directory Person', email: 'person@example.test', userPrincipalName: 'person@example.test' }];
     await mountPage(page);
     fireEvent.click(Array.from(document.querySelectorAll<HTMLButtonElement>('[data-transcript-speaker-trigger]')).find((b) => b.textContent === 'Speaker A')!);
-    fireEvent.click(await screen.findByRole('button', { name: /Directory Person/ }));
+    const contact = await screen.findByRole('button', { name: /Directory Person/ });
+    // The async assignment schedules a React transition after persistence.
+    // Flush that interaction before checking the separate sharing action.
+    await act(async () => { fireEvent.click(contact); });
     const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
     expect(shareWrites()).toHaveLength(0);
     fireEvent.click(button);
