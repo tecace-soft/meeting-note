@@ -244,7 +244,9 @@ function reportRefusal(input: { jobId: string; userId: string }, outcome: { reas
 
 // The link a resumed execution submits. Re-signs only when needed: the stored link's
 // expiry is known and (nearly) past, or its probe answered 4xx. A storage 5xx, 429 or
-// network failure is not helped by a new signature and fails as before.
+// network failure is not helped by a new signature and fails as before. When the re-sign
+// is refused or fails but the stored link has not expired yet (it was only inside the
+// margin), the stored link is probed and, if it answers, submitted as before #23.
 export async function resumableAudioUrl(input: {
   jobId: string;
   userId: string;
@@ -254,8 +256,10 @@ export async function resumableAudioUrl(input: {
 }): Promise<string> {
   const stored = parseProjectSignedUrl(input.downloadUrl);
   let why: string;
+  let storedStillValid = false;
   if (stored?.expiresAtMs != null && stored.expiresAtMs <= Date.now() + RESIGN_EXPIRY_MARGIN_MS) {
-    why = 'the stored link expired';
+    storedStillValid = stored.expiresAtMs > Date.now();
+    why = storedStillValid ? 'the stored link expires within the margin' : 'the stored link expired';
   } else {
     const probe = await probeStorageAudio(input.downloadUrl);
     if (probe.kind !== 'unavailable') return input.downloadUrl;
@@ -265,6 +269,10 @@ export async function resumableAudioUrl(input: {
   const outcome = await resignOwnedRecording({ userId: input.userId, fileId: input.fileId, storedUrl: input.downloadUrl });
   if (!outcome.ok) {
     reportRefusal(input, outcome, why);
+    if (storedStillValid && (await probeStorageAudio(input.downloadUrl)).kind === 'ok') {
+      console.warn(`Workflow job ${input.jobId} submits its stored link, still valid, after the re-sign was not done (${outcome.reason}).`);
+      return input.downloadUrl;
+    }
     throw new AudioUnavailableError(input.language, `${why}; re-sign refused (${outcome.reason})`);
   }
   console.log(`Workflow job ${input.jobId} re-signed its recording after ${why}; resuming with the fresh link.`);
