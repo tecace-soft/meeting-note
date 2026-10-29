@@ -391,6 +391,27 @@ describe('TranscriptionSummary speaker suggestions and name-aware refresh (U9)',
 });
 
 describe('review #61: Done protects an editor opened during a refresh save', () => {
+  it('Done waits for an in-flight refresh, then only saves a conflicting draft after explicit confirmation', async () => {
+    let finish!: (value: boolean) => void;
+    h.saveIfUnsaved.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    await openCompletedNote();
+    await nameMainSpeakers();
+    await passDebounce();
+    fireEvent.click(screen.getAllByRole('button', { name: 'edit' })[0]);
+    await screen.findByPlaceholderText('Edit your summary here... (Markdown supported)');
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'done' })[0]); });
+    const writesWhilePending = h.patchNoteReturningId.mock.calls.filter((call) => 'summary_edit' in call[0].patch).length;
+    await act(async () => { finish(true); });
+    fireEvent.change(screen.getByPlaceholderText('Edit your summary here... (Markdown supported)'), { target: { value: 'My intentional revised draft' } });
+    h.confirm.mockResolvedValueOnce(true);
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'done' })[0]); });
+    vi.useRealTimers();
+    expect(writesWhilePending).toBe(0);
+    expect(h.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: 'summaryEditRefreshConflict' }));
+    expect(h.patchNoteReturningId.mock.calls.filter((call) => 'summary_edit' in call[0].patch).map((call) => call[0].patch.summary_edit)).toEqual(['My intentional revised draft']);
+    expect(screen.queryByPlaceholderText('Edit your summary here... (Markdown supported)')).not.toBeInTheDocument();
+  }, 5000);
+
   it('keeps the draft and asks before Done can overwrite the newer saved summary', async () => {
     let finish!: (value: boolean) => void;
     h.saveIfUnsaved.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));

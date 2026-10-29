@@ -457,6 +457,37 @@ describe('review #61: editor and late-save protection', () => {
     expect(view.result.current.pendingReplacement).toBeNull();
   }, 5000);
 
+  it("does not display our late result when read-back finds someone else's edit", async () => {
+    const save = deferred<boolean>();
+    const view = setup();
+    view.saveSummary.mockImplementationOnce(() => save.promise);
+    view.rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(NAME_REFRESH_RUN_DEADLINE_MS); });
+    view.readSavedEdit.mockResolvedValue('Someone else edited this');
+    await act(async () => { save.resolve(true); });
+    await flush();
+    vi.useRealTimers();
+    expect(view.onApply).not.toHaveBeenCalled();
+    expect(view.result.current.error).toMatch(/saved summary changed/);
+    expect(view.result.current.isBusy()).toBe(false);
+  }, 5000);
+
+  it('a failed late save clears its barrier without applying text or causing an unhandled rejection', async () => {
+    const save = deferred<boolean>();
+    const view = setup();
+    view.saveSummary.mockImplementationOnce(() => save.promise);
+    view.rerender({ segments: transcript('Andrew', 'Hansoo') });
+    await passDebounce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(NAME_REFRESH_RUN_DEADLINE_MS); });
+    await act(async () => { save.reject(new Error('Late write failed')); });
+    await flush();
+    vi.useRealTimers();
+    expect(view.onApply).not.toHaveBeenCalled();
+    expect(view.result.current.error).toBe('Late write failed');
+    expect(view.result.current.isBusy()).toBe(false);
+  }, 5000);
+
   it('checks hand edits before taking the old-backend display path', async () => {
     const view = setup({ currentSummary: 'My own words' });
     view.regenerate.mockResolvedValueOnce({ summary: 'Saved by old server', persisted: null });

@@ -8,7 +8,7 @@ import type { TranscriptSegment } from '../../lib/transcriptSegments';
 export const NAME_REFRESH_DEBOUNCE_MS = 4000;
 /** Automatic refreshes per note per page session; the manual button is not counted. */
 export const MAX_AUTO_NAME_REFRESHES_PER_NOTE = 3;
-/** Upper bound for one whole run (token, reads, regenerate, save), whatever step hangs. */
+/** Foreground run bound; an already-started write retains its barrier until it settles. */
 export const NAME_REFRESH_RUN_DEADLINE_MS = 150_000;
 
 export interface SummaryNameRefreshInput {
@@ -33,13 +33,17 @@ export interface SummaryNameRefreshInput {
   saveSummary: (text: string, options: { onlyIfUnsaved: boolean }) => Promise<boolean>;
   /** Show `text` as the summary. */
   onApply: (text: string) => void;
+  /** A refresh reached the DB while an editor was open; retain its draft and report the conflict. */
+  onSavedWhileEditing?: (text: string) => void;
 }
 
-type RunMode = 'auto' | 'retry' | 'manual';
+type RunMode = 'auto' | 'retry' | 'manual' | 'replace';
 export type NameRefreshPhase = 'idle' | 'scheduled' | 'running';
 
 export interface SummaryNameRefresh {
   phase: NameRefreshPhase;
+  /** Includes an uncancellable write that outlived the run deadline. */
+  isBusy: () => boolean;
   error: string | null;
   /** A regenerated summary waiting for the user because the current one was edited by hand. */
   pendingReplacement: string | null;
@@ -94,12 +98,17 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
   const generatedRef = useRef<Set<string>>(new Set());
   const busyRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const pendingWrites = useRef(new Map<string, Promise<boolean>>());
+  const alive = useRef(true);
+  const noteEpoch = useRef(0);
+  const isBusy = useCallback(() => busyRef.current || Boolean(noteRef.current && pendingWrites.current.has(noteRef.current)), []);
 
   const signature = useMemo(() => namingSignature(segments), [segments]);
 
   // Reset per note: the summary on screen reflects the names it was generated with.
   if (noteRef.current !== noteId) {
     noteRef.current = noteId;
+    noteEpoch.current += 1;
     baselineRef.current = noteId ? signature : null;
     lastAttemptRef.current = null;
     autoCountRef.current = 0;
@@ -121,7 +130,10 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
     setServerSavedNotice(false);
   }, [noteId]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; abortRef.current?.abort(); };
+  }, []);
 
   const isGenerated = useCallback((text: string) => generatedRef.current.has(normalize(text)), []);
 
@@ -145,36 +157,91 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
   const show = useCallback((text: string, appliedSignature: string | null) => {
     generatedRef.current.add(normalize(text));
     baselineRef.current = appliedSignature;
-    // Already saved; an editor opened meanwhile keeps the user's text on screen (Done saves it).
-    if (!latest.current.isEditing) latest.current.onApply(text);
+    // Keep the draft, but let Done distinguish it from the newer persisted summary.
+    if (latest.current.isEditing) latest.current.onSavedWhileEditing?.(text);
+    else latest.current.onApply(text);
   }, []);
 
   const run = useCallback(
-    async (mode: RunMode) => {
+    async (mode: RunMode, replacement?: { text: string; signature: string | null }) => {
       const forNote = noteRef.current;
-      if (busyRef.current || !forNote) return;
+      if (!forNote) return;
+      if (pendingWrites.current.has(forNote)) {
+        setError('The previous summary save is still pending. Please wait before trying again.');
+        return;
+      }
+      if (busyRef.current) return;
       busyRef.current = true;
       const controller = new AbortController();
       abortRef.current = controller;
       const requestSegments = latest.current.segments;
-      const requestSignature = namingSignature(requestSegments);
+      const requestSignature = replacement ? replacement.signature : namingSignature(requestSegments);
       lastAttemptRef.current = requestSignature;
       if (mode === 'auto') autoCountRef.current += 1;
       setPhase('running');
       setError(null);
-      // Unmount, note change or deadline: the remaining steps must not touch the screen or the DB.
+      if (mode === 'manual') setPending(null);
+      const epoch = noteEpoch.current;
+      let timedOut = false;
+      const sameNote = () => alive.current && noteRef.current === forNote && noteEpoch.current === epoch;
+      // Cancellation blocks subsequent steps; an already-started write is tracked and reconciled.
       const cancelled = () => controller.signal.aborted || noteRef.current !== forNote;
       const ask = (text: string) => setPending({ text, signature: requestSignature });
 
+      const save = (text: string, onlyIfUnsaved: boolean): Promise<boolean> => {
+        const callbacks = latest.current;
+        let tracked!: Promise<boolean>;
+        tracked = (async () => {
+          try {
+            const saved = await callbacks.saveSummary(text, { onlyIfUnsaved });
+            // Aborting a browser request cannot undo a DB commit already in progress.
+            // Keep the barrier through an authoritative read and reconcile only our saved text.
+            if (timedOut && saved && sameNote()) {
+              const actual = await withDeadline(callbacks.readSavedEdit(), 15_000,
+                'Could not verify the delayed summary save. Please reload the note.');
+              if (sameNote()) {
+                if (actual !== null && normalize(actual) === normalize(text)) show(actual, requestSignature);
+                else setError('The saved summary changed. Please reload the note before replacing it.');
+              }
+            }
+            return saved;
+          } catch (saveError) {
+            if (timedOut && sameNote()) setError(errorMessage(saveError));
+            throw saveError;
+          } finally {
+            if (pendingWrites.current.get(forNote) === tracked) pendingWrites.current.delete(forNote);
+            if (alive.current && noteRef.current === forNote) setRevision((value) => value + 1);
+          }
+        })();
+        pendingWrites.current.set(forNote, tracked);
+        return tracked;
+      };
+
       const work = async (): Promise<void> => {
+        if (mode === 'replace' && replacement) {
+          const saved = await save(replacement.text, false);
+          if (!cancelled() && saved) {
+            show(replacement.text, replacement.signature);
+            setPending(null);
+          }
+          return;
+        }
         const before = mode === 'manual' ? null : await readSavedEditState();
         if (cancelled()) return;
         const result = await latest.current.regenerate(requestSegments, controller.signal);
         if (cancelled()) return;
         if (mode === 'manual') {
-          if (result.persisted !== true) await latest.current.saveSummary(result.summary, { onlyIfUnsaved: false });
+          if (result.persisted !== true) await save(result.summary, false);
           if (!cancelled()) show(result.summary, requestSignature);
           return;
+        }
+        if (before?.edited || editedOnThisPage()) {
+          if (result.persisted !== false) {
+            olderServerRef.current = true;
+            setServerSavedNotice(true);
+            setAutoPaused(true);
+          }
+          return ask(result.summary);
         }
         if (result.persisted !== false) {
           // An older server ignored persist:false and already saved: show what it saved instead of
@@ -185,18 +252,16 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
           show(result.summary, requestSignature);
           return;
         }
-        if (before?.edited || editedOnThisPage()) return ask(result.summary);
         // Re-check right before writing: an edit saved elsewhere during the request wins.
         const now = await readSavedEditState();
         if (cancelled()) return;
         if (now.edited || editedOnThisPage()) return ask(result.summary);
-        const saved = await latest.current.saveSummary(result.summary, { onlyIfUnsaved: now.empty });
+        const saved = await save(result.summary, now.empty);
         if (cancelled()) return;
         if (!saved) return ask(result.summary);
         show(result.summary, requestSignature);
       };
 
-      let timedOut = false;
       try {
         await withDeadline(work(), NAME_REFRESH_RUN_DEADLINE_MS, 'The summary update timed out. Please try again.');
       } catch (runError) {
@@ -220,7 +285,7 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
 
   // Schedule one debounced automatic refresh when the names differ from what the summary shows.
   useEffect(() => {
-    if (!noteId || phase === 'running' || pending || olderServerRef.current) return;
+    if (!noteId || phase === 'running' || pending || olderServerRef.current || pendingWrites.current.has(noteId)) return;
     if (signature === null || signature === baselineRef.current || signature === lastAttemptRef.current) {
       setPhase('idle');
       return;
@@ -236,18 +301,8 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
   }, [noteId, signature, phase, pending, revision, run]);
 
   const acceptReplacement = useCallback(async () => {
-    if (!pending) return;
-    try {
-      setError(null);
-      await latest.current.saveSummary(pending.text, { onlyIfUnsaved: false });
-      show(pending.text, pending.signature);
-      setPending(null);
-      setRevision((value) => value + 1);
-    } catch (acceptError) {
-      console.error('Replacing the summary failed:', acceptError);
-      setError(errorMessage(acceptError));
-    }
-  }, [pending, show]);
+    if (pending) await run('replace', pending);
+  }, [pending, run]);
 
   const dismissReplacement = useCallback(() => {
     if (!pending) return;
@@ -256,14 +311,12 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
     setRevision((value) => value + 1);
   }, [pending]);
 
-  const runManual = useCallback(() => {
-    setPending(null);
-    void run('manual');
-  }, [run]);
+  const runManual = useCallback(() => { void run('manual'); }, [run]);
   const retry = useCallback(() => void run('retry'), [run]);
 
   return {
     phase,
+    isBusy,
     error,
     pendingReplacement: pending?.text ?? null,
     autoPaused,
