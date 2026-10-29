@@ -1,3 +1,4 @@
+import { isDraining, registerExecution } from '../runtime/executionScope.js';
 // Orphan sweep: reconciles queued/processing jobs left by a crash or redeploy. With the
 // S10 schema (DEC-0022) recoverOrphanedJobs claims each job whose lease expired by
 // database time (the claim itself fails a job past its execution or claim cap) and
@@ -55,7 +56,7 @@ export function reconstructResultFromNote(noteRow: Record<string, unknown>): Sum
 }
 
 export async function failOrphanedJobs(): Promise<void> {
-  if (!env.supabaseUrl || !env.serviceRoleKey) return;
+  if (isDraining() || !env.supabaseUrl || !env.serviceRoleKey) return;
   const cutoff = new Date(Date.now() - ORPHANED_JOB_THRESHOLD_MS).toISOString();
   const { data, error } = await supabase
     .from('workflow_job')
@@ -99,7 +100,7 @@ export async function failOrphanedJobs(): Promise<void> {
   for (const row of rows) {
     const note = row.note_id ? notesById.get(row.note_id) : undefined;
     // Only recover when the note belongs to the same user as the job.
-    if (note && (typeof note.user_id !== 'string' || note.user_id === row.user_id)) {
+    if (note && typeof note.user_id === 'string' && note.user_id === row.user_id) {
       recoverable.push({ jobId: row.id, note });
     } else {
       failedIds.push(row.id);
@@ -211,6 +212,13 @@ function reportExhausted(claim: JobClaim): void {
 // so a deferral never uses an execution attempt (only a claim, which SQL bounds).
 export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcome> {
   const execution = executionFromClaim(claim, { resumed: true });
+  if (isDraining()) { await jobLeases.release(execution); return 'deferred'; }
+  const registered = registerExecution(execution, () => undefined);
+  try { return await registered.run(() => recoverWithExecution(claim, execution)); }
+  finally { registered.finish(); }
+}
+
+async function recoverWithExecution(claim: JobClaim, execution: JobExecution): Promise<RecoveryOutcome> {
   try {
     // FIX 1 (convergence): a persisted note means the work finished; converge to
     // completed instead of running (and paying for) it again.
@@ -228,7 +236,7 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
         return 'deferred';
       }
       const row = note as Record<string, unknown> | null;
-      if (row && (typeof row.user_id !== 'string' || row.user_id === claim.userId)) {
+      if (row && typeof row.user_id === 'string' && row.user_id === claim.userId) {
         const written = await updateWorkflowJob(execution, {
           status: 'completed',
           stage: 'completed',
@@ -239,7 +247,12 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
         if (written) console.log(`Recovered orphaned workflow job ${claim.jobId} to completed from an existing note.`);
         return written ? 'completed' : 'deferred';
       }
+      if (row) {
+        console.warn(`Note ownership does not match workflow job ${claim.jobId}; deferring without completing or overwriting it.`);
+        return 'deferred';
+      }
     }
+    if (isDraining()) { await jobLeases.release(execution); return 'deferred'; }
     const loaded = await jobLeases.loadRequest(execution);
     if (loaded.outcome === 'lost') throw new JobLeaseLostError(claim.jobId, claim.generation, 'the request load');
     if (loaded.outcome !== 'ok') {
@@ -248,6 +261,7 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
     }
     const input = await resumeInputFromRequest(claim, loaded.request);
     if (!input) return await failClaimed(execution, RESUME_UNREADABLE_REQUEST_MESSAGE);
+    if (isDraining()) { await jobLeases.release(execution); return 'deferred'; }
     const begun = await jobLeases.beginExecution(execution);
     if (begun.outcome === 'lost') throw new JobLeaseLostError(claim.jobId, claim.generation, 'the execution start');
     if (begun.outcome !== 'ok' || begun.attempt === null) {
@@ -262,6 +276,7 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
     });
     return 'resumed';
   } catch (error) {
+    if (isDraining()) return 'deferred';
     if (error instanceof JobLeaseLostError) {
       console.warn(`${error.message} Another execution took this orphan over.`);
       return 'lost';
@@ -278,7 +293,7 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
 let sweepInFlight = false;
 
 export async function recoverOrphanedJobs(): Promise<void> {
-  if (!env.supabaseUrl || !env.serviceRoleKey) return;
+  if (isDraining() || !env.supabaseUrl || !env.serviceRoleKey) return;
   if (sweepInFlight) {
     console.log('An orphan sweep is still running; skipping this one.');
     return;
@@ -313,6 +328,7 @@ async function sweepOnce(): Promise<void> {
   }
   const rows = (data ?? []) as Array<{ id: string }>;
   for (const [index, row] of rows.entries()) {
+    if (isDraining()) return;
     if (activeResumes >= MAX_ACTIVE_RESUMES) {
       console.log(`${activeResumes} resumed workflow job(s) are running (cap ${MAX_ACTIVE_RESUMES}); ${rows.length - index} orphan(s) wait for a later sweep unclaimed.`);
       return;

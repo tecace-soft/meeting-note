@@ -1,3 +1,4 @@
+import { jobLeases, JobLeaseLostError } from '../jobs/lease.js';
 // Summarize stage of the pipeline: loads inputs, runs the transcript stage, generates
 // the Gemini summary (with attachments and the parallel transcript translation), writes
 // stage/progress to the job row, persists the note idempotently and clears the transcript
@@ -44,7 +45,7 @@ export async function insertNote(input: {
   meetingAt: string | null;
   fileId: string | null;
   audioDurationSeconds: number | null;
-}): Promise<void> {
+}, job: JobRef = null): Promise<void> {
   const notePayload = {
     transcription: input.transcriptText,
     transcription_language: input.transcriptionLanguage,
@@ -63,6 +64,16 @@ export async function insertNote(input: {
     audio_file_id: input.fileId,
     duration_seconds: input.audioDurationSeconds,
   };
+  if (job && typeof job !== 'string') {
+    if (job.lost) throw new JobLeaseLostError(job.jobId, job.generation, 'note persistence');
+    const outcome = await jobLeases.persistNote(job, notePayload, 'insert');
+    if (outcome !== 'ok') {
+      // Never fall back to an unfenced insert, including a missing migration or unknown DB outcome.
+      job.lost = true;
+      throw new JobLeaseLostError(job.jobId, job.generation, `note persistence (${outcome}); deferred for recovery`);
+    }
+    return;
+  }
   // FIX 1: idempotent on the note primary key. A terminal-status write can fail
   // (DB outage) AFTER this insert succeeds, which later strands the job and
   // triggers a retry. If that retry reuses the same noteId, a bare .insert()
@@ -298,7 +309,7 @@ export async function runSummarizeAudio(input: SummarizeAudioInput, job: JobRef 
     meetingAt: meetingStartAt,
     fileId: input.fileId,
     audioDurationSeconds,
-  });
+  }, job);
 
   // FIX 2: the note (which embeds the transcript) is now durably persisted, so
   // the transcript checkpoint is no longer needed. Best-effort cleanup keeps the

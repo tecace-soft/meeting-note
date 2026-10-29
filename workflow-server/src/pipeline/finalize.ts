@@ -1,3 +1,5 @@
+import { assertExecutionActive } from '../runtime/executionScope.js';
+import { jobLeases, JobLeaseLostError, type JobExecution } from '../jobs/lease.js';
 // Post-completion finalize stage: folds the note into the owner's personal memory and
 // names a solo recording's speaker at ingest (F5.1), refreshing note_insight. Runs after
 // the job is marked completed and never throws. Imports shared config, db and memory
@@ -15,14 +17,18 @@ import type { SummarizeAudioInput } from './types.js';
 // is sent, so the user sees the summary without waiting on these extra Gemini calls.
 // Guaranteed non-throwing: each step is best-effort and the whole body is guarded, so a
 // caller can await or fire-and-forget it without risk of an unhandled rejection.
-export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: TranscriptSegment[]): Promise<void> {
+export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: TranscriptSegment[], execution?: JobExecution): Promise<boolean> {
+  let complete = true;
   try {
+    assertExecutionActive();
+    const writeEnrichment = execution ? fencedEnrichmentWriter(execution) : undefined;
     const transcriptText = formatTranscriptText(segments, 'original');
     // Fold into personal memory + write the note_insight index. Idempotent:
     // foldNoteIntoMemory skips already-folded notes, so a retry never double-counts.
     try {
       const fold = await foldNoteIntoMemory({
         supabase,
+        writeEnrichment,
         apiKey: env.geminiApiKey,
         userId: input.userId,
         noteId: input.noteId,
@@ -32,8 +38,10 @@ export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: T
         // names instead of "" (transcript labels are generic "Speaker A/B" at this stage).
         speakerContext: input.speakerContext || null,
       });
+      complete = complete && fold.complete;
       console.log(`Memory fold note=${input.noteId} items=${fold.memoryItemCount} insight=${fold.insightWritten} skipped=${fold.skipped}`);
     } catch (memoryError) {
+      complete = false;
       console.warn(`Memory fold failed for note ${input.noteId}:`, memoryError);
     }
 
@@ -46,13 +54,17 @@ export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: T
         userId: input.userId,
         selfName: input.userName ?? null,
         segments,
+        execution,
       });
     } catch (identifyError) {
+      complete = false;
       console.warn(`Auto speaker identify failed for note ${input.noteId}:`, identifyError);
     }
   } catch (finalizeError) {
+    complete = false;
     console.warn(`finalizeNoteMemory failed for note ${input.noteId}:`, finalizeError);
   }
+  return complete;
 }
 
 // F5.1: at ingest, auto-name speakers ONLY in the reliable SINGLE-speaker case (a solo
@@ -71,6 +83,7 @@ export async function autoIdentifySpeakersAtIngest(input: {
   userId: string;
   selfName: string | null;
   segments: TranscriptSegment[];
+  execution?: JobExecution;
 }): Promise<void> {
   if (!env.geminiApiKey) return;
   const { noteId, userId, selfName, segments } = input;
@@ -83,7 +96,7 @@ export async function autoIdentifySpeakersAtIngest(input: {
   // call entirely. Needs the owner's name; without it we leave the label for a manual rename.
   if (anonLabels.length === 1) {
     if (!selfName?.trim()) return;
-    await applyNamedSpeakers(noteId, userId, segments, new Map([[anonLabels[0], selfName.trim()]]));
+    await applyNamedSpeakers(noteId, userId, segments, new Map([[anonLabels[0], selfName.trim()]]), input.execution);
     return;
   }
 
@@ -101,24 +114,44 @@ async function applyNamedSpeakers(
   userId: string,
   segments: TranscriptSegment[],
   nameByLabel: Map<string, string>,
+  execution?: JobExecution,
 ): Promise<void> {
   if (nameByLabel.size === 0) return;
   const namedSegments = segments.map((seg) => {
     const name = nameByLabel.get(seg.speaker);
     return name ? { ...seg, speaker: name } : seg;
   });
-  const { error: updateError } = await supabase.from('note').update({ diarization: namedSegments }).eq('id', noteId);
+  assertExecutionActive();
+  if (execution) {
+    const outcome = execution.lost ? 'lost' : await jobLeases.persistNote(execution, {
+      id: noteId, user_id: userId, diarization: namedSegments, diarization_before: segments,
+    }, 'diarization');
+    if (outcome !== 'ok') throw new JobLeaseLostError(execution.jobId, execution.generation, 'speaker enrichment');
+  }
+  const { error: updateError } = execution ? { error: null } : await supabase.from('note').update({ diarization: namedSegments }).eq('id', noteId);
   if (updateError) {
     console.warn(`Diarization update failed for note ${noteId}: ${updateError.message}`);
     return;
   }
-  await extractAndStoreInsight({
+  const insight = await extractAndStoreInsight({
     supabase,
+    writeEnrichment: execution ? fencedEnrichmentWriter(execution) : undefined,
     apiKey: env.geminiApiKey,
     userId,
     noteId,
     transcript: formatTranscriptText(namedSegments, 'original'),
     speakerContext: buildSpeakerContextFromSegments(namedSegments),
   });
+  if (!insight.ok && execution) throw new Error('Speaker insight enrichment did not finish.');
   console.log(`Auto-named ${nameByLabel.size} speaker(s) for note ${noteId}: ${Array.from(nameByLabel.values()).join(', ')}`);
+}
+
+function fencedEnrichmentWriter(execution: JobExecution) {
+  return async (kind: 'memory' | 'insight', payload: Record<string, unknown>): Promise<boolean> => {
+    assertExecutionActive();
+    if (execution.lost) throw new JobLeaseLostError(execution.jobId, execution.generation, 'enrichment');
+    const outcome = await jobLeases.writeEnrichment(execution, kind, payload);
+    if (outcome !== 'ok') throw new JobLeaseLostError(execution.jobId, execution.generation, `enrichment (${outcome})`);
+    return true;
+  };
 }

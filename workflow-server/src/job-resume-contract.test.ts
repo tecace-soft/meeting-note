@@ -525,12 +525,12 @@ test('resume order: note check, then the request load, then the execution count;
 test('resume converges to completed from a persisted note of the same user; a lookup error defers', async (t) => {
   t.mock.method(console, 'log', () => undefined);
   t.mock.method(console, 'warn', () => undefined);
-  let noteMode: 'mine' | 'foreign' | 'error' = 'mine';
+  let noteMode: 'mine' | 'foreign' | 'null' | 'error' = 'mine';
   const note = { id: 'fixture-note', user_id: USER, summary: 'Saved summary', name: 'Saved', diarization: [], tags: [] };
   const f = await fixture(t, noCheckpoint, (url, method) => {
     if (!(isTable(url, 'note') && method === 'GET' && url.searchParams.get('id') === 'eq.fixture-note')) return undefined;
     if (noteMode === 'error') return Response.json({ message: 'note read timeout' }, { status: 500 });
-    return Response.json(noteMode === 'mine' ? note : { ...note, user_id: OTHER });
+    return Response.json(noteMode === 'mine' ? note : { ...note, user_id: noteMode === 'null' ? null : OTHER });
   });
   assert.equal(await recoverAndSettle(f, claimRow()), 'completed');
   const done = terminal(f, 'resumed-job')!;
@@ -542,8 +542,12 @@ test('resume converges to completed from a persisted note of the same user; a lo
   assert.equal(rpcCalls(f, 'workflow_job_write').length, 0, 'unknown note state: neither rerun nor fail');
   assert.equal(rpcCalls(f, 'workflow_job_begin_execution').length, 0, 'a note lookup deferral uses no execution attempt');
   f.reset(); noteMode = 'foreign';
-  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'foreign-note-job' })), 'resumed', 'another user\'s note never completes this job');
+  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'foreign-note-job' })), 'deferred', 'another user\'s note never completes this job');
   completedJobResults.delete('foreign-note-job');
+  f.reset(); noteMode = 'null';
+  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'null-owner-job' })), 'deferred');
+  assert.equal(rpcCalls(f, 'workflow_job_write').length, 0, 'null owner never completes another user job');
+  assert.equal(rpcCalls(f, 'workflow_job_begin_execution').length, 0, 'unknown ownership does not pay for a rerun');
 });
 
 // ---------------------------------------------------------------------------
@@ -648,4 +652,27 @@ test('the sweep falls back to the pre-S10 behavior when the S10 columns or RPCs 
   assert.ok(warn.mock.calls.some((c) => c.arguments[0] === 'Could not scan for orphaned workflow jobs: scan timeout'), 'other scan errors only warn');
   assert.ok(!f.state.calls.some((c) => c.url.searchParams.get('updated_at')?.startsWith('lt.')), 'no fallback that would fail live S10 jobs');
   await turn();
+});
+
+test('S12: a lost or unavailable atomic note RPC never falls back to an unfenced note write', { timeout: 10000 }, async (t) => {
+  t.mock.method(console, 'log', () => undefined);
+  t.mock.method(console, 'warn', () => undefined);
+  let missing = false;
+  const f = await fixture(t, (url) => {
+    if (!isRpc(url, 'workflow_job_persist_note')) return undefined;
+    return missing ? Response.json({ code: 'PGRST202', message: 'Synthetic missing migration' }, { status: 404 }) : Response.json(false);
+  });
+  for (const absent of [false, true]) {
+    f.reset(); missing = absent;
+    await processSummarizeJob('note-fence-lost', input());
+    const persisted = rpcCalls(f, 'workflow_job_persist_note');
+    assert.equal(persisted.length, 1);
+    assert.equal(persisted[0]!.body.p_generation, 1);
+    assert.equal(persisted[0]!.body.p_owner, JOB_INSTANCE_ID);
+    assert.equal(terminal(f, 'note-fence-lost'), undefined, 'unknown ownership does not mark the recording failed or completed');
+    assert.ok(!f.state.calls.some((c) => isTable(c.url, 'note') && c.method !== 'GET'), 'no unfenced note fallback');
+    const persistedAt = indexOf(f, (c) => isRpc(c.url, 'workflow_job_persist_note'));
+    assert.ok(!f.state.calls.slice(persistedAt + 1).some((c) => isTable(c.url, 'user_memory') || isRpc(c.url, 'workflow_job_write_enrichment')),
+      'enrichment does not run after an unconfirmed insert; the earlier memory context read is allowed');
+  }
 });

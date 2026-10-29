@@ -100,6 +100,8 @@ export async function workflowFixture() {
     return json([]);
   });
   const { server } = await import('../index.js');
+  const { resetDrain } = await import('../runtime/executionScope.js');
+  resetDrain();
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();

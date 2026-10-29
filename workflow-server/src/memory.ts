@@ -550,12 +550,15 @@ export async function callJsonModel<T>(input: {
  * original owner visibility of their own index). This replaces a prior
  * `upsert(onConflict: 'note_id')` that overwrote user_id on conflict.
  */
+export type EnrichmentWriter = (kind: 'memory' | 'insight', payload: Record<string, unknown>) => Promise<boolean>;
+
 async function writeNoteInsight(
   supabase: SupabaseClient,
   userId: string,
   noteId: string,
   insight: NoteInsight,
   now: string,
+  writeEnrichment?: EnrichmentWriter,
 ): Promise<boolean> {
   const content = {
     actions: insight.actions,
@@ -567,6 +570,7 @@ async function writeNoteInsight(
     source_model: insight.sourceModel,
     updated_at: now,
   };
+  if (writeEnrichment) return writeEnrichment('insight', { note_id: noteId, user_id: userId, ...content });
   const { data: updated, error: updateError } = await supabase
     .from('note_insight')
     .update(content)
@@ -626,6 +630,7 @@ export async function extractInsight(input: {
  */
 export async function extractAndStoreInsight(input: {
   supabase: SupabaseClient;
+  writeEnrichment?: EnrichmentWriter;
   apiKey: string;
   model?: string;
   fallbackModels?: string[];
@@ -644,7 +649,7 @@ export async function extractAndStoreInsight(input: {
     speakerContext: input.speakerContext ?? null,
   });
   if ('error' in res) return { ok: false, reason: res.error };
-  const wrote = await writeNoteInsight(input.supabase, input.userId, input.noteId, res.insight, new Date().toISOString());
+  const wrote = await writeNoteInsight(input.supabase, input.userId, input.noteId, res.insight, new Date().toISOString(), input.writeEnrichment);
   return wrote ? { ok: true } : { ok: false, reason: 'db upsert failed' };
 }
 
@@ -1199,12 +1204,14 @@ export async function atomizeRunOns(input: {
 }
 
 export interface FoldNoteResult {
+  complete: boolean;
   memoryItemCount: number;
   insightWritten: boolean;
   skipped: boolean;
 }
 
 interface FoldNoteInput {
+  writeEnrichment?: EnrichmentWriter;
   supabase: SupabaseClient;
   apiKey: string;
   model?: string;
@@ -1247,7 +1254,7 @@ function withUserFoldLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
 export async function foldNoteIntoMemory(input: FoldNoteInput): Promise<FoldNoteResult> {
   const { userId, noteId } = input;
   const transcript = input.transcript.trim();
-  if (!userId || !noteId || !transcript) return { memoryItemCount: 0, insightWritten: false, skipped: true };
+  if (!userId || !noteId || !transcript) return { memoryItemCount: 0, insightWritten: false, skipped: true, complete: false };
   return withUserFoldLock(userId, () => foldNoteIntoMemoryLocked(input));
 }
 
@@ -1266,12 +1273,16 @@ async function foldNoteIntoMemoryLocked(input: FoldNoteInput): Promise<FoldNoteR
   // processed history. Skipping leaves the note unprocessed so a later run retries.
   if (readError) {
     console.warn(`[memory] fold aborted for note ${noteId}: user_memory read failed: ${readError.message}`);
-    return { memoryItemCount: 0, insightWritten: false, skipped: true };
+    return { memoryItemCount: 0, insightWritten: false, skipped: true, complete: false };
   }
   const processedNoteIds: string[] = Array.isArray((row as { processed_note_ids?: unknown } | null)?.processed_note_ids)
     ? ((row as { processed_note_ids: string[] }).processed_note_ids)
     : [];
-  if (processedNoteIds.includes(noteId)) return { memoryItemCount: 0, insightWritten: false, skipped: true };
+  if (processedNoteIds.includes(noteId)) {
+    if (!input.writeEnrichment) return { memoryItemCount: 0, insightWritten: false, skipped: true, complete: true };
+    const { data: insight, error } = await supabase.from('note_insight').select('note_id').eq('note_id', noteId).eq('user_id', userId).maybeSingle();
+    return { memoryItemCount: 0, insightWritten: Boolean(insight && !error), skipped: true, complete: Boolean(insight && !error) };
+  }
 
   const now = new Date().toISOString();
   const selfName = input.selfName ?? null;
@@ -1298,17 +1309,18 @@ async function foldNoteIntoMemoryLocked(input: FoldNoteInput): Promise<FoldNoteR
       finalItems = consolidated.items;
     }
     const nextProcessed = [...processedNoteIds, noteId].slice(-PROCESSED_CAP);
-    const { error } = await supabase
-      .from('user_memory')
-      .upsert({ user_id: userId, memory: { version: 2, items: finalItems }, processed_note_ids: nextProcessed, updated_at: now }, { onConflict: 'user_id' });
-    if (!error) {
+    const payload = { user_id: userId, memory: { version: 2, items: finalItems }, processed_note_ids: nextProcessed, updated_at: now };
+    const saved = input.writeEnrichment
+      ? await input.writeEnrichment('memory', payload)
+      : !(await supabase.from('user_memory').upsert(payload, { onConflict: 'user_id' })).error;
+    if (saved) {
       memoryItemCount = finalItems.length;
       memoryProcessed = true;
     }
   }
 
   // Insight (F4): one row per note, best-effort. Written even if memory failed.
-  const insightWritten = 'insight' in insightRes ? await writeNoteInsight(supabase, userId, noteId, insightRes.insight, now) : false;
+  const insightWritten = 'insight' in insightRes ? await writeNoteInsight(supabase, userId, noteId, insightRes.insight, now, input.writeEnrichment) : false;
 
-  return { memoryItemCount, insightWritten, skipped: !memoryProcessed && !insightWritten };
+  return { memoryItemCount, insightWritten, skipped: !memoryProcessed && !insightWritten, complete: memoryProcessed && insightWritten };
 }

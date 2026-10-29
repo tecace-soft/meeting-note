@@ -608,17 +608,17 @@ test('sweep recovers jobs whose note exists for the same user and fails the rest
   assert.equal(read!.columns, '*');
   assert.deepEqual(read!.filters, [['in', 'id', ['n1', 'n2', 'n3', 'n5']]], 'distinct non-null note ids');
   const updates = jobUpdates(calls);
-  assert.deepEqual(updates.slice(0, 3).map((u) => u.filters), [[['eq', 'id', 'j1']], [['eq', 'id', 'j5']], [['eq', 'id', 'j6']]]);
-  assert.deepEqual(staleFailFilters(updates[3]!), [['in', 'id', ['j2', 'j3', 'j4']], ['in', 'status', ['queued', 'processing']]], 'the fail write re-checks the row is still an active orphan');
-  for (const [index, source] of [[0, notes[0]], [1, notes[2]], [2, notes[0]]] as const) {
+  assert.deepEqual(updates.slice(0, 2).map((u) => u.filters), [[['eq', 'id', 'j1']], [['eq', 'id', 'j6']]]);
+  assert.deepEqual(staleFailFilters(updates[2]!), [['in', 'id', ['j2', 'j3', 'j4', 'j5']], ['in', 'status', ['queued', 'processing']]], 'the fail write re-checks the row is still an active orphan');
+  for (const [index, source] of [[0, notes[0]], [1, notes[0]]] as const) {
     const patch = updates[index]!.payload as Record<string, unknown>;
     assert.deepEqual(withoutUpdatedAt(patch), { status: 'completed', stage: 'completed', progress: 100, result: reconstructResultFromNote(source), error: null });
   }
-  const failPatch = updates[3]!.payload as Record<string, unknown>;
+  const failPatch = updates[2]!.payload as Record<string, unknown>;
   assert.deepEqual(withoutUpdatedAt(failPatch), { status: 'failed', stage: 'failed', error: RESTART_MESSAGE }, 'the failure write has no progress field');
   assert.deepEqual(log.mock.calls.map((c) => c.arguments[0]), [
-    'Recovered 3 orphaned workflow job(s) to completed from an existing note.',
-    'Marked 3 orphaned workflow job(s) as failed.',
+    'Recovered 2 orphaned workflow job(s) to completed from an existing note.',
+    'Marked 4 orphaned workflow job(s) as failed.',
   ]);
 });
 
