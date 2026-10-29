@@ -9,7 +9,8 @@ import { STANDARD_FALLBACK_CHAIN } from '../gemini-models.js';
 import { parseDiarizedSegmentsWithRecovery, type TranscriptSegment } from '../parsers.js';
 import { buildTranscriptTranslationPrompt } from '../prompts.js';
 import { hasAssemblyUsage, recordAssemblyResubmission, recordAssemblyUsage, recordGeminiUsage } from './usage.js';
-import { AudioUnavailableError, NoSpeechDetectedError, noSpeechMessage } from './errors.js';
+import { NoSpeechDetectedError, noSpeechMessage, redactSignedUrls } from './errors.js';
+import { resumableAudioUrl } from './resumeAudio.js';
 import { loadTranscriptCheckpoint, saveTranscriptCheckpoint, updateWorkflowJob } from '../jobs/store.js';
 import { jobLeases, JobLeaseLostError, type JobExecution } from '../jobs/lease.js';
 
@@ -153,7 +154,7 @@ async function submitAssemblyTranscript(input: { downloadUrl: string; settings: 
   });
   const createRaw = await createResponse.text();
   if (!createResponse.ok) {
-    throw new AssemblySubmitRejectedError(`AssemblyAI transcript submit failed (${createResponse.status}): ${createRaw.slice(0, 800)}`);
+    throw new AssemblySubmitRejectedError(`AssemblyAI transcript submit failed (${createResponse.status}): ${redactSignedUrls(createRaw.slice(0, 800))}`);
   }
   const created = JSON.parse(createRaw) as { id?: unknown };
   if (typeof created.id !== 'string' || !created.id.trim()) {
@@ -202,11 +203,11 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number, a
     if (!pollResponse.ok) {
       const isTransient = pollResponse.status >= 500 || pollResponse.status === 429;
       if (!isTransient) {
-        throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+        throw new Error(`AssemblyAI transcript poll failed (${pollResponse.status}): ${redactSignedUrls(pollRaw.slice(0, 800))}`);
       }
       consecutivePollFailures += 1;
       if (consecutivePollFailures > maxConsecutivePollFailures) {
-        throw new Error(`AssemblyAI transcript poll failed after ${consecutivePollFailures} consecutive transient errors (last ${pollResponse.status}): ${pollRaw.slice(0, 800)}`);
+        throw new Error(`AssemblyAI transcript poll failed after ${consecutivePollFailures} consecutive transient errors (last ${pollResponse.status}): ${redactSignedUrls(pollRaw.slice(0, 800))}`);
       }
       console.warn(`AssemblyAI transcript poll transient ${pollResponse.status} (${consecutivePollFailures}/${maxConsecutivePollFailures}), retrying.`);
       continue;
@@ -216,7 +217,7 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number, a
     } catch {
       consecutivePollFailures += 1;
       if (consecutivePollFailures > maxConsecutivePollFailures) {
-        throw new Error(`AssemblyAI transcript poll returned invalid JSON ${consecutivePollFailures} times in a row (${pollResponse.status}): ${pollRaw.slice(0, 500)}`);
+        throw new Error(`AssemblyAI transcript poll returned invalid JSON ${consecutivePollFailures} times in a row (${pollResponse.status}): ${redactSignedUrls(pollRaw.slice(0, 500))}`);
       }
       console.warn(`AssemblyAI transcript poll returned invalid JSON (${consecutivePollFailures}/${maxConsecutivePollFailures}), retrying.`);
       continue;
@@ -224,7 +225,8 @@ async function pollAssemblyTranscript(transcriptId: string, startedAt: number, a
     consecutivePollFailures = 0;
     if (transcript.status === 'completed') break;
     if (transcript.status === 'error') {
-      throw new Error(typeof transcript.error === 'string' ? transcript.error : 'AssemblyAI transcription failed.');
+      // AssemblyAI's error names the audio_url it could not fetch: a signed credential.
+      throw new Error(typeof transcript.error === 'string' ? redactSignedUrls(transcript.error) : 'AssemblyAI transcription failed.');
     }
   }
   if (!transcript || transcript.status !== 'completed') {
@@ -335,40 +337,8 @@ async function finishAssemblyTranscript(transcript: Record<string, unknown>, inp
   return { segments, latencyMs, audioDurationSeconds, detectedLanguage };
 }
 
-export const AUDIO_PROBE_TIMEOUT_MS = 15_000;
-const AUDIO_PROBE_TRIES = 2;
-
-// S10 resume guard: before paying for a fresh submission of a recovered job, check that
-// the saved audio link still answers, so an expired link fails with a clear message
-// instead of an opaque provider download error. Probes only links on this project's
-// Supabase host (signed storage URLs). The server never fetches other client-supplied
-// hosts, which would let a resume make a server-side request to an arbitrary URL.
-export async function assertAudioReachable(downloadUrl: string, language: 'en' | 'ko'): Promise<void> {
-  let target: URL;
-  let storageHost: string;
-  try {
-    target = new URL(downloadUrl);
-    storageHost = new URL(env.supabaseUrl).host;
-  } catch {
-    return;
-  }
-  if (target.protocol !== 'https:' || target.host !== storageHost) return;
-  let problem = 'not checked';
-  for (let attempt = 1; attempt <= AUDIO_PROBE_TRIES; attempt += 1) {
-    try {
-      // redirect: 'error' keeps the probe on the storage host even if it answers with a redirect.
-      const response = await fetch(target, { headers: { Range: 'bytes=0-0' }, redirect: 'error', signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS) });
-      await response.body?.cancel().catch(() => undefined);
-      if (response.ok) return;
-      problem = `HTTP ${response.status}`;
-      // A 4xx (expired or invalid signature, deleted object) does not heal on retry.
-      if (response.status < 500 && response.status !== 429) break;
-    } catch (error) {
-      problem = error instanceof Error ? error.message : String(error);
-    }
-  }
-  throw new AudioUnavailableError(language, problem);
-}
+// The S10 resume probe and the #23 re-sign live in resumeAudio.ts; re-exported for callers.
+export { AUDIO_PROBE_TIMEOUT_MS, assertAudioReachable } from './resumeAudio.js';
 
 // Marks the submission in flight before calling AssemblyAI. Lost lease: stop. Any other
 // failure: submit anyway (never strand the recording) and say so in the log.
@@ -413,6 +383,7 @@ async function persistTranscriptId(job: JobExecution, transcriptId: string): Pro
 // earlier one may have been charged (DEC-0022), submit, save the id, then poll.
 async function transcribeForJob(input: {
   downloadUrl: string;
+  fileId?: string | null;
   noteId: string;
   userId: string;
   language: 'en' | 'ko';
@@ -438,7 +409,11 @@ async function transcribeForJob(input: {
     if (ownership.superseded) throw new JobLeaseLostError(job.jobId, job.generation, 'the transcription usage record');
     return result;
   }
-  if (job.resumed) await assertAudioReachable(input.downloadUrl, input.language);
+  // A resume checks the stored link first and, when it expired, re-signs the recording
+  // after an ownership check (#23); a fresh run submits the link it was given.
+  const downloadUrl = job.resumed
+    ? await resumableAudioUrl({ jobId: job.jobId, userId: input.userId, fileId: input.fileId ?? null, downloadUrl: input.downloadUrl, language: input.language })
+    : input.downloadUrl;
   const reason = job.submissionState === 'submitting'
     ? 'submit-outcome-unknown' as const
     : job.unknownPriorSubmission;
@@ -457,7 +432,7 @@ async function transcribeForJob(input: {
   const startedAt = performance.now();
   let transcriptId: string;
   try {
-    transcriptId = await submitAssemblyTranscript({ downloadUrl: input.downloadUrl, settings: input.settings });
+    transcriptId = await submitAssemblyTranscript({ downloadUrl, settings: input.settings });
   } catch (error) {
     // A rejected submit was not accepted, so a later retry is not a resubmission.
     if (error instanceof AssemblySubmitRejectedError) {
@@ -512,6 +487,8 @@ export async function transcribeOrReuseCheckpoint(input: {
   noteId: string;
   userId: string;
   downloadUrl: string;
+  // The job's file row id, used only to re-sign an expired link on a resume (#23).
+  fileId?: string | null;
   language: 'en' | 'ko';
   settings: TranscriptionSettings;
   job?: JobExecution;

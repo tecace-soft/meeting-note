@@ -117,6 +117,7 @@ export async function runSummarizeAudio(input: SummarizeAudioInput, job: JobRef 
     noteId: input.noteId,
     userId: input.userId,
     downloadUrl: input.downloadUrl,
+    fileId: input.fileId,
     language: input.language,
     settings: transcriptionSettings,
     ...(job && typeof job === 'object' ? { job } : {}),

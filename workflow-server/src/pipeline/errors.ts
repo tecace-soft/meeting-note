@@ -40,3 +40,13 @@ export function audioUnavailableMessage(language: 'en' | 'ko'): string {
     ? '서버가 다시 시작되는 동안 이 녹음의 오디오 링크가 만료되어 이어서 처리하지 못했어요. 녹음은 그대로 남아 있으니 요약을 다시 시작해 주세요.'
     : 'The server restarted while this recording was processing and its audio link expired, so it could not be resumed. Your recording is still saved; please start the summary again.';
 }
+
+// A signed storage link is a bearer credential for the recording. Provider error bodies
+// (AssemblyAI echoes audio_url when it cannot download it) must not carry one into job
+// errors, logs or ops incidents. Replaces any URL with an /object/sign/ path, then any
+// remaining token= query value (a relative signed path, or a link split by quoting).
+const SIGNED_STORAGE_URL_RE = /\bhttps?:\/\/[^\s"'<>]*\/object\/(?:upload\/)?sign\/[^\s"'<>]*/gi;
+const TOKEN_PARAM_RE = /([?&]token=)[^&\s"'<>]+/gi;
+export function redactSignedUrls(text: string): string {
+  return text.replace(SIGNED_STORAGE_URL_RE, '[signed storage link]').replace(TOKEN_PARAM_RE, '$1[redacted]');
+}

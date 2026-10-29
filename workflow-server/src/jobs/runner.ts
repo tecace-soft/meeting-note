@@ -5,7 +5,7 @@
 // jobs/lease and ops modules only (never index.ts or routes).
 import { raiseIncident } from '../ops/incidents.js';
 import type { SummarizeAudioInput, SummarizeAudioResult } from '../pipeline/types.js';
-import { AudioUnavailableError, NoSpeechDetectedError } from '../pipeline/errors.js';
+import { AudioUnavailableError, NoSpeechDetectedError, redactSignedUrls } from '../pipeline/errors.js';
 import { runSummarizeAudio } from '../pipeline/summarize.js';
 import { finalizeNoteMemory } from '../pipeline/finalize.js';
 import { updateWorkflowJob, JOB_HEARTBEAT_INTERVAL_MS, type JobRef } from './store.js';
@@ -145,15 +145,17 @@ async function runJob(job: string | JobExecution, input: SummarizeAudioInput): P
       console.warn(`${error.message} This execution stops without writing.`);
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    // Redacted again here (the job row is user-visible): no signed link from any stage.
+    const message = redactSignedUrls(error instanceof Error ? error.message : String(error));
     // A no-speech recording is a normal user outcome, not a system failure: mark
     // the job failed so the user sees the guidance message, but do not log it as
     // an error or raise an ops incident (that would be pure noise).
     if (error instanceof NoSpeechDetectedError) {
       console.log(`Workflow job ${jobId} ended with no detectable speech in the audio; surfacing to the user without an incident.`);
     } else if (error instanceof AudioUnavailableError) {
-      // An expired signed link on a resume is an expected outcome (the user restarts the
-      // summary, which signs a new link). Re-signing web links is a separate task (#23).
+      // An audio link that no longer answers on a resume, and could not be re-signed (no
+      // fileId, an ownership check that did not match, or a failed re-sign; #23), is an
+      // expected outcome: the recording is kept and the user restarts the summary.
       console.warn(`Workflow job ${jobId} could not be resumed because its audio link no longer answers (${error.detail}); surfacing to the user without an incident.`);
     } else {
       console.error(`Workflow job ${jobId} failed:`, error);
