@@ -47,6 +47,7 @@ Tracked directories only, to depth 2; generated / vendor directories (node_modul
 │   ├── axkh-node/
 │   ├── decisions/
 │   ├── handoffs/
+│   ├── proposals/
 │   ├── refactor/
 │   └── reviews/
 ├── meeting-note-mobile/
