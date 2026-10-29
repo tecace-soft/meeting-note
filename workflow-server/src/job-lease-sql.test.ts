@@ -508,3 +508,17 @@ test('S12 SQL: SIGKILL recovery reopens durable state and rejects the dead gener
     p_note: { id: 'durable-note', user_id: 'fixture-user', summary: 'recovered' }, p_mode: 'insert' }, 5000)).data, true);
   assert.equal((await db.query('select id from public.note')).rows.length, 1, 'restart converges to one note');
 });
+
+test('S12: operator PRE/POST documents execute as single aggregate queries', { timeout: 120000 }, async (t) => {
+  const db = await database({ s10: true });
+  t.after(() => db.close());
+  const document = await sql('docs/refactor/S12_MIGRATION_CHECKS.md');
+  const queries = [...document.matchAll(/```sql\n([\s\S]*?)```/g)].map((match) => match[1]!);
+  assert.equal(queries.length, 2, 'one PRE and one POST query');
+  const pre = (await db.query<{ s12_pre: Record<string, unknown> }>(queries[0]!)).rows[0]!.s12_pre;
+  assert.deepEqual(pre, { missing_columns: [], active_jobs: 0, recent_completed: 0, active_null_or_foreign_note_owners: 0 });
+  await db.exec(await sql('supabase/migrations/20261029180000_workflow_job_s12_shutdown.sql'));
+  const post = (await db.query<{ s12_post: Record<string, unknown> }>(queries[1]!)).rows[0]!.s12_post;
+  assert.deepEqual(post, { schema_ok: true, functions_ok: true, grants_ok: true, strict_note_ownership: true,
+    pending_enrichment: 0, invalid_postprocessing_states: 0, active_jobs: 0 });
+});
