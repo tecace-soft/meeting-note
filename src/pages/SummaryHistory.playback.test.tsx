@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mounting characterization of SummaryHistory transcript-segment playback (T2-4 playback unit): the signed
 // audio URL request and cache, play / stop, switching notes, and the audio element events. Own harness on
-// purpose; the older mounting test files are left untouched. This pins today's behavior, including that the
-// signed URL is cached for the life of the page and is never re-signed on failure (R10).
+// purpose; R10 updates the original failure contract to one re-sign and one retry,
+// followed by reset only when recovery also fails.
 
 const h = vi.hoisted(() => ({
   auth: {
@@ -120,6 +120,7 @@ const media = {
   duration: Number.NaN,
   src: '',
   loadMode: 'ok' as 'ok' | 'error' | 'never',
+  loadModes: [] as Array<'ok' | 'error' | 'never'>,
   playError: null as Error | null,
 };
 let fetchCalls: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
@@ -160,9 +161,10 @@ function stubMedia() {
   });
   vi.spyOn(proto, 'load').mockImplementation(function (this: HTMLMediaElement) {
     media.calls.push('load');
+    const mode = media.loadModes.shift() ?? media.loadMode;
     setTimeout(() => {
-      if (media.loadMode === 'ok') this.dispatchEvent(new Event('loadedmetadata'));
-      if (media.loadMode === 'error') this.dispatchEvent(new Event('error'));
+      if (mode === 'ok') this.dispatchEvent(new Event('loadedmetadata'));
+      if (mode === 'error') this.dispatchEvent(new Event('error'));
     }, 0);
   });
   vi.spyOn(proto, 'play').mockImplementation(async function () {
@@ -204,6 +206,7 @@ beforeEach(() => {
   media.duration = Number.NaN;
   media.src = '';
   media.loadMode = 'ok';
+  media.loadModes = [];
   media.playError = null;
   fetchHandler = (body) => ({ ok: true, payload: { url: urlFor(String(body.noteId)) } });
   stubFetch();
@@ -214,6 +217,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   for (const key of ['readyState', 'duration', 'currentTime', 'src']) {
@@ -342,19 +346,68 @@ describe('SummaryHistory segment playback', () => {
     expect(media.calls).not.toContain('play');
   });
 
-  it('resets playback when the audio fails to load or play', async () => {
+  it('re-signs after a load failure and restores the selected segment and stop position', async () => {
+    await ready();
+    media.loadModes = ['error', 'ok'];
+    fetchHandler = () => ({ ok: true, payload: { url: 'https://audio.example/refreshed.mp3' } });
+    fireEvent.click(playButton('Ann'));
+    await waitFor(() => expect(media.calls).toContain('play'));
+    expect(signedFetches()).toHaveLength(2);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(2);
+    expect(media.calls).toContain('src:https://audio.example/refreshed.mp3');
+    expect(text('pb-active')).toBe('0');
+    expect(text('pb-playing')).toBe('true');
+    expect(text('pb-loading')).toBe('null');
+    media.currentTime = 4.2;
+    act(() => audio().dispatchEvent(new Event('timeupdate')));
+    expect(text('pb-label')).toBe('0:04 / 0:04');
+    expect(text('pb-playing')).toBe('false');
+  }, 5000);
+
+  it('resets only after both load attempts fail and never retries a third time', async () => {
     media.loadMode = 'error';
     await ready();
     fireEvent.click(playButton('Ann'));
     await waitFor(() => expect(console.error).toHaveBeenCalledWith('Failed to play transcript segment:', expect.any(Error)));
+    expect(signedFetches()).toHaveLength(2);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(2);
     expect(text('pb-active')).toBe('null');
-    media.loadMode = 'ok';
-    media.src = '';
+    expect(text('pb-loading')).toBe('null');
+    expect(media.calls).not.toContain('play');
+  }, 5000);
+
+  it('resets an autoplay rejection without re-signing the already loaded audio', async () => {
+    await ready();
     media.playError = new Error('autoplay blocked');
     fireEvent.click(playButton('Ann'));
-    await waitFor(() => expect((console.error as unknown as { mock: { calls: unknown[][] } }).mock.calls.some((c) => (c[1] as Error)?.message === 'autoplay blocked')).toBe(true));
+    await waitFor(() => expect(errorCalls().some((call) => (call[1] as Error)?.message === 'autoplay blocked')).toBe(true));
+    expect(signedFetches()).toHaveLength(1);
     expect(text('pb-active')).toBe('null');
-  });
+  }, 5000);
+
+  it('the real page keeps loading until fifteen seconds, retries once and then clears the state', async () => {
+    await ready();
+    media.loadMode = 'never';
+    vi.useFakeTimers();
+    let requestsBeforeTimeout = 0;
+    let loadingBeforeTimeout: string | null = null;
+    try {
+      await act(async () => {
+        fireEvent.click(playButton('Ann'));
+        await vi.advanceTimersByTimeAsync(14999);
+      });
+      requestsBeforeTimeout = signedFetches().length;
+      loadingBeforeTimeout = text('pb-loading');
+      await act(async () => { await vi.advanceTimersByTimeAsync(15001); });
+    } finally { vi.useRealTimers(); }
+    expect(requestsBeforeTimeout).toBe(1);
+    expect(loadingBeforeTimeout).toBe('0');
+    expect(signedFetches()).toHaveLength(2);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(2);
+    expect(text('pb-active')).toBe('null');
+    expect(text('pb-loading')).toBe('null');
+    expect(media.calls).not.toContain('play');
+  }, 5000);
 
   it('resets playback when the signed URL cannot be fetched, with the server message or a fallback', async () => {
     await mountLoaded();

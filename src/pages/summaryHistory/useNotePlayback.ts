@@ -138,8 +138,8 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
   useEffect(() => {
     if (!selectedNote || segmentPlayback?.noteId === selectedNote.id) return;
     stopSegmentPlayback();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the selected note id or playback note changes
-  }, [selectedNote?.id, segmentPlayback?.noteId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a media error clears playback state during retry; only a selection change cancels it
+  }, [selectedNote?.id]);
 
   const playTranscriptSegment = async (note: Note, segment: TranscriptSegment, segmentIndex: number) => {
     if (!isPlayableSegment(segment)) return;
