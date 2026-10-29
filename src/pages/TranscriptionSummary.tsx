@@ -388,6 +388,7 @@ const TranscriptionSummary: React.FC = () => {
   // Synchronous guard so two triggers in one tick cannot both POST.
   const submitInFlightRef = useRef(false);
   const [summaryEditError, setSummaryEditError] = useState<string | null>(null);
+  const summarySavedDuringEdit = useRef<{ noteId: string; text: string } | null>(null);
   const generatedTitleInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingGeneratedTitle, setIsEditingGeneratedTitle] = useState(false);
   const [generatedTitleDraft, setGeneratedTitleDraft] = useState('');
@@ -451,7 +452,14 @@ const TranscriptionSummary: React.FC = () => {
       if (!row) throw new Error('Could not save the summary. Please refresh and try again.');
       return true;
     },
+    onSavedWhileEditing: (text) => {
+      if (!currentNoteId) return;
+      summarySavedDuringEdit.current = { noteId: currentNoteId, text };
+      setSummaryEditError(t('summaryEditRefreshConflict'));
+      setSummaryResult((prev) => prev ? { ...prev, summary: text, summaryTranslations: undefined } : prev);
+    },
     onApply: (text) => {
+      summarySavedDuringEdit.current = null;
       setEditedSummary(text);
       // The regenerated summary is one text in the meeting's language; old translations are stale.
       setSummaryResult((prev) => (prev ? { ...prev, summary: text, summaryTranslations: undefined } : prev));
@@ -1695,14 +1703,30 @@ const TranscriptionSummary: React.FC = () => {
 
   const handleToggleEditSummary = async () => {
     if (!isEditingSummary) {
+      summarySavedDuringEdit.current = null;
       setIsEditingSummary(true);
       return;
+    }
+    if (nameRefresh.isBusy()) {
+      setSummaryEditError(t('summarySaveStillPending'));
+      return;
+    }
+    const changed = summarySavedDuringEdit.current;
+    if (changed?.noteId === currentNoteId && changed.text.trim() !== editedSummary.trim()) {
+      const replace = await confirm({ message: t('summaryEditRefreshConflict'),
+        confirmLabel: t('saveCurrentSummaryDraft'), cancelLabel: t('keepEditingSummary') });
+      if (!replace) return;
+      if (nameRefresh.isBusy() || summarySavedDuringEdit.current !== changed) {
+        setSummaryEditError(t('summarySaveStillPending'));
+        return;
+      }
     }
 
     if (currentNoteId) {
       const saved = await persistSummaryEdit(editedSummary);
       if (!saved) return;
     }
+    summarySavedDuringEdit.current = null;
     setIsEditingSummary(false);
   };
 

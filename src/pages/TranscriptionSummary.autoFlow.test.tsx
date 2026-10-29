@@ -26,6 +26,7 @@ const h = vi.hoisted(() => {
     fetchReferencingNotes: null as unknown as ReturnType<typeof vi.fn>,
     upload: null as unknown as ReturnType<typeof vi.fn>,
     fileInsert: null as unknown as ReturnType<typeof vi.fn>,
+    confirm: vi.fn(async () => true),
   };
 });
 
@@ -34,7 +35,7 @@ vi.mock('../context/LanguageContext', () => ({
   useLanguage: () => ({ appLanguage: 'en', transcriptLanguage: 'original', t: (key: string) => key }),
 }));
 vi.mock('../context/RecorderContext', () => ({ useRecorder: () => h.recorder }));
-vi.mock('../components/ConfirmDialog', () => ({ useConfirm: () => async () => true }));
+vi.mock('../components/ConfirmDialog', () => ({ useConfirm: () => h.confirm }));
 vi.mock('../config/supabaseConfig', () => {
   const query = (table: string) => {
     const q: Record<string, unknown> = {};
@@ -264,6 +265,8 @@ beforeEach(() => {
   );
   window.localStorage.clear();
   h.recorder = baseRecorder();
+  h.confirm.mockReset();
+  h.confirm.mockResolvedValue(true);
   h.patchNoteReturningId.mockClear();
   h.patchOwnedNoteReturningId.mockClear();
   h.readOwnedNoteSummaryEdit.mockReset();
@@ -385,6 +388,47 @@ describe('TranscriptionSummary speaker suggestions and name-aware refresh (U9)',
     expect(regenerateCalls()).toHaveLength(1);
     expect(submitCalls()).toHaveLength(0);
   });
+});
+
+describe('review #61: Done protects an editor opened during a refresh save', () => {
+  it('Done waits for an in-flight refresh, then only saves a conflicting draft after explicit confirmation', async () => {
+    let finish!: (value: boolean) => void;
+    h.saveIfUnsaved.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    await openCompletedNote();
+    await nameMainSpeakers();
+    await passDebounce();
+    fireEvent.click(screen.getAllByRole('button', { name: 'edit' })[0]);
+    await screen.findByPlaceholderText('Edit your summary here... (Markdown supported)');
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'done' })[0]); });
+    const writesWhilePending = h.patchNoteReturningId.mock.calls.filter((call) => 'summary_edit' in call[0].patch).length;
+    await act(async () => { finish(true); });
+    fireEvent.change(screen.getByPlaceholderText('Edit your summary here... (Markdown supported)'), { target: { value: 'My intentional revised draft' } });
+    h.confirm.mockResolvedValueOnce(true);
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'done' })[0]); });
+    vi.useRealTimers();
+    expect(writesWhilePending).toBe(0);
+    expect(h.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: 'summaryEditRefreshConflict' }));
+    expect(h.patchNoteReturningId.mock.calls.filter((call) => 'summary_edit' in call[0].patch).map((call) => call[0].patch.summary_edit)).toEqual(['My intentional revised draft']);
+    expect(screen.queryByPlaceholderText('Edit your summary here... (Markdown supported)')).not.toBeInTheDocument();
+  }, 5000);
+
+  it('keeps the draft and asks before Done can overwrite the newer saved summary', async () => {
+    let finish!: (value: boolean) => void;
+    h.saveIfUnsaved.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    await openCompletedNote();
+    await nameMainSpeakers();
+    await passDebounce();
+    fireEvent.click(screen.getAllByRole('button', { name: 'edit' })[0]);
+    const editor = await screen.findByPlaceholderText('Edit your summary here... (Markdown supported)');
+    await act(async () => { finish(true); });
+    h.confirm.mockResolvedValueOnce(false);
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'done' })[0]); });
+    vi.useRealTimers();
+    expect(h.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: 'summaryEditRefreshConflict' }));
+    expect(h.patchNoteReturningId.mock.calls.filter((call) => 'summary_edit' in call[0].patch)).toHaveLength(0);
+    expect(editor).toHaveValue('Generic summary about Speaker A.');
+    expect(editor).toBeInTheDocument();
+  }, 5000);
 });
 
 describe('TranscriptionSummary automatic summary after recording or choosing a file (U1)', () => {
