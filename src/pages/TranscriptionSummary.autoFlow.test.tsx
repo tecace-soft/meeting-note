@@ -644,6 +644,8 @@ describe('TranscriptionSummary bounded audio load recovery (R10)', () => {
   it('times out each metadata attempt at fifteen seconds and stops after the single retry', async () => {
     const { load, play } = mediaPlan(['never', 'never']);
     await openUploadedNote();
+    vi.useRealTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: false });
     fireEvent.click(screen.getByRole('button', { name: 'play-fixture-segment' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(14999); });
     const beforeDeadline = signingCalls().length;

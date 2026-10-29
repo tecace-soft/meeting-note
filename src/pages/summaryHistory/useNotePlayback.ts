@@ -34,23 +34,28 @@ export interface UseNotePlaybackOptions {
  * Transcript segment playback for the history page: the note audio signed-URL request and cache, the
  * play / stop state shown by the transcript editor, and the handlers of the page's hidden audio element.
  *
- * The signed URL is cached per note for the lifetime of the hook and is never refreshed; a URL that has
- * expired (R10) fails at loadAudioMetadata and playback resets. A re-sign-on-failure fix belongs in
- * getNoteAudioUrl (drop the cache entry and request a new URL) plus a single retry in playTranscriptSegment
- * when loadAudioMetadata rejects.
+ * Cache the URL until a metadata load fails; invalidate only that note and sign once more.
+ * A second load failure resets playback, and every metadata attempt has a fifteen-second bound.
  */
 export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybackOptions) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const playbackLoadRef = useRef<AbortController | null>(null);
+  const audioUrlGenerationRef = useRef<Map<string, number>>(new Map());
   const playbackStopAtRef = useRef<number | null>(null);
   const [segmentPlayback, setSegmentPlayback] = useState<SegmentPlaybackState | null>(null);
   const [playbackLoadingSegment, setPlaybackLoadingSegment] = useState<{ noteId: string; segmentIndex: number } | null>(null);
 
-  const getNoteAudioUrl = async (note: Note): Promise<string> => {
+  const getNoteAudioUrl = async (note: Note, signal?: AbortSignal): Promise<string> => {
     const cached = audioUrlCacheRef.current.get(note.id);
     if (cached) return cached;
-    const url = await requestNoteAudioUrl(note.id, getAccessToken);
-    audioUrlCacheRef.current.set(note.id, url);
+    const generation = (audioUrlGenerationRef.current.get(note.id) ?? 0) + 1;
+    audioUrlGenerationRef.current.set(note.id, generation);
+    const url = await requestNoteAudioUrl(note.id, getAccessToken, signal);
+    // An old preload must not restore a URL discarded by a later retry.
+    if (!signal?.aborted && audioUrlGenerationRef.current.get(note.id) === generation) {
+      audioUrlCacheRef.current.set(note.id, url);
+    }
     return url;
   };
 
@@ -64,7 +69,15 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
     // eslint-disable-next-line react-hooks/exhaustive-deps -- preload only when the selected note id changes
   }, [selectedNote?.id]);
 
+  useEffect(() => {
+    const loadRef = playbackLoadRef;
+    return () => { loadRef.current?.abort(); };
+  }, []);
+
   const stopSegmentPlayback = () => {
+    playbackLoadRef.current?.abort();
+    playbackLoadRef.current = null;
+    setPlaybackLoadingSegment(null);
     const audio = audioRef.current;
     if (audio) audio.pause();
     playbackStopAtRef.current = null;
@@ -82,8 +95,9 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
     return `Audio file could not be loaded: ${detail}.`;
   };
 
-  const loadAudioMetadata = (audio: HTMLAudioElement, url: string): Promise<void> => {
-    if (audio.src === url && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+  const loadAudioMetadata = (audio: HTMLAudioElement, url: string, signal: AbortSignal, force: boolean): Promise<void> => {
+    if (signal.aborted) return Promise.reject(new DOMException('Playback cancelled.', 'AbortError'));
+    if (!force && !audio.error && audio.src === url && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
       return Promise.resolve();
     }
 
@@ -93,6 +107,7 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
         audio.removeEventListener('loadedmetadata', onLoaded);
         audio.removeEventListener('canplay', onLoaded);
         audio.removeEventListener('error', onError);
+        signal.removeEventListener('abort', onAbort);
       };
       const onLoaded = () => {
         cleanup();
@@ -102,6 +117,7 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
         cleanup();
         reject(new Error(getAudioErrorMessage(audio)));
       };
+      const onAbort = () => { cleanup(); reject(new DOMException('Playback cancelled.', 'AbortError')); };
       const timeout = window.setTimeout(() => {
         cleanup();
         reject(new Error('Audio metadata did not load. The audio URL may be expired, blocked, or not playable in this browser.'));
@@ -110,6 +126,7 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
       audio.addEventListener('loadedmetadata', onLoaded, { once: true });
       audio.addEventListener('canplay', onLoaded, { once: true });
       audio.addEventListener('error', onError, { once: true });
+      signal.addEventListener('abort', onAbort, { once: true });
 
       if (audio.src !== url) {
         audio.src = url;
@@ -139,33 +156,52 @@ export function useNotePlayback({ selectedNote, getAccessToken }: UseNotePlaybac
       return;
     }
 
+    playbackLoadRef.current?.abort();
+    const controller = new AbortController();
+    playbackLoadRef.current = controller;
+    const isCurrent = () => !controller.signal.aborted && playbackLoadRef.current === controller;
+    const playing = { noteId: note.id, segmentIndex, speaker: segment.speaker.trim() || 'Speaker',
+      start, end, currentTime: start, isPlaying: true };
     try {
       setPlaybackLoadingSegment({ noteId: note.id, segmentIndex });
-      const url = audioUrlCacheRef.current.get(note.id) ?? await getNoteAudioUrl(note);
+      let url = await getNoteAudioUrl(note, controller.signal);
+      if (!isCurrent()) return;
       audio.muted = false;
       audio.volume = 1;
       playbackStopAtRef.current = end;
-      setSegmentPlayback({
-        noteId: note.id,
-        segmentIndex,
-        speaker: segment.speaker.trim() || 'Speaker',
-        start,
-        end,
-        currentTime: start,
-        isPlaying: true,
-      });
-      await loadAudioMetadata(audio, url);
+      setSegmentPlayback(playing);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await loadAudioMetadata(audio, url, controller.signal, attempt > 0);
+          break;
+        } catch (loadError) {
+          if (!isCurrent()) return;
+          audioUrlCacheRef.current.delete(note.id);
+          audioUrlGenerationRef.current.set(note.id, (audioUrlGenerationRef.current.get(note.id) ?? 0) + 1);
+          if (attempt > 0) throw loadError;
+          url = await getNoteAudioUrl(note, controller.signal);
+          if (!isCurrent()) return;
+        }
+      }
+      if (!isCurrent()) return;
       if (Number.isFinite(audio.duration) && start > audio.duration) {
         throw new Error(`Segment timestamp ${formatPlaybackTime(start)} is outside this audio file (${formatPlaybackTime(audio.duration)}).`);
       }
+      // React's media error handler cleared these during the first failed attempt.
+      playbackStopAtRef.current = end;
+      setSegmentPlayback(playing);
       audio.currentTime = start;
       await audio.play();
     } catch (error) {
+      if (!isCurrent()) return;
       console.error('Failed to play transcript segment:', error);
       playbackStopAtRef.current = null;
       setSegmentPlayback(null);
     } finally {
-      setPlaybackLoadingSegment(null);
+      if (isCurrent()) {
+        playbackLoadRef.current = null;
+        setPlaybackLoadingSegment(null);
+      }
     }
   };
 

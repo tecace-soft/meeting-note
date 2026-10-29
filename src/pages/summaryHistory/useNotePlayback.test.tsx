@@ -378,6 +378,39 @@ describe('useNotePlayback playing', () => {
     }
   }, 5000);
 
+  it('does not re-sign for autoplay rejection or an invalid timestamp', async () => {
+    const { result } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValueOnce(new Error('blocked'));
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, ANN, 0));
+    media.duration = 3;
+    await act(async () => result.current.playTranscriptSegment(NOTE_A, BOB, 1));
+    expect(signed()).toHaveLength(1);
+    expect(media.calls.filter((call) => call === 'load')).toHaveLength(1);
+    expect(result.current.segmentPlayback).toBeNull();
+  }, 5000);
+
+  it('unmount cancels a pending metadata wait without refreshing or leaking its timeout', async () => {
+    const { result, unmount } = setup();
+    await waitFor(() => expect(signed()).toHaveLength(1));
+    media.loadMode = 'never';
+    vi.useFakeTimers();
+    let playing!: Promise<void>;
+    let timers = -1;
+    try {
+      await act(async () => {
+        playing = result.current.playTranscriptSegment(NOTE_A, ANN, 0);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      unmount();
+      await act(async () => { await playing; });
+      timers = vi.getTimerCount();
+    } finally { vi.useRealTimers(); }
+    expect(timers).toBe(0);
+    expect(signed()).toHaveLength(1);
+    expect(media.calls).not.toContain('play');
+  }, 5000);
+
   it('stops playback when another note is selected, but not while its own note stays selected', async () => {
     const { result, rerender } = setup();
     await act(async () => result.current.playTranscriptSegment(NOTE_A, ANN, 0));
