@@ -42,7 +42,7 @@ String summarySourceKey(String audioPath) {
 
 class SummarySubmitStore {
   const SummarySubmitStore({
-    this.cache = const JsonCacheStore('summary_submits'),
+    this.cache = const JsonCacheStore('summary_submits', atomicWrites: true),
   });
   final JsonCacheStore cache;
   static Future<void> _tail = Future.value();

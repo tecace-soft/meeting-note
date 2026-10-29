@@ -97,14 +97,17 @@ void main() {
     test('$mode fails closed instead of claiming no existing notes', () async {
       final adapter = Adapter((request) {
         final offset = request.queryParameters['offset'] as int;
-        if (mode == 'missing-count') return jsonResponse([]);
-        if (mode == 'truncated')
+        if (mode == 'missing-count') {
+          return jsonResponse([]);
+        }
+        if (mode == 'truncated') {
           return jsonResponse(
             [],
             extraHeaders: {
               'content-range': ['*/2'],
             },
           );
+        }
         return jsonResponse(
           [
             {'id': 'other-$offset', 'audio_file_id': 'another-file'},
