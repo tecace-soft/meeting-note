@@ -210,7 +210,7 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
             if (timedOut && sameNote()) setError(errorMessage(saveError));
             throw saveError;
           } finally {
-            if (pendingWrites.current.get(forNote) === tracked) pendingWrites.current.delete(forNote);
+            pendingWrites.current.delete(forNote);
             if (alive.current && noteRef.current === forNote) setRevision((value) => value + 1);
           }
         })();
