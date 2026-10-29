@@ -932,9 +932,14 @@ const TranscriptionSummary: React.FC = () => {
   useEffect(() => {
     const translatedSummary = summaryResult?.summaryTranslations?.[appLanguage]?.trim();
     if (!translatedSummary || isEditingSummary) return;
+    if (editedSummary === translatedSummary && summaryResult?.summary === translatedSummary) return;
+    // Review finding 7: only swap a generated text for its translation; a summary the user
+    // edited by hand stays on screen (it is what was saved).
+    const shown = editedSummary.trim();
+    if (shown && !generatedSummaryTexts.some((text) => text.trim() === shown)) return;
     setEditedSummary(translatedSummary);
     setSummaryResult((prev) => (prev ? { ...prev, summary: translatedSummary } : prev));
-  }, [appLanguage, isEditingSummary, summaryResult?.summaryTranslations]);
+  }, [appLanguage, isEditingSummary, summaryResult?.summaryTranslations, summaryResult?.summary, editedSummary, generatedSummaryTexts]);
 
   // Keep in sync with the meeting-recordings bucket file_size_limit
   // (supabase/migrations/20260805120000_raise_meeting_recordings_upload_limit.sql)
@@ -1444,7 +1449,11 @@ const TranscriptionSummary: React.FC = () => {
     }
   };
 
-  const handleSummarize = async () => {
+  /**
+   * Submit one uploaded file. An automatic start passes the file it waited for; the manual button
+   * passes none and summarizes the first ready file (unchanged behavior).
+   */
+  const handleSummarize = async (targetFileId?: string) => {
     if (!hasCompletedFiles || submitInFlightRef.current || isSummarizing) return;
     // A manual or automatic start ends any pending automatic start (no second submit later).
     cancelAutoSubmit();
@@ -1458,7 +1467,8 @@ const TranscriptionSummary: React.FC = () => {
     }
 
     const completedFiles = uploadedFiles.filter(f => f.status === 'completed' && (f.publicUrl || f.storagePath));
-    if (completedFiles.length === 0) return;
+    const file = targetFileId ? completedFiles.find((f) => f.id === targetFileId) : completedFiles[0];
+    if (!file) return;
 
     stopResultSegmentPlayback();
     setIsSummarizing(true);
@@ -1476,7 +1486,6 @@ const TranscriptionSummary: React.FC = () => {
     let token: string;
     submitInFlightRef.current = true;
     try {
-      const file = completedFiles[0];
       if (!user?.id) throw new Error('Not signed in.');
       noteId = noteIdForFile(file, user.id);
       setCurrentNoteId(noteId);
@@ -1557,7 +1566,7 @@ const TranscriptionSummary: React.FC = () => {
     }
     if (file.status !== 'completed' || summaryPromptsLoading || isSummarizing) return;
     setAutoSummarizeFileId(null);
-    void handleSummarize();
+    void handleSummarize(file.id);
     // handleSummarize reads the latest state of this render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSummarizeFileId, uploadedFiles, summaryPromptsLoading, isSummarizing]);

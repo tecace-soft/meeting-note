@@ -188,11 +188,13 @@ type FetchCall = { url: string; method: string; body: Record<string, unknown> | 
 let fetchCalls: FetchCall[] = [];
 let regenerateResponses: Array<() => Response> = [];
 let submitRecordAtPost: string | null = null;
+let jobResultExtra: Record<string, unknown> = {};
 
 function installFetch() {
   fetchCalls = [];
   regenerateResponses = [];
   submitRecordAtPost = null;
+  jobResultExtra = {};
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -208,7 +210,7 @@ function installFetch() {
           jobId: 'job-1',
           noteId: 'note-1',
           status: 'completed',
-          result: { transcript: TRANSCRIPT, summary: 'Generic summary about Speaker A.', title: 'Web slice' },
+          result: { transcript: TRANSCRIPT, summary: 'Generic summary about Speaker A.', title: 'Web slice', ...jobResultExtra },
         });
       }
       if (input.endsWith('/regenerate-summary')) {
@@ -360,6 +362,22 @@ describe('TranscriptionSummary speaker suggestions and name-aware refresh (U9)',
     expect(regenerateCalls()).toHaveLength(2);
   });
 
+  it('a translation never replaces a summary the user edited by hand (finding 7)', async () => {
+    jobResultExtra = { summaryTranslations: { en: 'Translated summary.' } };
+    window.localStorage.setItem('meeting-note:active-summary-job', JSON.stringify({ jobId: 'job-1', noteId: 'note-1' }));
+    renderPage();
+    await screen.findByText('Translated summary.');
+    fireEvent.click(screen.getByRole('button', { name: 'edit' }));
+    fireEvent.change(screen.getByPlaceholderText(/Edit your summary here/), { target: { value: 'My edit.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'done' }));
+    await screen.findByText('My edit.');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByText('My edit.')).toBeInTheDocument();
+    expect(screen.queryByText('Translated summary.')).not.toBeInTheDocument();
+  });
+
   it('the update-with-names button regenerates right away', async () => {
     await openCompletedNote();
     fireEvent.click(screen.getByRole('button', { name: 'updateSummaryWithNames' }));
@@ -483,6 +501,81 @@ describe('TranscriptionSummary automatic summary after recording or choosing a f
     await advance(5100);
     await waitFor(() => expect(submitCalls()).toHaveLength(1));
     expect(submitCalls()[0].body!.fileId).toBe('file-8');
+    h.recent = [];
+  });
+
+  function chooseFiles(container: HTMLElement, names: string[]) {
+    const input = container.querySelector('#meeting-audio-upload') as HTMLInputElement;
+    const files = names.map((name) => new File(['audio'], name, { type: 'audio/webm' }));
+    fireEvent.change(input, { target: { files } });
+  }
+
+  it('a file upload starts the summary after the countdown', async () => {
+    const { container } = renderPage();
+    await screen.findByText('noRecentRecordings');
+    chooseFiles(container, ['meeting.webm']);
+    await screen.findByText('autoSummaryStartsIn');
+    await advance(5100);
+    await waitFor(() => expect(submitCalls()).toHaveLength(1));
+    expect(submitCalls()[0].body!.fileName).toBe('meeting.webm');
+  });
+
+  it('the automatic start submits the file it waited for, not the first one in the list (finding 5)', async () => {
+    const { container } = renderPage();
+    await screen.findByText('noRecentRecordings');
+    chooseFiles(container, ['first.webm']);
+    await screen.findByText('autoSummaryStartsIn');
+    fireEvent.click(screen.getByRole('button', { name: 'cancel' }));
+    await advance(100);
+    chooseFiles(container, ['second.webm']);
+    await screen.findByText('autoSummaryStartsIn');
+    await advance(5100);
+    await waitFor(() => expect(submitCalls()).toHaveLength(1));
+    expect(submitCalls()[0].body!.fileName).toBe('second.webm');
+  });
+
+  it('a manual Summarize click during the countdown posts once', async () => {
+    const { container } = renderPage();
+    await screen.findByText('noRecentRecordings');
+    chooseFiles(container, ['meeting.webm']);
+    await screen.findByText('autoSummaryStartsIn');
+    // The Options row's Summarize (the hidden recording panel has its own button).
+    const optionsSummarize = await waitFor(() => {
+      const button = screen
+        .getAllByRole('button', { name: 'summarize' })
+        .find((candidate) => !candidate.closest('.recording-playback-actions'));
+      if (!button) throw new Error('Summarize button not ready');
+      return button;
+    });
+    fireEvent.click(optionsSummarize);
+    await waitFor(() => expect(submitCalls()).toHaveLength(1));
+    await advance(7000);
+    expect(submitCalls()).toHaveLength(1);
+    expect(screen.queryByText('autoSummaryStartsIn')).not.toBeInTheDocument();
+  });
+
+  it('the 2-hour auto stop on this page starts the countdown, and Cancel acknowledges it', async () => {
+    h.recorder = baseRecorder({ ...finishedRecording(7200), recordingAutoStopped: true });
+    renderPage();
+    await screen.findByText('autoSummaryStartsIn');
+    fireEvent.click(screen.getByRole('button', { name: 'cancel' }));
+    expect(h.recorder.acknowledgeAutoStop).toHaveBeenCalled();
+    await advance(6000);
+    expect(submitCalls()).toHaveLength(0);
+    expect(h.upload).not.toHaveBeenCalled();
+  });
+
+  it('a failed referencing-note check skips the automatic start (fail-closed)', async () => {
+    h.recent = [
+      { id: 'file-7', name: 'unknown.webm', bucket: 'meeting-recordings', storage_path: 'unknown.webm', public_url: '', size_bytes: 10 },
+    ];
+    h.fetchReferencingNotes.mockRejectedValue(new Error('timeout'));
+    renderPage();
+    fireEvent.click(await screen.findByText('unknown.webm'));
+    await screen.findByText('recordingNoteCheckFailed');
+    await advance(6000);
+    expect(screen.queryByText('autoSummaryStartsIn')).not.toBeInTheDocument();
+    expect(submitCalls()).toHaveLength(0);
     h.recent = [];
   });
 });
