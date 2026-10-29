@@ -65,7 +65,7 @@ function pgliteRpc(db: PGlite): JobLeaseRpc {
   };
 }
 
-async function asRole<T>(db: PGlite, role: string, run: () => Promise<T>): Promise<T> {
+async function asRole<T>(db: PGlite, role: string, run: () => PromiseLike<T>): Promise<T> {
   await db.exec(`set role ${role}`);
   try { return await run(); } finally { await db.exec('reset role'); }
 }
@@ -99,7 +99,7 @@ test('S10 lease SQL on an isolated PostgreSQL engine', async (t) => {
   t.after(() => db.close());
   const rpc = pgliteRpc(db);
   const store = (owner: string) => createJobLeaseStore(rpc, owner);
-  const service = <T>(run: () => Promise<T>) => asRole(db, 'service_role', run);
+  const service = <T>(run: () => PromiseLike<T>) => asRole(db, 'service_role', run);
 
   await t.test('pre-S10 inserts and id-only updates keep working with defaulted S10 columns', async () => {
     const id = await insertJob(db);
@@ -384,7 +384,7 @@ test('S12 SQL: release hands off immediately and stale writers cannot persist no
   const db = await database({ s10: true, s12: true });
   t.after(() => db.close());
   const rpc = pgliteRpc(db);
-  const service = <T>(run: () => Promise<T>) => asRole(db, 'service_role', run);
+  const service = <T>(run: () => PromiseLike<T>) => asRole(db, 'service_role', run);
   const id = await insertJob(db, { noteId: 's12-note' });
   assert.equal((await service(() => createJobLeaseStore(rpc, 'old').claim(id, 'start'))).kind, 'claimed');
   const fence = { p_job_id: id, p_owner: 'old', p_generation: 1 };
@@ -426,4 +426,39 @@ test('S12 SQL: expired leases and null note owners never authorize or converge w
   assert.equal((await asRole(db, 'service_role', () => createJobLeaseStore(rpc, 'new').claim(id, 'recover'))).kind, 'exhausted');
   assert.equal((await row(db, id)).status, 'failed');
   assert.equal((await db.query<{ user_id: unknown }>("select user_id from public.note where id='null-owner'")).rows[0]?.user_id, null);
+});
+
+test('S12 SQL: completed remains completed, pending enrichment is durable and fenced', { timeout: 120000 }, async (t) => {
+  const db = await database({ s10: true, s12: true });
+  t.after(() => db.close());
+  const rpc = pgliteRpc(db);
+  const service = <T>(run: () => PromiseLike<T>) => asRole(db, 'service_role', run);
+  const id = await insertJob(db, { noteId: 'enrichment-note' });
+  const store = createJobLeaseStore(rpc, 'worker');
+  const claim = await service(() => store.claim(id, 'start'));
+  assert.equal(claim.kind, 'claimed');
+  const execution = executionFromClaim((claim as { claim: JobClaim }).claim, { resumed: false, owner: 'worker' });
+  await db.exec("insert into public.note(id,user_id,diarization) values ('enrichment-note','fixture-user','[]')");
+  await service(() => store.write(execution, { status: 'completed', result: { transcript: [] } }));
+  const fence = { p_job_id: id, p_owner: 'worker', p_generation: 1 };
+  const write = (p_kind: string, p_payload: Record<string, unknown>) => service(() => rpc('workflow_job_write_enrichment', { ...fence, p_kind, p_payload }, 5000));
+  const memory = { user_id: 'fixture-user', memory: { version: 2, items: [] }, processed_note_ids: ['enrichment-note'] };
+  assert.deepEqual(await write('memory', { ...memory, user_id: 'foreign' }), { data: false, error: null });
+  assert.deepEqual(await write('memory', memory), { data: true, error: null });
+  assert.deepEqual(await write('memory', { ...memory, memory: { version: 2, items: ['duplicate'] } }), { data: true, error: null });
+  assert.deepEqual((await db.query<{ memory: unknown }>('select memory from public.user_memory')).rows[0]?.memory, memory.memory);
+  assert.equal((await row(db, id)).postprocessing_status, 'pending');
+  assert.deepEqual(await service(() => rpc('workflow_job_release', fence, 5000)), { data: true, error: null });
+  assert.equal((await row(db, id)).status, 'completed');
+  assert.equal((await row(db, id)).postprocessing_status, 'pending');
+  assert.deepEqual(await write('memory', memory), { data: false, error: null });
+  assert.deepEqual(await service(() => rpc('workflow_job_postprocessing_done', fence, 5000)), { data: false, error: null });
+  assert.equal((await service(() => createJobLeaseStore(rpc, 'new').claim(id, 'recover'))).kind, 'not-claimable', 'this PR does not auto-resume completed enrichment');
+  const other = await insertJob(db, { noteId: 'done-note' });
+  const owned = await service(() => store.claim(other, 'start'));
+  assert.equal(owned.kind, 'claimed');
+  const e = executionFromClaim((owned as { claim: JobClaim }).claim, { resumed: false, owner: 'worker' });
+  await service(() => store.write(e, { status: 'completed' }));
+  assert.deepEqual(await service(() => rpc('workflow_job_postprocessing_done', { ...fence, p_job_id: other }, 5000)), { data: true, error: null });
+  assert.equal((await row(db, other)).postprocessing_status, 'done');
 });
