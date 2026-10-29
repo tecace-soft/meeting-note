@@ -1,0 +1,45 @@
+name: mobile-tests
+
+on:
+  pull_request:
+    paths:
+      - 'meeting-note-mobile/app/**'
+      - '.github/workflows/mobile-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'meeting-note-mobile/app/**'
+      - '.github/workflows/mobile-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  mobile:
+    name: mobile (Flutter analyze + offline tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+    defaults:
+      run:
+        working-directory: meeting-note-mobile/app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up pinned Flutter 3.44.9 (Dart 3.12.2)
+        run: |
+          git clone --depth 1 --branch 3.44.9 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = 6b182d2c7585eba26d4edce0f97630effd256c33
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" --disable-analytics
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+      - name: Install locked dependencies
+        run: flutter pub get --enforce-lockfile
+      # main already has five warnings and 29 infos with this SDK.
+      # Fail on analyzer errors; do not broaden this feature into legacy cleanup.
+      - name: Analyze
+        run: flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
+      - name: Offline tests with per-test deadlines
+        run: flutter test --no-pub --timeout 30s

@@ -3,6 +3,7 @@
 // ignore_for_file: deprecated_member_use
 
 import 'dart:io';
+import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -24,10 +25,16 @@ class NewNoteDraft {
   const NewNoteDraft({
     required this.audioPath,
     this.attachmentPaths = const [],
+    this.autoSummarize = false,
+    this.recordingDuration,
+    this.checkReferences = false,
   });
 
   final String audioPath;
   final List<String> attachmentPaths;
+  final bool autoSummarize;
+  final Duration? recordingDuration;
+  final bool checkReferences;
 }
 
 class NewNoteScreen extends ConsumerStatefulWidget {
@@ -35,10 +42,16 @@ class NewNoteScreen extends ConsumerStatefulWidget {
     super.key,
     this.audioPath,
     this.initialAttachmentPaths = const [],
+    this.autoSummarize = false,
+    this.recordingDuration,
+    this.checkReferences = false,
   });
 
   final String? audioPath;
   final List<String> initialAttachmentPaths;
+  final bool autoSummarize;
+  final Duration? recordingDuration;
+  final bool checkReferences;
 
   @override
   ConsumerState<NewNoteScreen> createState() => _NewNoteScreenState();
@@ -51,6 +64,12 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
   late String? _audioPath;
   late final List<String> _attachmentPaths;
   bool _loadingPrompts = true;
+  bool _submitting = false;
+  Timer? _autoTimer;
+  int? _remainingSeconds;
+  String? _autoHint;
+  String? _existingNoteId;
+  int _autoGeneration = 0;
 
   @override
   void initState() {
@@ -61,10 +80,15 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     _audioPath = widget.audioPath;
     _attachmentPaths = [...widget.initialAttachmentPaths];
     Future.microtask(_loadDefaultPrompt);
+    if (widget.autoSummarize) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _beginAutoSummary());
+    }
   }
 
   @override
   void dispose() {
+    _autoGeneration++;
+    _autoTimer?.cancel();
     _title.dispose();
     _instructions.dispose();
     super.dispose();
@@ -119,11 +143,48 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                 child: ListView(
                   padding: EdgeInsets.zero,
                   children: [
+                    if (_remainingSeconds != null)
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Wrap(
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            spacing: 8,
+                            children: [
+                              Text(
+                                t(
+                                  'newNote.autoSummaryCountdown',
+                                ).replaceAll('{seconds}', '$_remainingSeconds'),
+                              ),
+                              TextButton(
+                                onPressed: _cancelAutoSummary,
+                                child: Text(t('common.cancel')),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (_autoHint != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(t(_autoHint!)),
+                      ),
+                    if (_existingNoteId != null)
+                      TextButton(
+                        onPressed: () {
+                          _cancelAutoSummary();
+                          context.push('/note/$_existingNoteId');
+                        },
+                        child: Text(t('newNote.openExistingNote')),
+                      ),
                     _AudioSourceCard(
                       name: audioName,
                       meta: _audioMetaLine(_audioPath),
                       removeLabel: t('newNote.remove'),
-                      onRemove: () => setState(() => _audioPath = null),
+                      onRemove: () {
+                        _cancelAutoSummary();
+                        setState(() => _audioPath = null);
+                      },
                     ),
                     const SizedBox(height: 24),
                     _FieldLabel(t('newNote.titleLabel')),
@@ -191,8 +252,10 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
                     const SizedBox(height: 55),
                     PrimaryButton(
                       label: t('newNote.generateSummary'),
-                      loading: false,
-                      onPressed: _audioPath == null ? null : _submit,
+                      loading: _submitting,
+                      onPressed: _audioPath == null || _submitting
+                          ? null
+                          : _submit,
                     ),
                     const SizedBox(height: 19),
                     Text(
@@ -458,10 +521,76 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
     }
   }
 
+  void _cancelAutoSummary() {
+    _autoGeneration++;
+    _autoTimer?.cancel();
+    if (mounted) setState(() => _remainingSeconds = null);
+  }
+
+  Future<void> _beginAutoSummary() async {
+    final generation = ++_autoGeneration;
+    final audioPath = _audioPath;
+    if (!mounted || audioPath == null) return;
+    if (widget.recordingDuration != null &&
+        widget.recordingDuration! < const Duration(seconds: 5)) {
+      setState(() => _autoHint = 'newNote.shortRecording');
+      return;
+    }
+    if (widget.checkReferences) {
+      try {
+        final existing = await ref
+            .read(notesRepositoryProvider)
+            .referencingNote(audioPath)
+            .timeout(const Duration(seconds: 15));
+        if (!mounted ||
+            generation != _autoGeneration ||
+            audioPath != _audioPath) {
+          return;
+        }
+        if (existing != null) {
+          setState(() {
+            _existingNoteId = existing;
+            _autoHint = 'newNote.existingNote';
+          });
+          return;
+        }
+      } catch (_) {
+        if (mounted && generation == _autoGeneration) {
+          setState(() => _autoHint = 'newNote.referenceCheckFailed');
+        }
+        return;
+      }
+    }
+    if (!mounted || generation != _autoGeneration || audioPath != _audioPath) {
+      return;
+    }
+    setState(() => _remainingSeconds = 5);
+    _autoTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted ||
+          generation != _autoGeneration ||
+          audioPath != _audioPath) {
+        timer.cancel();
+        return;
+      }
+      final seconds = (_remainingSeconds ?? 1) - 1;
+      if (seconds <= 0) {
+        timer.cancel();
+        setState(() => _remainingSeconds = null);
+        unawaited(_submit());
+      } else {
+        setState(() => _remainingSeconds = seconds);
+      }
+    });
+  }
+
   Future<void> _submit() async {
     final audioPath = _audioPath;
-    if (audioPath == null) return;
-
+    if (audioPath == null || _submitting) return;
+    _cancelAutoSummary();
+    setState(() => _submitting = true);
+    final title = _title.text.trim();
+    final instructions = _instructions.text.trim();
+    final attachments = List<String>.of(_attachmentPaths);
     final t = ref.read(appTextProvider);
     try {
       final selectedPrompt = await _selectedPromptForSubmit();
@@ -478,13 +607,11 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
           noteId: uuidV4(),
           fileId: uuidV4(),
           audioPath: audioPath,
-          title: _title.text.trim(),
-          instructions: _instructions.text.trim().isEmpty
-              ? null
-              : _instructions.text.trim(),
+          title: title,
+          instructions: instructions.isEmpty ? null : instructions,
           promptId: selectedPrompt.id,
           userName: user?.displayName,
-          attachmentPaths: [..._attachmentPaths],
+          attachmentPaths: attachments,
         ),
       );
     } catch (e) {
@@ -493,10 +620,13 @@ class _NewNoteScreenState extends ConsumerState<NewNoteScreen> {
           SnackBar(content: Text('${t('newNote.failedToSubmit')}: $e')),
         );
       }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
   void _goBackToRecord() {
+    _cancelAutoSummary();
     if (context.canPop()) {
       context.pop();
     } else {

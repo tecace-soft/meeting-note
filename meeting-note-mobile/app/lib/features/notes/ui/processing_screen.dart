@@ -204,7 +204,9 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> with Widget
         // Terminal: drop the persisted record so a relaunch does not resume a
         // finished job. Done after the single attachment-save attempt so it
         // cannot loop on a transient attachment failure.
-        await ref.read(notesRepositoryProvider).clearActiveJob(_jobId);
+        await ref
+            .read(notesRepositoryProvider)
+            .clearActiveJob(_jobId, completed: true);
         if (!mounted) return;
         context.pushReplacement('/note/${next.noteId}');
         return;

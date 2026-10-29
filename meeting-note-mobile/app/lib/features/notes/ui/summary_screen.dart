@@ -13,6 +13,7 @@ import '../../auth/providers/auth_provider.dart';
 import '../data/notes_repository.dart';
 import '../models/meeting_note.dart';
 import '../../../core/network/error_message.dart';
+import 'speaker_note_share_actions.dart';
 
 class SummaryScreen extends ConsumerWidget {
   const SummaryScreen({super.key, required this.noteId});
@@ -64,6 +65,7 @@ class _DetailScaffoldState extends ConsumerState<_DetailScaffold> {
   int _tab = 0;
   String? _selectedSpeaker;
   late MeetingNote _note;
+  List<SpeakerNoteShareOffer> _shareOffers = [];
 
   @override
   void initState() {
@@ -77,6 +79,7 @@ class _DetailScaffoldState extends ConsumerState<_DetailScaffold> {
     if (oldWidget.note.id != widget.note.id) {
       _note = widget.note;
       _selectedSpeaker = null;
+      _shareOffers = [];
     }
   }
 
@@ -104,6 +107,35 @@ class _DetailScaffoldState extends ConsumerState<_DetailScaffold> {
                 transcriptLabel: t('note.transcriptTab'),
               ),
               const SizedBox(height: 19),
+              if (_shareOffers.isNotEmpty)
+                SpeakerNoteShareActions(
+                  key: ValueKey(note.id),
+                  note: note,
+                  offers: _shareOffers,
+                  onShared: (ids) => setState(
+                    () => _note = _note.copyWith(sharedUserIds: ids),
+                  ),
+                  onSelectTarget: () async {
+                    final selected = await showModalBottomSheet<List<String>>(
+                      context: context,
+                      showDragHandle: true,
+                      isScrollControlled: true,
+                      builder: (_) => _DetailShareNoteSheet(
+                        note: _note,
+                        repository: ref.read(notesRepositoryProvider),
+                      ),
+                    );
+                    if (selected == null || !mounted) return;
+                    await ref
+                        .read(notesRepositoryProvider)
+                        .shareNote(note.id, selected);
+                    if (mounted && _note.id == note.id) {
+                      setState(
+                        () => _note = _note.copyWith(sharedUserIds: selected),
+                      );
+                    }
+                  },
+                ),
               Expanded(
                 child: IndexedStack(
                   index: _tab,
@@ -119,9 +151,27 @@ class _DetailScaffoldState extends ConsumerState<_DetailScaffold> {
                       onSelectedSpeakerChanged: (speaker) {
                         setState(() => _selectedSpeaker = speaker);
                       },
+                      onSpeakerEdit: (result) {
+                        if (result.noteId != _note.id) return;
+                        setState(() {
+                          _note = _note.copyWith(transcript: result.segments);
+                          _shareOffers = result.reset
+                              ? []
+                              : [
+                                  ..._shareOffers.where(
+                                    (offer) => offer.appliesTo(result.segments),
+                                  ),
+                                  ...result.offers,
+                                ];
+                          _selectedSpeaker = null;
+                        });
+                      },
                       onTranscriptChanged: (segments) {
                         setState(() {
                           _note = _note.copyWith(transcript: segments);
+                          _shareOffers = _shareOffers
+                              .where((offer) => offer.appliesTo(segments))
+                              .toList();
                           final speakers = _orderedSpeakers(segments);
                           if (_selectedSpeaker != null &&
                               !speakers.contains(_selectedSpeaker)) {
@@ -491,12 +541,14 @@ class _TranscriptTab extends ConsumerWidget {
     required this.selectedSpeaker,
     required this.onSelectedSpeakerChanged,
     required this.onTranscriptChanged,
+    required this.onSpeakerEdit,
   });
 
   final MeetingNote note;
   final String? selectedSpeaker;
   final ValueChanged<String?> onSelectedSpeakerChanged;
   final ValueChanged<List<TranscriptSegment>> onTranscriptChanged;
+  final ValueChanged<_SpeakerEditResult> onSpeakerEdit;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -549,7 +601,7 @@ class _TranscriptTab extends ConsumerWidget {
               label: t('note.suggestSpeakers'),
               compact: true,
               onTap: () async {
-                final next = await showModalBottomSheet<List<TranscriptSegment>>(
+                final next = await showModalBottomSheet<_SpeakerEditResult>(
                   context: context,
                   isScrollControlled: true,
                   showDragHandle: true,
@@ -557,10 +609,13 @@ class _TranscriptTab extends ConsumerWidget {
                     repository: ref.read(notesRepositoryProvider),
                     noteId: note.id,
                     segments: segments,
-                    selfName: ref.read(authControllerProvider).user?.displayName,
+                    selfName: ref
+                        .read(authControllerProvider)
+                        .user
+                        ?.displayName,
                   ),
                 );
-                if (next != null) onTranscriptChanged(next);
+                if (next != null) onSpeakerEdit(next);
               },
             ),
           ),
@@ -571,21 +626,20 @@ class _TranscriptTab extends ConsumerWidget {
             segment: entry.$2,
             onSpeakerTap: () async {
               final originalIndex = segments.indexOf(entry.$2);
-              final next = await showModalBottomSheet<List<TranscriptSegment>>(
+              final next = await showModalBottomSheet<_SpeakerEditResult>(
                 context: context,
                 isScrollControlled: true,
                 showDragHandle: true,
                 builder: (context) => _SpeakerPickerSheet(
                   noteId: note.id,
                   segments: segments,
-                  currentSharedUserIds: note.sharedUserIds,
                   segmentIndex: originalIndex,
                   originalSpeaker: _speakerKeyOf(entry.$2),
                   transcription: note.transcription,
                   repository: ref.read(notesRepositoryProvider),
                 ),
               );
-              if (next != null) onTranscriptChanged(next);
+              if (next != null) onSpeakerEdit(next);
             },
             onTextTap: () async {
               final originalIndex = segments.indexOf(entry.$2);
@@ -1825,8 +1879,40 @@ class _SuggestSpeakersSheetState extends ConsumerState<_SuggestSpeakersSheet> {
           suggestion: s,
         ));
       }
+      List<SavedSpeaker> saved;
+      try { saved = await widget.repository.savedSpeakers(); }
+      catch (_) { saved = const []; }
+      final offers = <SpeakerNoteShareOffer>[];
+      for (final suggestion in suggestions) {
+        final name = nameByLabel[suggestion.label];
+        if (name == null) continue;
+        String? microsoftId;
+        for (final speaker in saved) {
+          if (speaker.id == suggestion.speakerId &&
+              speaker.name.trim().toLowerCase() == name.toLowerCase()) {
+            microsoftId = speaker.microsoftId;
+            break;
+          }
+        }
+        offers.add(
+          SpeakerNoteShareOffer(
+            name: name,
+            microsoftId: microsoftId,
+            segmentIndexes: [
+              for (var i = 0; i < widget.segments.length; i++)
+                if (widget.segments[i].speaker == suggestion.label) i,
+            ],
+          ),
+        );
+      }
       if (!mounted) return;
-      Navigator.of(context).pop(next);
+      Navigator.of(context).pop(
+        _SpeakerEditResult(
+          noteId: widget.noteId,
+          segments: next,
+          offers: offers,
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -2067,7 +2153,6 @@ class _SpeakerPickerSheet extends ConsumerStatefulWidget {
   const _SpeakerPickerSheet({
     required this.noteId,
     required this.segments,
-    required this.currentSharedUserIds,
     required this.segmentIndex,
     required this.originalSpeaker,
     required this.repository,
@@ -2076,7 +2161,6 @@ class _SpeakerPickerSheet extends ConsumerStatefulWidget {
 
   final String noteId;
   final List<TranscriptSegment> segments;
-  final List<String> currentSharedUserIds;
   final int segmentIndex;
   // Stable key of the tapped speaker (used for matching), not the display name.
   final String originalSpeaker;
@@ -2158,10 +2242,7 @@ class _SpeakerPickerSheetState extends ConsumerState<_SpeakerPickerSheet> {
       }
     }
     final speaker = await widget.repository.ensureSavedSpeaker(name: name);
-    await _applySpeaker(
-      name: speaker.name,
-      microsoftId: speaker.microsoftId,
-    );
+    await _applySpeaker(name: speaker.name);
   }
 
   void _selectSavedSpeaker(SavedSpeaker speaker) {
@@ -2195,10 +2276,7 @@ class _SpeakerPickerSheetState extends ConsumerState<_SpeakerPickerSheet> {
       email: contact.email,
       microsoftId: contact.id,
     );
-    await _applySpeaker(
-      name: speaker.name,
-      microsoftId: speaker.microsoftId ?? contact.id,
-    );
+    await _applySpeaker(name: speaker.name, microsoftId: contact.id);
   }
 
   Future<void> _applySpeaker({
@@ -2225,15 +2303,30 @@ class _SpeakerPickerSheetState extends ConsumerState<_SpeakerPickerSheet> {
         chosenName: name,
         source: 'manual_rename',
       ));
-      if (microsoftId != null && microsoftId.isNotEmpty) {
-        await widget.repository.shareNoteWithMicrosoftUser(
-          widget.noteId,
-          microsoftId,
-          widget.currentSharedUserIds,
-        );
-      }
       if (!mounted) return;
-      Navigator.of(context).pop(next);
+      Navigator.of(context).pop(
+        _SpeakerEditResult(
+          noteId: widget.noteId,
+          segments: next,
+          offers: [
+            SpeakerNoteShareOffer(
+              name: name,
+              microsoftId: microsoftId,
+              segmentIndexes: [
+                for (var i = 0; i < next.length; i++)
+                  if (_shouldReplaceSpeaker(
+                    index: i,
+                    segment: widget.segments[i],
+                    segmentIndex: widget.segmentIndex,
+                    originalSpeaker: widget.originalSpeaker,
+                    scope: _scope,
+                  ))
+                    i,
+              ],
+            ),
+          ],
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -2254,7 +2347,14 @@ class _SpeakerPickerSheetState extends ConsumerState<_SpeakerPickerSheet> {
       final next = _resetSpeakers(widget.segments, widget.transcription);
       await widget.repository.saveDiarization(widget.noteId, next);
       if (!mounted) return;
-      Navigator.of(context).pop(next);
+      Navigator.of(context).pop(
+        _SpeakerEditResult(
+          noteId: widget.noteId,
+          segments: next,
+          offers: const [],
+          reset: true,
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -2673,4 +2773,17 @@ class _SpeakerEmptyRow extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SpeakerEditResult {
+  const _SpeakerEditResult({
+    required this.noteId,
+    required this.segments,
+    required this.offers,
+    this.reset = false,
+  });
+  final String noteId;
+  final List<TranscriptSegment> segments;
+  final List<SpeakerNoteShareOffer> offers;
+  final bool reset;
 }

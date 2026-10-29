@@ -4,9 +4,10 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 class JsonCacheStore {
-  const JsonCacheStore(this.namespace);
+  const JsonCacheStore(this.namespace, {this.atomicWrites = false});
 
   final String namespace;
+  final bool atomicWrites;
 
   Future<List<dynamic>?> readList(String key) async {
     final data = await _read(key);
@@ -41,7 +42,15 @@ class JsonCacheStore {
   Future<void> _write(String key, Object value) async {
     final file = await _file(key);
     await file.parent.create(recursive: true);
-    await file.writeAsString(jsonEncode(value), flush: true);
+    if (atomicWrites) {
+      // Same-directory rename preserves the last complete record if the app
+      // stops while writing a later submission. Only S11 opts in to this path.
+      final pending = File('${file.path}.pending');
+      await pending.writeAsString(jsonEncode(value), flush: true);
+      await pending.rename(file.path);
+    } else {
+      await file.writeAsString(jsonEncode(value), flush: true);
+    }
   }
 
   Future<File> _file(String key) async {

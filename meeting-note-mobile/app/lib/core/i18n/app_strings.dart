@@ -16,6 +16,32 @@ import '../../features/settings/providers/settings_provider.dart';
 /// `ref`, then pass the result down. A few strings compose a localized label with a runtime
 /// value (e.g. `'${t('note.shareWith')} $count'`); those keep the value appended verbatim.
 const Map<String, Map<String, String>> _appStrings = {
+  'note.shareWithThisPerson': {
+    'en': 'Share this note with this person',
+    'ko': '이 사람과 노트 공유',
+  },
+  'note.selectSharingTarget': {
+    'en': 'Choose who to share with',
+    'ko': '공유 대상 선택',
+  },
+  'note.alreadyShared': {'en': 'Already shared', 'ko': '공유됨'},
+  'newNote.autoSummaryCountdown': {
+    'en': 'Summary starts in {seconds} seconds',
+    'ko': '{seconds}초 뒤 요약을 시작합니다',
+  },
+  'newNote.shortRecording': {
+    'en': 'This recording is too short to start automatically.',
+    'ko': '짧은 녹음이라 자동으로 시작하지 않았습니다.',
+  },
+  'newNote.existingNote': {
+    'en': 'A note already uses this recording.',
+    'ko': '이미 이 녹음으로 만든 노트가 있습니다.',
+  },
+  'newNote.openExistingNote': {'en': 'Open note', 'ko': '노트 열기'},
+  'newNote.referenceCheckFailed': {
+    'en': 'Could not check existing notes. Start a summary manually.',
+    'ko': '기존 노트를 확인하지 못했습니다. 요약을 수동으로 시작해 주세요.',
+  },
   // ---- Common ----
   'common.cancel': {'en': 'Cancel', 'ko': '취소'},
   'common.back': {'en': 'Back', 'ko': '뒤로'},
