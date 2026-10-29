@@ -136,6 +136,10 @@ async function nameSpeaker(name = 'Colleague', pickSaved = true, label = 'Speake
   else fireEvent.change(within(menu).getByPlaceholderText('searchOrTypeSpeaker'), { target: { value: name } });
   fireEvent.click(within(menu).getByRole('button', { name: 'Change' }));
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Change Speaker' })).not.toBeInTheDocument());
+  // Naming updates run in a React transition after the dialog closes.
+  // Wait for the transcript commit before starting another assignment or checking its card.
+  await waitFor(() => expect(Array.from(document.querySelectorAll('[data-transcript-speaker-trigger]'))
+    .some((button) => button.textContent === label)).toBe(false));
 }
 
 for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit note sharing`, () => {
@@ -259,7 +263,7 @@ for (const page of ['new', 'history'] as const) describe(`${page}: U9-0 explicit
     await nameSpeaker('Colleague', true, 'Speaker B');
     await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
     expect(screen.getAllByRole('button', { name: 'shareNoteWithThisPerson' })).toHaveLength(1);
-    expect(screen.queryByText('suggestSpeakersTitle')).not.toBeInTheDocument();
+    expect(screen.queryAllByText('suggestSpeakersTitle')).toHaveLength(0);
     expect(shareWrites()).toHaveLength(0);
   }, 5000);
 
