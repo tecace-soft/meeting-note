@@ -1,10 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NoteSharingChangedError } from '../lib/notes/repository';
 import { SpeakerNoteShareActions, type SpeakerShareAssignment } from './SpeakerNoteShareActions';
 
+vi.mock('../config/supabaseConfig', () => ({ supabase: {} }));
 const h = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn() }));
 vi.mock('../context/LanguageContext', () => ({ useLanguage: () => ({ t: (key: string) => key }) }));
-vi.mock('../lib/notes/repository', () => ({
+vi.mock('../lib/notes/repository', async (original) => ({
+  ...await original<typeof import('../lib/notes/repository')>(),
   getNoteSharing: (...args: unknown[]) => h.read(...args),
   setNoteSharedUsersAsOwner: (...args: unknown[]) => h.write(...args),
 }));
@@ -26,8 +29,48 @@ describe('explicit speaker sharing ownership and lifecycle', () => {
     h.read.mockResolvedValue(owner(['legacy', 'new-recipient']));
     fireEvent.click(button); fireEvent.click(button);
     await screen.findByText('noteAlreadyShared');
-    expect(h.write).toHaveBeenCalledExactlyOnceWith({ noteId: 'n1', userId: 'owner', sharedUsers: ['legacy', 'new-recipient', 'colleague-oid'] });
+    expect(h.write).toHaveBeenCalledExactlyOnceWith({ noteId: 'n1', userId: 'owner', sharedUsers: ['legacy', 'new-recipient', 'colleague-oid'], expectedSharedUsers: ['legacy', 'new-recipient'] });
     expect(onNoteShared).toHaveBeenCalledExactlyOnceWith(['legacy', 'new-recipient', 'colleague-oid']);
+  }, 5000);
+
+  it('stops after three conflicts and reports failure without a success callback', async () => {
+    h.write.mockRejectedValue(new NoteSharingChangedError());
+    const { onNoteShared } = mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'shareNoteWithThisPerson' }));
+    await screen.findByText(/Could not share/);
+    expect(h.write).toHaveBeenCalledTimes(3);
+    expect(h.read).toHaveBeenCalledTimes(4);
+    expect(onNoteShared).not.toHaveBeenCalled();
+    expect(screen.queryByText('noteAlreadyShared')).not.toBeInTheDocument();
+  }, 5000);
+
+  it('does not retry a database failure', async () => {
+    h.write.mockRejectedValue(new Error('Sharing database down'));
+    const { onNoteShared } = mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'shareNoteWithThisPerson' }));
+    await screen.findByText('Sharing database down');
+    expect(h.write).toHaveBeenCalledTimes(1); expect(onNoteShared).not.toHaveBeenCalled();
+  }, 5000);
+
+  it('re-checks ownership after a conflict before attempting another write', async () => {
+    const { onNoteShared } = mount();
+    const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
+    h.read.mockResolvedValueOnce(owner()).mockResolvedValue({ user_id: 'other-owner', shared_users: [] });
+    h.write.mockRejectedValue(new NoteSharingChangedError());
+    fireEvent.click(button);
+    await screen.findByText('Only the note owner can share this note.');
+    expect(h.write).toHaveBeenCalledTimes(1); expect(onNoteShared).not.toHaveBeenCalled();
+  }, 5000);
+
+  it('does not write again when another tab already added the chosen recipient', async () => {
+    const { onNoteShared } = mount();
+    const button = await screen.findByRole('button', { name: 'shareNoteWithThisPerson' });
+    h.read.mockResolvedValueOnce(owner()).mockResolvedValue(owner(['other-tab', 'colleague-oid']));
+    h.write.mockRejectedValue(new NoteSharingChangedError());
+    fireEvent.click(button);
+    await screen.findByText('noteAlreadyShared');
+    expect(h.write).toHaveBeenCalledTimes(1);
+    expect(onNoteShared).toHaveBeenCalledWith(['other-tab', 'colleague-oid']);
   }, 5000);
 
   it('shows an existing share without writing or revoking it', async () => {

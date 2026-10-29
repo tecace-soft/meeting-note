@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
-import { getNoteSharing, setNoteSharedUsersAsOwner } from '../lib/notes/repository';
+import { getNoteSharing, setNoteSharedUsersAsOwner, NoteSharingChangedError, type NoteSharedUsersSnapshot } from '../lib/notes/repository';
 
 export interface SpeakerShareAssignment {
   speakerKey: string;
@@ -43,14 +43,19 @@ export function SpeakerNoteShareActions({ noteId, userId, assignments, onDismiss
   const readOwnerSharing = useCallback(async () => {
     const row = await getNoteSharing(noteId);
     if (!row || row.user_id !== userId) throw new Error('Only the note owner can share this note.');
-    return sharedIds(row.shared_users);
+    const raw = row.shared_users;
+    if (raw !== null && (!Array.isArray(raw) || !raw.every((id) => id === null || typeof id === 'string'))) {
+      throw new Error('Could not read note sharing. Refresh and try again.');
+    }
+    const snapshot: NoteSharedUsersSnapshot = raw === null ? null : [...raw];
+    return { users: sharedIds(raw), snapshot };
   }, [noteId, userId]);
 
   useEffect(() => {
     let cancelled = false;
     setSharing(null);
     setReadError(null);
-    void readOwnerSharing().then((users) => {
+    void readOwnerSharing().then(({ users }) => {
       if (!cancelled) setSharing({ owner: true, users });
     }).catch((error: unknown) => {
       if (!cancelled) setReadError(error instanceof Error ? error.message : 'Could not read note sharing.');
@@ -64,19 +69,30 @@ export function SpeakerNoteShareActions({ noteId, userId, assignments, onDismiss
     setBusy(true);
     setErrors((prev) => ({ ...prev, [assignment.speakerKey]: '' }));
     try {
-      // A recipient may have been added since naming; preserve the current list, not a UI snapshot.
-      const users = await readOwnerSharing();
-      if (!alive.current || !currentAssignments.current.includes(assignment)) return;
-      if (!assignment.microsoftId) {
-        onNoteShared?.(users);
-        onSelectSharingTarget?.();
+      // A failed conditional UPDATE never overwrites another tab's changes. Re-read at most
+      // three times, and add only this explicitly chosen recipient to the latest list.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { users, snapshot } = await readOwnerSharing();
+        if (!alive.current || !currentAssignments.current.includes(assignment)) return;
+        if (!assignment.microsoftId) {
+          onNoteShared?.(users);
+          onSelectSharingTarget?.();
+          return;
+        }
+        const next = users.includes(assignment.microsoftId) ? users : [...users, assignment.microsoftId];
+        if (next !== users) {
+          try {
+            await setNoteSharedUsersAsOwner({ noteId, userId, sharedUsers: next, expectedSharedUsers: snapshot });
+          } catch (error: unknown) {
+            if (error instanceof NoteSharingChangedError && attempt < 2) continue;
+            throw error;
+          }
+        }
+        if (!alive.current) return;
+        setSharing({ owner: true, users: next });
+        onNoteShared?.(next);
         return;
       }
-      const next = users.includes(assignment.microsoftId) ? users : [...users, assignment.microsoftId];
-      if (next !== users) await setNoteSharedUsersAsOwner({ noteId, userId, sharedUsers: next });
-      if (!alive.current) return;
-      setSharing({ owner: true, users: next });
-      onNoteShared?.(next);
     } catch (error: unknown) {
       if (alive.current) setErrors((prev) => ({ ...prev, [assignment.speakerKey]: error instanceof Error ? error.message : 'Could not share this note.' }));
     } finally {

@@ -164,17 +164,46 @@ export async function saveOwnedNoteSummaryEditIfUnsaved(input: {
   return Boolean(data);
 }
 
-/** Owner-scoped share-list write. A missing returned row is a denial, never a successful share. */
-export async function setNoteSharedUsersAsOwner(input: { noteId: string; userId: string; sharedUsers: string[] }): Promise<void> {
+/** Exact database value used to detect a concurrent share-list change, including legacy nulls. */
+export type NoteSharedUsersSnapshot = readonly (string | null)[] | null;
+
+export class NoteSharingChangedError extends Error {
+  constructor() {
+    super('Could not share this note because its sharing changed. Please try again.');
+    this.name = 'NoteSharingChangedError';
+  }
+}
+
+/** Owner-scoped share-list write. With a snapshot, check and write happen in one UPDATE. */
+export async function setNoteSharedUsersAsOwner(input: {
+  noteId: string;
+  userId: string;
+  sharedUsers: string[];
+  expectedSharedUsers?: NoteSharedUsersSnapshot;
+}): Promise<void> {
   const userId = requireOwnerId(input.userId);
-  const { data, error } = await supabase
+  let query = supabase
     .from('note')
     .update({ shared_users: input.sharedUsers })
     .eq('id', input.noteId)
-    .eq('user_id', userId)
-    .select('id')
-    .maybeSingle();
+    .eq('user_id', userId);
+  const conditional = 'expectedSharedUsers' in input;
+  if (conditional) {
+    const expected = input.expectedSharedUsers;
+    if (expected === null) {
+      query = query.is('shared_users', null);
+    } else {
+      if (!Array.isArray(expected) || !expected.every((id) => id === null || typeof id === 'string')) {
+        throw new Error('A valid sharing snapshot is required for a conditional share write.');
+      }
+      // PostgreSQL text[] literal: quote every string and escape both backslashes and quotes.
+      const literal = '{' + expected.map((id) => id === null ? 'NULL' : '"' + id.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}';
+      query = query.eq('shared_users', literal);
+    }
+  }
+  const { data, error } = await query.select('id').maybeSingle();
   if (error) throw error;
+  if (!data && conditional) throw new NoteSharingChangedError();
   if (!data || data.id !== input.noteId) throw new Error('Could not share this note. You may not have permission. Refresh and try again.');
 }
 

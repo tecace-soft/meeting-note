@@ -21,6 +21,7 @@ import {
   selectAudioReferencePage,
   setNoteSharedUsers,
   setNoteSharedUsersAsOwner,
+  NoteSharingChangedError,
 } from './repository';
 
 const fake = () => fixture.fake as ReturnType<typeof createFakeSupabase>;
@@ -120,6 +121,37 @@ describe('note repository writes', () => {
       fixture.result = { data };
       await expect(setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['a'] })).rejects.toThrow(/Could not share/);
     }
+  });
+  it('conditional sharing filters the exact previous array as well as the owner', async () => {
+    fixture.result = { data: { id: 'n1' } };
+    await setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['a', 'b'], expectedSharedUsers: ['a'] });
+    expect(calls()).toEqual([['note', ['update', { shared_users: ['a', 'b'] }], ['eq', 'id', 'n1'], ['eq', 'user_id', 'o'], ['eq', 'shared_users', '{"a"}'], ['select', 'id'], ['maybeSingle']]]);
+  });
+  it('conditional sharing distinguishes null, empty and null-valued array snapshots', async () => {
+    fixture.result = { data: { id: 'n1' } };
+    for (const expected of [null, [], [null]] as const) {
+      fake().queries.length = 0;
+      await setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['b'], expectedSharedUsers: expected });
+      expect(calls()[0]).toContainEqual(expected === null ? ['is', 'shared_users', null] : ['eq', 'shared_users', expected.length ? '{NULL}' : '{}']);
+    }
+  });
+  it('conditional sharing escapes text array members without confusing NULL strings and null values', async () => {
+    fixture.result = { data: { id: 'n1' } };
+    const expected = ['quote"member', 'path\\member', 'NULL', null, '', 'comma,member', 'brace}member'];
+    await setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['b'], expectedSharedUsers: expected });
+    expect(calls()[0]).toContainEqual(['eq', 'shared_users', String.raw`{"quote\"member","path\\member","NULL",NULL,"","comma,member","brace}member"}`]);
+  });
+  it('conditional sharing uses a distinct conflict error for zero changed rows', async () => {
+    fixture.result = { data: null };
+    await expect(setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['b'], expectedSharedUsers: [] })).rejects.toBeInstanceOf(NoteSharingChangedError);
+  });
+  it('conditional sharing does not hide database errors as retryable conflicts', async () => {
+    const error = { message: 'database down' }; fixture.result = { error };
+    await expect(setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['b'], expectedSharedUsers: [] })).rejects.toBe(error);
+  });
+  it('an explicitly missing snapshot cannot fall back to an unconditional sharing write', async () => {
+    await expect(setNoteSharedUsersAsOwner({ noteId: 'n1', userId: 'o', sharedUsers: ['b'], expectedSharedUsers: undefined })).rejects.toThrow(/snapshot/);
+    expect(calls()[0]).not.toContainEqual(['maybeSingle']);
   });
   it('setNoteSharedUsers is unscoped (unchanged editor behavior) and throws the raw error', async () => {
     await setNoteSharedUsers({ noteId: 'n1', sharedUsers: ['a'] });
