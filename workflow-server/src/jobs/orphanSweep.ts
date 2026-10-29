@@ -99,7 +99,7 @@ export async function failOrphanedJobs(): Promise<void> {
   for (const row of rows) {
     const note = row.note_id ? notesById.get(row.note_id) : undefined;
     // Only recover when the note belongs to the same user as the job.
-    if (note && (typeof note.user_id !== 'string' || note.user_id === row.user_id)) {
+    if (note && typeof note.user_id === 'string' && note.user_id === row.user_id) {
       recoverable.push({ jobId: row.id, note });
     } else {
       failedIds.push(row.id);
@@ -228,7 +228,7 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
         return 'deferred';
       }
       const row = note as Record<string, unknown> | null;
-      if (row && (typeof row.user_id !== 'string' || row.user_id === claim.userId)) {
+      if (row && typeof row.user_id === 'string' && row.user_id === claim.userId) {
         const written = await updateWorkflowJob(execution, {
           status: 'completed',
           stage: 'completed',
@@ -238,6 +238,10 @@ export async function recoverClaimedJob(claim: JobClaim): Promise<RecoveryOutcom
         }, { retries: 2 });
         if (written) console.log(`Recovered orphaned workflow job ${claim.jobId} to completed from an existing note.`);
         return written ? 'completed' : 'deferred';
+      }
+      if (row) {
+        console.warn(`Note ownership does not match workflow job ${claim.jobId}; deferring without completing or overwriting it.`);
+        return 'deferred';
       }
     }
     const loaded = await jobLeases.loadRequest(execution);

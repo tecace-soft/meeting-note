@@ -60,8 +60,8 @@ export async function updateWorkflowJob(job: JobRef, patch: WorkflowJobPatch, op
       ...patch,
       updated_at: new Date().toISOString(),
     }).eq('id', jobId);
-    const { error } = await (options?.activeOnly ? update.in('status', ['queued', 'processing']) : update);
-    if (!error) return true;
+    const { data, error } = await (options?.activeOnly ? update.in('status', ['queued', 'processing']).select('id') : update);
+    if (!error) return !options?.activeOnly || (Array.isArray(data) && data.length > 0);
     if (attempt < retries) {
       await delay(Math.min(1000 * 2 ** attempt, 8000));
       continue;
