@@ -190,8 +190,9 @@ export function useSummaryNameRefresh(input: SummaryNameRefreshInput): SummaryNa
 
       const save = (text: string, onlyIfUnsaved: boolean): Promise<boolean> => {
         const callbacks = latest.current;
-        let tracked!: Promise<boolean>;
-        tracked = (async () => {
+        const tracked: Promise<boolean> = (async () => {
+          // Publish the barrier before a callback can synchronously throw.
+          await Promise.resolve();
           try {
             const saved = await callbacks.saveSummary(text, { onlyIfUnsaved });
             // Aborting a browser request cannot undo a DB commit already in progress.
