@@ -113,7 +113,6 @@ async function writeFailed(job: JobRef, jobId: string, message: string): Promise
 }
 
 async function runJob(job: string | JobExecution, input: SummarizeAudioInput): Promise<void> {
-  const jobId = typeof job === 'string' ? job : job.jobId;
   // Keep the lease (or updated_at) fresh across long silent stages (e.g. the
   // multi-minute AssemblyAI poll) so the orphan sweep never mistakes this live job
   // for an orphan.
