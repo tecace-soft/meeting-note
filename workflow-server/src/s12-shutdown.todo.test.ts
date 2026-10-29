@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import { getGlobalDispatcher } from 'undici';
 
-const TODO = 'S12 implementation waits for T1-9b and S10; remove todo after readiness, cancellation and fenced resume state exist';
 interface JournalEvent { event: string; status?: string; postprocessingPending?: boolean; postprocessingStatus?: string; fenced?: boolean; durableLease?: boolean }
 async function signalScenario(t: { after: (fn: () => void) => void }, mode: 'processing' | 'completed', signal: 'SIGTERM' | 'SIGKILL') {
   const workflow = fileURLToPath(new URL('../', import.meta.url));
@@ -32,7 +31,7 @@ async function signalScenario(t: { after: (fn: () => void) => void }, mode: 'pro
   return { ready, journal, exit: await exited };
 }
 
-test('S12: startup installs a SIGTERM drain handler', { todo: TODO }, async (t) => {
+test('S12: startup installs a SIGTERM drain handler', { timeout: 20000 }, async (t) => {
   const { server, startServer } = await import('./index.js');
   const before = process.listenerCount('SIGTERM');
   const stop = startServer({ port: 0, host: '127.0.0.1', dispatcher: getGlobalDispatcher() });
@@ -41,23 +40,23 @@ test('S12: startup installs a SIGTERM drain handler', { todo: TODO }, async (t) 
   assert.equal(process.listenerCount('SIGTERM'), before + 1);
 });
 
-test('S12: SIGTERM during processing exits cleanly after a fenced nonterminal handoff', { todo: TODO }, async (t) => {
+test('S12: SIGTERM during processing exits cleanly after a fenced nonterminal handoff', { timeout: 20000 }, async (t) => {
   const result = await signalScenario(t, 'processing', 'SIGTERM');
   assert.equal(result.exit.code, 0, 'the existing process dies from SIGTERM without draining');
-  assert.ok(result.journal.some((event) => event.status === 'queued' && event.fenced));
-  assert.ok(!result.journal.some((event) => event.status === 'failed'));
+  assert.ok(result.journal.some((event) => event.status === 'queued' && event.fenced), 'shutdown hands off processing with the execution fence');
+  assert.ok(!result.journal.some((event) => event.status === 'failed')), 'shutdown never fails the recording';
 });
 
-test('S12: SIGTERM after completed preserves success and records unfinished enrichment separately', { todo: TODO }, async (t) => {
+test('S12: SIGTERM after completed preserves success and records unfinished enrichment separately', { timeout: 20000 }, async (t) => {
   const result = await signalScenario(t, 'completed', 'SIGTERM');
   assert.equal(result.ready.postprocessingPending, true);
-  assert.ok(result.journal.some((event) => event.status === 'completed'));
-  assert.ok(!result.journal.some((event) => event.status === 'failed'));
+  assert.ok(result.journal.some((event) => event.status === 'completed'), 'completed was durable before shutdown');
+  assert.ok(!result.journal.some((event) => event.status === 'failed')), 'shutdown never fails the recording';
   assert.ok(result.journal.some((event) => event.postprocessingStatus === 'pending'), 'in-memory enrichment has no durable pending marker yet');
   assert.equal(result.exit.code, 0);
 });
 
-test('S12: SIGKILL leaves a durable expiring lease and fenced generation for S10 recovery', { todo: TODO }, async (t) => {
+test('S12: SIGKILL leaves a durable expiring lease and fenced generation for S10 recovery', { timeout: 20000 }, async (t) => {
   const result = await signalScenario(t, 'processing', 'SIGKILL');
   assert.equal(result.exit.signal, 'SIGKILL');
   assert.ok(result.journal.some((event) => event.fenced && event.durableLease), 'SIGKILL cannot execute a cleanup handler');

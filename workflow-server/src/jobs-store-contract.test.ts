@@ -33,6 +33,7 @@ function fakeFrom(t: test.TestContext, results: Result[]) {
       upsert: (row: unknown, options: unknown) => { call.op = 'upsert'; call.payload = row; call.options = options; return chain; },
       delete: () => { call.op = 'delete'; return chain; },
       eq: (column: string, value: unknown) => { call.filters.push([column, value]); return chain; },
+      in: (column: string, value: unknown) => { call.filters.push([column, value]); return chain; },
       maybeSingle: async () => result,
       then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve(result).then(resolve, reject),
     };
@@ -220,4 +221,11 @@ test('a recording with no speech fails the job with the localized message and no
   assert.equal(failed.error, noSpeechMessage('en'));
   assert.ok(log.mock.calls.some((c) => String(c.arguments[0]).includes('ended with no detectable speech')), 'the no-speech outcome is logged');
   assert.equal(error.mock.callCount(), 0, 'no error log and no incident for a silent recording');
+});
+
+
+test('L1: activeOnly updates report zero affected rows as false', { timeout: 5000 }, async (t) => {
+  fakeFrom(t, [{ data: [], error: null }, { data: [{ id: 'active' }], error: null }]);
+  assert.equal(await updateWorkflowJob('finished', { status: 'failed' }, { activeOnly: true }), false);
+  assert.equal(await updateWorkflowJob('active', { stage: 'saving' }, { activeOnly: true }), true);
 });

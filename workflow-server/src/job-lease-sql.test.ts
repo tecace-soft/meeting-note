@@ -26,13 +26,18 @@ const S10 = 'supabase/migrations/20261026120000_workflow_job_s10_lease_and_resum
 const TABLE_FUNCTIONS = new Set(['workflow_job_claim']);
 const sql = (path: string) => readFile(new URL('../../' + path, import.meta.url), 'utf8');
 
-async function database(options: { s10: boolean }) {
+async function database(options: { s10: boolean; s12?: boolean }) {
   const db = new PGlite();
   for (const path of CHAIN) await db.exec(await sql(path));
   if (options.s10) {
     await db.exec(await sql(S10));
     // Re-applying must be a no-op (the operator may run the file twice).
     await db.exec(await sql(S10));
+  }
+  if (options.s12) {
+    const migration = await sql('supabase/migrations/20261029180000_workflow_job_s12_shutdown.sql');
+    await db.exec(migration);
+    await db.exec(migration);
   }
   return db;
 }
@@ -372,4 +377,53 @@ test('S10 lease store reports unsupported before the migration so callers keep p
     assert.equal(await s.renew(execution), 'unsupported');
     assert.equal(await s.write(execution, { stage: 'x' }), 'unsupported');
   });
+});
+
+
+test('S12 SQL: release hands off immediately and stale writers cannot persist notes', { timeout: 120000 }, async (t) => {
+  const db = await database({ s10: true, s12: true });
+  t.after(() => db.close());
+  const rpc = pgliteRpc(db);
+  const service = <T>(run: () => Promise<T>) => asRole(db, 'service_role', run);
+  const id = await insertJob(db, { noteId: 's12-note' });
+  assert.equal((await service(() => createJobLeaseStore(rpc, 'old').claim(id, 'start'))).kind, 'claimed');
+  const fence = { p_job_id: id, p_owner: 'old', p_generation: 1 };
+  const note = { id: 's12-note', user_id: 'fixture-user', summary: 'first', diarization: [] };
+  const persist = (patch: Record<string, unknown>, mode = 'insert') => service(() => rpc('workflow_job_persist_note', { ...fence, p_note: patch, p_mode: mode }, 5000));
+  assert.deepEqual(await persist({ ...note, user_id: 'other' }), { data: false, error: null });
+  assert.deepEqual(await persist(note), { data: true, error: null });
+  assert.deepEqual(await persist({ ...note, summary: 'overwrite' }), { data: true, error: null });
+  assert.equal((await db.query<{ summary: string }>("select summary from public.note where id='s12-note'")).rows[0]?.summary, 'first');
+  await db.query("update public.workflow_job set assembly_transcript_id='saved', transcript_submission_state='submitted' where id=$1", [id]);
+  assert.deepEqual(await service(() => rpc('workflow_job_release', fence, 5000)), { data: true, error: null });
+  assert.equal((await row(db, id)).status, 'queued');
+  assert.equal((await row(db, id)).assembly_transcript_id, 'saved');
+  assert.equal((await row(db, id)).transcript_submission_state, 'submitted');
+  assert.deepEqual(await persist(note), { data: false, error: null });
+  assert.equal((await service(() => createJobLeaseStore(rpc, 'new').claim(id, 'recover'))).kind, 'claimed');
+  assert.deepEqual(await service(() => rpc('workflow_job_release', fence, 5000)), { data: false, error: null });
+  assert.deepEqual(await persist({ ...note, diarization: [{ speaker: 'stale' }] }, 'diarization'), { data: false, error: null });
+  assert.equal((await row(db, id)).lease_owner, 'new');
+  for (const role of ['anon', 'authenticated']) {
+    assert.equal((await asRole(db, role, () => rpc('workflow_job_persist_note', { ...fence, p_note: note, p_mode: 'insert' }, 5000))).error?.code, '42501');
+    assert.equal((await asRole(db, role, () => rpc('workflow_job_release', fence, 5000))).error?.code, '42501');
+  }
+});
+
+test('S12 SQL: expired leases and null note owners never authorize or converge work', { timeout: 120000 }, async (t) => {
+  const db = await database({ s10: true, s12: true });
+  t.after(() => db.close());
+  const rpc = pgliteRpc(db);
+  const id = await insertJob(db, { noteId: 'null-owner' });
+  await db.exec("insert into public.note(id,user_id) values ('null-owner',null)");
+  const store = createJobLeaseStore(rpc, 'owner');
+  await asRole(db, 'service_role', () => store.claim(id, 'start'));
+  const args = { p_job_id: id, p_owner: 'owner', p_generation: 1, p_note: { id: 'null-owner', user_id: 'fixture-user', summary: 'forbidden' }, p_mode: 'insert' };
+  assert.deepEqual(await asRole(db, 'service_role', () => rpc('workflow_job_persist_note', args, 5000)), { data: false, error: null });
+  await expireLease(db, id);
+  assert.deepEqual(await asRole(db, 'service_role', () => rpc('workflow_job_persist_note', args, 5000)), { data: false, error: null });
+  await db.query('update public.workflow_job set attempt_count=3 where id=$1', [id]);
+  assert.equal((await asRole(db, 'service_role', () => createJobLeaseStore(rpc, 'new').claim(id, 'recover'))).kind, 'exhausted');
+  assert.equal((await row(db, id)).status, 'failed');
+  assert.equal((await db.query<{ user_id: unknown }>("select user_id from public.note where id='null-owner'")).rows[0]?.user_id, null);
 });

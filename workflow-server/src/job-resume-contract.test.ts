@@ -525,12 +525,12 @@ test('resume order: note check, then the request load, then the execution count;
 test('resume converges to completed from a persisted note of the same user; a lookup error defers', async (t) => {
   t.mock.method(console, 'log', () => undefined);
   t.mock.method(console, 'warn', () => undefined);
-  let noteMode: 'mine' | 'foreign' | 'error' = 'mine';
+  let noteMode: 'mine' | 'foreign' | 'null' | 'error' = 'mine';
   const note = { id: 'fixture-note', user_id: USER, summary: 'Saved summary', name: 'Saved', diarization: [], tags: [] };
   const f = await fixture(t, noCheckpoint, (url, method) => {
     if (!(isTable(url, 'note') && method === 'GET' && url.searchParams.get('id') === 'eq.fixture-note')) return undefined;
     if (noteMode === 'error') return Response.json({ message: 'note read timeout' }, { status: 500 });
-    return Response.json(noteMode === 'mine' ? note : { ...note, user_id: OTHER });
+    return Response.json(noteMode === 'mine' ? note : { ...note, user_id: noteMode === 'null' ? null : OTHER });
   });
   assert.equal(await recoverAndSettle(f, claimRow()), 'completed');
   const done = terminal(f, 'resumed-job')!;
@@ -542,8 +542,12 @@ test('resume converges to completed from a persisted note of the same user; a lo
   assert.equal(rpcCalls(f, 'workflow_job_write').length, 0, 'unknown note state: neither rerun nor fail');
   assert.equal(rpcCalls(f, 'workflow_job_begin_execution').length, 0, 'a note lookup deferral uses no execution attempt');
   f.reset(); noteMode = 'foreign';
-  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'foreign-note-job' })), 'resumed', 'another user\'s note never completes this job');
+  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'foreign-note-job' })), 'deferred', 'another user\'s note never completes this job');
   completedJobResults.delete('foreign-note-job');
+  f.reset(); noteMode = 'null';
+  assert.equal(await recoverAndSettle(f, claimRow({ jobId: 'null-owner-job' })), 'deferred');
+  assert.equal(rpcCalls(f, 'workflow_job_write').length, 0, 'null owner never completes another user job');
+  assert.equal(rpcCalls(f, 'workflow_job_begin_execution').length, 0, 'unknown ownership does not pay for a rerun');
 });
 
 // ---------------------------------------------------------------------------
