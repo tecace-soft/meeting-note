@@ -2,9 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { GEMINI_2_5_FLASH_LITE, GEMINI_3_1_FLASH_LITE } from '../../gemini-models.js';
-import { extractDecisions, prepareInput, runDecisionExtraction, NOTE_EXTRACTION_SELECT, type NoteForExtraction } from '../../decisions/job.js';
+import { extractDecisions, prepareInput, refinePayload, runDecisionExtraction, DECISION_PIPELINE_VERSION, NOTE_EXTRACTION_SELECT, type NoteForExtraction } from '../../decisions/job.js';
 import { buildExtractionPayload } from '../../decisions/store.js';
-import { DECISION_PROMPT_VERSION } from '../../decisions/prompt.js';
 import { errorResult, jsonResult } from '../lib/formatters.js';
 import { getDataContext, getScopedUserId } from '../lib/supabase.js';
 
@@ -55,20 +54,24 @@ export function registerDecisionTools(server: McpServer): void {
         // No fallback model in dry runs: the eval measures exactly the requested model.
         const res = await extractDecisions({ apiKey: env.geminiApiKey, model: chosenModel, fallbackModels: [], noteId, title: note.name, prepared });
         if ('error' in res) { results.push({ noteId, ok: false, error: res.error, latencyMs: res.latencyMs }); continue; }
-        const { payload, metrics, aliasCandidates } = buildExtractionPayload(res.extraction, {
-          noteId, meetingDate: prepared.meetingDate, promptVersion: DECISION_PROMPT_VERSION, runId: null, segments: prepared.segments,
+        const built = buildExtractionPayload(res.extraction, {
+          noteId, meetingDate: prepared.meetingDate, promptVersion: DECISION_PIPELINE_VERSION, runId: null, segments: prepared.segments,
         });
+        const { payload, aliasCandidates } = built;
+        const { metrics, refine } = await refinePayload({ apiKey: env.geminiApiKey, model: chosenModel, payload, metrics: built.metrics, segments: prepared.segments });
         results.push({
           noteId,
           ok: true,
           stored: false,
           model: res.model,
-          promptVersion: DECISION_PROMPT_VERSION,
+          promptVersion: DECISION_PIPELINE_VERSION,
           latencyMs: res.latencyMs,
           inputChars: prepared.transcript.length,
           transcriptTruncated: prepared.truncated,
           usage: res.usage,
           metrics,
+          statusAdjustments: refine.adjustments,
+          verifier: refine.verifier,
           meeting: { date: payload.record.meeting_date, ...pick(res.extraction.meeting, ['title', 'meeting_kind', 'sensitivity', 'quality', 'quality_notes']) },
           decisions: payload.decisions.map((d) => ({
             id: d.local_id, status: d.status, side: d.side, text: d.text, decidedBy: d.decided_by, project: d.project,

@@ -60,7 +60,8 @@ Table names keep the handoff's `mn_` prefix. Differences:
 - `workflow-server/src/decisions/normalize.ts`: seed aliases, resolver, alias candidates (F2)
 - `workflow-server/src/decisions/evidence.ts`: quote matching and segment ids
 - `workflow-server/src/decisions/store.ts`: payload builder, metrics, RPC write
-- `workflow-server/src/decisions/job.ts`: Job A (load, idempotency, extract, store, run log)
+- `workflow-server/src/decisions/verify.ts`: status refinement after extraction (guards + verifier pass; only lowers a status)
+- `workflow-server/src/decisions/job.ts`: Job A (load, idempotency, extract, refine, store, run log)
 - `workflow-server/eval/decision-graph.ts` (`npm run eval:decisions`): eval on a note list (local, needs service-role + Gemini keys)
 - MCP tool `run_decision_extraction` (`workflow-server/src/mcp/tools/decisions.ts`): the same eval from any MCP client with no local setup. Owner's notes only, up to 3 per call, dry run by default (`dryRun:false` stores through the real job). Works while `DECISION_GRAPH_ENABLED` is off
 - Tests: `src/decisions/decisions.test.ts` (unit), `src/decisions/decision-graph-sql.test.ts` (migration on PGlite: RLS, sensitivity, idempotency, human_verified, cascade)
@@ -123,3 +124,23 @@ Findings, all addressed in prompt v2 (`decision-extract-v2`) and code:
   - 2.5-flash-lite assigned speaker labels to seed-alias people with no basis. v2 forbids this.
 
 Model call after the pilot: **gemini-3.1-flash-lite**. Status discipline is the top requirement, and it was clearly better there; it was also about 10x faster. Not enabled yet: rerun v2 on the same 5 notes, then the gold set.
+
+### 2026-11-04 rerun: prompt v2, same 5 notes, gemini-3.1-flash-lite
+
+| Metric | v1 | v2 | Target |
+| --- | --- | --- | --- |
+| Meeting date correct | 2/5 | 5/5 | — |
+| Company/team names as owners | several | 0 | — |
+| Evidence verbatim match | 0.69 (20/29) | 0.83 (20/24) | ≥ 0.95 |
+| Share labeled `decided` | 70% | 88% (7/8) | flag > 70% |
+| Output in meeting language | 2/5 | 3/5 | 5/5 |
+
+The model still labels "keep discussing" and "I'll prepare it" as `decided`, despite the v2 negative examples. One quote was copied from the summary; the matcher flagged it.
+
+Response: a status-refinement step (`decisions/verify.ts`, `verify-v1`). It runs after extraction and can only lower a status, never raise one.
+1. **Deterministic guards.**
+   - The side and the status must agree.
+   - A `decided` or `customer_decided` item whose quote is not verbatim in the transcript drops to `direction` or `customer_stated`.
+2. **Verifier pass.** One lite call per meeting re-judges each remaining decided item against ±4 transcript segments around its evidence. A verdict is applied only when it is lower and valid for the item's side. If the verifier fails, the guard result stands.
+
+The original model output stays in `output_json`. Every change is listed in the run metrics as `status_adjustments`, and the counts before refinement as `status_counts_before_refine`. Runs are versioned as `DECISION_PIPELINE_VERSION` = `decision-extract-v2+verify-v1`.

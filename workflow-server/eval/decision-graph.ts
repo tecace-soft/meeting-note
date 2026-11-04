@@ -21,9 +21,8 @@ import { config } from 'dotenv';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createClient } from '@supabase/supabase-js';
 import { assertLiveModel, isLiteModel, DECISION_EXTRACTION_MODEL } from '../src/gemini-models.js';
-import { extractDecisions, prepareInput, runDecisionExtraction, NOTE_EXTRACTION_SELECT, type NoteForExtraction } from '../src/decisions/job.js';
+import { extractDecisions, prepareInput, refinePayload, runDecisionExtraction, DECISION_PIPELINE_VERSION, NOTE_EXTRACTION_SELECT, type NoteForExtraction } from '../src/decisions/job.js';
 import { buildExtractionPayload } from '../src/decisions/store.js';
-import { DECISION_PROMPT_VERSION } from '../src/decisions/prompt.js';
 import { DECISION_STATUSES } from '../src/decisions/schema.js';
 
 config();
@@ -96,9 +95,11 @@ async function main() {
       console.log(`${noteId} FAILED ${res.error.slice(0, 120)}`);
       continue;
     }
-    const { payload, metrics } = buildExtractionPayload(res.extraction, {
-      noteId, meetingDate: prepared.meetingDate, promptVersion: DECISION_PROMPT_VERSION, runId: null, segments: prepared.segments,
+    const built = buildExtractionPayload(res.extraction, {
+      noteId, meetingDate: prepared.meetingDate, promptVersion: DECISION_PIPELINE_VERSION, runId: null, segments: prepared.segments,
     });
+    const { payload } = built;
+    const { metrics } = await refinePayload({ apiKey, model, payload, metrics: built.metrics, segments: prepared.segments });
     const unmatched = [...payload.decisions, ...payload.actions, ...payload.issues]
       .filter((x) => x.evidence_match === false)
       .map((x) => String(x.evidence_quote).slice(0, 120));
@@ -122,7 +123,7 @@ async function main() {
   const decisionsTotal = sum((r) => r.decisions);
   const latencies = ok.map((r) => r.latencyMs).filter((x): x is number => typeof x === 'number').sort((a, b) => a - b);
   const summary = {
-    promptVersion: DECISION_PROMPT_VERSION,
+    promptVersion: DECISION_PIPELINE_VERSION,
     model,
     notes: rows.length,
     schemaOrCallFailureRate: rows.length ? (rows.length - ok.length) / rows.length : null,
