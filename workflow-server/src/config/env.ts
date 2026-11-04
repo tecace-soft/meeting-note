@@ -1,4 +1,4 @@
-import { liteModelFromEnv, SUMMARY_MODEL, REGENERATE_SUMMARY_MODEL, TRANSCRIPTION_TEST_MODEL } from '../gemini-models.js';
+import { liteModelFromEnv, SUMMARY_MODEL, REGENERATE_SUMMARY_MODEL, TRANSCRIPTION_TEST_MODEL, DECISION_EXTRACTION_MODEL } from '../gemini-models.js';
 
 export const env = {
   supabaseUrl: process.env.SUPABASE_URL ?? '',
@@ -23,6 +23,12 @@ export const env = {
   listenHost: process.env.WORKFLOW_HOST || undefined,
   fetchHeadersTimeoutMs: Number(process.env.WORKFLOW_FETCH_HEADERS_TIMEOUT_MS || '1200000'),
   fetchBodyTimeoutMs: Number(process.env.WORKFLOW_FETCH_BODY_TIMEOUT_MS || '1200000'),
+  // Decision Graph (docs/decision-graph.md). Off unless exactly "true": the whole pipeline is
+  // feature-flagged and stays off in production until the gold-set eval passes.
+  decisionGraphEnabled: process.env.DECISION_GRAPH_ENABLED === 'true',
+  decisionGraphModel: liteModelFromEnv('DECISION_GRAPH_MODEL', process.env.DECISION_GRAPH_MODEL, DECISION_EXTRACTION_MODEL),
+  // Calendar day of a meeting is taken in this zone (team spans Korea and LA).
+  decisionGraphTimeZone: process.env.DECISION_GRAPH_TIMEZONE || 'Asia/Seoul',
 };
 
 export const ASSEMBLYAI_PRODUCTION_TRANSCRIPTION_MODELS = ['universal-2'] as const;

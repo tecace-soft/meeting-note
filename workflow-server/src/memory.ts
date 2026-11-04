@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { callGemini, dedupeModels, isRetryableGeminiError } from './gemini.js';
+import { callGemini, dedupeModels, isRetryableGeminiError, type GeminiUsageMetadata } from './gemini.js';
 import { MEMORY_MODEL, MEMORY_FALLBACK_CHAIN } from './gemini-models.js';
 
 // Bounds to keep prompt/cost sane and the base from growing without limit.
@@ -505,7 +505,7 @@ export async function callJsonModel<T>(input: {
   // tokens). A NEGATIVE value = OMIT thinkingConfig so the model decides for itself — needed
   // for models that REJECT thinkingBudget:0 with a 400 (e.g. gemini-3.5-flash-lite). Eval-only.
   thinkingBudget?: number;
-}): Promise<{ value: T; model: string } | { error: string }> {
+}): Promise<{ value: T; model: string; usageMetadata?: GeminiUsageMetadata } | { error: string }> {
   const thinkingBudget = input.thinkingBudget === undefined ? 0 : (input.thinkingBudget < 0 ? undefined : input.thinkingBudget);
   let lastError = 'no models attempted';
   for (const model of input.models) {
@@ -524,7 +524,7 @@ export async function callJsonModel<T>(input: {
           thinkingBudget,
         });
         const parsed = input.parse(result.text);
-        if (parsed !== null) return { value: parsed, model };
+        if (parsed !== null) return { value: parsed, model, usageMetadata: result.usageMetadata };
         // HTTP 200 but unparseable/invalid body → retryable (try again / next model).
         lastError = `${model}: unparseable output len=${result.text.length}`;
         if (attempt === MAX_ATTEMPTS_PER_MODEL) break; // exhausted this model → next model

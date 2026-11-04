@@ -57,6 +57,9 @@ export const MEMORY_MODEL = GEMINI_2_5_FLASH_LITE;
 export const PROJECT_CHAT_MODEL = GEMINI_3_1_FLASH_LITE;
 export const TRANSCRIPTION_TEST_MODEL = GEMINI_3_1_FLASH_LITE;
 export const KNOWLEDGE_EXTRACTION_MODEL = GEMINI_3_1_FLASH_LITE;
+// Decision Graph extraction (docs/decision-graph.md). Override with DECISION_GRAPH_MODEL
+// (lite-only via liteModelFromEnv); compare both lite models on the eval set before enabling.
+export const DECISION_EXTRACTION_MODEL = GEMINI_3_1_FLASH_LITE;
 
 // Failover chains (DEC-0005: lite-only, each ends in a live lite model). Order is
 // load-bearing: it IS the runtime failover order. The call site passes the primary
