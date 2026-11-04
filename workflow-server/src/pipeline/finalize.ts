@@ -60,7 +60,8 @@ export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: T
         apiKey: env.geminiApiKey,
         noteId: input.noteId,
         model: env.decisionGraphModel,
-        timeZone: env.decisionGraphTimeZone,
+        // The recorder's own zone when the client sent one; the note-name prefix wins anyway.
+        timeZone: typeof input.userTimeZone === 'string' && input.userTimeZone.trim() ? input.userTimeZone.trim() : env.decisionGraphTimeZone,
       });
       console.log(`[decision-graph] note=${input.noteId} ${outcome.status}${'reason' in outcome ? ` (${outcome.reason})` : ''}`);
     }

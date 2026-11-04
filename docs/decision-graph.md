@@ -88,3 +88,38 @@ Monitoring: `mn_extraction_runs.metrics` has `status_counts`, `decided_ratio` (a
 1. Extraction model and per-meeting cost cap. Only the two lite models are allowed under DEC-0005; the eval reports estimated cost per meeting.
 2. The 20 gold meetings and the reviewer (Hans or 이주화).
 3. Sharing default: implemented as "inherit note visibility, sensitive → owner only". Owner + participants needs attendee oids.
+
+## 8. Eval log
+
+Aggregate numbers only. Meeting content stays out of the repo.
+
+### 2026-11-04 pilot: prompt v1, 5 notes owned by Hans, dry run through `run_decision_extraction`
+
+The 5 notes: a partner/customer meeting, a partner handover, an internal exec meeting, a partner intro and an internal dev meeting. All transcripts are 16–23k characters.
+
+| Metric | gemini-3.1-flash-lite | gemini-2.5-flash-lite | Target |
+| --- | --- | --- | --- |
+| Schema/call failures | 0/5 | 0/5 | < 2% |
+| Decisions extracted | 10 | 41 | — |
+| Share labeled `decided` | 70% | 80% (two notes 100%: 8/8, 15/15) | flag > 70% per meeting |
+| Evidence verbatim match | 20/29 = 0.69 | 67/110 = 0.61 | ≥ 0.95 |
+| Latency per note | 3.1–4.6 s | 9.8–47 s | — |
+| Est. cost per note | about $0.0048 | about $0.0030 | — |
+
+Findings, all addressed in prompt v2 (`decision-extract-v2`) and code:
+- **Date bug (code).** The fixed `Asia/Seoul` zone shifted LA meetings by one day in 3 of 5 notes. The model then reported false "summary date" discrepancies. Fix: use the note-name `yymmdd` prefix, which is computed in the recorder's zone, and the recorder's zone in finalize.
+- **Evidence.**
+  - Fragments were joined with " / " or stitched into new sentences.
+  - Twice, the "quote" was a paraphrase of the decision itself.
+  - v2 asks for one verbatim span, or fragments joined by " ... ", and never a summary or the decision text. The matcher now also splits on " / ".
+- **Over-classification.**
+  - 2.5-flash-lite labeled opinions, experiences and "keep discussing" as `decided`.
+  - Both models put a partner speaker's statement under `side=tecace`.
+  - v2 adds explicit negative examples and requires the side to follow the speaker's organization.
+- **Output language.** 3.1-flash-lite answered in English for 3 Korean meetings. v2 asks for the meeting's language.
+- **Names.**
+  - Romanized names were unresolved: Hansoo Lee, Chang Han, Yung Kim. These are now aliases.
+  - Company and team names appeared as owners. These now become null.
+  - 2.5-flash-lite assigned speaker labels to seed-alias people with no basis. v2 forbids this.
+
+Model call after the pilot: **gemini-3.1-flash-lite**. Status discipline is the top requirement, and it was clearly better there; it was also about 10x faster. Not enabled yet: rerun v2 on the same 5 notes, then the gold set.

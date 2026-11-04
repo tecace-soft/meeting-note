@@ -4,7 +4,7 @@ import { parseDecisionExtraction } from './schema.js';
 import { EntityResolver, isSpeakerLabel } from './normalize.js';
 import { TranscriptIndex } from './evidence.js';
 import { buildExtractionPayload, idPrefix } from './store.js';
-import { meetingDateOf, prepareInput } from './job.js';
+import { meetingDateOf, prepareInput, resolveMeetingDate } from './job.js';
 import { DECISION_SYSTEM_PROMPT, buildDecisionUserPrompt } from './prompt.js';
 
 // Synthetic fixture only (no real meeting content).
@@ -188,4 +188,37 @@ test('prompt: keeps the fixed taxonomy and alias rules, and fences the transcrip
 test('idPrefix: stable, alphanumeric, 6-char note part', () => {
   assert.equal(idPrefix('8ebea35d-4125-4369', '2026-08-07'), '260807-8ebea3');
   assert.equal(idPrefix('---', '2026-08-07'), '260807-note00');
+});
+
+test('v2: meeting date prefers the note-name yymmdd prefix (recorder zone) within a day of meeting_at', () => {
+  // 2026-10-15 14:47 in LA = 2026-10-16 06:47 in Seoul: the name prefix keeps the LA day.
+  assert.equal(resolveMeetingDate({ name: '261015_Tecace_Strategic', meeting_at: '2026-10-15T21:47:02Z' }, 'Asia/Seoul'), '2026-10-15');
+  // Korea meeting, LA fallback zone: prefix still wins.
+  assert.equal(resolveMeetingDate({ name: '261030 b2b rugged', meeting_at: '2026-10-30T05:19:27Z' }, 'America/Los_Angeles'), '2026-10-30');
+  // No prefix, or a prefix far from meeting_at, or an invalid date: zone fallback.
+  assert.equal(resolveMeetingDate({ name: 'Weekly sync', meeting_at: '2026-10-15T21:47:02Z' }, 'Asia/Seoul'), '2026-10-16');
+  assert.equal(resolveMeetingDate({ name: '250101_Old', meeting_at: '2026-10-15T21:47:02Z' }, 'UTC'), '2026-10-15');
+  assert.equal(resolveMeetingDate({ name: '261340_Bad', meeting_at: '2026-10-15T21:47:02Z' }, 'UTC'), '2026-10-15');
+});
+
+test('v2: company/team names in person slots become null; pilot aliases resolve', () => {
+  const r = new EntityResolver();
+  r.setOrgNames(['TecAce', 'Cloit']);
+  assert.equal(r.resolve('person', 'TecAce'), null);
+  assert.equal(r.resolve('person', 'TecAce Team'), null);
+  assert.equal(r.resolve('person', 'TecAce/Cloit'), null);
+  assert.equal(r.resolve('person', 'TecAce, Cloit'), null);
+  assert.equal(r.resolve('person', 'Hansoo Lee'), '이한수');
+  assert.equal(r.resolve('person', 'Chang Han'), '한창환');
+  assert.equal(r.resolve('person', 'Yung Kim'), '김융');
+  assert.equal(r.resolve('project', '리플러'), 'Niffler');
+  assert.equal(r.resolve('person', '삼성 영업팀장'), '삼성 영업팀장');
+  r.resolve('org', 'Unknown Corp');
+  assert.ok(!r.candidates.some((c) => c.type === 'org'));
+});
+
+test('v2: " / "-joined fragments must each be verbatim and in order', () => {
+  const idx = new TranscriptIndex(segments);
+  assert.equal(idx.check('결정 기록 기능을 먼저 / 좋습니다. 제가 다음 주').match, true);
+  assert.equal(idx.check('결정 기록 기능을 먼저 / 이런 말은 없었다').match, false);
 });

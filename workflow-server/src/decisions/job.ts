@@ -60,11 +60,31 @@ export function meetingDateOf(iso: string | null | undefined, timeZone: string):
   }
 }
 
+/**
+ * The meeting's calendar date. Note names start with "yymmdd_" computed in the RECORDER's time
+ * zone at ingest (buildNoteName), which is the only place that zone survives, so that prefix wins
+ * when it is within a day of meeting_at. Otherwise meeting_at/created_at in `timeZone`.
+ * (A fixed zone shifted LA meetings by a day in the first eval: 3 of 5 notes.)
+ */
+export function resolveMeetingDate(note: Pick<NoteForExtraction, 'name' | 'meeting_at' | 'created_at'>, timeZone: string): string | null {
+  const iso = note.meeting_at || note.created_at;
+  const fallback = meetingDateOf(iso, timeZone);
+  const m = /^(\d{2})(\d{2})(\d{2})(?:[_\s]|$)/.exec(note.name?.trim() ?? '');
+  if (m) {
+    const fromTitle = `20${m[1]}-${m[2]}-${m[3]}`;
+    const t = Date.parse(`${fromTitle}T12:00:00Z`);
+    const ref = iso ? Date.parse(iso) : NaN;
+    const valid = !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === fromTitle;
+    if (valid && (Number.isNaN(ref) || Math.abs(t - ref) <= 36 * 3600 * 1000)) return fromTitle;
+  }
+  return fallback;
+}
+
 export function prepareInput(note: NoteForExtraction, timeZone: string): PreparedInput | { error: string } {
   let segments = normalizeTranscript(note.diarization).filter((s) => s.text.trim());
   if (segments.length === 0) segments = normalizeTranscript(note.transcription ?? null);
   if (segments.length === 0) return { error: 'empty transcript' };
-  const meetingDate = meetingDateOf(note.meeting_at || note.created_at, timeZone);
+  const meetingDate = resolveMeetingDate(note, timeZone);
   if (!meetingDate) return { error: 'note has no meeting_at/created_at' };
 
   // Keep whole segments up to the cap, so evidence indexes stay aligned with what the model saw.

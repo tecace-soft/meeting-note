@@ -5,7 +5,8 @@
 // Matching is exact after a light normalization that cannot change meaning: Unicode NFC, case,
 // whitespace runs, and quote characters. An ellipsis ("..." / "…") inside a quote splits it into
 // parts that must each occur, in order. A leading "Speaker: " prefix is tolerated because the
-// model sees transcript lines in that form.
+// model sees transcript lines in that form. " / " is treated like an ellipsis: each fragment must still
+// be verbatim.
 //
 // Segment ids are "s<index>" into the note's diarization array (segments have no stable id of
 // their own yet). The handoff prefers diarized segment ids over the backfill's "@N" sentence
@@ -63,7 +64,8 @@ export class TranscriptIndex {
   check(evidence: string | null | undefined): EvidenceResult {
     if (isSummaryEvidence(evidence)) return { match: null, segmentIds: [] };
     const parts = (evidence as string)
-      .split(/\.{3,}|…/)
+      // Fragments joined by "..." / "…" (asked for) or " / " (seen in the pilot) must each occur, in order.
+      .split(/\.{3,}|…|\s\/\s/)
       .map(normalizeForMatch)
       .filter((p) => p.length > 0);
     if (parts.length === 0) return { match: null, segmentIds: [] };
