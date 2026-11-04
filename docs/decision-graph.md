@@ -61,14 +61,15 @@ Table names keep the handoff's `mn_` prefix. Differences:
 - `workflow-server/src/decisions/evidence.ts`: quote matching and segment ids
 - `workflow-server/src/decisions/store.ts`: payload builder, metrics, RPC write
 - `workflow-server/src/decisions/job.ts`: Job A (load, idempotency, extract, store, run log)
-- `workflow-server/eval/decision-graph.ts` (`npm run eval:decisions`): eval on a note list
+- `workflow-server/eval/decision-graph.ts` (`npm run eval:decisions`): eval on a note list (local, needs service-role + Gemini keys)
+- MCP tool `run_decision_extraction` (`workflow-server/src/mcp/tools/decisions.ts`): the same eval from any MCP client with no local setup. Owner's notes only, up to 3 per call, dry run by default (`dryRun:false` stores through the real job). Works while `DECISION_GRAPH_ENABLED` is off
 - Tests: `src/decisions/decisions.test.ts` (unit), `src/decisions/decision-graph-sql.test.ts` (migration on PGlite: RLS, sensitivity, idempotency, human_verified, cascade)
 
 ## 5. Rollout (in order)
 
 1. Apply the migration to the hosted DB. It only adds tables; nothing writes to them while the flag is off.
 2. Deploy the backend with the flag still off.
-3. Run `npm run eval:decisions -- --file gold.txt --model gemini-3.1-flash-lite`, and again with `--model gemini-2.5-flash-lite`, on the 20 gold meetings. Read-only.
+3. Run the eval on the 20 gold meetings with each lite model: through the MCP tool `run_decision_extraction` (dry run), or locally with `npm run eval:decisions -- --file gold.txt --model <model>`. Neither stores anything.
 4. Score decided precision and recall against the gold set by hand (or with a follow-up scorer). Check the automatic metrics: evidence match ≥ 0.95, schema failure < 2%.
 5. Pick the model, set `DECISION_GRAPH_MODEL`, set `DECISION_GRAPH_ENABLED=true`.
 6. Optional: backfill recent notes with `--write` (uses the production job with `force`).

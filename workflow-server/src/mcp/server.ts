@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerNoteResources } from './resources/noteResources.js';
 import { registerSpeakerResources } from './resources/speakerResources.js';
 import { registerContextTools } from './tools/context.js';
+import { registerDecisionTools } from './tools/decisions.js';
 import { registerEvaluationTools } from './tools/evaluation.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMemoryTools } from './tools/memory.js';
@@ -25,6 +26,7 @@ export function createMeetingNoteMcpServer(): McpServer {
   registerContextTools(server);
   registerMemoryTools(server);
   registerEvaluationTools(server);
+  registerDecisionTools(server);
   registerKnowledgeTools(server);
   registerProductDocsTools(server);
   registerNoteResources(server);

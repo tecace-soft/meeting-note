@@ -17,7 +17,7 @@ generated: true
 <!-- GENERATED:mcp-tools START -->
 > 이 영역은 `npm run docs:generate`로 MCP 서버의 등록된 툴에서 자동 생성됩니다. 손으로 편집하지 마세요.
 
-Meeting Note MCP 서버에 등록된 툴은 총 30개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
+Meeting Note MCP 서버에 등록된 툴은 총 31개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
 대부분의 툴은 공통 평가 필드(`user_intent`·`reason_for_tool_choice`는 필수, `expected_answer_type`는 선택)도 받지만, 모든 툴에 동일하게 적용되므로 아래에서는 생략했습니다.
 출력(응답) 형태·소유권·권한 범위는 서버 핸들러에서 결정되므로 이 자동 생성 영역에서는 다루지 않습니다.
 
@@ -368,6 +368,18 @@ Un-organize a meeting: remove a note from one of YOUR projects. The project must
 | --- | --- | --- | --- |
 | `noteId` | string | 필수 |  |
 | `projectId` | string | 필수 |  |
+
+### `run_decision_extraction`
+
+**Run Decision Extraction (eval)**
+
+Decision Graph evaluation tool. Runs decision extraction (Prompt A) on up to 3 notes YOU OWN and returns the structured decisions (status, decided_by, evidence quote) plus quality metrics: evidence match rate against the transcript, status distribution, decided ratio, latency and estimated cost. Default dryRun=true stores nothing. dryRun=false stores the result in the decision tables (re-running replaces unverified rows). Each note takes one model call over the full transcript (can take tens of seconds); call with one note at a time for long meetings. Only for evaluating or backfilling the Decision Graph, not for answering questions about meetings.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `noteIds` | string[] | 필수 |  |
+| `model` | enum | 선택 | Lite model to evaluate. Default: the configured decision model. |
+| `dryRun` | boolean | 선택 | Default true: return results without storing them. |
 
 ### `search`
 
