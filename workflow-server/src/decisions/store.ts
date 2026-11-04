@@ -76,6 +76,7 @@ export function buildExtractionPayload(extraction: DecisionExtraction, ctx: Buil
   const index = new TranscriptIndex(ctx.segments);
   const m = extraction.meeting;
   resolver.collectQualityNoteHints(m.quality_notes);
+  resolver.setOrgNames(['TecAce', 'Samsung', ...m.orgs, ...m.participants.map((p) => p.org ?? '').filter(Boolean)]);
 
   const person = (name: string | null) => resolver.resolve('person', name);
   const project = (name: string | null) => resolver.resolve('project', name);

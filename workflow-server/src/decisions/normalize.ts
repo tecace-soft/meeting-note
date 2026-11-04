@@ -19,11 +19,16 @@ export interface EntityDef {
 // "강성원(Samsung) ≠ 강사장(TecAce)" is enforced by keeping them as two separate entities with
 // no shared alias.
 // Assumption: Niffler is typed 'project' (the handoff does not say what it is).
+// 2026-11-04 pilot additions (romanized forms the model produced for people in the seed or the
+// requester): Hansoo Lee → 이한수, Chang Han → 한창환, Yung Kim → 김융. "리플러" is the Korean
+// transcription of Repler.
 export const SEED_ENTITIES: EntityDef[] = [
-  { type: 'project', canonical: 'Niffler', aliases: ['Ripler', 'Nippler', 'Repler'] },
+  { type: 'project', canonical: 'Niffler', aliases: ['Ripler', 'Nippler', 'Repler', '리플러', '니플러'] },
+  { type: 'person', canonical: '이한수', aliases: ['Hansoo Lee', 'Hans Lee', 'Hansoo', 'Hans'] },
+  { type: 'person', canonical: '한창환', aliases: ['Chang Han', 'Chang Han (한창환)'] },
   { type: 'person', canonical: 'Gene Kim', aliases: ['Gene', '김진', 'Gene Kim(김진)'], attrs: { korean_name: '김진' } },
   { type: 'person', canonical: 'Andrew Yoo', aliases: ['Andrew', '유영준', 'Andrew Yoo(유영준)'], attrs: { korean_name: '유영준' } },
-  { type: 'person', canonical: '김융', aliases: ['Yung'] },
+  { type: 'person', canonical: '김융', aliases: ['Yung', 'Yung Kim'] },
   { type: 'person', canonical: '하스티브', aliases: ['Steve Ha'] },
   { type: 'person', canonical: '김창희', aliases: ['Charlie Kim'] },
   { type: 'person', canonical: '김교탁', aliases: ['Kotak', 'Kyotak', '교탁', '김교탁(Samsung)'], attrs: { org: 'Samsung' } },
@@ -76,6 +81,9 @@ export class EntityResolver {
     if (raw == null) return null;
     const trimmed = raw.trim();
     if (!trimmed) return null;
+    // A person slot holding a company or team ("TecAce", "TecAce Team", "TecAce/Cloit") is not
+    // a person: store null rather than a fake owner.
+    if (type === 'person' && this.isGroupName(trimmed)) return null;
     const estimated = ESTIMATED.test(trimmed);
     const base = trimmed.replace(ESTIMATED, '').trim();
     if (isSpeakerLabel(base)) return trimmed;
@@ -83,6 +91,22 @@ export class EntityResolver {
     if (def) return estimated ? `${def.canonical} (추정)` : def.canonical;
     this.recordUnknown(type, base);
     return trimmed;
+  }
+
+  private orgKeys = new Set<string>();
+
+  /** Names that are organizations in this meeting; a person slot holding one becomes null. */
+  setOrgNames(names: string[]): void {
+    for (const n of names) if (n.trim()) this.orgKeys.add(key(n));
+  }
+
+  isGroupName(name: string): boolean {
+    const k = key(name);
+    if (this.orgKeys.has(k)) return true;
+    if (/(^|\s)(team|팀)$/i.test(k)) return true;
+    // "A/B", "A, B", "A / B" with any part being an org.
+    const parts = k.split(/\s*[/,]\s*/).filter(Boolean);
+    return parts.length > 1 && parts.some((p) => this.orgKeys.has(p) || /^(tecace|samsung)$/.test(p));
   }
 
   /** Canonical entity for a name, or undefined. Tries the full string, then without a "(...)" suffix. */
@@ -95,6 +119,8 @@ export class EntityResolver {
   }
 
   private recordUnknown(type: EntityType, raw: string): void {
+    // Org names are not curated as aliases; logging every company was pure noise in the pilot.
+    if (type === 'org') return;
     const k = `${type}|${key(raw)}`;
     if (this.seenCandidates.has(k)) return;
     this.seenCandidates.add(k);
