@@ -203,9 +203,9 @@
         "workflow-server/src/mcp/server.ts"
       ],
       "generated": true,
-      "verified_body_hash": "8ee598654e67638eabf6bc60111d2f903a804c79c5e1d4fefa78f7cd3dd13217",
-      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
-      "verified_at": "2026-10-20",
+      "verified_body_hash": "ca2489501267e44cd084955376f94a31f31a53f65854c3cbb160b8097fe82d2f",
+      "verified_revision": "663eb56f5e7fe65632517ed150fbe1c56872202c",
+      "verified_at": "2026-11-04",
       "verified_by": "docs:generate (generated)"
     },
     {

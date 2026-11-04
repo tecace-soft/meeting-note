@@ -7,6 +7,7 @@ import { supabase } from '../db/supabaseClient.js';
 import { formatTranscriptText, type TranscriptSegment } from '../parsers.js';
 import { extractAndStoreInsight, foldNoteIntoMemory } from '../memory.js';
 import { buildSpeakerContextFromSegments } from './speakerContext.js';
+import { runDecisionExtraction } from '../decisions/job.js';
 import type { SummarizeAudioInput } from './types.js';
 
 // Post-summary enrichment that does NOT change the returned summary: fold the note
@@ -49,6 +50,19 @@ export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: T
       });
     } catch (identifyError) {
       console.warn(`Auto speaker identify failed for note ${input.noteId}:`, identifyError);
+    }
+
+    // Decision Graph Job A (docs/decision-graph.md). Feature-flagged, off by default. Runs last
+    // so it sees any speaker names applied above; reads the note from the DB itself.
+    if (env.decisionGraphEnabled) {
+      const outcome = await runDecisionExtraction({
+        supabase,
+        apiKey: env.geminiApiKey,
+        noteId: input.noteId,
+        model: env.decisionGraphModel,
+        timeZone: env.decisionGraphTimeZone,
+      });
+      console.log(`[decision-graph] note=${input.noteId} ${outcome.status}${'reason' in outcome ? ` (${outcome.reason})` : ''}`);
     }
   } catch (finalizeError) {
     console.warn(`finalizeNoteMemory failed for note ${input.noteId}:`, finalizeError);
