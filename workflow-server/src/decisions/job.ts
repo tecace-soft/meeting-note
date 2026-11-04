@@ -14,9 +14,50 @@ import { calculateGeminiUsageCost } from '../costs.js';
 import { normalizeTranscript, type TranscriptSegment } from '../mcp/lib/transcript.js';
 import { buildSpeakerContextFromSegments } from '../pipeline/speakerContext.js';
 import { DECISION_PROMPT_VERSION, DECISION_SYSTEM_PROMPT, buildDecisionUserPrompt } from './prompt.js';
+import { refineDecisionStatuses, VERIFY_VERSION, type RefineResult, type RefinableDecision } from './verify.js';
+import { DECISION_STATUSES } from './schema.js';
 import { parseDecisionExtraction, type DecisionExtraction } from './schema.js';
 import { resolverFromStored } from './normalize.js';
-import { buildExtractionPayload, writeExtraction, type ExtractionMetrics } from './store.js';
+import { buildExtractionPayload, writeExtraction, type ExtractionMetrics, type ExtractionPayload } from './store.js';
+import type { EvidenceSegment } from './evidence.js';
+
+// What a stored run was produced by: the Prompt A version plus the status-refinement version.
+// Runs are idempotent on this string, so changing either re-extracts on the next run.
+export const DECISION_PIPELINE_VERSION = `${DECISION_PROMPT_VERSION}+${VERIFY_VERSION}`;
+
+/**
+ * Status refinement (verify.ts) on a built payload, then recount the status metrics. Shared by
+ * the job, the MCP eval tool and the eval script so all three measure the same pipeline.
+ */
+export async function refinePayload(input: {
+  apiKey: string;
+  model: string;
+  fallbackModels?: string[];
+  payload: ExtractionPayload;
+  metrics: ExtractionMetrics;
+  segments: EvidenceSegment[];
+}): Promise<{ metrics: ExtractionMetrics & { status_counts_before_refine: Record<string, number> }; refine: RefineResult }> {
+  const before = { ...input.metrics.status_counts };
+  const refine = await refineDecisionStatuses({
+    apiKey: input.apiKey,
+    model: input.model,
+    fallbackModels: input.fallbackModels,
+    decisions: input.payload.decisions as unknown as RefinableDecision[],
+    segments: input.segments,
+  });
+  const counts: Record<string, number> = Object.fromEntries(DECISION_STATUSES.map((st) => [st, 0]));
+  for (const d of input.payload.decisions) counts[d.status] += 1;
+  const n = input.payload.decisions.length;
+  return {
+    metrics: {
+      ...input.metrics,
+      status_counts: counts,
+      decided_ratio: n ? Math.round((counts.decided / n) * 1000) / 1000 : null,
+      status_counts_before_refine: before,
+    },
+    refine,
+  };
+}
 
 // flash-lite has a 1M-token window; ~600k chars of Korean/English is far below it and bounds
 // cost on pathological recordings. Truncation is recorded in quality_notes and metrics.
@@ -175,7 +216,7 @@ export async function runDecisionExtraction(input: {
   promptVersion?: string;
 }): Promise<RunOutcome> {
   const { supabase, noteId } = input;
-  const promptVersion = input.promptVersion ?? DECISION_PROMPT_VERSION;
+  const promptVersion = input.promptVersion ?? DECISION_PIPELINE_VERSION;
   try {
     if (!input.apiKey) return { status: 'skipped', reason: 'no Gemini API key' };
 
@@ -233,7 +274,7 @@ export async function runDecisionExtraction(input: {
       .eq('user_id', n.user_id);
     const resolver = resolverFromStored((storedEntities ?? []) as Array<{ type: string; canonical_name: string; aliases: string[] | null }>);
 
-    const { payload, metrics, aliasCandidates } = buildExtractionPayload(extracted.extraction, {
+    const built = buildExtractionPayload(extracted.extraction, {
       noteId,
       meetingDate: prepared.meetingDate,
       promptVersion,
@@ -241,9 +282,15 @@ export async function runDecisionExtraction(input: {
       segments: prepared.segments,
       resolver,
     });
+    const { payload, aliasCandidates } = built;
+    const { metrics, refine } = await refinePayload({
+      apiKey: input.apiKey, model: input.model, fallbackModels: [...STANDARD_FALLBACK_CHAIN], payload, metrics: built.metrics, segments: prepared.segments,
+    });
 
     const runMetrics = {
       ...metrics,
+      status_adjustments: refine.adjustments,
+      verifier: refine.verifier,
       latency_ms: extracted.latencyMs,
       transcript_truncated: prepared.truncated,
       model: extracted.model,
