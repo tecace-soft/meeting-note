@@ -71,23 +71,37 @@ Table names keep the handoff's `mn_` prefix. Differences:
 1. Apply the migration to the hosted DB. It only adds tables; nothing writes to them while the flag is off.
 2. Deploy the backend with the flag still off.
 3. Run the eval on the 20 gold meetings with each lite model: through the MCP tool `run_decision_extraction` (dry run), or locally with `npm run eval:decisions -- --file gold.txt --model <model>`. Neither stores anything.
-4. Score decided precision and recall against the gold set by hand (or with a follow-up scorer). Check the automatic metrics: evidence match ≥ 0.95, schema failure < 2%.
+4. Score the run against the gold set (§5.1). The review workbook computes decided precision and recall.
 5. Pick the model, set `DECISION_GRAPH_MODEL`, set `DECISION_GRAPH_ENABLED=true`.
 6. Optional: backfill recent notes with `--write` (uses the production job with `force`).
+
+### 5.1 Acceptance criteria (revised 2026-11-04, approved by Hans)
+
+The handoff's "evidence match ≥ 0.95 over all items" is replaced as follows.
+
+| Criterion | Gate | How |
+| --- | --- | --- |
+| Every `decided` / `customer_decided` row has a verbatim transcript quote | **Required, 100%** | Guaranteed by the evidence guard (`verify.ts`); a decided item without a matching quote cannot be stored |
+| Decided precision on the gold set | **Required, ≥ 0.85** | Gold-set review: final `decided` rows that the reviewer also marks `decided` |
+| Decision recall on the gold set | **Required, ≥ 0.80** | Gold-set review: extracted valid items / (extracted valid + missing) |
+| Schema failure rate | **Required, < 2%** | Run metrics |
+| Evidence match over all items (decisions, actions, issues) | Monitoring, ≥ 0.9 | Run metrics `evidence_match_rate`. It is no longer a gate: a non-matching quote on a non-decided item cannot create a false decision |
+| Per-meeting decided ratio > 0.7 | Monitoring | Logged warning |
+
+Gold set: 20 notes owned by Hans, extracted on 2026-11-04 with `decision-extract-v2+verify-v1`. The review workbook stays outside the repo because it contains meeting content.
 
 Monitoring: `mn_extraction_runs.metrics` has `status_counts`, `decided_ratio` (a warning is logged above 0.7 with at least 4 decisions), `evidence_match_rate`, `evidence_summary_rate`, latency, tokens and estimated cost. `alias_candidates` lists unknown names and the model's "alias 후보" hints for curating aliases.
 
 ## 6. Not in Phase 1
 
-- Phase 2 (P1): Job B linking (Prompt B, ≥ 0.7 confidence, `invalid_at`, owner notification), MCP tools (`get_decisions`, `get_decision_timeline`, `get_open_conflicts`, `explain_decision`), the "Decisions" tab with inline edit (sets `human_verified`, needs owner UPDATE policies).
+- Phase 2 (P1): Job B linking (Prompt B, ≥ 0.7 confidence, `invalid_at`, owner notification), MCP read and verify tools (plan: `docs/decision-graph-mcp-plan.md`), the "Decisions" tab with inline edit (sets `human_verified`, needs owner UPDATE policies).
 - Phase 3 (P2): Markdown export for AXKH, backfill import (`source = 'backfill'`).
 - Duplicate-recording detection (`duplicate_of`).
-- Gold-set scorer for decided precision and recall.
 
 ## 7. Open questions for Hans (from handoff §9, still open)
 
-1. Extraction model and per-meeting cost cap. Only the two lite models are allowed under DEC-0005; the eval reports estimated cost per meeting.
-2. The 20 gold meetings and the reviewer (Hans or 이주화).
+1. Extraction model: gemini-3.1-flash-lite after the pilot (§8). Cost is about $0.005 per meeting including the verifier; no cap has been set yet.
+2. Gold set: the 20 notes in §5.1 have been chosen. Hans reviews them.
 3. Sharing default: implemented as "inherit note visibility, sensitive → owner only". Owner + participants needs attendee oids.
 
 ## 8. Eval log
@@ -144,3 +158,22 @@ Response: a status-refinement step (`decisions/verify.ts`, `verify-v1`). It runs
 2. **Verifier pass.** One lite call per meeting re-judges each remaining decided item against ±4 transcript segments around its evidence. A verdict is applied only when it is lower and valid for the item's side. If the verifier fails, the guard result stands.
 
 The original model output stays in `output_json`. Every change is listed in the run metrics as `status_adjustments`, and the counts before refinement as `status_counts_before_refine`. Runs are versioned as `DECISION_PIPELINE_VERSION` = `decision-extract-v2+verify-v1`.
+
+### 2026-11-04: v2 + verify-v1, same 5 notes, then the 20-note gold set
+
+| Metric | v1 | v2 | v2+verify (5 notes) | v2+verify (20 notes) |
+| --- | --- | --- | --- | --- |
+| Schema/call failures | 0/5 | 0/5 | 0/5 | 0/20 |
+| Decisions extracted | 10 | 8 | 8 | 32 |
+| Labeled `decided` before refinement | 70% | 88% | 88% (7/8) | 91% (29/32) |
+| Stored as `decided` | 70% | 88% | **25% (2/8)** | **38% (12/32)** |
+| Decided rows with a verbatim quote | n/a | n/a | 2/2 | 12/12 |
+| Evidence match, all items | 0.69 | 0.83 | 0.83 | 0.80 (73/91) |
+| Cost per meeting | about $0.005 | about $0.005 | about $0.0055 | $0.003–0.011 |
+
+On the 5 notes, the reviewer-agent reading (not yet the human gold) is:
+- 5 of 6 downgrades look right.
+- One "already done" item went to `proposed`; `status_report` would be more accurate.
+- The 2 kept `decided` items are real instructions that were accepted.
+
+Human precision and recall are pending the gold-set review.
