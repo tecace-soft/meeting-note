@@ -91,6 +91,7 @@ MCP 서버 이름은 `meeting-note`다(`workflow-server/src/mcp/server.ts`).
 - `get_decisions` - 접근 가능한 회의의 결정 목록(status·이유·결정자·원문 인용·회의 링크). 프로젝트·사람·status·기간·텍스트로 필터. 기본은 decided·customer_decided·direction만.
 - `explain_decision` - 결정 하나의 전체 내용, 이유·대안·전제, 인용 주변 전사, 파생 action, 다른 회의 결정과의 연결.
 - `run_decision_extraction` - 평가·백필용(본인 소유 노트만, 기본 dry-run). 질문 답변용이 아니다.
+- `run_decision_backfill` - 본인 소유 노트 중 현재 파이프라인 버전으로 미처리된 노트를 한 번에 최대 25건 추출·저장(WRITE). `remaining`이 0이 될 때까지 반복 호출. 질문 답변용이 아니다.
 - 권한은 앱과 같다(노트 공유 범위 상속, 민감 회의는 소유자만). service_role 전용 SQL 함수가 적용한다.
 
 평가 (`tools/evaluation.ts`):

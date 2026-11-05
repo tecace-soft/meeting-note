@@ -255,3 +255,12 @@ Still wrong at item level:
 **Fresh held-out set 2** (10 notes never used for tuning; awaiting Hans's labels):
 - Schema/call failures: **1/10**. One note made flash-lite wrap the JSON object in an array on every attempt, and it reproduced on retry. Fixed in this PR: the parser unwraps that exact shape. In production the fallback model would also have run.
 - 9 notes extracted 13 decisions; 4 of them are stored as `decided`.
+
+**Held-out set 2 labels** (Hans, strict):
+- Decided precision **1.00 (4/4)**.
+- Critical errors: **0**.
+- Together with the v4 regression check on held-out set 1 (3/3), this passes §5.1. It is a small sample (7 decided items across the two sets), so production monitoring continues: decided ratio, `status_adjustments`, and human corrections through M3 `verify_decision`.
+
+**Rollout decision** (Hans, 2026-11-05):
+- Enable extraction for new notes: `DECISION_GRAPH_MODEL=gemini-3.1-flash-lite`, `DECISION_GRAPH_ENABLED=true`.
+- Load existing notes with the owner-scoped MCP tool `run_decision_backfill`. It runs up to 25 notes per call, 3 in parallel, and the caller repeats it until `remaining` is 0. Already processed and human-verified notes are safe.
