@@ -178,3 +178,24 @@ On the 5 notes, the reviewer-agent reading (not yet the human gold) is:
 - The 2 kept `decided` items are real instructions that were accepted.
 
 Human precision and recall are pending the gold-set review.
+
+### 2026-11-05: v3 + verify-v2 on the 20-note gold set (scored against Hans's labels)
+
+Items were matched to the gold labels by content. Two notes produced items that are not in the gold set; these are unlabeled and excluded.
+
+| Metric | v2+verify-v1 (reviewed run) | v3+verify-v2 | Target |
+| --- | --- | --- | --- |
+| Decided precision | 0.83 (10/12) | 0.79 (11/14) | ≥ 0.85 |
+| Decided recall (gold decided found as decided) | 0.83 (10/12) | **0.92 (11/12)** | — |
+| Gold items extracted at all | 32/32 | 30/32 | ≥ 0.80 |
+| Status accuracy on gold items | 0.69 | 0.66 | — |
+| Meeting kind fixed (Samsung → customer) | — | 3/3 | — |
+| Sensitivity → financial (2 gold cases) | — | 0/2 | — |
+
+- **The three v2 false negatives are fixed.**
+  - A re-quote rescued two items: "documented and agreed" and "맞아요, 그렇게 쓰셔야겠네요".
+  - The verifier now keeps "지원팀에서 결정을 냈다" as `customer_decided`.
+- **The remaining false positives** are single-speaker statements kept as `decided`: an opinion ("직접 하는 게 효과가 좋다고 생각합니다"), a pitch to the customer, and a customer system explanation that the model reattributed to TecAce.
+- **Run-to-run variance.** Two re-runs of the same notes produced different item sets: items appeared and disappeared, and item texts changed. With 12–14 decided items, one item moves precision by about 0.07. Treat differences under about 0.1 as noise.
+
+Response, verify-v3: a deterministic **agreement guard**. A final status needs an explicit decision or agreement marker in the verbatim quote, or a quote spanning at least two speakers. On this run it would lower the opinion and the pitch, giving an estimated precision of 11/12. This estimate was made by hand from the quotes and has not been measured. Validate it on the held-out notes, not this set.
