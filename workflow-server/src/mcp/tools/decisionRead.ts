@@ -116,6 +116,36 @@ export async function meetingDecisionsBlock(noteId: string): Promise<unknown> {
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD');
 
+export interface TimelineLink { new_decision: string; old_decision: string; rel: string; confidence: number | null; reason: string | null; reviewed: boolean }
+export interface TimelineAction { id: string; text: string; owner: string | null; due: string | null; from_decision: string | null; status: string }
+
+/**
+ * Chronological decision timeline (oldest first) with links, the decisions currently in force
+ * (final and not superseded), conflicts, and open actions that hang off superseded decisions.
+ * Pure: the tool feeds it rows from the visibility-checked SQL functions.
+ */
+export function buildTimeline(rows: DecisionRow[], links: TimelineLink[], actions: TimelineAction[]) {
+  const ordered = [...rows].sort((a, b) => (a.valid_from === b.valid_from ? a.seq - b.seq : a.valid_from < b.valid_from ? -1 : 1));
+  const inScope = new Set(ordered.map((r) => r.id));
+  const scopedLinks = links.filter((l) => inScope.has(l.new_decision) || inScope.has(l.old_decision));
+  const linksOf = (id: string) => scopedLinks
+    .filter((l) => l.new_decision === id || l.old_decision === id)
+    .map((l) => l.new_decision === id
+      ? { rel: l.rel, to: l.old_decision, direction: 'this → earlier', confidence: l.confidence, reason: l.reason }
+      : { rel: l.rel, from: l.new_decision, direction: 'later → this', confidence: l.confidence, reason: l.reason });
+  const superseded = new Set(ordered.filter((r) => r.invalid_at).map((r) => r.id));
+  return {
+    timeline: ordered.map((r) => ({ ...formatDecision(r), links: linksOf(r.id) })),
+    current: ordered
+      .filter((r) => (r.status === 'decided' || r.status === 'customer_decided') && !r.invalid_at)
+      .map((r) => ({ id: r.id, date: r.valid_from, statusLabel: STATUS_LABELS[r.status], text: r.text, meetingTitle: r.meeting_title })),
+    openConflicts: scopedLinks.filter((l) => l.rel === 'conflicts_with').map((l) => ({ newer: l.new_decision, older: l.old_decision, reason: l.reason, confidence: l.confidence })),
+    staleOpenActions: actions
+      .filter((a) => a.status === 'open' && a.from_decision && superseded.has(a.from_decision))
+      .map((a) => ({ id: a.id, text: a.text, owner: a.owner, due: a.due, fromDecision: a.from_decision, note: 'source decision was superseded; check whether this action is still needed' })),
+  };
+}
+
 export function registerDecisionReadTools(server: McpServer): void {
   server.registerTool(
     'get_decisions',
@@ -186,6 +216,69 @@ export function registerDecisionReadTools(server: McpServer): void {
         });
       } catch (error) {
         return errorResult(`get_decisions failed: ${(error as Error).message}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_decision_timeline',
+    {
+      title: 'Get Decision Timeline',
+      description: [
+        'Show how decisions on one topic evolved across meetings you can access: decisions in date order with their links (supersedes / revises / refines / confirms / resolves / conflicts_with), the decisions currently in force, open conflicts, and open actions whose source decision was later superseded.',
+        'Scope with projectId (one of your Meeting Note projects), projectName (extracted project name or alias), and/or query (text in the decision). At least one is required. Includes non-final items (proposals, directions) so the evolution is visible.',
+        STATUS_RULE,
+        'Links come from an automatic linking step (confidence >= 0.7); say so when you rely on one. If links is empty everywhere, linking may not have run yet for these notes.',
+      ].join(' '),
+      inputSchema: {
+        projectId: z.string().min(1).optional(),
+        projectName: z.string().min(1).max(100).optional(),
+        query: z.string().min(1).max(200).optional(),
+        from: dateString.optional(),
+        to: dateString.optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+    },
+    async ({ projectId, projectName, query, from, to, limit }) => {
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('get_decision_timeline needs a signed-in user.');
+      if (!projectId && !projectName && !query) return errorResult('Pass projectId, projectName or query.');
+      try {
+        let noteIds: string[] | null = null;
+        if (projectId) {
+          const { supabase } = getDataContext();
+          let q = supabase.from('note').select('id').contains('projects', [toIdValue(projectId)]).limit(500);
+          q = applyNoteAccessScope(q, await noteAccessFilter(userId));
+          const { data, error } = await q;
+          if (error) return errorResult(error.message);
+          noteIds = ((data as Array<{ id: string }>) ?? []).map((r) => String(r.id));
+          if (noteIds.length === 0) return jsonResult({ timeline: [], message: `No accessible notes in project ${projectId}.` });
+        }
+        const { rows, total } = await queryVisibleDecisions(userId, {
+          noteIds, statuses: null, from: from ?? null, to: to ?? null,
+          project: containsPattern(projectName), query: containsPattern(query),
+          includeSuperseded: true, limit: limit ?? 50,
+        });
+        const covered = await visibleRecordCount(userId, noteIds);
+        if (rows.length === 0) return jsonResult({ timeline: [], coverage: { notesWithDecisionData: covered }, message: covered === 0 ? NO_DATA_MESSAGE : 'No decisions match this scope.' });
+        const ids = rows.map((r) => r.id);
+        const { supabase } = getDataContext();
+        const [linksRes, actionsRes] = await Promise.all([
+          supabase.rpc('mn_visible_links', { p_user_id: userId, p_decision_ids: ids }),
+          supabase.rpc('mn_visible_actions', { p_user_id: userId, p_decision_ids: ids, p_note_ids: null }),
+        ]);
+        if (linksRes.error) return errorResult(linksRes.error.message);
+        if (actionsRes.error) return errorResult(actionsRes.error.message);
+        const built = buildTimeline(rows, (linksRes.data as TimelineLink[]) ?? [], (actionsRes.data as TimelineAction[]) ?? []);
+        return jsonResult({
+          rule: STATUS_RULE,
+          totalMatching: total,
+          truncated: total > rows.length,
+          ...built,
+          coverage: { notesWithDecisionData: covered },
+        });
+      } catch (error) {
+        return errorResult(`get_decision_timeline failed: ${(error as Error).message}`);
       }
     },
   );

@@ -18,7 +18,7 @@ type ToolCallback = (args: Record<string, unknown>, extra: unknown) => Promise<C
 const EVALUATION_TOOL_NAMES = new Set(['log_final_answer', 'search', 'fetch']);
 // Every other tool only reads, so it is annotated readOnlyHint for clients (ChatGPT) that use
 // it to skip write confirmations and to pick company-knowledge tools.
-const WRITE_TOOL_NAMES = new Set(['add_note_to_project', 'remove_note_from_project', 'log_final_answer', 'run_decision_extraction', 'run_decision_backfill']);
+const WRITE_TOOL_NAMES = new Set(['add_note_to_project', 'remove_note_from_project', 'log_final_answer', 'run_decision_extraction', 'run_decision_backfill', 'run_decision_linking']);
 const TRACKING_FIELD_DESCRIPTIONS = {
   user_intent: 'Required. Restate the user request or goal that caused this tool call. Include the relevant original phrasing when available.',
   reason_for_tool_choice: 'Required. Explain why this tool is the correct tool for the user request.',

@@ -5,6 +5,7 @@ import { GEMINI_2_5_FLASH_LITE, GEMINI_3_1_FLASH_LITE } from '../../gemini-model
 import { extractDecisions, prepareInput, refinePayload, runDecisionExtraction, DECISION_PIPELINE_VERSION, NOTE_EXTRACTION_SELECT, type NoteForExtraction } from '../../decisions/job.js';
 import { buildExtractionPayload } from '../../decisions/store.js';
 import { runDecisionBackfill, MAX_BACKFILL_BATCH } from '../../decisions/backfill.js';
+import { runLinkingBackfill } from '../../decisions/link.js';
 import { errorResult, jsonResult } from '../lib/formatters.js';
 import { getDataContext, getScopedUserId } from '../lib/supabase.js';
 
@@ -120,6 +121,27 @@ export function registerDecisionTools(server: McpServer): void {
         });
       } catch (error) {
         return errorResult(`run_decision_backfill failed: ${(error as Error).message}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    'run_decision_linking',
+    {
+      title: 'Run Decision Linking',
+      description:
+        'Decision Graph linking (WRITES data). For a batch of YOUR notes that already have decision data, compares their decisions with your earlier decisions and stores cross-meeting links (supersedes / revises / refines / confirms / resolves / conflicts_with, confidence >= 0.7); a superseded decision gets an end date but is never deleted. Oldest notes first; returns counts and how many remain. Call repeatedly until remaining is 0. limit defaults to 10 (max 25). Only for loading link data, not for answering questions.',
+      inputSchema: { limit: z.number().int().min(1).max(25).optional() },
+    },
+    async ({ limit }) => {
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('run_decision_linking needs a signed-in user (owner-scoped).');
+      if (!env.geminiApiKey) return errorResult('Gemini API key is not configured on the server.');
+      try {
+        const result = await runLinkingBackfill({ supabase: getDataContext().supabase, apiKey: env.geminiApiKey, userId, model: env.decisionGraphModel, limit });
+        return jsonResult({ ...result, next: result.remaining > 0 ? 'Call run_decision_linking again to continue.' : 'All notes with decision data are linked for this version.' });
+      } catch (error) {
+        return errorResult(`run_decision_linking failed: ${(error as Error).message}`);
       }
     },
   );

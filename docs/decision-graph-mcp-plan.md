@@ -5,7 +5,12 @@ Status (2026-11-05):
   - Migration `20261105120000_decision_graph_read_functions.sql`.
   - Tools `get_decisions` and `explain_decision` (`workflow-server/src/mcp/tools/decisionRead.ts`).
   - A `decisions` block in `get_meeting_brief`.
-- M2 and M3 are still plans.
+- **M2 is implemented (2026-11-06).**
+  - Migration `20261106120000_decision_graph_linking.sql`.
+  - Job B in `workflow-server/src/decisions/link.ts`. It runs after Job A in finalize, and the MCP tool `run_decision_linking` handles existing notes.
+  - `get_decision_timeline`.
+  - Notifications on conflicts are not built yet. Conflicts and stale actions are surfaced in the timeline instead.
+- M3 is still a plan.
 - The tools return a "no decision data yet" message until extraction is enabled and notes are backfilled.
 
 The plan below is from 2026-11-04. Requirements: handoff §5 (F4) and §3 rule 4. Design context: `docs/decision-graph.md`.

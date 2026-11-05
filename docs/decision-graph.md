@@ -264,3 +264,17 @@ Still wrong at item level:
 **Rollout decision** (Hans, 2026-11-05):
 - Enable extraction for new notes: `DECISION_GRAPH_MODEL=gemini-3.1-flash-lite`, `DECISION_GRAPH_ENABLED=true`.
 - Load existing notes with the owner-scoped MCP tool `run_decision_backfill`. It runs up to 25 notes per call, 3 in parallel, and the caller repeats it until `remaining` is 0. Already processed and human-verified notes are safe.
+
+### 2026-11-06: M2 linking (Job B)
+
+- **Candidates.** For each new decision, the owner's earlier decisions from other notes are scored by character-bigram Jaccard on "project + text", with a +0.3 bonus for the same project entity. The top 8 per decision go to the model, capped at 40 per note. Exact project matching was rejected because extracted project names are noisy.
+- **Prompt B** is the handoff text, adapted:
+  - It uses stored ids.
+  - It is told not to link to `status_report` or `info` items.
+  - The new meeting's references to past decisions are the primary evidence.
+- **Storage** goes through `mn_apply_decision_links`. It is service_role only and runs as one transaction per note.
+  - It checks: the same owner, the old decision is not later than the new one, a known relation, and confidence ≥ 0.7.
+  - It replaces only unreviewed LLM links from that note.
+  - It recomputes `invalid_at` as the earliest date of a superseding decision. `invalid_at` is cleared again if the supersedes link goes away. Rows are never deleted.
+  - Human-made or reviewed links are untouched.
+- Not evaluated yet. Next step: run linking on the backfilled notes, then review a sample of supersedes and conflicts links.

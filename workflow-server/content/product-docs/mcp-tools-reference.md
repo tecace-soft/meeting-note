@@ -17,7 +17,7 @@ generated: true
 <!-- GENERATED:mcp-tools START -->
 > 이 영역은 `npm run docs:generate`로 MCP 서버의 등록된 툴에서 자동 생성됩니다. 손으로 편집하지 마세요.
 
-Meeting Note MCP 서버에 등록된 툴은 총 34개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
+Meeting Note MCP 서버에 등록된 툴은 총 36개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
 대부분의 툴은 공통 평가 필드(`user_intent`·`reason_for_tool_choice`는 필수, `expected_answer_type`는 선택)도 받지만, 모든 툴에 동일하게 적용되므로 아래에서는 생략했습니다.
 출력(응답) 형태·소유권·권한 범위는 서버 핸들러에서 결정되므로 이 자동 생성 영역에서는 다루지 않습니다.
 
@@ -94,6 +94,21 @@ Return attachment metadata for a meeting note. This does not download file conte
 | 파라미터 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | `noteId` | string | 필수 |  |
+
+### `get_decision_timeline`
+
+**Get Decision Timeline**
+
+Show how decisions on one topic evolved across meetings you can access: decisions in date order with their links (supersedes / revises / refines / confirms / resolves / conflicts_with), the decisions currently in force, open conflicts, and open actions whose source decision was later superseded. Scope with projectId (one of your Meeting Note projects), projectName (extracted project name or alias), and/or query (text in the decision). At least one is required. Includes non-final items (proposals, directions) so the evolution is visible. Always present each item with its statusLabel. Only status "decided" or "customer_decided" is a final decision; never describe proposed/direction/deferred/info items as decided. Links come from an automatic linking step (confidence >= 0.7); say so when you rely on one. If links is empty everywhere, linking may not have run yet for these notes.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `projectId` | string | 선택 |  |
+| `projectName` | string | 선택 |  |
+| `query` | string | 선택 |  |
+| `from` | string | 선택 |  |
+| `to` | any | 선택 |  |
+| `limit` | integer | 선택 |  |
 
 ### `get_decisions`
 
@@ -421,6 +436,16 @@ Decision Graph evaluation tool. Runs decision extraction (Prompt A) on up to 3 n
 | `noteIds` | string[] | 필수 |  |
 | `model` | enum | 선택 | Lite model to evaluate. Default: the configured decision model. |
 | `dryRun` | boolean | 선택 | Default true: return results without storing them. |
+
+### `run_decision_linking`
+
+**Run Decision Linking**
+
+Decision Graph linking (WRITES data). For a batch of YOUR notes that already have decision data, compares their decisions with your earlier decisions and stores cross-meeting links (supersedes / revises / refines / confirms / resolves / conflicts_with, confidence >= 0.7); a superseded decision gets an end date but is never deleted. Oldest notes first; returns counts and how many remain. Call repeatedly until remaining is 0. limit defaults to 10 (max 25). Only for loading link data, not for answering questions.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `limit` | integer | 선택 |  |
 
 ### `search`
 
