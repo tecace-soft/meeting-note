@@ -14,6 +14,7 @@ From there the work moved up the value chain in a few broad waves:
 - Speaker identification: a context-based (not voiceprint) approach, backtested and tuned for within-roster discriminability rather than raw coverage.
 - MCP and connectors: the MCP server was merged into the backend process to cut hosting cost, then hardened for spec-correct OAuth / auth so Claude and ChatGPT can connect.
 - Private meeting knowledge: policy-gated extraction and durable private delivery of meeting knowledge, with project-scoped RLS tightened on the way.
+- Decision Graph (2026-11): per-meeting decisions with a strict 8-value status, verbatim evidence and cross-meeting links, tuned against a human-labeled gold set and held-out sets, then enabled in production and backfilled.
 
 For the per-commit detail of the most recent work, use `git log`; for deeper design rationale see the `*_DESIGN.md` files at the repo root.
 
