@@ -119,6 +119,12 @@ export function parseDecisionExtraction(raw: string): ParseResult {
   } catch (error) {
     return { ok: false, error: `invalid JSON: ${(error as Error).message.slice(0, 160)}` };
   }
+  // 2026-11-05 held-out: one note made flash-lite wrap the whole object in an array on every
+  // attempt ("[{ meeting, decisions, ... }]"). Unwrap exactly that shape; anything else still fails.
+  if (Array.isArray(json)) {
+    const wrapped = json.find((x) => x && typeof x === 'object' && !Array.isArray(x) && 'meeting' in (x as object));
+    if (wrapped) json = wrapped;
+  }
   const result = extractionSchema.safeParse(json);
   if (!result.success) {
     const first = result.error.issues[0];
