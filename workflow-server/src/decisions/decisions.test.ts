@@ -222,3 +222,19 @@ test('v2: " / "-joined fragments must each be verbatim and in order', () => {
   assert.equal(idx.check('결정 기록 기능을 먼저 / 좋습니다. 제가 다음 주').match, true);
   assert.equal(idx.check('결정 기록 기능을 먼저 / 이런 말은 없었다').match, false);
 });
+
+test('v3: side follows the decider organization (participants or seed alias attrs)', () => {
+  const json = JSON.parse(validJson());
+  json.meeting.participants.push({ name: '김현석', org: '삼성전자', role: '' });
+  json.decisions[0].by = '김현석';            // participant from Samsung → customer
+  json.decisions[1].by = 'Kotak';              // seed alias 김교탁, attrs.org Samsung → customer
+  json.decisions[1].status = 'decided';
+  json.decisions.push({ ...json.decisions[0], id: 'D-3', by: '이한수' }); // TecAce → unchanged
+  json.decisions.push({ ...json.decisions[0], id: 'D-4', by: 'Speaker C (추정)' }); // guess → unchanged
+  const parsed = parseDecisionExtraction(JSON.stringify(json));
+  assert.ok(parsed.ok);
+  const { payload, sideFixes } = buildExtractionPayload(parsed.value, { noteId: 'n1', meetingDate: '2026-11-04', promptVersion: 'v', runId: null, segments });
+  assert.deepEqual(payload.decisions.map((x) => x.side), ['customer', 'customer', 'tecace', 'tecace']);
+  assert.deepEqual(sideFixes.map((f) => f.id), ['D-1', 'D-2']);
+  assert.equal(payload.decisions[1].decided_by, '김교탁');
+});

@@ -17,7 +17,7 @@ generated: true
 <!-- GENERATED:mcp-tools START -->
 > 이 영역은 `npm run docs:generate`로 MCP 서버의 등록된 툴에서 자동 생성됩니다. 손으로 편집하지 마세요.
 
-Meeting Note MCP 서버에 등록된 툴은 총 31개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
+Meeting Note MCP 서버에 등록된 툴은 총 33개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
 대부분의 툴은 공통 평가 필드(`user_intent`·`reason_for_tool_choice`는 필수, `expected_answer_type`는 선택)도 받지만, 모든 툴에 동일하게 적용되므로 아래에서는 생략했습니다.
 출력(응답) 형태·소유권·권한 범위는 서버 핸들러에서 결정되므로 이 자동 생성 영역에서는 다루지 않습니다.
 
@@ -31,6 +31,16 @@ Organize a meeting: add an accessible note to one of YOUR projects. The note mus
 | --- | --- | --- | --- |
 | `noteId` | string | 필수 |  |
 | `projectId` | string | 필수 |  |
+
+### `explain_decision`
+
+**Explain Decision**
+
+Explain one decision by id (from get_decisions or get_meeting_brief): full text, why, trigger, rejected alternatives, assumptions, the verbatim evidence with the surrounding transcript lines, actions derived from it, and links to earlier/later decisions when recorded. Always present each item with its statusLabel. Only status "decided" or "customer_decided" is a final decision; never describe proposed/direction/deferred/info items as decided.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `decisionId` | string | 필수 |  |
 
 ### `fetch`
 
@@ -85,11 +95,30 @@ Return attachment metadata for a meeting note. This does not download file conte
 | --- | --- | --- | --- |
 | `noteId` | string | 필수 |  |
 
+### `get_decisions`
+
+**Get Decisions**
+
+List decisions recorded from meetings you can access, with status, reason, decision maker, verbatim transcript evidence and a link to the meeting. Use for "what did we decide about X / why / who decided". Filters: projectId (one of your Meeting Note projects), projectName (free text, matches extracted project names and aliases), person, status, from/to dates (YYYY-MM-DD), query (text in the decision or reason). By default returns final decisions plus directions (status decided, customer_decided, direction); pass status to include proposed/deferred/info/etc. Always present each item with its statusLabel. Only status "decided" or "customer_decided" is a final decision; never describe proposed/direction/deferred/info items as decided. If coverage.notesWithDecisionData is 0, decision data does not exist yet for that scope: say so and fall back to summaries; do not conclude nothing was decided.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `projectId` | string | 선택 |  |
+| `projectName` | string | 선택 |  |
+| `person` | string | 선택 |  |
+| `status` | enum[] | 선택 |  |
+| `from` | string | 선택 |  |
+| `to` | any | 선택 |  |
+| `query` | string | 선택 |  |
+| `includeSuperseded` | boolean | 선택 |  |
+| `limit` | integer | 선택 |  |
+| `cursor` | string | 선택 |  |
+
 ### `get_meeting_brief`
 
 **Get Meeting Brief**
 
-Return one compact meeting package with metadata, summary, optional transcript excerpt, speakers, and attachment metadata.
+Return one compact meeting package with metadata, summary, optional transcript excerpt, speakers, attachment metadata, and the meeting's recorded decisions (each with status and statusLabel; only decided/customer_decided are final).
 
 | 파라미터 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |

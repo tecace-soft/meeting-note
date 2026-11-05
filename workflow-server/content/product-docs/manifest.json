@@ -31,10 +31,10 @@
       "order": 2,
       "revision": "2026-10-20.1",
       "summary": "AI 에이전트가 Meeting Note와 작업하는 법: 문서를 먼저 읽고 명세에 맞춰 구현, MCP 툴 사용, 문서 발견 방법.",
-      "verified_body_hash": "c0167b57ce04d224cb4ea6b498bec088be57f2ca2995b1a7c2671053a89d59d1",
-      "verified_revision": "5ad3803de39fbcd760c6363fa3c78df98bfdad4b",
-      "verified_at": "2026-10-20",
-      "verified_by": "Andrew Yoo"
+      "verified_body_hash": "523a4234ff4703cfb22400568a3578116817cf8f651f37f0cb8f9cf2e926c4f2",
+      "verified_revision": "fa9b738d992d1082c322c7d3c27e70371ddbf333",
+      "verified_at": "2026-11-05",
+      "verified_by": "Claude (requested by Hans Lee)"
     },
     {
       "slug": "architecture",
@@ -203,9 +203,9 @@
         "workflow-server/src/mcp/server.ts"
       ],
       "generated": true,
-      "verified_body_hash": "ca2489501267e44cd084955376f94a31f31a53f65854c3cbb160b8097fe82d2f",
-      "verified_revision": "663eb56f5e7fe65632517ed150fbe1c56872202c",
-      "verified_at": "2026-11-04",
+      "verified_body_hash": "75e328d424eabce73281ad775f9c188ce438773dd5c903342b2637d4aa3d9763",
+      "verified_revision": "fa9b738d992d1082c322c7d3c27e70371ddbf333",
+      "verified_at": "2026-11-05",
       "verified_by": "docs:generate (generated)"
     },
     {

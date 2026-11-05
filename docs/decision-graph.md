@@ -63,6 +63,7 @@ Table names keep the handoff's `mn_` prefix. Differences:
 - `workflow-server/src/decisions/verify.ts`: status refinement after extraction (guards + verifier pass; only lowers a status)
 - `workflow-server/src/decisions/job.ts`: Job A (load, idempotency, extract, refine, store, run log)
 - `workflow-server/eval/decision-graph.ts` (`npm run eval:decisions`): eval on a note list (local, needs service-role + Gemini keys)
+- MCP read tools `get_decisions` and `explain_decision`, plus the `decisions` block in `get_meeting_brief` (`workflow-server/src/mcp/tools/decisionRead.ts`). They go through the service_role-only SQL functions in `20261105120000_decision_graph_read_functions.sql`, which mirror RLS; parity is tested in `decision-graph-read-sql.test.ts`
 - MCP tool `run_decision_extraction` (`workflow-server/src/mcp/tools/decisions.ts`): the same eval from any MCP client with no local setup. Owner's notes only, up to 3 per call, dry run by default (`dryRun:false` stores through the real job). Works while `DECISION_GRAPH_ENABLED` is off
 - Tests: `src/decisions/decisions.test.ts` (unit), `src/decisions/decision-graph-sql.test.ts` (migration on PGlite: RLS, sensitivity, idempotency, human_verified, cascade)
 

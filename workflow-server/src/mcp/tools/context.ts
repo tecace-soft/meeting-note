@@ -17,6 +17,7 @@ import {
   type NoteRow,
 } from '../lib/supabase.js';
 import { normalizeTranscript } from '../lib/transcript.js';
+import { meetingDecisionsBlock } from './decisionRead.js';
 
 interface AttachmentRow {
   id: string;
@@ -109,7 +110,7 @@ export function registerContextTools(_server: McpServer): void {
     'get_meeting_brief',
     {
       title: 'Get Meeting Brief',
-      description: 'Return one compact meeting package with metadata, summary, optional transcript excerpt, speakers, and attachment metadata.',
+      description: 'Return one compact meeting package with metadata, summary, optional transcript excerpt, speakers, attachment metadata, and the meeting\'s recorded decisions (each with status and statusLabel; only decided/customer_decided are final).',
       inputSchema: {
         noteId: z.string().min(1),
         includeTranscriptExcerpt: optionalBoolean(),
@@ -125,6 +126,7 @@ export function registerContextTools(_server: McpServer): void {
       const attachments = includeAttachments ? await fetchNoteAttachments(note.id) : { attachments: [] };
       const segments = includeTranscriptExcerpt ? normalizeTranscript(note.diarization) : [];
       const transcript = includeTranscriptExcerpt ? getNoteTranscriptText(note) : '';
+      const decisions = await meetingDecisionsBlock(String(note.id));
 
       return jsonResult({
         note: summarizeNote(note),
@@ -133,6 +135,7 @@ export function registerContextTools(_server: McpServer): void {
         speakers: segments.length ? [...new Set(segments.map((segment) => segment.speaker).filter(Boolean))] : undefined,
         attachments: attachments.attachments.map(summarizeAttachment),
         attachmentsUnavailableReason: attachments.unavailableReason,
+        decisions,
       });
     },
   );

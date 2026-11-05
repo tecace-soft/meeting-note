@@ -71,6 +71,8 @@ export function buildExtractionPayload(extraction: DecisionExtraction, ctx: Buil
   payload: ExtractionPayload;
   metrics: ExtractionMetrics;
   aliasCandidates: AliasCandidate[];
+  /** Deterministic side corrections (who decided belongs to a customer/partner org). */
+  sideFixes: Array<{ id: string; from: string; to: string; reason: string }>;
 } {
   const resolver = ctx.resolver ?? new EntityResolver();
   const index = new TranscriptIndex(ctx.segments);
@@ -117,6 +119,24 @@ export function buildExtractionPayload(extraction: DecisionExtraction, ctx: Buil
     ...evidenceOf(d.evidence),
   }));
   const decisionIds = new Set(decisions.map((d) => d.local_id));
+
+  // Side by the decider's organization (gold review 2026-11-05: a Samsung speaker's statement was
+  // stored as a TecAce decision). Org comes from this meeting's participant list or the seed alias
+  // attrs; only a TecAce-side item whose known decider is NOT TecAce is changed.
+  const orgOf = new Map<string, string>();
+  for (const p of m.participants) {
+    const name = person(p.name);
+    if (name && p.org) orgOf.set(name, p.org);
+  }
+  const sideFixes: Array<{ id: string; from: string; to: string; reason: string }> = [];
+  for (const d of decisions) {
+    if (d.side !== 'tecace' || !d.decided_by || /\(추정\)\s*$/.test(d.decided_by)) continue;
+    const org = orgOf.get(d.decided_by) ?? resolver.lookup('person', d.decided_by)?.attrs?.org;
+    if (!org || isTecAceOrg(org)) continue;
+    const to = isCustomerOrg(org) || m.meeting_kind === 'customer' ? 'customer' : 'partner';
+    sideFixes.push({ id: d.local_id, from: d.side, to, reason: `decided_by ${d.decided_by} belongs to ${org}` });
+    d.side = to;
+  }
 
   const actions = extraction.actions.map((a) => ({
     text: a.text,
@@ -195,7 +215,16 @@ export function buildExtractionPayload(extraction: DecisionExtraction, ctx: Buil
     evidence_matched: matched,
   };
 
-  return { payload, metrics, aliasCandidates: resolver.candidates };
+  return { payload, metrics, aliasCandidates: resolver.candidates, sideFixes };
+}
+
+export function isTecAceOrg(org: string): boolean {
+  return /tecace|tech\s*ace|테크에이스|텍에이스|택에이스/i.test(org);
+}
+
+/** Organizations that buy from TecAce. Everything else outside TecAce counts as a partner. */
+export function isCustomerOrg(org: string): boolean {
+  return /samsung|삼성/i.test(org);
 }
 
 function round(n: number): number {

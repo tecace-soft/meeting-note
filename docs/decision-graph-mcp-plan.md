@@ -1,6 +1,14 @@
 # Decision Graph: MCP plan (Phase 2)
 
-Status: plan only, nothing built yet (2026-11-04). Requirements: handoff §5 (F4) and §3 rule 4. Design context: `docs/decision-graph.md`.
+Status (2026-11-05):
+- **M1 is implemented.**
+  - Migration `20261105120000_decision_graph_read_functions.sql`.
+  - Tools `get_decisions` and `explain_decision` (`workflow-server/src/mcp/tools/decisionRead.ts`).
+  - A `decisions` block in `get_meeting_brief`.
+- M2 and M3 are still plans.
+- The tools return a "no decision data yet" message until extraction is enabled and notes are backfilled.
+
+The plan below is from 2026-11-04. Requirements: handoff §5 (F4) and §3 rule 4. Design context: `docs/decision-graph.md`.
 
 ## 1. Summary
 
