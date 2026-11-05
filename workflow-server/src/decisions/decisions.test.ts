@@ -121,7 +121,7 @@ test('payload: normalizes names, links actions to decisions, computes evidence m
   const { payload, metrics, aliasCandidates } = buildExtractionPayload(parsed.value, {
     noteId: 'note-abc-123', meetingDate: '2026-11-04', promptVersion: 'v-test', runId: null, segments,
   });
-  assert.equal(payload.id_prefix, '261104-noteab');
+  assert.match(payload.id_prefix, /^261104-[0-9a-f]{10}$/);
   assert.equal(payload.record.meeting_date, '2026-11-04');
   assert.deepEqual(payload.decisions[0].participants, ['Andrew Yoo']);
   assert.equal(payload.decisions[0].decided_by, '이한수');
@@ -185,9 +185,10 @@ test('prompt: keeps the fixed taxonomy and alias rules, and fences the transcrip
   assert.match(user, /transcript 일부만 입력/);
 });
 
-test('idPrefix: stable, alphanumeric, 6-char note part', () => {
-  assert.equal(idPrefix('8ebea35d-4125-4369', '2026-08-07'), '260807-8ebea3');
-  assert.equal(idPrefix('---', '2026-08-07'), '260807-note00');
+test('idPrefix: stable per note and distinct for same-day notes whose ids share a date prefix', () => {
+  assert.equal(idPrefix('260417lzywt2uiu1', '2026-04-17'), idPrefix('260417lzywt2uiu1', '2026-04-17'));
+  assert.notEqual(idPrefix('260417lzywt2uiu1', '2026-04-17'), idPrefix('260417rfbebf0x85', '2026-04-17'));
+  assert.match(idPrefix('8ebea35d-4125-4369', '2026-08-07'), /^260807-[0-9a-f]{10}$/);
 });
 
 test('v2: meeting date prefers the note-name yymmdd prefix (recorder zone) within a day of meeting_at', () => {
