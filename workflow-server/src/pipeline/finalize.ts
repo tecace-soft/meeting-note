@@ -8,6 +8,7 @@ import { formatTranscriptText, type TranscriptSegment } from '../parsers.js';
 import { extractAndStoreInsight, foldNoteIntoMemory } from '../memory.js';
 import { buildSpeakerContextFromSegments } from './speakerContext.js';
 import { runDecisionExtraction } from '../decisions/job.js';
+import { runDecisionLinking } from '../decisions/link.js';
 import type { SummarizeAudioInput } from './types.js';
 
 // Post-summary enrichment that does NOT change the returned summary: fold the note
@@ -64,6 +65,11 @@ export async function finalizeNoteMemory(input: SummarizeAudioInput, segments: T
         timeZone: typeof input.userTimeZone === 'string' && input.userTimeZone.trim() ? input.userTimeZone.trim() : env.decisionGraphTimeZone,
       });
       console.log(`[decision-graph] note=${input.noteId} ${outcome.status}${'reason' in outcome ? ` (${outcome.reason})` : ''}`);
+      // Job B: link this note's decisions to the owner's earlier ones (M2).
+      if (outcome.status === 'done') {
+        const linked = await runDecisionLinking({ supabase, apiKey: env.geminiApiKey, noteId: input.noteId, model: env.decisionGraphModel });
+        console.log(`[decision-graph] link note=${input.noteId} ${linked.status}${linked.status === 'done' ? ` inserted=${linked.inserted} superseded=${linked.superseded}` : ` (${linked.reason})`}`);
+      }
     }
   } catch (finalizeError) {
     console.warn(`finalizeNoteMemory failed for note ${input.noteId}:`, finalizeError);

@@ -49,10 +49,10 @@ test('tools/list exposes OpenAI-compatible search/fetch and readOnlyHint on read
   assert.deepEqual(byName.get('fetch')?.inputSchema.required, ['id']);
   assert.deepEqual(Object.keys(byName.get('fetch')?.inputSchema.properties ?? {}), ['id']);
 
-  for (const name of ['search', 'fetch', 'search_notes', 'get_note', 'get_decisions', 'explain_decision']) {
+  for (const name of ['search', 'fetch', 'search_notes', 'get_note', 'get_decisions', 'explain_decision', 'get_decision_timeline']) {
     assert.equal(byName.get(name)?.annotations?.readOnlyHint, true, `${name} should be read-only`);
   }
-  for (const name of ['add_note_to_project', 'remove_note_from_project', 'log_final_answer', 'run_decision_extraction', 'run_decision_backfill']) {
+  for (const name of ['add_note_to_project', 'remove_note_from_project', 'log_final_answer', 'run_decision_extraction', 'run_decision_backfill', 'run_decision_linking']) {
     assert.notEqual(byName.get(name)?.annotations?.readOnlyHint, true, `${name} writes and must not be read-only`);
   }
   // Other tools still carry the evaluation tracking fields.

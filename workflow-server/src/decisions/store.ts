@@ -1,6 +1,7 @@
 // Turns a validated Prompt A extraction into the payload of public.mn_replace_note_extraction
 // (normalized names, evidence match + segment ids, per-run metrics), and writes it.
 // buildExtractionPayload is pure so tests and the eval script run the exact production logic.
+import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DecisionExtraction, DecisionStatus } from './schema.js';
 import { DECISION_STATUSES } from './schema.js';
@@ -60,11 +61,16 @@ export interface BuildContext {
   resolver?: EntityResolver;
 }
 
-/** 'D:<yymmdd>-<note6>-<nn>' prefix part: '<yymmdd>-<note6>'. */
+/**
+ * 'D:<yymmdd>-<note10>-<nn>' prefix part: '<yymmdd>-<note10>'. note10 is the first 10 hex chars of
+ * SHA-256(note id), so it is unique per note. (Backfill 2026-11-05: the previous "first 6 chars of
+ * the note id" collided for older notes whose ids start with their own date, e.g. 260417xxxx, and
+ * the second note of a day failed with a duplicate primary key.)
+ */
 export function idPrefix(noteId: string, meetingDate: string): string {
   const yymmdd = meetingDate.replace(/-/g, '').slice(2, 8);
-  const note6 = noteId.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toLowerCase() || 'note00';
-  return `${yymmdd}-${note6}`;
+  const note10 = createHash('sha256').update(noteId, 'utf8').digest('hex').slice(0, 10);
+  return `${yymmdd}-${note10}`;
 }
 
 export function buildExtractionPayload(extraction: DecisionExtraction, ctx: BuildContext): {

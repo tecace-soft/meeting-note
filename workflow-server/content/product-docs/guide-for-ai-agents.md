@@ -90,6 +90,8 @@ MCP 서버 이름은 `meeting-note`다(`workflow-server/src/mcp/server.ts`).
 결정 기록 / Decision Graph (`tools/decisionRead.ts`, `tools/decisions.ts`):
 - `get_decisions` - 접근 가능한 회의의 결정 목록(status·이유·결정자·원문 인용·회의 링크). 프로젝트·사람·status·기간·텍스트로 필터. 기본은 decided·customer_decided·direction만.
 - `explain_decision` - 결정 하나의 전체 내용, 이유·대안·전제, 인용 주변 전사, 파생 action, 다른 회의 결정과의 연결.
+- `get_decision_timeline` - 프로젝트·주제별로 결정이 회의를 거쳐 어떻게 바뀌었는지(번복·수정·구체화·재확인·해결·충돌 연결), 현재 유효한 결정, 열린 충돌, 번복된 결정에 걸린 열린 action.
+- `run_decision_linking` - 본인 노트의 결정을 이전 결정과 연결(WRITE, 확신도 0.7 이상만 저장, 번복된 결정은 삭제하지 않고 종료일만 기록). `remaining`이 0이 될 때까지 반복. 질문 답변용이 아니다.
 - `run_decision_extraction` - 평가·백필용(본인 소유 노트만, 기본 dry-run). 질문 답변용이 아니다.
 - `run_decision_backfill` - 본인 소유 노트 중 현재 파이프라인 버전으로 미처리된 노트를 한 번에 최대 25건 추출·저장(WRITE). `remaining`이 0이 될 때까지 반복 호출. 질문 답변용이 아니다.
 - 권한은 앱과 같다(노트 공유 범위 상속, 민감 회의는 소유자만). service_role 전용 SQL 함수가 적용한다.
@@ -106,6 +108,7 @@ OpenAI 호환 (`tools/knowledge.ts`):
 - 한 회의의 세부는 `get_meeting_brief` / `get_notes_by_date`로 본다.
 - 호출자 본인의 여러 회의를 가로지른 이해는 `recall_personal_context`(넓게) 또는 `search_personal_context`(엔티티로 좁혀)로 본다.
 - "무엇을 결정했나 / 왜 그렇게 했나"는 `get_decisions` → `explain_decision`으로 답한다. 항목마다 `statusLabel`을 함께 말하고, `isFinal`이 false인 항목(제안·방향·보류·정보·고객 입장)을 "결정됐다"고 말하지 않는다.
+- "이 결정이 그 뒤에 어떻게 바뀌었나 / 지금 유효한 게 뭐냐"는 `get_decision_timeline`으로 답한다. 연결은 자동 판정(확신도 0.7 이상)이므로 근거로 쓸 때 그렇다고 밝히고, `supersededOn`이 있는 결정을 현재 유효하다고 말하지 않는다.
 - `get_decisions`의 `coverage.notesWithDecisionData`가 0이면 결정 데이터가 아직 없는 것이다. "결정이 없었다"가 아니라 "아직 추출되지 않았다"고 말하고 요약 툴로 보완한다.
 - 결과에 `hasMore` / `reachedNoteCap` / `segmentsTruncated` 같은 신호가 있으면 그대로 받아들이고, 잘린 답을 완전한 것처럼 제시하지 않는다.
 
