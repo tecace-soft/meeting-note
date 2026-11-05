@@ -15,13 +15,14 @@ The web app authenticates with Microsoft (MSAL / Azure AD) and integrates with M
 All note data lives in Supabase (Postgres) behind row-level security.
 An unauthenticated request is rejected, and an authenticated one sees only its own rows, never another user's data.
 
-On top of the raw pipeline the backend layers several higher-value subsystems: personal memory that folds across meetings, context-based speaker identification, a private meeting-knowledge extraction flow, and an MCP server so assistants (Claude, ChatGPT) can query a user's notes and personal context.
+On top of the raw pipeline the backend layers several higher-value subsystems: personal memory that folds across meetings, context-based speaker identification, a private meeting-knowledge extraction flow, a Decision Graph that stores each meeting's decisions with a fixed status and a verbatim quote and links them across meetings, and an MCP server so assistants (Claude, ChatGPT) can query a user's notes, decisions and personal context.
+The Decision Graph lives in `workflow-server/src/decisions/`, its tables are the `mn_*` migrations, and its design and eval log are in `docs/decision-graph.md` (DEC-0026).
 
 ## How the pieces fit
 
 The web frontend (`src/`) is the primary UI.
 It talks to the Node backend (`workflow-server/`) for the transcribe / summarize pipeline and to Supabase directly for reading note data under RLS.
-The backend also hosts the MCP server on the same process (merged to save hosting cost) and owns the edge-adjacent AI work (memory fold, insight extraction, speaker ID, knowledge extraction).
+The backend also hosts the MCP server on the same process (merged to save hosting cost) and owns the edge-adjacent AI work (memory fold, insight extraction, speaker ID, knowledge extraction, decision extraction and linking).
 Supabase (`supabase/`) holds the schema, migrations, RLS policies, and Deno edge functions used for token exchange, signed audio URLs, profile generation, and admin.
 A Flutter app (`meeting-note-mobile/`) is the mobile client, kept roughly at web parity.
 

@@ -1,6 +1,6 @@
 # Decision Graph: MCP plan (Phase 2)
 
-Status (2026-11-05):
+Status (2026-11-05, updated after the production rollout):
 - **M1 is implemented.**
   - Migration `20261105120000_decision_graph_read_functions.sql`.
   - Tools `get_decisions` and `explain_decision` (`workflow-server/src/mcp/tools/decisionRead.ts`).
@@ -10,8 +10,12 @@ Status (2026-11-05):
   - Job B in `workflow-server/src/decisions/link.ts`. It runs after Job A in finalize, and the MCP tool `run_decision_linking` handles existing notes.
   - `get_decision_timeline`.
   - Notifications on conflicts are not built yet. Conflicts and stale actions are surfaced in the timeline instead.
+- **M0 is done (2026-11-05).**
+  - Gold review passed §5.1 in `docs/decision-graph.md`.
+  - `DECISION_GRAPH_ENABLED=true` with `gemini-3.1-flash-lite` is live on the workflow-server.
+  - Hans's notes are backfilled and linked. Numbers are in `docs/decision-graph.md` §8, "2026-11-05: production rollout".
 - M3 is still a plan.
-- The tools return a "no decision data yet" message until extraction is enabled and notes are backfilled.
+- For notes without decision data (for example another user's notes that were never backfilled), the tools still return the "no decision data yet" message.
 
 The plan below is from 2026-11-04. Requirements: handoff §5 (F4) and §3 rule 4. Design context: `docs/decision-graph.md`.
 

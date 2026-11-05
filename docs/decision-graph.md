@@ -2,7 +2,12 @@
 
 Source of truth for requirements: the 2026-11-01 handoff from Hans Lee ("Meeting Note — Decision Graph 저장 기능 개발 요청": HANDOFF.md, schema.sql, Prompt A/B). This note maps the handoff onto the existing codebase and records what Phase 1 ships.
 
-**Status**: Phase 1 code merged behind `DECISION_GRAPH_ENABLED` (default off). Not enabled in production. The migration has not been applied to the hosted DB yet. No eval has run on real notes yet.
+**Status (2026-11-05)**: live in production.
+- Migrations `20261104120000`, `20261105120000` and `20261106120000` are applied to the hosted DB.
+- `DECISION_GRAPH_ENABLED=true` and `DECISION_GRAPH_MODEL=gemini-3.1-flash-lite` are set on the workflow-server. Confirmed through the MCP backfill response (`automaticExtractionEnabled: true`). New notes now run Job A (extraction) and then Job B (linking) in finalize.
+- Hans's existing notes are backfilled and linked (§8, 2026-11-05 rollout).
+- MCP read tools M1 and M2 are live (`docs/decision-graph-mcp-plan.md`). M3 (`verify_decision`, `find_action_items` on `mn_actions`), conflict notifications and the Decisions UI tab are not built.
+- The code default of the flag is still off, so other environments stay off until they set it.
 
 ## 1. Where it plugs in
 
@@ -74,7 +79,9 @@ Table names keep the handoff's `mn_` prefix. Differences:
 3. Run the eval on the 20 gold meetings with each lite model: through the MCP tool `run_decision_extraction` (dry run), or locally with `npm run eval:decisions -- --file gold.txt --model <model>`. Neither stores anything.
 4. Score the run against the gold set (§5.1). The review workbook computes decided precision and recall.
 5. Pick the model, set `DECISION_GRAPH_MODEL`, set `DECISION_GRAPH_ENABLED=true`.
-6. Optional: backfill recent notes with `--write` (uses the production job with `force`).
+6. Backfill existing notes with the MCP tool `run_decision_backfill`, then link them with `run_decision_linking`. Repeat each until `remaining` is 0.
+
+All six steps were done for production by 2026-11-05 (§8).
 
 ### 5.0 Definition of `decided` (strict, chosen by Hans 2026-11-05)
 
@@ -104,14 +111,15 @@ Monitoring: `mn_extraction_runs.metrics` has `status_counts`, `decided_ratio` (a
 
 ## 6. Not in Phase 1
 
-- Phase 2 (P1): Job B linking (Prompt B, ≥ 0.7 confidence, `invalid_at`, owner notification), MCP read and verify tools (plan: `docs/decision-graph-mcp-plan.md`), the "Decisions" tab with inline edit (sets `human_verified`, needs owner UPDATE policies).
+- Phase 2 (P1), done: Job B linking (Prompt B, ≥ 0.7 confidence, `invalid_at`) and the MCP read tools (`get_decisions`, `explain_decision`, `get_decision_timeline`).
+- Phase 2 (P1), still open: owner notification on conflicts, the MCP verify tool (M3 in `docs/decision-graph-mcp-plan.md`), and the "Decisions" tab with inline edit (sets `human_verified`, needs owner UPDATE policies).
 - Phase 3 (P2): Markdown export for AXKH, backfill import (`source = 'backfill'`).
 - Duplicate-recording detection (`duplicate_of`).
 
 ## 7. Open questions for Hans (from handoff §9, still open)
 
-1. Extraction model: gemini-3.1-flash-lite after the pilot (§8). Cost is about $0.005 per meeting including the verifier; no cap has been set yet.
-2. Gold set: the 20 notes in §5.1 have been chosen. Hans reviews them.
+1. Extraction model: decided, gemini-3.1-flash-lite (§8). Cost is about $0.005 per meeting including the verifier; no cap has been set yet.
+2. Gold set: closed. Hans reviewed the 20-note gold set and two held-out sets (§8).
 3. Sharing default: implemented as "inherit note visibility, sensitive → owner only". Owner + participants needs attendee oids.
 
 ## 8. Eval log
@@ -277,4 +285,39 @@ Still wrong at item level:
   - It replaces only unreviewed LLM links from that note.
   - It recomputes `invalid_at` as the earliest date of a superseding decision. `invalid_at` is cleared again if the supersedes link goes away. Rows are never deleted.
   - Human-made or reviewed links are untouched.
-- Not evaluated yet. Next step: run linking on the backfilled notes, then review a sample of supersedes and conflicts links.
+- Not evaluated yet. Next step: review a sample of supersedes and conflicts links (see the rollout entry below).
+
+### 2026-11-05: production rollout
+
+Aggregate numbers only, from the MCP tool responses. All notes are Hans's own.
+
+**Backfill** (`run_decision_backfill`, `decision-extract-v4+verify-v4`)
+
+| Run | Done | Skipped | Failed | Decisions stored | Decided stored |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 215 | 4 | 29 | 327 | 53 |
+| 2 (after the id fix) | 14 | 9 | 0 | 26 | 1 |
+
+- The 29 failures in run 1 were duplicate primary keys. Decision ids used a short note-id prefix that collided between notes. Fixed by hashing the full note id (`store.ts` `idPrefix`, PR #79); run 2 had 0 failures.
+- The 9 skips in run 2 were "another run is in progress": an overlapping call was still extracting them. A later call found 0 notes left, so all 9 finished. That call's counts were not captured, so the decision totals above are a lower bound.
+- Decided share across the stored decisions: about 15% (54 of 353 captured). This is in line with the strict definition (§5.0).
+
+**Linking** (`run_decision_linking`, `link-v1`), 11 calls
+
+| Processed | Done | Skipped | Failed | Links inserted | Decisions superseded |
+| --- | --- | --- | --- | --- | --- |
+| 259 | 244 | 15 | 0 | 132 | 35 |
+
+- The tool does not return skip reasons, so the cause of the 15 skips is unknown.
+- 35 of 132 links end an earlier decision. That share is high enough to check by sample before relying on `current` in `get_decision_timeline`.
+
+**Flag**: `automaticExtractionEnabled: true` was confirmed after the backfill.
+
+**Known issue**: `run_decision_backfill` computes `remaining` before it runs the batch. Notes skipped as "another run is in progress" leave no run row, so they are still eligible even when `remaining` is 0. Calling once more after 15 minutes picks them up.
+
+**Next**
+| Action | Owner | Due |
+| --- | --- | --- |
+| Spot-check about 10 supersedes / conflicts_with links via `get_decision_timeline` | Hans (Claude can draft a review sheet) | Before relying on `current` |
+| Confirm automatic extraction on a new recording (`get_meeting_brief` `decisions` block, or `[decision-graph]` lines in the Render log) | Hans | Next meeting |
+| M3: `verify_decision` and `find_action_items` on `mn_actions` | Dev | Not scheduled |

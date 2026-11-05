@@ -3,7 +3,7 @@ title: "변경 이력"
 slug: release-history
 section: "History"
 order: 1
-revision: "2026-10-20.1"
+revision: "2026-11-05.1"
 last_verified_commit: "56781a4be253a4edc98f56aaf3a53d14536ac96f"
 last_verified_at: "2026-10-13"
 source_of_truth: "repo code; manual verification 2026-10-13"
@@ -21,6 +21,13 @@ source_of_truth: "repo code; manual verification 2026-10-13"
 서비스마다 자기 git SHA를 `/version` 엔드포인트로 보고한다. 프론트엔드는 `public/version.json`(service, sha, branch, deployedAt)도 함께 싣는다.
 모바일 앱은 빌드 스크립트로 따로 버전을 매긴다(versionCode `10000 + commit count`, versionName `<market>-<sha>`). pubspec 업데이트 시 GitHub Action이 자동 태그를 단다.
 작성 시점 기준 프론트엔드는 `46fde17`(2026-10-12 배포)이다.
+
+## 2026-11-04 ~ 11-05 - Decision Graph(회의 결정 기록)
+
+- 요약이 끝난 노트에서 결정·action·이슈를 추출해 `mn_*` 테이블에 저장(Job A). status는 8종으로 고정하고, `decided`는 엄격 기준(조건 없는 명시적 확정)만 인정한다. 확정 항목은 전사 원문 인용이 있어야 저장된다.
+- 회의 사이 결정 연결(Job B): 번복·수정·구체화·재확인·해결·충돌. 확신도 0.7 이상만 저장하고, 번복된 결정은 지우지 않고 종료일만 남긴다.
+- MCP 툴 추가: `get_decisions`, `explain_decision`, `get_decision_timeline`, `get_meeting_brief`의 `decisions` 블록. 백필·평가용 `run_decision_backfill`, `run_decision_linking`, `run_decision_extraction`. 권한은 노트 공유 범위를 따르고 민감 회의는 소유자만 본다.
+- 2026-11-05 운영 활성화(`DECISION_GRAPH_ENABLED=true`). 기존 노트 백필과 연결 완료(소유자 Hans). 결정 검증 툴(`verify_decision`)과 결정 탭 UI는 아직 없다.
 
 ## 2026-10-15 ~ 10-20 - 인증 하드닝, 원클릭 AXKH 전송
 
