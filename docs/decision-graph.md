@@ -236,3 +236,22 @@ Response, prompt `decision-extract-v4` + verify-v4:
 - Pilot/POC/commission talks are `customer-commercial`.
 
 By hand on the held-out quotes, the veto would lower all 3 false positives and keep the 3 true positives. That would be precision 3/3, but it is not yet measured. The next held-out run must use notes that are new to all tuning so far.
+
+### 2026-11-05: v4 + verify-v4
+
+**Regression check on held-out set 1** (10 notes; scored against Hans's strict labels, though these notes were used for the v4 tuning):
+
+| Metric | v3 + verify-v3 | v4 + verify-v4 |
+| --- | --- | --- |
+| Decided precision | 0.50 (3/6) | **1.00 (3/3)** |
+| Decided recall | 3/3 | 3/3 |
+| Critical errors | 0 | 0 |
+
+Still wrong at item level:
+- A personal remark is still extracted, but as `direction`. It is no longer `decided`.
+- The two pitch-rehearsal items are still extracted, as `direction`.
+- One status report came out as `direction`.
+
+**Fresh held-out set 2** (10 notes never used for tuning; awaiting Hans's labels):
+- Schema/call failures: **1/10**. One note made flash-lite wrap the JSON object in an array on every attempt, and it reproduced on retry. Fixed in this PR: the parser unwraps that exact shape. In production the fallback model would also have run.
+- 9 notes extracted 13 decisions; 4 of them are stored as `decided`.

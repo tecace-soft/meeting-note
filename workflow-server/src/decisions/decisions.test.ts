@@ -238,3 +238,10 @@ test('v3: side follows the decider organization (participants or seed alias attr
   assert.deepEqual(sideFixes.map((f) => f.id), ['D-1', 'D-2']);
   assert.equal(payload.decisions[1].decided_by, '김교탁');
 });
+
+test('schema: unwraps a top-level array that contains the extraction object; other arrays still fail', () => {
+  const wrapped = parseDecisionExtraction('[' + validJson() + ']');
+  assert.equal(wrapped.ok, true);
+  assert.equal(parseDecisionExtraction('[{"foo": 1}]').ok, false);
+  assert.equal(parseDecisionExtraction('[]').ok, false);
+});
