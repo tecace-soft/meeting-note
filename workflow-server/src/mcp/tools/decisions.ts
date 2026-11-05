@@ -4,6 +4,7 @@ import { env } from '../../config/env.js';
 import { GEMINI_2_5_FLASH_LITE, GEMINI_3_1_FLASH_LITE } from '../../gemini-models.js';
 import { extractDecisions, prepareInput, refinePayload, runDecisionExtraction, DECISION_PIPELINE_VERSION, NOTE_EXTRACTION_SELECT, type NoteForExtraction } from '../../decisions/job.js';
 import { buildExtractionPayload } from '../../decisions/store.js';
+import { runDecisionBackfill, MAX_BACKFILL_BATCH } from '../../decisions/backfill.js';
 import { errorResult, jsonResult } from '../lib/formatters.js';
 import { getDataContext, getScopedUserId } from '../lib/supabase.js';
 
@@ -84,6 +85,42 @@ export function registerDecisionTools(server: McpServer): void {
         });
       }
       return jsonResult({ dryRun: !write, results });
+    },
+  );
+
+  server.registerTool(
+    'run_decision_backfill',
+    {
+      title: 'Run Decision Backfill',
+      description:
+        'Decision Graph backfill (WRITES data). Extracts and stores decisions for a batch of YOUR OWN notes that have not been processed with the current pipeline version, newest first, and returns counts plus how many notes remain. Call repeatedly until remaining is 0. Safe to repeat: already-processed notes are skipped and human-verified rows are never overwritten. limit defaults to 10 (max 25); one call can take a minute or two. Optional from/to (YYYY-MM-DD) restrict by note creation date. Only for loading decision data, not for answering questions.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(MAX_BACKFILL_BATCH).optional(),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      },
+    },
+    async ({ limit, from, to }) => {
+      const userId = getScopedUserId();
+      if (!userId) return errorResult('run_decision_backfill needs a signed-in user (owner-scoped).');
+      if (!env.geminiApiKey) return errorResult('Gemini API key is not configured on the server.');
+      try {
+        const result = await runDecisionBackfill({
+          supabase: getDataContext().supabase,
+          apiKey: env.geminiApiKey,
+          userId,
+          model: env.decisionGraphModel,
+          timeZone: env.decisionGraphTimeZone,
+          limit, from: from ?? null, to: to ?? null,
+        });
+        return jsonResult({
+          ...result,
+          automaticExtractionEnabled: env.decisionGraphEnabled,
+          next: result.remaining > 0 ? 'Call run_decision_backfill again to continue.' : 'All notes in scope are processed for this pipeline version.',
+        });
+      } catch (error) {
+        return errorResult(`run_decision_backfill failed: ${(error as Error).message}`);
+      }
     },
   );
 }

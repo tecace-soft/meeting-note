@@ -17,7 +17,7 @@ generated: true
 <!-- GENERATED:mcp-tools START -->
 > 이 영역은 `npm run docs:generate`로 MCP 서버의 등록된 툴에서 자동 생성됩니다. 손으로 편집하지 마세요.
 
-Meeting Note MCP 서버에 등록된 툴은 총 33개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
+Meeting Note MCP 서버에 등록된 툴은 총 34개입니다. 아래 표는 각 툴의 이름, 설명, 입력 파라미터만 다룹니다.
 대부분의 툴은 공통 평가 필드(`user_intent`·`reason_for_tool_choice`는 필수, `expected_answer_type`는 선택)도 받지만, 모든 툴에 동일하게 적용되므로 아래에서는 생략했습니다.
 출력(응답) 형태·소유권·권한 범위는 서버 핸들러에서 결정되므로 이 자동 생성 영역에서는 다루지 않습니다.
 
@@ -397,6 +397,18 @@ Un-organize a meeting: remove a note from one of YOUR projects. The project must
 | --- | --- | --- | --- |
 | `noteId` | string | 필수 |  |
 | `projectId` | string | 필수 |  |
+
+### `run_decision_backfill`
+
+**Run Decision Backfill**
+
+Decision Graph backfill (WRITES data). Extracts and stores decisions for a batch of YOUR OWN notes that have not been processed with the current pipeline version, newest first, and returns counts plus how many notes remain. Call repeatedly until remaining is 0. Safe to repeat: already-processed notes are skipped and human-verified rows are never overwritten. limit defaults to 10 (max 25); one call can take a minute or two. Optional from/to (YYYY-MM-DD) restrict by note creation date. Only for loading decision data, not for answering questions.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `limit` | integer | 선택 |  |
+| `from` | string | 선택 |  |
+| `to` | string | 선택 |  |
 
 ### `run_decision_extraction`
 
