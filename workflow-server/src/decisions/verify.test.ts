@@ -122,3 +122,25 @@ test('v3 agreement guard: marker or two speakers keeps decided; single-speaker o
   assert.equal(hasAgreementMarker('결정이 필요한 부분이라 오늘은 답을 드리기 힘들 것 같고'), false);
   assert.equal(evidenceSpeakerCount(['s2', 's3', 's99'], segs), 2);
 });
+
+test('v4 strict: hedged commitments are lowered; polite advice + acceptance stays decided', async () => {
+  const { applyAgreementGuard, hasCommitmentHedge } = await import('./verify.js');
+  const segs = [
+    { speaker: 'A', text: '클라이언트 앱만 만들어주면 쉽지.' },
+    { speaker: 'B', text: '맞아요. 클라이언트만 만드는 거예요. 저는 그렇게 보고 있어요.' },
+    { speaker: 'C', text: '오케이, 그런 식으로 결정될 것 같아요.' },
+    { speaker: 'D', text: '기술적인 리더십을 내세우면 문제가 생길 수 있을 것 같아요.' },
+    { speaker: 'E', text: '알겠습니다.' },
+  ];
+  const items = [
+    d({ local_id: 'view', evidence_quote: '클라이언트 앱만 만들어주면 쉽지. 맞아요. 클라이언트만 만드는 거예요. 저는 그렇게 보고 있어요.', evidence_segment_ids: ['s0', 's1'] }),
+    d({ local_id: 'guess', evidence_quote: segs[2].text, evidence_segment_ids: ['s1', 's2'] }),
+    d({ local_id: 'or-something', evidence_quote: 'there will be a commission, like 20 or something. I totally agree with that.', evidence_segment_ids: ['s0', 's1'] }),
+    d({ local_id: 'advice-accepted', evidence_quote: '기술적인 리더십을 내세우면 문제가 생길 수 있을 것 같아요. 알겠습니다.', evidence_segment_ids: ['s3', 's4'] }),
+  ];
+  const adj = applyAgreementGuard(items, segs);
+  assert.deepEqual(items.map((i) => `${i.local_id}:${i.status}`), ['view:direction', 'guess:direction', 'or-something:direction', 'advice-accepted:decided']);
+  assert.ok(adj.every((a) => a.reason.includes('hedged')));
+  assert.equal(hasCommitmentHedge('그 정도면 괜찮을 것 같아요'), false);
+  assert.equal(hasCommitmentHedge('아마 그쪽으로 다 들어갈 것 같아요'), true);
+});
