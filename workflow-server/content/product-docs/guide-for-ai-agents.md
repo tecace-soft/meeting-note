@@ -71,7 +71,7 @@ MCP 서버 이름은 `meeting-note`다(`workflow-server/src/mcp/server.ts`).
 - `get_speaker_segments` - 화자 이름으로 세그먼트 검색(단일 노트 또는 접근 가능 노트 전체, 노트/세그먼트 상한 신호 포함).
 
 컨텍스트 / 프로젝트 (`tools/context.ts`, `tools/projects.ts`):
-- `get_meeting_brief` - 메타데이터·요약·(옵션)전사 발췌·화자·첨부 메타를 담은 단일 회의 패키지.
+- `get_meeting_brief` - 메타데이터·요약·(옵션)전사 발췌·화자·첨부 메타·그 회의의 기록된 결정(status 포함)을 담은 단일 회의 패키지.
 - `get_attachment_context` - 첨부 메타데이터(파일 내용 다운로드 아님).
 - `get_project_timeline` - 프로젝트 관련 회의를 시간순으로.
 - `find_action_items` - note_insight 인덱스(owner/due/status) 우선, 미인덱스 노트는 요약 텍스트 휴리스틱 fallback.
@@ -87,6 +87,12 @@ MCP 서버 이름은 `meeting-note`다(`workflow-server/src/mcp/server.ts`).
 - `recall_personal_context` - 로그인 사용자 자신의 누적 개인 메모리(진행 프로젝트·협업자·본인 미결 커밋먼트·과거 결정 이유). 폭넓은 "요즘 뭐 했지" 질문용. 엄격히 본인 전용.
 - `search_personal_context` - 특정 엔티티/토픽으로 개인 메모리를 좁혀 검색. 결정적 키워드/엔티티 필터.
 
+결정 기록 / Decision Graph (`tools/decisionRead.ts`, `tools/decisions.ts`):
+- `get_decisions` - 접근 가능한 회의의 결정 목록(status·이유·결정자·원문 인용·회의 링크). 프로젝트·사람·status·기간·텍스트로 필터. 기본은 decided·customer_decided·direction만.
+- `explain_decision` - 결정 하나의 전체 내용, 이유·대안·전제, 인용 주변 전사, 파생 action, 다른 회의 결정과의 연결.
+- `run_decision_extraction` - 평가·백필용(본인 소유 노트만, 기본 dry-run). 질문 답변용이 아니다.
+- 권한은 앱과 같다(노트 공유 범위 상속, 민감 회의는 소유자만). service_role 전용 SQL 함수가 적용한다.
+
 평가 (`tools/evaluation.ts`):
 - `log_final_answer` - 선택 사항. 최종 사용자 응답 품질 평가를 위해 최종 답을 기록.
 
@@ -98,6 +104,8 @@ OpenAI 호환 (`tools/knowledge.ts`):
 - 특정 타인이 한 일(담당자 귀속 사실)은 `find_action_items` / `search_notes`로 찾는다. 개인 메모리 툴로 답하지 않는다.
 - 한 회의의 세부는 `get_meeting_brief` / `get_notes_by_date`로 본다.
 - 호출자 본인의 여러 회의를 가로지른 이해는 `recall_personal_context`(넓게) 또는 `search_personal_context`(엔티티로 좁혀)로 본다.
+- "무엇을 결정했나 / 왜 그렇게 했나"는 `get_decisions` → `explain_decision`으로 답한다. 항목마다 `statusLabel`을 함께 말하고, `isFinal`이 false인 항목(제안·방향·보류·정보·고객 입장)을 "결정됐다"고 말하지 않는다.
+- `get_decisions`의 `coverage.notesWithDecisionData`가 0이면 결정 데이터가 아직 없는 것이다. "결정이 없었다"가 아니라 "아직 추출되지 않았다"고 말하고 요약 툴로 보완한다.
 - 결과에 `hasMore` / `reachedNoteCap` / `segmentsTruncated` 같은 신호가 있으면 그대로 받아들이고, 잘린 답을 완전한 것처럼 제시하지 않는다.
 
 ## 연결 방법
