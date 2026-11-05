@@ -18,6 +18,9 @@
 //  3. Evidence guard (no model call, also when the verifier failed): a decided/customer_decided
 //     item still without a verbatim quote drops to direction/customer_stated. "No verifiable
 //     quote, no decided."
+//  4. Agreement guard (no model call): a decided/customer_decided item must show agreement in its
+//     verbatim quote, either as explicit decision wording or as turns from at least two speakers.
+//     Otherwise it drops to direction/customer_stated.
 //
 // The model's original output stays in mn_extraction_runs.output_json; every change is listed in
 // the run metrics (status_adjustments).
@@ -28,7 +31,10 @@ import { calculateGeminiUsageCost } from '../costs.js';
 import { TranscriptIndex, normalizeForMatch, type EvidenceSegment } from './evidence.js';
 import type { DecisionStatus } from './schema.js';
 
-export const VERIFY_VERSION = 'verify-v2';
+//  - verify-v3 (2026-11-05 v3 gold re-run): decided recall rose to 11/12, but 3 single-speaker
+//    statements (an opinion, a pitch, a plan) were still kept as decided. Step 4 adds a
+//    deterministic agreement guard.
+export const VERIFY_VERSION = 'verify-v3';
 
 const TECACE_STATUSES = ['decided', 'direction', 'proposed', 'deferred', 'status_report', 'info'] as const;
 const OTHER_SIDE_STATUSES = ['customer_decided', 'customer_stated'] as const;
@@ -55,7 +61,7 @@ export interface StatusAdjustment {
   id: string;
   from: DecisionStatus;
   to: DecisionStatus;
-  by: 'side-guard' | 'evidence-guard' | 'verifier' | 'requote';
+  by: 'side-guard' | 'evidence-guard' | 'verifier' | 'requote' | 'agreement-guard';
   reason: string;
 }
 
@@ -87,6 +93,43 @@ export function applyEvidenceGuard(decisions: RefinableDecision[]): StatusAdjust
       out.push({ id: d.local_id, from: d.status, to, by: 'evidence-guard', reason: 'no verbatim agreement quote in the transcript' });
       d.status = to;
     }
+  }
+  return out;
+}
+
+// Explicit decision/agreement wording. A quote that has it can stand on one speaker ("하기로 했다",
+// "합의가 되어 있다", "동의를 받아서" report an agreement); otherwise agreement must be visible as
+// turns from at least two speakers.
+const AGREEMENT_MARKERS = /합의|확정|동의|승인|하기로\s*(했|함|하죠|합시다|결정)|합시다|하시죠|그렇게\s*(하겠|하시|하죠|합|가|쓰|해)|그대로\s*두시죠|결정(을\s*(냈|했)|했|됐|되었|하였)|\bagreed?\b|\blet'?s\b|\bdecided\b|\bgo with\b/i;
+
+export function hasAgreementMarker(quote: unknown): boolean {
+  return typeof quote === 'string' && AGREEMENT_MARKERS.test(quote);
+}
+
+/** Distinct speakers across the item's evidence segments. */
+export function evidenceSpeakerCount(segmentIds: unknown, segments: EvidenceSegment[]): number {
+  const ids = Array.isArray(segmentIds) ? segmentIds : [];
+  const speakers = new Set<string>();
+  for (const id of ids) {
+    const n = Number(String(id).replace(/^s/, ''));
+    if (Number.isInteger(n) && n >= 0 && n < segments.length) speakers.add(segments[n].speaker.trim().toLowerCase());
+  }
+  return speakers.size;
+}
+
+/**
+ * Step 4. A final status needs a visible agreement: an explicit decision marker in the quote, or
+ * a quote spanning at least two speakers. Otherwise decided → direction (customer_decided →
+ * customer_stated). Mutates in place.
+ */
+export function applyAgreementGuard(decisions: RefinableDecision[], segments: EvidenceSegment[]): StatusAdjustment[] {
+  const out: StatusAdjustment[] = [];
+  for (const d of decisions) {
+    if (!isFinal(d.status)) continue;
+    if (hasAgreementMarker(d.evidence_quote) || evidenceSpeakerCount(d.evidence_segment_ids, segments) >= 2) continue;
+    const to: DecisionStatus = d.status === 'decided' ? 'direction' : 'customer_stated';
+    out.push({ id: d.local_id, from: d.status, to, by: 'agreement-guard', reason: 'quote shows neither an agreement marker nor a second speaker' });
+    d.status = to;
   }
   return out;
 }
@@ -270,5 +313,6 @@ export async function refineDecisionStatuses(input: {
     }
   }
   adjustments.push(...applyEvidenceGuard(input.decisions));
+  adjustments.push(...applyAgreementGuard(input.decisions, input.segments));
   return { adjustments, verifier };
 }

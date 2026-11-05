@@ -92,3 +92,33 @@ test('refine: no final items → no model call, evidence guard still runs', asyn
   assert.equal(r.verifier.ran, false);
   assert.deepEqual(items.map((i) => i.status), ['direction', 'info']);
 });
+
+test('v3 agreement guard: marker or two speakers keeps decided; single-speaker opinion/pitch/plan is lowered', async () => {
+  const { applyAgreementGuard, hasAgreementMarker, evidenceSpeakerCount } = await import('./verify.js');
+  const segs = [
+    { speaker: 'A', text: '이번 구조는 직접 하는 게 훨씬 효과가 좋다고 생각합니다.' },
+    { speaker: 'A', text: '7개월이라는 입장을 잡았고 이렇게 제안드립니다.' },
+    { speaker: 'B', text: '기본으로 영어로 하세요.' },
+    { speaker: 'A', text: '네 그렇게 할게요.' },
+    { speaker: 'C', text: '계약상에 명시했고 그룹장님 동의를 받아서 운영합니다.' },
+    { speaker: 'D', text: '운영계약은 월별이 아니면 안 되는 걸로 지원팀에서 결정을 냈다.' },
+  ];
+  const items = [
+    d({ local_id: 'opinion', evidence_quote: segs[0].text, evidence_segment_ids: ['s0'] }),
+    d({ local_id: 'pitch', evidence_quote: segs[1].text, evidence_segment_ids: ['s1'] }),
+    d({ local_id: 'two-speakers', evidence_quote: '기본으로 영어로 하세요. 네 그렇게 할게요.', evidence_segment_ids: ['s2', 's3'] }),
+    d({ local_id: 'reported-agreement', evidence_quote: segs[4].text, evidence_segment_ids: ['s4'] }),
+    d({ local_id: 'customer-decided', side: 'customer', status: 'customer_decided', evidence_quote: segs[5].text, evidence_segment_ids: ['s5'] }),
+    d({ local_id: 'not-final', status: 'proposed', evidence_quote: segs[0].text, evidence_segment_ids: ['s0'] }),
+  ];
+  const adj = applyAgreementGuard(items, segs);
+  assert.deepEqual(items.map((i) => `${i.local_id}:${i.status}`), [
+    'opinion:direction', 'pitch:direction', 'two-speakers:decided', 'reported-agreement:decided', 'customer-decided:customer_decided', 'not-final:proposed',
+  ]);
+  assert.deepEqual(adj.map((a) => a.by), ['agreement-guard', 'agreement-guard']);
+  assert.equal(hasAgreementMarker('보완 버전을 월요일날 업데이트 하기로 했다'), true);
+  assert.equal(hasAgreementMarker('88로 그럼 그렇게 하겠습니다'), true);
+  assert.equal(hasAgreementMarker("Let's go with the OpenAI agent"), true);
+  assert.equal(hasAgreementMarker('결정이 필요한 부분이라 오늘은 답을 드리기 힘들 것 같고'), false);
+  assert.equal(evidenceSpeakerCount(['s2', 's3', 's99'], segs), 2);
+});
