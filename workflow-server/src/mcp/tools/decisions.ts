@@ -58,7 +58,7 @@ export function registerDecisionTools(server: McpServer): void {
           noteId, meetingDate: prepared.meetingDate, promptVersion: DECISION_PIPELINE_VERSION, runId: null, segments: prepared.segments,
         });
         const { payload, aliasCandidates } = built;
-        const { metrics, refine } = await refinePayload({ apiKey: env.geminiApiKey, model: chosenModel, payload, metrics: built.metrics, segments: prepared.segments });
+        const { metrics, refine } = await refinePayload({ apiKey: env.geminiApiKey, model: chosenModel, payload, metrics: built.metrics, segments: prepared.segments, sideFixes: built.sideFixes });
         results.push({
           noteId,
           ok: true,

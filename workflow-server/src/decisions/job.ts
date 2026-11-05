@@ -36,7 +36,11 @@ export async function refinePayload(input: {
   payload: ExtractionPayload;
   metrics: ExtractionMetrics;
   segments: EvidenceSegment[];
-}): Promise<{ metrics: ExtractionMetrics & { status_counts_before_refine: Record<string, number> }; refine: RefineResult }> {
+  sideFixes?: Array<{ id: string; from: string; to: string; reason: string }>;
+}): Promise<{
+  metrics: ExtractionMetrics & { status_counts_before_refine: Record<string, number>; side_fixes: Array<{ id: string; from: string; to: string; reason: string }> };
+  refine: RefineResult;
+}> {
   const before = { ...input.metrics.status_counts };
   const refine = await refineDecisionStatuses({
     apiKey: input.apiKey,
@@ -48,12 +52,18 @@ export async function refinePayload(input: {
   const counts: Record<string, number> = Object.fromEntries(DECISION_STATUSES.map((st) => [st, 0]));
   for (const d of input.payload.decisions) counts[d.status] += 1;
   const n = input.payload.decisions.length;
+  // A verifier re-quote turns a non-verbatim quote into a verbatim one: recount evidence.
+  const requoted = refine.adjustments.filter((a) => a.by === 'requote').length;
+  const matched = input.metrics.evidence_matched + requoted;
   return {
     metrics: {
       ...input.metrics,
       status_counts: counts,
       decided_ratio: n ? Math.round((counts.decided / n) * 1000) / 1000 : null,
+      evidence_matched: matched,
+      evidence_match_rate: input.metrics.evidence_quoted ? Math.round((matched / input.metrics.evidence_quoted) * 1000) / 1000 : null,
       status_counts_before_refine: before,
+      side_fixes: input.sideFixes ?? [],
     },
     refine,
   };
@@ -284,7 +294,7 @@ export async function runDecisionExtraction(input: {
     });
     const { payload, aliasCandidates } = built;
     const { metrics, refine } = await refinePayload({
-      apiKey: input.apiKey, model: input.model, fallbackModels: [...STANDARD_FALLBACK_CHAIN], payload, metrics: built.metrics, segments: prepared.segments,
+      apiKey: input.apiKey, model: input.model, fallbackModels: [...STANDARD_FALLBACK_CHAIN], payload, metrics: built.metrics, segments: prepared.segments, sideFixes: built.sideFixes,
     });
 
     const runMetrics = {

@@ -99,7 +99,7 @@ async function main() {
       noteId, meetingDate: prepared.meetingDate, promptVersion: DECISION_PIPELINE_VERSION, runId: null, segments: prepared.segments,
     });
     const { payload } = built;
-    const { metrics } = await refinePayload({ apiKey, model, payload, metrics: built.metrics, segments: prepared.segments });
+    const { metrics } = await refinePayload({ apiKey, model, payload, metrics: built.metrics, segments: prepared.segments, sideFixes: built.sideFixes });
     const unmatched = [...payload.decisions, ...payload.actions, ...payload.issues]
       .filter((x) => x.evidence_match === false)
       .map((x) => String(x.evidence_quote).slice(0, 120));
