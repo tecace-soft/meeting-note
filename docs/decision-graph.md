@@ -76,6 +76,15 @@ Table names keep the handoff's `mn_` prefix. Differences:
 5. Pick the model, set `DECISION_GRAPH_MODEL`, set `DECISION_GRAPH_ENABLED=true`.
 6. Optional: backfill recent notes with `--write` (uses the production job with `force`).
 
+### 5.0 Definition of `decided` (strict, chosen by Hans 2026-11-05)
+
+`decided` requires an explicit commitment or acceptance that is not qualified by uncertainty.
+- **Hedged commitments are `direction`.** Examples: "그런 식으로 결정될 것 같아요", "저는 그렇게 보고 있어요", "아마 그렇게 될 거예요", "20% or something".
+- **Polite advice that the other side accepts is `decided`.** Example: "~하는 게 좋을 것 같아요" answered with "알겠습니다".
+- **Lines read from a pitch rehearsal or presentation script are not decisions.** Example: "~하겠습니다".
+
+The extraction prompt, the verifier and the deterministic agreement guard (`verify.ts` step 4) all implement this definition. Gold labels are judged against it.
+
 ### 5.1 Acceptance criteria (revised 2026-11-04, approved by Hans)
 
 The handoff's "evidence match ≥ 0.95 over all items" is replaced as follows.
@@ -199,3 +208,31 @@ Items were matched to the gold labels by content. Two notes produced items that 
 - **Run-to-run variance.** Two re-runs of the same notes produced different item sets: items appeared and disappeared, and item texts changed. With 12–14 decided items, one item moves precision by about 0.07. Treat differences under about 0.1 as noise.
 
 Response, verify-v3: a deterministic **agreement guard**. A final status needs an explicit decision or agreement marker in the verbatim quote, or a quote spanning at least two speakers. On this run it would lower the opinion and the pitch, giving an estimated precision of 11/12. This estimate was made by hand from the quotes and has not been measured. Validate it on the held-out notes, not this set.
+
+### 2026-11-05: held-out 10 notes (new to all tuning), v3 + verify-v3, labeled by Hans (strict)
+
+| Metric | Result | Target |
+| --- | --- | --- |
+| Schema/call failures | 0/10 | < 2% |
+| Decided precision | **0.50 (3/6)** | ≥ 0.85 |
+| Critical errors: a proposal, info or invalid item stored as `decided` | **0/6** | — |
+| Decision recall (no missing decisions entered) | 1.0 | ≥ 0.80 |
+| Status accuracy | 0.67 | — |
+| Items judged invalid | 3/15: two pitch-rehearsal lines with non-verbatim quotes, one personal resignation remark | — |
+| Meeting kind wrong: internal pitch prep labeled `customer` | 2/10 | — |
+| Sensitivity under-flagged: pilot/POC talks should be `customer-commercial` | 2/10 | — |
+
+- **All three false positives were hedged commitments**, judged `direction` under the strict definition:
+  - "저는 그렇게 보고 있어요"
+  - "그런 식으로 결정될 것 같아요"
+  - "like 20 or something … I totally agree"
+- **The gold set and the held-out set were labeled with slightly different strictness.** "맞아요, 그렇게 쓰셔야겠네요" was labeled `decided` in the gold set. The similar "맞아요 … 그렇게 보고 있어요" was labeled `direction` here. Hans then fixed the strict definition (§5.0).
+
+Response, prompt `decision-extract-v4` + verify-v4:
+- **Commitment-hedge veto in the agreement guard.** It is narrow on purpose. Generic "~것 같아요" is not vetoed, because 5 reviewed true decisions have the shape "polite advice + 알겠습니다".
+- Pitch-rehearsal lines are excluded.
+- Personal matters such as resignation are not extracted.
+- `customer` requires a customer person to actually participate.
+- Pilot/POC/commission talks are `customer-commercial`.
+
+By hand on the held-out quotes, the veto would lower all 3 false positives and keep the 3 true positives. That would be precision 3/3, but it is not yet measured. The next held-out run must use notes that are new to all tuning so far.

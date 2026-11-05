@@ -34,7 +34,12 @@ import type { DecisionStatus } from './schema.js';
 //  - verify-v3 (2026-11-05 v3 gold re-run): decided recall rose to 11/12, but 3 single-speaker
 //    statements (an opinion, a pitch, a plan) were still kept as decided. Step 4 adds a
 //    deterministic agreement guard.
-export const VERIFY_VERSION = 'verify-v3';
+//  - verify-v4 (2026-11-05 held-out review, Hans chose the STRICT definition of decided): all 3
+//    held-out false positives were commitments qualified by uncertainty ("결정될 것 같아요",
+//    "그렇게 보고 있어요", "like 20 or something"). Step 4 now also vetoes a final status whose
+//    quote carries such a commitment hedge. Polite advice hedges ("~하는 게 좋을 것 같아요")
+//    followed by acceptance are NOT vetoed: 5 reviewed true decisions have that shape.
+export const VERIFY_VERSION = 'verify-v4';
 
 const TECACE_STATUSES = ['decided', 'direction', 'proposed', 'deferred', 'status_report', 'info'] as const;
 const OTHER_SIDE_STATUSES = ['customer_decided', 'customer_stated'] as const;
@@ -102,6 +107,14 @@ export function applyEvidenceGuard(decisions: RefinableDecision[]): StatusAdjust
 // turns from at least two speakers.
 const AGREEMENT_MARKERS = /합의|확정|동의|승인|하기로\s*(했|함|하죠|합시다|결정)|합시다|하시죠|그렇게\s*(하겠|하시|하죠|합|가|쓰|해)|그대로\s*두시죠|결정(을\s*(냈|했)|했|됐|되었|하였)|\bagreed?\b|\blet'?s\b|\bdecided\b|\bgo with\b/i;
 
+// Hedges that qualify the commitment itself (strict definition of decided, 2026-11-05). Kept narrow
+// on purpose: generic "~것 같아요" is common in polite advice that is then accepted.
+const COMMITMENT_HEDGES = /결정(될|된)\s*것\s*같|(그렇게|이렇게|저렇게)\s*보고\s*있|아마(도)?\s|할까\s*(요|싶|합니다)|해\s*볼까|생각\s*중|검토\s*중|\bor something\b|\bmaybe\b|\bprobably\b|\bkind of agreed?\b/i;
+
+export function hasCommitmentHedge(quote: unknown): boolean {
+  return typeof quote === 'string' && COMMITMENT_HEDGES.test(quote);
+}
+
 export function hasAgreementMarker(quote: unknown): boolean {
   return typeof quote === 'string' && AGREEMENT_MARKERS.test(quote);
 }
@@ -118,17 +131,18 @@ export function evidenceSpeakerCount(segmentIds: unknown, segments: EvidenceSegm
 }
 
 /**
- * Step 4. A final status needs a visible agreement: an explicit decision marker in the quote, or
- * a quote spanning at least two speakers. Otherwise decided → direction (customer_decided →
- * customer_stated). Mutates in place.
+ * Step 4. A final status needs a visible, unhedged agreement: an explicit decision marker in the
+ * quote or a quote spanning at least two speakers, AND no commitment hedge. Otherwise decided →
+ * direction (customer_decided → customer_stated). Mutates in place.
  */
 export function applyAgreementGuard(decisions: RefinableDecision[], segments: EvidenceSegment[]): StatusAdjustment[] {
   const out: StatusAdjustment[] = [];
   for (const d of decisions) {
     if (!isFinal(d.status)) continue;
-    if (hasAgreementMarker(d.evidence_quote) || evidenceSpeakerCount(d.evidence_segment_ids, segments) >= 2) continue;
+    const hedged = hasCommitmentHedge(d.evidence_quote);
+    if (!hedged && (hasAgreementMarker(d.evidence_quote) || evidenceSpeakerCount(d.evidence_segment_ids, segments) >= 2)) continue;
     const to: DecisionStatus = d.status === 'decided' ? 'direction' : 'customer_stated';
-    out.push({ id: d.local_id, from: d.status, to, by: 'agreement-guard', reason: 'quote shows neither an agreement marker nor a second speaker' });
+    out.push({ id: d.local_id, from: d.status, to, by: 'agreement-guard', reason: hedged ? 'commitment is hedged (strict definition of decided)' : 'quote shows neither an agreement marker nor a second speaker' });
     d.status = to;
   }
   return out;
@@ -146,6 +160,8 @@ decided 조건: 원문 구간 안에 합의 또는 확정이 실제로 있다. �
 - 한쪽의 제안·지시를 상대(결정권자·고객 포함)가 "맞아요", "좋습니다", "그렇게 하시죠", "알겠습니다", "그렇게 쓰셔야겠네요"처럼 받아들임
 - 계약서·공식 문서에 명시했고 상대 결정권자가 동의했다고 말함
 - 이후 발화가 그 결정을 전제로 진행됨
+엄격 기준: 확정 발화 자체가 추정·유보로 흐려지면 decided가 아니라 direction이다 (예: "그런 식으로 결정될 것 같아요", "저는 그렇게 보고 있어요", "아마 그렇게 될 거예요", "20% or something"). 단, 한쪽이 "~하는 게 좋을 것 같아요"라고 정중하게 조언하고 상대가 "알겠습니다"로 받아들인 것은 decided다.
+발표 리허설·제안 발표 대본을 읽는 문장("~하겠습니다", "~달성하겠다")은 결정이 아니다.
 customer_decided 조건: 고객·파트너 조직이 결정했다는 발화가 있다 (예: "지원팀에서 결정을 냈다", "그쪽은 이걸로 간다고 했다"). 전달하는 사람이 결정 주체가 아니어도 된다.
 
 decided가 아닌 경우, 가장 맞는 것 하나를 고른다:
