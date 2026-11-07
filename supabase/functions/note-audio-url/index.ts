@@ -126,6 +126,9 @@ async function signObject(
  * falls through to the next candidate). Throws if the ownership RPC is
  * unavailable, so the function fails CLOSED; apply the backing migration first.
  */
+const LEGACY_AUDIO_BUCKET = 'meeting-recordings';
+const LEGACY_FILE_ROW_SCAN_LIMIT = 50;
+
 async function signIfOwned(
   adminClient: SupabaseClient,
   bucket: string,
@@ -142,16 +145,22 @@ async function signIfOwned(
     return owner === ownerId ? await signObject(adminClient, bucket, storagePath) : null;
   }
   // Legacy object with no recorded owner_id: require a file row owned by the note owner.
-  const { data: ownedFile, error: fileError } = await adminClient
+  // file rows are client-writable, so a user could add their own row pointing at someone
+  // else's owner-less object. Two guards keep that from minting a URL:
+  //  - only the audio bucket qualifies (other buckets' objects always carry owner_id);
+  //  - every file row that points at this object must belong to the note owner. A forged
+  //    row from another account makes the object ambiguous and it is not signed.
+  if (bucket !== LEGACY_AUDIO_BUCKET) return null;
+  const { data: fileRows, error: fileError } = await adminClient
     .from('file')
-    .select('id')
-    .eq('user_id', ownerId)
+    .select('user_id')
     .eq('bucket', bucket)
     .eq('storage_path', storagePath)
-    .limit(1)
-    .maybeSingle();
+    .limit(LEGACY_FILE_ROW_SCAN_LIMIT);
   if (fileError) throw fileError;
-  return ownedFile ? await signObject(adminClient, bucket, storagePath) : null;
+  const owners = ((fileRows ?? []) as Array<{ user_id: unknown }>).map((row) => row.user_id);
+  const ownedOnlyByNoteOwner = owners.length > 0 && owners.every((owner) => owner === ownerId);
+  return ownedOnlyByNoteOwner ? await signObject(adminClient, bucket, storagePath) : null;
 }
 
 function normalizeSharedUsers(raw: unknown): string[] {

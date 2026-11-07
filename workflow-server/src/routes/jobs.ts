@@ -21,10 +21,23 @@ import { finalizeNoteMemory } from '../pipeline/finalize.js';
 import { type WorkflowJobRow } from '../jobs/store.js';
 import { processSummarizeJob, completedJobResults } from '../jobs/runner.js';
 
+// Security: the client chooses noteId (web/mobile pre-generate it for idempotent retries), and
+// the pipeline then writes that note with the service-role key. Refuse a noteId that already
+// belongs to someone else; otherwise a caller who knows another user's note id (any share
+// recipient does) could overwrite that note's diarization, insight and decision graph.
+// A missing note (first submit) or the caller's own note (retry) is allowed.
+export async function assertNoteIdAvailableFor(userId: string, noteId: string): Promise<void> {
+  const { data, error } = await supabase.from('note').select('user_id').eq('id', noteId).maybeSingle();
+  if (error) throw error;
+  const owner = (data as { user_id?: unknown } | null)?.user_id;
+  if (data && owner !== userId) throw new HttpError(403, 'This note belongs to another user.');
+}
+
 async function summarizeAudio(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const input = parseSummarizeInput((await readBody(req, 110_000_000)) as SummarizeAudioRequest);
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
+  await assertNoteIdAvailableFor(input.userId, input.noteId);
 
   const result = await runSummarizeAudio(input);
   sendJson(res, 200, result);
@@ -36,6 +49,7 @@ async function createSummarizeJob(req: IncomingMessage, res: ServerResponse): Pr
   const input = parseSummarizeInput((await readBody(req, 110_000_000)) as SummarizeAudioRequest);
   const tokenUserId = await getMicrosoftUserId(getBearerToken(req));
   if (tokenUserId !== input.userId) throw new Error('Authenticated user does not match request userId.');
+  await assertNoteIdAvailableFor(input.userId, input.noteId);
 
   // Idempotency: the mobile client generates noteId once per recording and
   // reuses it when it retries createNote (e.g. after a lost HTTP response or a
