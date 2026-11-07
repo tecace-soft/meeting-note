@@ -128,7 +128,7 @@ async function applyNamedSpeakers(
     const name = nameByLabel.get(seg.speaker);
     return name ? { ...seg, speaker: name } : seg;
   });
-  const { error: updateError } = await supabase.from('note').update({ diarization: namedSegments }).eq('id', noteId);
+  const { error: updateError } = await supabase.from('note').update({ diarization: namedSegments }).eq('id', noteId).eq('user_id', userId);
   if (updateError) {
     console.warn(`Diarization update failed for note ${noteId}: ${updateError.message}`);
     return;

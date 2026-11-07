@@ -84,6 +84,12 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
     sendJson(res, 403, { error: 'You do not have access to regenerate this note.' });
     return;
   }
+  // Security: share recipients have read-only access (note RLS allows UPDATE by the owner only).
+  // They may still get a regenerated summary back, but the server never saves it for them, never
+  // feeds the owner's personal memory into a prompt they control (their instructions/segments
+  // could echo it back), and never folds their request body into the owner's memory.
+  const isOwner = note.user_id === tokenUserId;
+  const persist = input.persist && isOwner;
 
   if (!env.geminiApiKey) throw new Error('Gemini API key is missing.');
 
@@ -94,9 +100,9 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
   // F1' -> regenerate: inject the NOTE OWNER's personal memory (not the requester's) so a
   // regenerated summary keeps the same cross-meeting context a fresh one gets, and a shared
   // user regenerating never leaks their own memory into someone else's note. Best-effort.
-  const personalMemoryContext = await getPersonalMemoryContext(
-    typeof note.user_id === 'string' ? note.user_id : undefined,
-  );
+  const personalMemoryContext = isOwner
+    ? await getPersonalMemoryContext(typeof note.user_id === 'string' ? note.user_id : undefined)
+    : '';
 
   const result = await callGeminiWithFallback({
     stage: 'Summary regeneration',
@@ -129,15 +135,17 @@ async function regenerateSummary(req: IncomingMessage, res: ServerResponse): Pro
     latencyMs: result.latencyMs,
   });
 
-  if (input.persist) {
+  if (persist) {
     const { error: updateError } = await supabase
       .from('note')
       .update({ summary_edit: parsedSummary.summary })
-      .eq('id', input.noteId);
+      .eq('id', input.noteId)
+      .eq('user_id', tokenUserId);
     if (updateError) throw updateError;
   }
 
-  sendJson(res, 200, { ...parsedSummary, persisted: input.persist });
+  sendJson(res, 200, { ...parsedSummary, persisted: persist });
+  if (!isOwner) return;
 
   // After responding (so the user is not blocked), fold this note into the owner's
   // memory + refresh its note_insight, best-effort. foldNoteIntoMemory is idempotent:

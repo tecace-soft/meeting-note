@@ -154,12 +154,12 @@ test('transcript checkpoint save upserts by note_id and delete filters by note; 
   assert.deepEqual(Object.keys(row).sort(), ['audio_duration_seconds', 'detected_language', 'note_id', 'segments', 'updated_at', 'user_id']);
   assert.deepEqual([row.note_id, row.user_id, row.segments, row.audio_duration_seconds, row.detected_language], ['n1', 'u1', segs, 5, 'en']);
   restore(); calls = fakeFrom(t, [{ error: null }]);
-  await deleteTranscriptCheckpoint('n1');
-  assert.deepEqual([calls[0].table, calls[0].op, calls[0].filters], ['workflow_transcript_checkpoint', 'delete', [['note_id', 'n1']]]);
+  await deleteTranscriptCheckpoint('n1', 'u1');
+  assert.deepEqual([calls[0].table, calls[0].op, calls[0].filters], ['workflow_transcript_checkpoint', 'delete', [['note_id', 'n1'], ['user_id', 'u1']]]);
   restore(); fakeFrom(t, [{ error: { message: 'write denied' } }]);
   await saveTranscriptCheckpoint({ noteId: 'n2', userId: 'u1', segments: segs, audioDurationSeconds: null, detectedLanguage: null });
   restore(); fakeFrom(t, [{ error: { message: 'delete denied' } }]);
-  await deleteTranscriptCheckpoint('n2');
+  await deleteTranscriptCheckpoint('n2', 'u1');
   assert.deepEqual(warn.mock.calls.map((c) => c.arguments[0]), [
     'Could not persist transcript checkpoint for note n2: write denied',
     'Could not delete transcript checkpoint for note n2: delete denied']);

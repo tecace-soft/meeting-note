@@ -434,7 +434,7 @@ test('runSummarizeAudio happy path: stage writes, summary call, usage, note, che
     meeting_at: meetingStartAt, audio_file_id: 'file-1', duration_seconds: 90,
   });
   const cleanup = calls.find((c) => c.table === 'workflow_transcript_checkpoint' && c.op === 'delete')!;
-  assert.deepEqual(cleanup.filters, [['eq', 'note_id', 'n1']]);
+  assert.deepEqual(cleanup.filters, [['eq', 'note_id', 'n1'], ['eq', 'user_id', 'u1']]);
 
   assert.deepEqual(result, {
     transcript: segments, summary: '## Summary\nRoadmap agreed.', summaryTranslations: { en: '## Summary\nRoadmap agreed.', ko: '' },
@@ -644,7 +644,7 @@ test('finalizeNoteMemory folds memory first, then names a solo speaker and refre
   assert.deepEqual(calls[0].filters, [['eq', 'user_id', 'u1']]);
   const update = calls.find((c) => c.table === 'note')!;
   assert.deepEqual(update.payload, { diarization: soloSegments.map((s) => ({ ...s, speaker: 'Andrew' })) });
-  assert.deepEqual(update.filters, [['eq', 'id', 'n1']]);
+  assert.deepEqual(update.filters, [['eq', 'id', 'n1'], ['eq', 'user_id', 'u1']]);
   assert.ok(http.generate[0].text.includes('Andrew: Note to self.\nAndrew: Ship it.'), 'insight sees the named transcript');
   assert.ok(http.generate[0].text.includes("Meeting participants (the transcript's speaker labels are these real names): Andrew."), 'insight sees the named speaker context');
   assert.deepEqual(log.mock.calls.map((c) => c.arguments[0]).filter((m) => !String(m).includes('calling Gemini')), [

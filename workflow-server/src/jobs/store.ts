@@ -163,11 +163,13 @@ export async function saveTranscriptCheckpoint(input: { noteId: string; userId: 
   }
 }
 
-export async function deleteTranscriptCheckpoint(noteId: string): Promise<void> {
+export async function deleteTranscriptCheckpoint(noteId: string, userId: string): Promise<void> {
+  // Scoped to the owner too, so a request naming someone else's noteId cannot clear their checkpoint.
   const { error } = await supabase
     .from('workflow_transcript_checkpoint')
     .delete()
-    .eq('note_id', noteId);
+    .eq('note_id', noteId)
+    .eq('user_id', userId);
   if (error) {
     // Best-effort cleanup; a leftover checkpoint is harmless (it is only read on a
     // retry for the same noteId, which the persisted note already short-circuits).

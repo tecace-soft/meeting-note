@@ -126,7 +126,9 @@ export async function noteAccessFilterFor(
   supabase: SupabaseClient,
   userId: string | undefined,
 ): Promise<string | null> {
-  if (!userId || !SAFE_FILTER_TOKEN.test(userId)) return null;
+  if (!userId) return null;
+  // Fail CLOSED on a malformed id: returning null here would mean "no scope" (see everything).
+  if (!SAFE_FILTER_TOKEN.test(userId)) throw new Error('Invalid user id for note access scope.');
   return noteAccessOrExpression(supabase, userId);
 }
 

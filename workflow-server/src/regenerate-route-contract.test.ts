@@ -6,7 +6,7 @@ test('T1-8 regeneration keeps prompt ownership and attributes memory/insight to 
  const f=await workflowFixture();t.after(()=>f.close());t.mock.method(console,'warn',()=>undefined);t.mock.method(console,'error',()=>undefined);
  const {parseRegenerateSummaryInput}=await import('./routes/regenerateSummary.js');
  const {loadSummaryPrompt,resolveSummaryPromptForAndroid,resolveRegenerateSummaryRules,DEFAULT_SUMMARY_PROMPT}=await import('./pipeline/promptLoaders.js');
- let selected:string|null=' selected ';let rows:any[]=[{name:'Default',prompt:' default ',created_at:'2026-02'},{name:'early',prompt:' first ',created_at:'2026-01'}];let promptError=false,missing=false,access=true,updateFail=false;
+ let selected:string|null=' selected ';let rows:any[]=[{name:'Default',prompt:' default ',created_at:'2026-02'},{name:'early',prompt:' first ',created_at:'2026-01'}];let promptError=false,missing=false,access=true,updateFail=false,owner=OTHER;
  const reads:URL[]=[];const previous=globalThis.fetch;
  t.mock.method(globalThis,'fetch',async(input:Parameters<typeof fetch>[0],init?:RequestInit)=>{
   const url=new URL(String(input)),table=url.pathname.split('/').pop();
@@ -16,7 +16,7 @@ test('T1-8 regeneration keeps prompt ownership and attributes memory/insight to 
     if(promptError)return Response.json({message:'fixture prompt error'},{status:400});
     return Response.json(url.searchParams.has('id')?{prompt:selected}:rows);
    }
-   if(table==='note')return Response.json(missing?null:{id:'fixture-note',user_id:OTHER,shared_users:access?[USER]:[]});
+   if(table==='note')return Response.json(missing?null:{id:'fixture-note',user_id:owner,shared_users:access?[USER]:[]});
    if(table==='user_memory')return Response.json({memory:{version:2,items:[{text:'OWNER_ONLY_CONTEXT',status:'active',id:'memory',entities:[],createdAt:'2026-01-01',updatedAt:'2026-01-01',sourceNoteIds:[]}]},processed_note_ids:[]});
   }
   if(url.hostname==='supabase.invalid'&&table==='note'&&init?.method==='PATCH'&&updateFail)return Response.json({message:'fixture write failure'},{status:400});
@@ -43,25 +43,38 @@ test('T1-8 regeneration keeps prompt ownership and attributes memory/insight to 
   rows=rows.filter(r=>r.name!=='Default');assert.equal(await resolveRegenerateSummaryRules(undefined,USER),'first');
   promptError=true;assert.equal(await resolveRegenerateSummaryRules(undefined,USER),DEFAULT_SUMMARY_PROMPT);promptError=false;selected=' request rules ';
  });
- await t.test('shared requester uses own rules but owner context, fold and insight',async()=>{
+ await t.test('shared requester uses own rules, gets no owner memory, and nothing is saved or folded',async()=>{
   f.state.calls.length=0;reads.length=0;
   const r=await f.request('/regenerate-summary',{body:{...regenerateBody,promptId:'p'}});assert.equal(r.status,200,r.text);assert.equal(r.body.summary,'Fixture summary');
-  for(let i=0;i<100;i++){
-   if(f.state.calls.some(c=>c.url.pathname.endsWith('/user_memory')&&c.method==='POST')&&f.state.calls.some(c=>c.url.pathname.endsWith('/note_insight')&&c.method==='POST'))break;
-   await new Promise<void>(resolve=>setImmediate(resolve));
-  }
-  const ownerWrites=f.state.calls.filter(c=>(c.url.pathname.endsWith('/user_memory')||c.url.pathname.endsWith('/note_insight'))&&c.method==='POST');
-  assert.equal(ownerWrites.length,2);for(const call of ownerWrites)assert.equal(call.body.user_id,OTHER);
-  for(const read of reads.filter(q=>q.pathname.endsWith('/user_memory')))assert.equal(read.searchParams.get('user_id'),'eq.'+OTHER);
+  assert.equal(r.body.persisted,false,'a share recipient never saves the owner note');
+  for(let i=0;i<100;i++)await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.ok(!f.state.calls.some(c=>c.url.pathname.endsWith('/note')&&c.method==='PATCH'),'no summary_edit write');
+  assert.ok(!f.state.calls.some(c=>(c.url.pathname.endsWith('/user_memory')||c.url.pathname.endsWith('/note_insight'))&&c.method==='POST'),'no owner memory/insight writes');
+  assert.ok(!reads.some(q=>q.pathname.endsWith('/user_memory')),'the owner memory is never read for a share recipient');
   assert.ok(reads.some(q=>q.pathname.endsWith('/summary_prompt')&&q.searchParams.get('user_id')==='eq.'+USER));
-  const summary=f.state.calls.find(c=>c.url.hostname==='generativelanguage.googleapis.com');assert.match(JSON.stringify(summary?.body),/OWNER_ONLY_CONTEXT/);assert.match(JSON.stringify(summary?.body),/request rules/);
+  const summary=f.state.calls.find(c=>c.url.hostname==='generativelanguage.googleapis.com');assert.doesNotMatch(JSON.stringify(summary?.body),/OWNER_ONLY_CONTEXT/);assert.match(JSON.stringify(summary?.body),/request rules/);
   assert.equal(f.state.calls.find(c=>c.url.pathname.endsWith('/workflow_usage'))?.body.user_id,USER);
+ });
+ await t.test('owner regenerate uses own memory, saves scoped to the owner, then folds and refreshes insight',async()=>{
+  owner=USER;f.state.calls.length=0;reads.length=0;
+  try{
+   const r=await f.request('/regenerate-summary',{body:{...regenerateBody,promptId:'p'}});assert.equal(r.status,200,r.text);assert.equal(r.body.persisted,true);
+   for(let i=0;i<100;i++){
+    if(f.state.calls.some(c=>c.url.pathname.endsWith('/user_memory')&&c.method==='POST')&&f.state.calls.some(c=>c.url.pathname.endsWith('/note_insight')&&c.method==='POST'))break;
+    await new Promise<void>(resolve=>setImmediate(resolve));
+   }
+   const save=f.state.calls.find(c=>c.url.pathname.endsWith('/note')&&c.method==='PATCH');
+   assert.equal(save?.url.searchParams.get('user_id'),'eq.'+USER,'the save is scoped to the owner');
+   const ownerWrites=f.state.calls.filter(c=>(c.url.pathname.endsWith('/user_memory')||c.url.pathname.endsWith('/note_insight'))&&c.method==='POST');
+   assert.equal(ownerWrites.length,2);for(const call of ownerWrites)assert.equal(call.body.user_id,USER);
+   const summary=f.state.calls.find(c=>c.url.hostname==='generativelanguage.googleapis.com');assert.match(JSON.stringify(summary?.body),/OWNER_ONLY_CONTEXT/);
+  }finally{owner=OTHER;}
  });
  await t.test('missing, denied, query path, AI and note-write errors retain statuses',async()=>{
   missing=true;assert.equal((await f.request('/regenerate-summary',{body:regenerateBody})).status,404);missing=false;
   access=false;assert.equal((await f.request('/regenerate-summary',{body:regenerateBody})).status,403);access=true;
   assert.equal((await f.request('/regenerate-summary?x=1',{body:regenerateBody})).status,404);
   f.state.aiFailure=true;assert.equal((await f.request('/regenerate-summary',{body:regenerateBody})).status,500);f.state.aiFailure=false;
-  updateFail=true;assert.equal((await f.request('/regenerate-summary',{body:regenerateBody})).status,500);updateFail=false;
+  owner=USER;updateFail=true;assert.equal((await f.request('/regenerate-summary',{body:regenerateBody})).status,500);updateFail=false;owner=OTHER;
  });
 });

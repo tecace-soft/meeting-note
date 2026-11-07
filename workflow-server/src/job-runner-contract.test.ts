@@ -202,6 +202,21 @@ test('job creation requires a non-blank id back; the runner uses the trimmed id,
   await sleep(20);
 });
 
+test('summarize routes refuse a noteId that already belongs to another user', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const f = await fixture(t);
+  for (const path of ['/summarize-audio', '/summarize-audio/jobs']) {
+    f.reset(); f.state.existingJob = false; f.state.noteOwner = OTHER;
+    const r = await f.request(path, { body: summarizeBody });
+    assert.equal(r.status, 403, path);
+    assert.equal(r.body.error, 'This note belongs to another user.');
+    assert.ok(!f.state.calls.some((c) => isTable(c.url, 'workflow_job') && c.method === 'POST'), `${path}: no job is created`);
+    assert.ok(!f.state.calls.some((c) => isTable(c.url, 'note') && c.method !== 'GET'), `${path}: the other user's note is never written`);
+  }
+  await sleep(20);
+  assert.equal(assemblyCalls(f).length, 0, 'no transcription starts for a foreign noteId');
+});
+
 test('summarize routes parse the body before authenticating the caller', async (t) => {
   t.mock.method(console, 'error', () => undefined);
   const f = await fixture(t);

@@ -303,7 +303,7 @@ export async function runSummarizeAudio(input: SummarizeAudioInput, job: JobRef 
   // FIX 2: the note (which embeds the transcript) is now durably persisted, so
   // the transcript checkpoint is no longer needed. Best-effort cleanup keeps the
   // checkpoint table small.
-  await deleteTranscriptCheckpoint(input.noteId);
+  await deleteTranscriptCheckpoint(input.noteId, input.userId);
 
   // Memory fold (F1') + auto speaker-ID (F5.1) used to run here, blocking job
   // completion behind 2-3 more Gemini calls the user never waits to see. They no

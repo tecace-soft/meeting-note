@@ -63,14 +63,24 @@ export function registerProjectTools(server: McpServer): void {
       // accessible-derived count. Capped at the 500-note accessible sample above (a metadata
       // count, not a correctness value); owned projects keep their exact full count.
       const accessibleNoteCountByProject = new Map<string, number>();
+      // Which note owners reference each project id. A note owner can write any id into their
+      // own note.projects, so a non-owned project row is only surfaced when one of the
+      // referencing accessible notes belongs to that project's owner; otherwise a forged
+      // reference would reveal another user's project name and created_at.
+      const noteOwnersByProject = new Map<string, Set<string>>();
       for (const note of accessibleNotes) {
         for (const projectId of note.projects ?? []) {
           const key = String(projectId);
           accessibleNoteCountByProject.set(key, (accessibleNoteCountByProject.get(key) ?? 0) + 1);
+          const owners = noteOwnersByProject.get(key) ?? new Set<string>();
+          if (typeof note.user_id === 'string') owners.add(note.user_id);
+          noteOwnersByProject.set(key, owners);
         }
       }
       try {
         for (const project of await fetchProjectRowsByIds(missingProjectIds)) {
+          const owner = typeof project.user_id === 'string' ? project.user_id : '';
+          if (!noteOwnersByProject.get(String(project.id))?.has(owner)) continue;
           projectsById.set(String(project.id), project);
         }
       } catch (projectError) {
